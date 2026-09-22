@@ -12,6 +12,7 @@ signature is frozen so that caller can rely on it.
 from __future__ import annotations
 
 from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -190,7 +191,7 @@ class ExportDatasetDialog(QDialog):
         Public so callers (and tests) can drive the export without going
         through a simulated button click.
         """
-        if self.export_thread is not None and self.export_thread.isRunning():
+        if self._is_running():
             return
 
         out_dir = self.output_edit.text().strip()
@@ -226,8 +227,12 @@ class ExportDatasetDialog(QDialog):
             self.only_complete_check,
             self.seed_spin,
             self.cancel_button,
+            self.export_button,
         ):
             widget.setEnabled(enabled)
+
+    def _is_running(self) -> bool:
+        return self.export_thread is not None and self.export_thread.isRunning()
 
     def _on_finished_ok(self, result: ExportResult) -> None:
         self.result_summary = result
@@ -240,14 +245,37 @@ class ExportDatasetDialog(QDialog):
         self.status_label.setText(" — ".join(parts))
         self.export_button.setText("Close")
         self._set_controls_enabled(True)
-        self.export_button.setEnabled(True)
 
     def _on_failed(self, message: str) -> None:
         self.result_summary = None
         self.progress_bar.setValue(0)
         self.status_label.setText(message)
         self._set_controls_enabled(True)
-        self.export_button.setEnabled(True)
+
+    # ---------------------------------------------------------- lifecycle
+
+    def reject(self) -> None:
+        """Ignore Cancel / Esc while the export thread is running.
+
+        Letting the default ``QDialog.reject()`` proceed would hide (and,
+        once the caller drops its reference after ``.exec()`` returns, let
+        Python garbage-collect) the dialog while ``ExportThread`` is still
+        running on its own OS thread — destroying a running ``QThread`` is a
+        fatal Qt error. Refuse instead; the run always finishes on its own
+        and re-enables the controls.
+        """
+        if self._is_running():
+            self.status_label.setText("Export in progress — please wait…")
+            return
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Block the title-bar close / Alt+F4 while an export is running (see ``reject``)."""
+        if self._is_running():
+            self.status_label.setText("Export in progress — please wait…")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 def _labeled(text: str, content) -> QVBoxLayout:

@@ -135,8 +135,12 @@ def export_dataset(
 
     ``images`` is ``image_manager.images`` (stem -> image path). Stems
     without a GT file are silently skipped. A GT file that fails to read
-    (``GtFileError``) is recorded in ``errors`` and the export continues.
-    ``mask/``, ``skeletons/`` and the GT files themselves are never modified.
+    (``GtFileError``), a missing/unreadable source image, or a failure while
+    writing that stem's mask/copy (``OSError``/``ValueError``) is recorded in
+    ``errors`` and the export continues with the remaining stems (spec §5.4);
+    any partial mask/image already written for that stem is removed so it is
+    never half-exported or counted in the splits/manifest. ``mask/``,
+    ``skeletons/`` and the GT files themselves are never modified.
     """
     out_dir = options.out_dir
     if os.path.exists(out_dir):
@@ -171,33 +175,50 @@ def export_dataset(
                 continue
 
             if tracing is not None:
-                aligned, warnings, _changed = align_to_registry(tracing, registry)
-                for warning in warnings:
-                    logger.info("GT alignment warning for %s: %s", stem, warning)
+                try:
+                    aligned, warnings, _changed = align_to_registry(tracing, registry)
+                    for warning in warnings:
+                        logger.info("GT alignment warning for %s: %s", stem, warning)
 
-                if options.only_complete and not is_complete(aligned, registry):
-                    skipped_incomplete += 1
-                else:
-                    remapped = remap_ids(aligned.ids, registry)
-                    Image.fromarray(remapped, mode="L").save(os.path.join(masks_dir, f"{stem}.png"))
+                    if options.only_complete and not is_complete(aligned, registry):
+                        skipped_incomplete += 1
+                    else:
+                        remapped = remap_ids(aligned.ids, registry)
+                        mask_out_path = os.path.join(masks_dir, f"{stem}.png")
+                        Image.fromarray(remapped, mode="L").save(mask_out_path)
 
+                        ext = os.path.splitext(image_path)[1]
+                        image_out_path = os.path.join(images_dir, f"{stem}{ext}")
+                        shutil.copy2(image_path, image_out_path)
+
+                        parsed = parse_image_name(stem)
+                        present = present_keys(aligned, registry)
+                        classes_present = ";".join(
+                            c.key for c in registry.labelled() if c.key in present
+                        )
+                        manifest_rows[stem] = {
+                            "stem": stem,
+                            "source_image": image_path,
+                            "tube": _or_blank(parsed.get("tube_number")),
+                            "position": _or_blank(parsed.get("length_position")),
+                            "date": _or_blank(parsed.get("date")),
+                            "classes_present": classes_present,
+                        }
+                        exported_stems.append(stem)
+                except (OSError, ValueError) as exc:
+                    # A missing/unreadable source image, or a write failure
+                    # (disk full, bad permissions, malformed array), must not
+                    # abort the whole export (spec §5.4: one bad file adds an
+                    # errors entry and the export continues). Clean up any
+                    # partial output so this stem is never half-exported.
+                    logger.warning("Skipping %s due to export error: %s", stem, exc)
+                    errors.append((stem, str(exc)))
                     ext = os.path.splitext(image_path)[1]
-                    shutil.copy2(image_path, os.path.join(images_dir, f"{stem}{ext}"))
-
-                    parsed = parse_image_name(stem)
-                    present = present_keys(aligned, registry)
-                    classes_present = ";".join(
-                        c.key for c in registry.labelled() if c.key in present
-                    )
-                    manifest_rows[stem] = {
-                        "stem": stem,
-                        "source_image": image_path,
-                        "tube": _or_blank(parsed.get("tube_number")),
-                        "position": _or_blank(parsed.get("length_position")),
-                        "date": _or_blank(parsed.get("date")),
-                        "classes_present": classes_present,
-                    }
-                    exported_stems.append(stem)
+                    _remove_if_exists(os.path.join(masks_dir, f"{stem}.png"))
+                    _remove_if_exists(os.path.join(images_dir, f"{stem}{ext}"))
+                    manifest_rows.pop(stem, None)
+                    if stem in exported_stems:
+                        exported_stems.remove(stem)
 
         _emit_progress(progress_cb, i, n)
 
@@ -235,6 +256,14 @@ def export_dataset(
 
 def _or_blank(value):
     return "" if value is None else value
+
+
+def _remove_if_exists(path: str) -> None:
+    """Best-effort delete of a partially written output file for a failed stem."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _emit_progress(progress_cb: Callable[[int], None] | None, i: int, n: int) -> None:

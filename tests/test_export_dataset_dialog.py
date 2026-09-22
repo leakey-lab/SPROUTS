@@ -106,3 +106,68 @@ def test_export_dialog_empty_output_path_shows_message(app, tmp_path):
 
     assert dialog.export_thread is None
     assert dialog.status_label.text() == "Choose an output folder"
+
+
+def test_export_button_disabled_while_running(app, tmp_path):
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_disable"))
+
+    dialog.start_export()
+    assert not dialog.export_button.isEnabled()
+
+    _wait_for_thread(dialog)
+    assert dialog.export_button.isEnabled()
+    assert dialog.export_button.text() == "Close"
+
+
+def test_reject_during_run_is_ignored_and_thread_finishes_cleanly(app, tmp_path):
+    """Cancel/Esc while exporting must not tear down the running QThread.
+
+    Destroying a running QThread is a fatal Qt error; ``reject()`` must be a
+    no-op while ``export_thread`` is running (verified by the ``rejected``
+    signal not firing), and the export must still complete normally once it
+    is left alone.
+    """
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_reject"))
+
+    dialog.start_export()
+    thread = dialog.export_thread
+    assert thread is not None
+
+    rejected_calls = []
+    dialog.rejected.connect(lambda: rejected_calls.append(1))
+
+    dialog.reject()  # simulate Cancel / Esc while exporting
+
+    assert rejected_calls == []  # reject() is ignored while the thread runs
+    assert dialog.export_thread is thread  # the worker thread was not torn down
+
+    _wait_for_thread(dialog)
+    assert dialog.result_summary is not None
+    assert dialog.result_summary.exported > 0
+
+    # Once idle, reject() behaves normally again.
+    dialog.reject()
+    assert rejected_calls == [1]
+
+
+def test_close_event_during_run_is_ignored(app, tmp_path):
+    from PyQt6.QtGui import QCloseEvent
+
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_close"))
+
+    dialog.start_export()
+    event = QCloseEvent()
+    dialog.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert dialog.export_thread is not None
+
+    _wait_for_thread(dialog)
+    assert dialog.result_summary is not None
+    assert dialog.result_summary.exported > 0

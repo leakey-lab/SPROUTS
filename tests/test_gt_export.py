@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 
 import numpy as np
 import pytest
@@ -264,3 +265,46 @@ def test_export_corrupt_gt_file_lands_in_errors_others_continue(tmp_path):
             assert current == corrupted_contents
         else:
             assert current == original_contents[stem]
+
+
+def test_export_missing_source_image_lands_in_errors_others_continue(tmp_path):
+    """A GT-traced image whose source file went missing must not abort the run.
+
+    remap_ids/mask-save only depends on the GT tracing, so the mask for the
+    missing-source stem would be written before ``shutil.copy2`` raises;
+    that partial mask must not survive, and the stem must not appear in the
+    split files or the manifest.
+    """
+    project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
+    missing_stem = _STEMS[0]
+    os.remove(images[missing_stem])  # source image gone; its GT file remains
+
+    options = ExportOptions(out_dir=str(tmp_path / "out"), only_complete=False)
+    result = export_dataset(project_dir, images, export_registry, options)
+
+    assert len(result.errors) == 1
+    assert result.errors[0][0] == missing_stem
+    assert result.exported == 5
+    assert result.train + result.val == 5
+
+    out_dir = tmp_path / "out"
+    assert not (out_dir / "images" / f"{missing_stem}.png").exists()
+    assert not (out_dir / "masks" / f"{missing_stem}.png").exists()
+
+    with open(out_dir / "splits" / "train.txt", encoding="utf-8") as fh:
+        train_stems = {line.strip() for line in fh if line.strip()}
+    with open(out_dir / "splits" / "val.txt", encoding="utf-8") as fh:
+        val_stems = {line.strip() for line in fh if line.strip()}
+    assert missing_stem not in train_stems
+    assert missing_stem not in val_stems
+    assert len(train_stems | val_stems) == 5
+
+    with open(out_dir / "manifest.csv", encoding="utf-8", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert missing_stem not in {row["stem"] for row in rows}
+    assert len(rows) == 5
+
+    # Other images still exported normally.
+    other_stem = _STEMS[1]
+    assert (out_dir / "images" / f"{other_stem}.png").exists()
+    assert (out_dir / "masks" / f"{other_stem}.png").exists()
