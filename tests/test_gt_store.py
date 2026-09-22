@@ -74,7 +74,8 @@ def test_palette_matches_registry(tmp_path):
 
 
 def test_gt_path_multi_dot_and_unicode(tmp_path):
-    assert gt_path(r"C:\d\plötz.T1.L2.png") == os.path.join(r"C:\d", "gt", "plötz.T1.L2.png")
+    src = os.path.join("somedir", "plötz.T1.L2.png")
+    assert gt_path(src) == os.path.join("somedir", "gt", "plötz.T1.L2.png")
 
     project_dir = tmp_path / "ünï"
     project_dir.mkdir()
