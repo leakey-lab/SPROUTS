@@ -173,8 +173,13 @@ def build_topbar(mw) -> QWidget:
     base_handlers = {
         "Library": lambda: mw.switch_right_panel("display"),
         "Generate": lambda: mw.switch_right_panel("display"),
-        "Correct Mask": mw.toggle_mask_tracing,
-        "Correct Skeleton": mw.toggle_skeleton_correction,
+        # Enter-only: clicking the active stage again must not toggle it off.
+        "Correct Mask": lambda: (
+            mw.toggle_mask_tracing() if mw.right_panel.currentIndex() != 1 else None
+        ),
+        "Correct Skeleton": lambda: (
+            mw.toggle_skeleton_correction() if mw.right_panel.currentIndex() != 3 else None
+        ),
         "Measure": lambda: mw.switch_right_panel("display"),
         "Visualize": lambda: mw.switch_right_panel("display"),
     }

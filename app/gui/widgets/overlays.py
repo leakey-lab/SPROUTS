@@ -102,6 +102,30 @@ class FloatingDock(_FloatingPanel):
         self.move(x, y)
 
 
+class CornerPanel(_FloatingPanel):
+    """Small horizontal floating panel pinned to a corner of the host.
+
+    ``corner`` is one of ``"tl"``, ``"tr"``, ``"bl"``, ``"br"``. Used for the
+    canvas filename/status chip and the zoom cluster.
+    """
+
+    def __init__(self, parent=None, *, corner: str = "br", margin: int = 14, v_margin=None):
+        super().__init__(parent, horizontal=True)
+        self._corner = corner
+        self._margin = margin
+        self._v_margin = margin if v_margin is None else v_margin
+        self._box.setContentsMargins(5, 4, 5, 4)
+
+    def reposition(self):
+        if self.parent() is None:
+            return
+        self.adjustSize()
+        pw, ph = self.parent().width(), self.parent().height()
+        x = self._margin if self._corner[1] == "l" else pw - self.width() - self._margin
+        y = self._v_margin if self._corner[0] == "t" else ph - self.height() - self._v_margin
+        self.move(x, y)
+
+
 class EnhancePopover(_FloatingPanel):
     """Top-right popover that hosts an arbitrary content widget."""
 

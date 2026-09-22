@@ -93,12 +93,13 @@ def _icon_path(icon_name: str) -> str | None:
 # The real editor shortcuts confirmed from mask_tracing_interface.py and
 # skeleton_correction_interface.py. Format: (keys, description).
 _SHORTCUTS = [
-    ("B", "Hold to adjust brush size with the scroll wheel (mask tracing)"),
-    ("Space", "Hold to pan the canvas"),
-    ("U", "Undo the last edit"),
-    ("Y", "Redo the last undone edit"),
-    ("Ctrl+Z", "Undo"),
-    ("Ctrl+Y", "Redo"),
+    ("B / E / F", "Brush, eraser, fill (mask tracing)"),
+    ("B + wheel", "Hold B and scroll to resize the brush; [ and ] also work"),
+    ("Space", "Hold to pan the canvas (middle-drag also pans)"),
+    ("H", "Show or hide the mask overlay"),
+    ("Ctrl+wheel", "Zoom under the cursor; Ctrl+0 fits, Ctrl+1 is 100%"),
+    ("Ctrl+S", "Save the mask"),
+    ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
 ]
 
 

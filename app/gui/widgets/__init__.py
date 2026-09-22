@@ -8,10 +8,11 @@ without behaviour changes. See ``tokens`` for the colour/density values.
 from __future__ import annotations
 
 from . import tokens
-from .controls import IconButton, SegmentedControl
+from .controls import DockSlider, IconButton, SegmentedControl
 from .effects import drop_shadow, pop_shadow
 from .icons import has_icon, icon_path, load_icon, load_pixmap
 from .overlays import (
+    CornerPanel,
     EnhancePopover,
     FloatingDock,
     ProgressOverlay,
@@ -30,6 +31,8 @@ __all__ = [
     "pop_shadow",
     "SegmentedControl",
     "IconButton",
+    "DockSlider",
+    "CornerPanel",
     "ToolRail",
     "FloatingDock",
     "EnhancePopover",

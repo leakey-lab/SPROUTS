@@ -116,6 +116,9 @@ class MainWindow(QMainWindow):
         self.mask_saved.connect(self.highlight_saved_mask)
         self.mask_cleared.connect(self.unhighlight_cleared_mask)
 
+        # Transient editor feedback (fill hints, clear/undo notes) -> toasts.
+        self.mask_tracing_interface.notice.connect(self.notify)
+
         self.init_ui()
 
         # Keyboard-shortcut help dialog (F1 / ?).
@@ -135,6 +138,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Stop Dash server threads before the window (and embedded viz widgets) are destroyed."""
+        self.mask_tracing_interface.maybe_save_changes()
         try:
             if self.root_length_viz is not None:
                 self.close_root_length_visualization()
@@ -437,17 +441,9 @@ class MainWindow(QMainWindow):
         # Show progress before loading.
         self.task_progress.start("Loading images")
 
-        # Clear undo/redo stacks if mask tracing interface exists
+        # Offer to save pending mask edits, then drop the editor's history.
         if hasattr(self, "mask_tracing_interface"):
-            self.mask_tracing_interface.undo_stack.clear()
-            self.mask_tracing_interface.redo_stack.clear()
-            self.mask_tracing_interface.last_point = None
-            self.mask_tracing_interface.drawing = False
-            if (
-                hasattr(self.mask_tracing_interface, "mask_pixmap")
-                and self.mask_tracing_interface.mask_pixmap
-            ):
-                self.mask_tracing_interface.mask_pixmap.fill(Qt.GlobalColor.transparent)
+            self.mask_tracing_interface.reset()
 
         # Load images through image manager
         self.image_manager.load_images(dir_name)
@@ -739,11 +735,9 @@ class MainWindow(QMainWindow):
     def on_b_key_status_changed(self, is_pressed):
         """Observer method for B key status changes in mask tracing interface."""
         if is_pressed:
-            self.status_bar.showMessage(
-                "B key pressed - use mouse wheel to adjust brush size", 3000
-            )
+            self.status_bar.showMessage("Scroll to resize the brush; release B when done", 3000)
         else:
-            self.status_bar.showMessage("B key released", 3000)
+            self.status_bar.clearMessage()
 
     def on_mask_saved(self, image_path):
         # Always emit the signal
@@ -801,6 +795,9 @@ class MainWindow(QMainWindow):
     # ==================== Panel Switching ====================
 
     def switch_right_panel(self, panel):
+        # Leaving the mask editor: offer to save pending edits first.
+        if self.right_panel.currentIndex() == 1 and panel != "mask_tracing":
+            self.mask_tracing_interface.maybe_save_changes()
         if panel == "display":
             self.right_panel.setCurrentIndex(0)
         elif panel == "mask_tracing":

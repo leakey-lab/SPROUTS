@@ -12,7 +12,9 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
+    QLabel,
     QPushButton,
+    QSlider,
     QToolButton,
     QWidget,
 )
@@ -173,3 +175,72 @@ class IconButton(QToolButton):
             self._on_color = on_color
             self.setStyleSheet(self._qss())
         self._refresh_icon()
+
+
+_DOCK_SLIDER_QSS = f"""
+QSlider {{ background: transparent; min-height: 18px; max-height: 18px; }}
+QSlider::groove:horizontal {{
+    border: none; height: 4px; background: {tokens.BG_3}; border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{ background: {tokens.ACCENT}; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    background: {tokens.TEXT}; border: none; width: 14px; height: 14px;
+    margin: -5px 0; border-radius: 7px;
+}}
+QSlider::handle:horizontal:hover {{ background: #ffffff; }}
+QLabel#dockSliderValue {{
+    color: {tokens.TEXT}; background: transparent;
+    font-family: {tokens.MONO}; font-size: 12px;
+}}
+"""
+
+
+class DockSlider(QWidget):
+    """Icon + filled horizontal slider + mono value readout, for floating docks.
+
+    ``fmt`` formats the readout from the integer value (e.g. ``"{} px"``).
+    The inner :class:`QSlider` is exposed as ``.slider`` so callers keep using
+    the standard ``valueChanged`` / ``setValue`` API.
+    """
+
+    def __init__(
+        self,
+        icon_name: str,
+        tooltip: str,
+        minimum: int,
+        maximum: int,
+        value: int,
+        *,
+        fmt: str = "{}",
+        width: int = 110,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._fmt = fmt
+        self.setStyleSheet(_DOCK_SLIDER_QSS)
+        self.setToolTip(tooltip)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 0, 4, 0)
+        row.setSpacing(8)
+
+        icon = QLabel()
+        icon.setPixmap(load_icon(icon_name, tokens.TEXT_MUTED, 16).pixmap(16, 16))
+        row.addWidget(icon)
+
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(minimum, maximum)
+        self.slider.setValue(value)
+        self.slider.setFixedWidth(width)
+        self.slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.addWidget(self.slider)
+
+        self.value_label = QLabel()
+        self.value_label.setObjectName("dockSliderValue")
+        self.value_label.setMinimumWidth(44)
+        row.addWidget(self.value_label)
+
+        self.slider.valueChanged.connect(self._sync_label)
+        self._sync_label(value)
+
+    def _sync_label(self, value: int):
+        self.value_label.setText(self._fmt.format(value))
