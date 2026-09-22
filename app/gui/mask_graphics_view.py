@@ -17,6 +17,8 @@ from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent, QPainter, QTransform, QWheelEvent
 from PyQt6.QtWidgets import QFrame, QGraphicsView, QWidget
 
+from .canvas_background import configure_canvas_background
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +60,7 @@ class MaskTracingGraphicsView(QGraphicsView):
 
         self._opengl_viewport_enabled = False
         self.set_opengl_viewport_enabled(DEFAULT_OPENGL_VIEWPORT_ENABLED)
+        configure_canvas_background(self)
 
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)

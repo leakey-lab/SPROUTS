@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .canvas_background import configure_canvas_background
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,7 @@ class MagnifyingGraphicsView(QGraphicsView):
 
         self._opengl_viewport_enabled = False
         self.set_opengl_viewport_enabled(DEFAULT_OPENGL_VIEWPORT_ENABLED)
+        configure_canvas_background(self)
 
         # Zoom control
         self.zoom = 1.0

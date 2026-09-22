@@ -17,6 +17,8 @@ from PyQt6.QtCore import QPoint, QPointF, Qt
 from PyQt6.QtGui import QKeyEvent, QMouseEvent, QPainter, QWheelEvent
 from PyQt6.QtWidgets import QGraphicsView, QWidget
 
+from .canvas_background import configure_canvas_background
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,7 @@ class SkeletonCorrectionGraphicsView(QGraphicsView):
 
         self._opengl_viewport_enabled = False
         self.set_opengl_viewport_enabled(DEFAULT_OPENGL_VIEWPORT_ENABLED)
+        configure_canvas_background(self)
 
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing

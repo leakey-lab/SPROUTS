@@ -146,7 +146,6 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         self.graphics_view = MaskTracingGraphicsView(self)
-        self.graphics_view.setBackgroundBrush(QColor(tokens.BG_0))
         self.scene = QGraphicsScene(self)
         self.graphics_view.setScene(self.scene)
         main_layout.addWidget(self.graphics_view)
