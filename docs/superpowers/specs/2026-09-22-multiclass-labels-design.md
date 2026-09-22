@@ -2,7 +2,7 @@
 
 **Status:** design v3 approved in chat 2026-09-22 (replaces the bit-packed `labels/` drafts);
 written spec pending user review.
-**Branch:** `feat/multiclass-labels`, from `edce31f` (tracing-editor overhaul + skeleton dock fix).
+**Branch:** `feat/multiclass-labels`, rebased on `1fb1b13` (tracing-editor overhaul, skeleton dock fix, opaque canvas background).
 **Worktree:** `D:\Root-Mask-and-Skeletons-gt`.
 
 ## Purpose
