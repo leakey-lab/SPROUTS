@@ -18,7 +18,7 @@ import time
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QPoint, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -43,16 +43,18 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from app.gui.widgets import (
+    CornerPanel,
+    DockSlider,
     EnhancePopover,
     FloatingDock,
     IconButton,
     ToolRail,
+    load_icon,
     tokens,
 )
 
@@ -335,6 +337,9 @@ class SkeletonCorrectionInterface(QWidget):
         if hasattr(self, "polyline_prompt"):
             self._reposition_polyline_prompt()
             self.polyline_prompt.raise_()
+        # After the prompt: the hint width depends on where the prompt sits.
+        if hasattr(self, "status_label"):
+            self._layout_hint()
 
     def _reposition_polyline_prompt(self) -> None:
         """Top-centre the contextual polyline prompt over the graphics view."""
@@ -359,25 +364,24 @@ class SkeletonCorrectionInterface(QWidget):
         """
         # Tools (select/eraser/polyline/connect + mode/smooth toggles) live in
         # the floating ToolRail, constructed in _build_overlays.
-        btn_style = """
-            QPushButton {
-                background-color: #2d2d2d;
-                border: none;
-                border-radius: 4px;
-                padding: 4px;
-                color: white;
-                min-height: 28px;
-                font-size: 12px;
-            }
-            QPushButton:checked { background-color: #404040; }
-            QPushButton:hover { background-color: #404040; }
-        """
-
-        self.load_skeleton_button = QPushButton("📎 Load Skeleton…")
-        self.save_skeleton_button = QPushButton("💾 Save Skeleton")
-        self.undo_button = QPushButton("⬅️ Undo (Ctrl+Z)")
-        self.redo_button = QPushButton("➡️ Redo (Ctrl+Y)")
-        self.clear_button = QPushButton("🗑️ Clear All")
+        # Dock actions follow the mask-tracing dock: icon-only undo/redo/clear,
+        # a ghost "Load" button and the accent "Save" button (global QSS object
+        # names from dark_theme.qss).
+        self.load_skeleton_button = QPushButton("Load skeleton")
+        self.load_skeleton_button.setObjectName("ghostButton")
+        self.load_skeleton_button.setIcon(load_icon("load", tokens.TEXT_MUTED, 16))
+        self.load_skeleton_button.setToolTip("Load a skeleton image to correct")
+        self.save_skeleton_button = QPushButton("Save skeleton")
+        self.save_skeleton_button.setObjectName("primaryButton")
+        self.save_skeleton_button.setIcon(load_icon("save", tokens.ACCENT_INK, 16))
+        self.save_skeleton_button.setToolTip("Save to skeleton_corrections/")
+        for b in (self.load_skeleton_button, self.save_skeleton_button):
+            b.setIconSize(QSize(16, 16))
+            b.setMinimumHeight(32)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.undo_button = IconButton("undo", "Undo (Ctrl+Z)")
+        self.redo_button = IconButton("redo", "Redo (Ctrl+Y)")
+        self.clear_button = IconButton("trash", "Clear all skeleton lines")
 
         # Polyline control buttons with distinctive styling
         polyline_btn_style = """
@@ -411,68 +415,34 @@ class SkeletonCorrectionInterface(QWidget):
         self.finish_polyline_button = QPushButton("✓ Finish Line (Enter)")
         self.cancel_polyline_button = QPushButton("✗ Cancel Line (Esc)")
 
-        for b in [
-            self.load_skeleton_button,
-            self.save_skeleton_button,
-            self.undo_button,
-            self.redo_button,
-            self.clear_button,
-        ]:
-            b.setStyleSheet(btn_style)
-
         # Polyline buttons styled here; reparented into the top-centre prompt.
         self.finish_polyline_button.setStyleSheet(polyline_btn_style)
         self.cancel_polyline_button.setStyleSheet(cancel_btn_style)
         self._polyline_prompt_layout.addWidget(self.finish_polyline_button)
         self._polyline_prompt_layout.addWidget(self.cancel_polyline_button)
 
-        slider_style = """
-            QSlider { max-height: 20px; }
-            QSlider::groove:horizontal {
-                border: none; height: 4px; background: #404040;
-                margin: 0px; border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #ff79c6; border: none; width: 16px;
-                margin: -6px 0; border-radius: 8px;
-            }
-            QSlider::handle:horizontal:hover { background: #ff92d0; }
-            QLabel { color: white; font-size: 11px; max-height: 15px; }
-        """
-
-        self.eraser_label = QLabel(f"Eraser: {self.eraser_radius}px")
-        self.eraser_slider = QSlider(Qt.Orientation.Horizontal)
-        self.eraser_slider.setStyleSheet(slider_style)
-        self.eraser_slider.setRange(1, 80)
-        self.eraser_slider.setValue(self.eraser_radius)
-
-        self.opacity_label = QLabel(f"Overlay: {int(self.overlay_opacity * 100)}%")
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setStyleSheet(slider_style)
-        self.opacity_slider.setRange(5, 100)
-        self.opacity_slider.setValue(int(self.overlay_opacity * 100))
-
         # ---- FloatingDock: eraser slider [eraser-only], opacity, actions, Save ----
-        # Eraser-size slider (label + slider); shown only when the eraser tool
-        # is active (toggled from _on_tool_changed).
-        self.eraser_container = QWidget(self)
-        eraser_box = QVBoxLayout(self.eraser_container)
-        eraser_box.setSpacing(1)
-        eraser_box.setContentsMargins(0, 0, 0, 0)
-        eraser_box.addWidget(self.eraser_label)
-        eraser_box.addWidget(self.eraser_slider)
-        self.eraser_container.setFixedWidth(150)
+        # Icon + slider + value readout (DockSlider keeps the readout in sync).
+        # The eraser slider is shown only while the eraser tool is active
+        # (toggled from _on_tool_changed).
+        self.eraser_container = DockSlider(
+            "erase", "Eraser size", 1, 80, self.eraser_radius, fmt="{} px"
+        )
+        self.eraser_slider = self.eraser_container.slider
+        self.eraser_label = self.eraser_container.value_label
         self.dock.add_widget(self.eraser_container)
         self.eraser_container.setVisible(self.current_tool == self.TOOL_ERASER)
 
-        # Overlay-opacity slider (label + slider) in a fixed-width container.
-        self.opacity_container = QWidget(self)
-        opacity_box = QVBoxLayout(self.opacity_container)
-        opacity_box.setSpacing(1)
-        opacity_box.setContentsMargins(0, 0, 0, 0)
-        opacity_box.addWidget(self.opacity_label)
-        opacity_box.addWidget(self.opacity_slider)
-        self.opacity_container.setFixedWidth(150)
+        self.opacity_container = DockSlider(
+            "overlay",
+            "Skeleton overlay opacity",
+            5,
+            100,
+            int(self.overlay_opacity * 100),
+            fmt="{}%",
+        )
+        self.opacity_slider = self.opacity_container.slider
+        self.opacity_label = self.opacity_container.value_label
         self.dock.add_widget(self.opacity_container)
 
         self.dock.add_separator()
@@ -507,13 +477,17 @@ class SkeletonCorrectionInterface(QWidget):
         self.tool_rail.add_separator()
         self.tool_rail.add_widget(self.enhance_button)
 
-        # Status/hint label -> bottom dock (separator + label).
-        self.status_label = QLabel("Select an image, then load a skeleton to edit.")
-        self.status_label.setStyleSheet("color: #8be9fd; font-size: 11px;")
-        self.status_label.setWordWrap(True)
-        self.status_label.setMaximumWidth(360)
-        self.dock.add_separator()
-        self.dock.add_widget(self.status_label)
+        # Status/hint label -> its own top-left chip. It used to sit in the
+        # bottom dock, where the multi-line hints were clipped by the dock height.
+        self.hint_panel = CornerPanel(self.graphics_view, corner="tl")
+        self.hint_panel._box.setContentsMargins(11, 6, 11, 6)
+        self.status_label = QLabel()
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.status_label.setStyleSheet(
+            f"color: {tokens.TEXT_MUTED}; font-size: 12px; background: transparent;"
+        )
+        self.hint_panel.add_widget(self.status_label)
+        self._set_status("Select an image, then load a skeleton to edit.")
 
     # -------------------- wiring --------------------
     def clamp_to_image(self, pt: QPoint) -> QPoint:
@@ -648,53 +622,100 @@ class SkeletonCorrectionInterface(QWidget):
         # Update status label with helpful context
         self._update_status_label()
 
+    # Max width of the top-left hint chip; longer hints wrap onto a second line
+    # instead of running under the top-centre polyline prompt.
+    HINT_MAX_WIDTH = 460
+
+    def _set_status(self, text: str, tooltip: str = "") -> None:
+        """Show ``text`` in the top-left hint chip (full help in ``tooltip``)."""
+        self.status_label.setText(text)
+        self.status_label.setToolTip(tooltip or text)
+        self._layout_hint()
+
+    # Narrowest hint text worth showing beside the polyline prompt; below this
+    # the chip moves under the prompt instead.
+    HINT_MIN_WIDTH = 160
+
+    def _layout_hint(self) -> None:
+        """Size and place the hint chip.
+
+        The hint wraps only when one line would exceed the allowed width. While
+        the top-centre polyline prompt is visible, the chip keeps clear of it:
+        beside it when there is room, otherwise just below it.
+        """
+        label = self.status_label
+        prompt = getattr(self, "polyline_prompt", None)
+        prompt_shown = prompt is not None and not prompt.isHidden()
+
+        max_w = self.HINT_MAX_WIDTH
+        below_prompt = False
+        if prompt_shown:
+            # Chip starts at x=14 and adds 11px padding on each side; keep a
+            # 14px gap before the prompt.
+            beside = prompt.x() - 14 - 22 - 14
+            if beside >= self.HINT_MIN_WIDTH:
+                max_w = min(max_w, beside)
+            else:
+                below_prompt = True
+
+        wrap = label.fontMetrics().horizontalAdvance(label.text()) > max_w
+        label.setWordWrap(wrap)
+        if wrap:
+            label.setFixedWidth(max_w)
+        else:
+            label.setMinimumWidth(0)
+            label.setMaximumWidth(16777215)
+
+        if hasattr(self, "hint_panel"):
+            self.hint_panel.reposition()
+            if below_prompt:
+                self.hint_panel.move(14, prompt.geometry().bottom() + 8)
+            self.hint_panel.raise_()
+
     def _update_status_label(self) -> None:
-        """Update the status label with context-sensitive hints."""
+        """Update the hint chip with a short, context-sensitive hint."""
         if self.model.mask is None:
-            self.status_label.setText("Select an image, then load a skeleton to edit.")
+            self._set_status("Select an image, then load a skeleton to edit.")
             return
 
         tool = self.current_tool
         if tool == self.TOOL_ERASER:
-            self.status_label.setText(
-                "🧽 ERASER: Click+drag to erase skeleton pixels. Release to finish stroke."
+            self._set_status(
+                "Eraser · drag over the skeleton to erase it",
+                "Click and drag to erase skeleton pixels. Release to finish the stroke. "
+                "Change the eraser size in the bottom dock.",
             )
         elif tool == self.TOOL_POLYLINE:
             n = len(self._polyline_points)
-            smooth_hint = ""
-            if self._polyline_smooth and n < 3:
-                smooth_hint = " (Smooth needs 3+ points: Ctrl+click a segment to add a bend point)"
+            smooth_hint = " · Smooth needs 3+ points" if self._polyline_smooth and n < 3 else ""
+            help_text = (
+                "Click to place points. Drag points to adjust. Ctrl+click a segment to add a "
+                "bend. Shift+drag a segment to move the whole line. Enter or double-click "
+                "finishes the line, Esc cancels it. Smooth needs 3+ points."
+            )
             if n == 0:
-                self.status_label.setText(
-                    "📏 POLYLINE: Click to place points. Drag points to adjust. Ctrl+click a segment to add a bend. Shift+drag a segment to move the whole line. Enter/double-click to finish."
-                )
+                text = "Polyline · click to place points · Ctrl+click a segment adds a bend"
             elif n == 1:
-                self.status_label.setText(
-                    f"📏 POLYLINE: {n} point. Click to add more. Drag points to adjust. Ctrl+click segment to add a bend. Enter/double-click to finish, Esc to cancel.{smooth_hint}"
-                )
+                text = "Polyline · 1 point · click to add more"
             else:
-                self.status_label.setText(
-                    f"📏 POLYLINE: {n} points. Drag points to adjust. Ctrl+click segment to add a bend. Shift+drag segment to move line. Enter/double-click/Finish to commit, Esc/Cancel to discard.{smooth_hint}"
-                )
+                text = f"Polyline · {n} points · drag points to adjust"
+            self._set_status(text + smooth_hint, help_text)
         elif tool == self.TOOL_CONNECT:
             if self._connect_first_endpoint is None:
-                self.status_label.setText(
-                    "🔗 CONNECT: Click near an endpoint (orange dot) to select first point."
-                )
+                self._set_status("Connect · click an endpoint (orange dot)")
             else:
-                self.status_label.setText(
-                    "🔗 CONNECT: Click near another endpoint to draw a connecting line."
-                )
+                self._set_status("Connect · click a second endpoint to join them")
         elif tool == self.TOOL_SELECT:
-            self.status_label.setText(
-                "🖱️ SELECT: Click near an existing skeleton line to load it for editing (then drag points / Smooth / Enter to commit)."
+            self._set_status(
+                "Select · click a skeleton line to edit it",
+                "Click near an existing skeleton line to load it for editing, then drag its "
+                "points, toggle Smooth, and press Enter to commit.",
             )
         else:
-            self.status_label.setText("Ready to edit skeleton.")
+            self._set_status("Ready to edit skeleton.")
 
     def _on_eraser_radius_changed(self, v: int) -> None:
         self.eraser_radius = int(v)
-        self.eraser_label.setText(f"Eraser: {v}px")
         self._rebuild_brush_cursor()
 
     def _eraser_effective_radius(self) -> int:
@@ -710,7 +731,6 @@ class SkeletonCorrectionInterface(QWidget):
 
     def _on_opacity_changed(self, v: int) -> None:
         self.overlay_opacity = float(v) / 100.0
-        self.opacity_label.setText(f"Overlay: {v}%")
         self.skeleton_item.setOpacity(self.overlay_opacity)
 
     # -------------------- skeleton IO --------------------
@@ -969,7 +989,7 @@ class SkeletonCorrectionInterface(QWidget):
         if not _imwrite_unicode(out_path, rendered):
             QMessageBox.critical(self, "Error", f"Failed to save skeleton to:\n{out_path}")
             return
-        self.status_label.setText(f"Saved skeleton: {out_path}")
+        self._set_status(f"Saved skeleton: {os.path.basename(out_path)}", out_path)
         self.skeleton_saved.emit(out_path)
 
     # -------------------- event delegation from view --------------------

@@ -87,3 +87,49 @@ def test_tool_selection_and_shortcuts(app):
 
     # Resize triggers overlay reposition without error.
     iface.resize(900, 700)
+
+
+def test_hint_lives_outside_dock_and_clears_polyline_prompt(app):
+    """The tool hint sits in its own top-left chip, not the bottom dock.
+
+    Regression: the multi-line hint used to be packed into the FloatingDock,
+    where the dock height clipped it.
+    """
+    from PyQt6.QtCore import QPoint
+
+    from app.gui.widgets import CornerPanel, DockSlider
+
+    iface = SkeletonCorrectionInterface()
+    iface.resize(820, 500)
+    iface.show()
+
+    assert isinstance(iface.hint_panel, CornerPanel)
+    assert iface.status_label.parent() is iface.hint_panel
+    assert not iface.dock.isAncestorOf(iface.status_label)
+
+    # Dock sliders are DockSliders whose readout tracks the value.
+    assert isinstance(iface.opacity_container, DockSlider)
+    assert isinstance(iface.eraser_container, DockSlider)
+    iface.opacity_slider.setValue(40)
+    assert iface.opacity_label.text() == "40%"
+    assert iface.skeleton_item.opacity() == 0.4
+
+    # Long polyline hint with the Finish/Cancel prompt showing: the hint chip
+    # must never overlap the prompt (beside it, or below it when narrow).
+    iface.model.set_empty((640, 480))
+    iface.polyline_button.setChecked(True)
+    iface._on_tool_changed(iface.polyline_button)
+    iface._polyline_smooth = True
+    iface._polyline_points[:] = [QPoint(10, 10), QPoint(50, 60)]
+    iface._update_polyline_buttons_enabled()
+    iface._reposition_overlays()
+
+    assert not iface.polyline_prompt.isHidden()
+    for width in (1600, 1100, 820, 600):
+        iface.resize(width, 500)
+        app.processEvents()
+        iface._reposition_overlays()
+        hint = iface.hint_panel.geometry()
+        prompt = iface.polyline_prompt.geometry()
+        assert not hint.intersects(prompt), (width, hint, prompt)
+    iface.close()
