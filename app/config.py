@@ -105,3 +105,19 @@ ROOT_LENGTHS_CSV = "root_lengths.csv"
 ROOT_AREAS_CSV = "root_areas.csv"
 LENGTH_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", "Length (mm)", "Error"]
 AREA_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", "Area (mm²)", "Error"]
+
+# --- Ground-truth (GT) tracing ---------------------------------------------
+# Hand-traced multi-class ground truth, independent of every ML model in the
+# app (see docs/superpowers/specs/2026-09-22-multiclass-labels-design.md).
+GT_DIRNAME = "gt"
+GT_CLASSES_FILENAME = "classes.json"
+GT_META_CHUNK = "sprouts_gt"
+GT_BACKGROUND_ID = 0
+GT_IGNORE_ID = 255
+GT_UNKNOWN_COLOR = "#808080"
+DEFAULT_GT_CLASSES = (
+    {"id": 1, "key": "root", "name": "Root", "color": "#5fd6a0", "retired": False},
+    {"id": 2, "key": "nodule", "name": "Nodule", "color": "#ff7eb6", "retired": False},
+    {"id": 3, "key": "root_tip", "name": "Root tip", "color": "#ffd166", "retired": False},
+    {"id": 255, "key": "ignore", "name": "Ignore", "color": "#8a8f98", "retired": False},
+)

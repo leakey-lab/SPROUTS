@@ -1,0 +1,252 @@
+"""
+Ground-truth class registry (``gt/classes.json``).
+
+The registry is the project-level list of GT classes: their ids, keys,
+display names and colours. It is deliberately independent of every ML model
+in the app (see
+``docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`` §2) and has
+no Qt dependency so it can be unit tested headlessly and reused by the
+dataset exporter.
+
+Ids are permanent once assigned (``next_id`` never reuses a retired id).
+Colours are unique across the whole registry, retired classes included,
+because the tracing editor maps a painted colour back to a class id by exact
+match. The Ignore class (id 255) is always present, always last in display
+order, and can never be retired.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+from dataclasses import dataclass, replace
+
+from app.config import DEFAULT_GT_CLASSES, GT_CLASSES_FILENAME, GT_DIRNAME, GT_IGNORE_ID
+
+logger = logging.getLogger(__name__)
+
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_MAX_NAME_LEN = 40
+_MAX_KEY_LEN = 32
+_MIN_NORMAL_ID = 1
+_MAX_NORMAL_ID = 254
+
+
+class RegistryError(ValueError):
+    """Raised for an invalid or corrupt class registry."""
+
+
+@dataclass(frozen=True)
+class ClassDef:
+    id: int
+    key: str
+    name: str
+    color: str
+    retired: bool = False
+
+    @property
+    def is_ignore(self) -> bool:
+        return self.key == "ignore"
+
+
+@dataclass(frozen=True)
+class Registry:
+    classes: tuple[ClassDef, ...]  # display order, Ignore last, retired included
+
+    def active(self) -> tuple[ClassDef, ...]:
+        """Non-retired classes, in display order (Ignore last)."""
+        return tuple(c for c in self.classes if not c.retired)
+
+    def labelled(self) -> tuple[ClassDef, ...]:
+        """Active classes excluding Ignore."""
+        return tuple(c for c in self.active() if not c.is_ignore)
+
+    def by_id(self, id: int) -> ClassDef | None:
+        for c in self.classes:
+            if c.id == id:
+                return c
+        return None
+
+    def by_key(self, key: str) -> ClassDef:
+        for c in self.classes:
+            if c.key == key:
+                return c
+        raise KeyError(key)
+
+    def next_id(self) -> int:
+        """Lowest id in 1..254 not used by any class (retired included)."""
+        used = {c.id for c in self.classes}
+        for candidate in range(_MIN_NORMAL_ID, _MAX_NORMAL_ID + 1):
+            if candidate not in used:
+                return candidate
+        raise RegistryError("No free class id in range 1-254")
+
+    def add(self, *, key: str, name: str, color: str) -> Registry:
+        """Return a new registry with a class appended just before Ignore."""
+        new_class = ClassDef(id=self.next_id(), key=key, name=name, color=color, retired=False)
+        classes = list(self.classes)
+        ignore_index = next(i for i, c in enumerate(classes) if c.is_ignore)
+        classes.insert(ignore_index, new_class)
+        return self._with_classes(tuple(classes))
+
+    def update(self, key: str, *, name: str | None = None, color: str | None = None) -> Registry:
+        """Return a new registry with ``name``/``color`` changed for ``key``.
+
+        Raises ``KeyError`` if ``key`` does not exist.
+        """
+        target = self.by_key(key)
+        updated = replace(
+            target,
+            name=target.name if name is None else name,
+            color=target.color if color is None else color,
+        )
+        classes = tuple(updated if c.key == key else c for c in self.classes)
+        return self._with_classes(classes)
+
+    def retire(self, key: str) -> Registry:
+        """Return a new registry with ``key`` marked retired. Ignore cannot be retired."""
+        target = self.by_key(key)
+        if target.is_ignore:
+            raise RegistryError("The Ignore class cannot be retired")
+        updated = replace(target, retired=True)
+        classes = tuple(updated if c.key == key else c for c in self.classes)
+        return self._with_classes(classes)
+
+    def to_dict(self) -> dict:
+        return {
+            "version": 1,
+            "classes": [
+                {
+                    "id": c.id,
+                    "key": c.key,
+                    "name": c.name,
+                    "color": c.color,
+                    "retired": c.retired,
+                }
+                for c in self.classes
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Registry:
+        """Parse and validate the JSON of spec §2. Ignore is moved last if needed."""
+        if data.get("version") != 1:
+            raise RegistryError(f"Unsupported registry version: {data.get('version')!r}")
+        try:
+            raw_classes = data["classes"]
+        except KeyError as exc:
+            raise RegistryError("Registry data missing 'classes'") from exc
+        try:
+            parsed = tuple(
+                ClassDef(
+                    id=int(item["id"]),
+                    key=str(item["key"]),
+                    name=str(item["name"]),
+                    color=str(item["color"]),
+                    retired=bool(item.get("retired", False)),
+                )
+                for item in raw_classes
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RegistryError(f"Malformed class entry: {exc}") from exc
+
+        non_ignore = tuple(c for c in parsed if not c.is_ignore)
+        ignore = tuple(c for c in parsed if c.is_ignore)
+        ordered = non_ignore + ignore
+        _validate_classes(ordered)
+        return cls(classes=ordered)
+
+    def _with_classes(self, classes: tuple[ClassDef, ...]) -> Registry:
+        _validate_classes(classes)
+        return Registry(classes=classes)
+
+
+def _validate_classes(classes: tuple[ClassDef, ...]) -> None:
+    """Enforce the invariants of spec §2. Raises ``RegistryError`` on violation."""
+    if not classes:
+        raise RegistryError("Registry must contain at least the Ignore class")
+
+    for c in classes:
+        if not _KEY_RE.match(c.key):
+            raise RegistryError(f"Invalid class key: {c.key!r}")
+        if not c.name or len(c.name) > _MAX_NAME_LEN:
+            raise RegistryError(f"Invalid class name: {c.name!r}")
+        if not _COLOR_RE.match(c.color):
+            raise RegistryError(f"Invalid class color: {c.color!r}")
+
+    keys = [c.key for c in classes]
+    if len(set(keys)) != len(keys):
+        raise RegistryError("Duplicate class key")
+
+    ids = [c.id for c in classes]
+    if len(set(ids)) != len(ids):
+        raise RegistryError("Duplicate class id")
+
+    colors_lower = [c.color.lower() for c in classes]
+    if len(set(colors_lower)) != len(colors_lower):
+        raise RegistryError("Duplicate class colour (colours must be unique, retired included)")
+
+    ignore_classes = [c for c in classes if c.is_ignore]
+    if len(ignore_classes) != 1:
+        raise RegistryError("Registry must contain exactly one Ignore class")
+    ignore = ignore_classes[0]
+    if ignore.id != GT_IGNORE_ID:
+        raise RegistryError(f"Ignore class must have id {GT_IGNORE_ID}")
+    if ignore.retired:
+        raise RegistryError("The Ignore class cannot be retired")
+    if classes[-1].key != "ignore":
+        raise RegistryError("Ignore class must be last in display order")
+
+    for c in classes:
+        if c.is_ignore:
+            continue
+        if not (_MIN_NORMAL_ID <= c.id <= _MAX_NORMAL_ID):
+            raise RegistryError(f"Class id out of range 1-254: {c.id}")
+
+
+def slugify_key(name: str) -> str:
+    """Slug a display name into a valid registry key (``^[a-z][a-z0-9_]{0,31}$``)."""
+    slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    if not slug:
+        slug = "class"
+    if not slug[0].isalpha():
+        slug = f"c_{slug}"
+    return slug[:_MAX_KEY_LEN]
+
+
+def default_registry() -> Registry:
+    """The built-in registry (``app.config.DEFAULT_GT_CLASSES``)."""
+    classes = tuple(ClassDef(**c) for c in DEFAULT_GT_CLASSES)
+    _validate_classes(classes)
+    return Registry(classes=classes)
+
+
+def registry_path(project_dir: str) -> str:
+    return os.path.join(project_dir, GT_DIRNAME, GT_CLASSES_FILENAME)
+
+
+def load_registry(project_dir: str) -> Registry:
+    """Load ``gt/classes.json``, or the defaults if it does not exist yet."""
+    path = registry_path(project_dir)
+    if not os.path.exists(path):
+        return default_registry()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RegistryError(f"Could not read registry {path}: {exc}") from exc
+    return Registry.from_dict(data)
+
+
+def save_registry(project_dir: str, registry: Registry) -> str:
+    """Atomically write ``gt/classes.json`` (creates ``gt/`` if needed). Returns the path."""
+    path = registry_path(project_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(registry.to_dict(), indent=2))
+    os.replace(tmp, path)
+    return path
