@@ -27,7 +27,7 @@ from collections import deque
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QPen, QPixmap, QShortcut
 
 from app.config import GT_BACKGROUND_ID, GT_CLASSES_FILENAME, GT_DIRNAME, GT_UNKNOWN_COLOR
@@ -186,6 +186,11 @@ class GtTracingInterface(MaskTracingInterface):
         self.set_active_class(
             self._active_key if self._active_key in active else self._default_key()
         )
+        # The row count changed: resize and re-centre the panel now, and again
+        # once the new rows are shown (a visible parent shows them on the next
+        # event-loop pass, and until then the layout does not count them).
+        self.class_panel.reposition()
+        QTimer.singleShot(0, self.class_panel.reposition)
 
     def _refresh_panel(self):
         """Checked boxes = ticked by hand or has pixels; boxes of painted classes are locked."""
@@ -209,7 +214,9 @@ class GtTracingInterface(MaskTracingInterface):
         """Open the class editor; save the new registry and recolour the canvas."""
         if self._registry_error:
             self.notice.emit(
-                f"Fix {_REGISTRY_NAME} before editing classes: {self._registry_error}", "danger"
+                f"Fix {_REGISTRY_NAME} and reopen the image before editing classes: "
+                f"{self._registry_error}",
+                "danger",
             )
             return
         if not self._project_dir:
@@ -379,7 +386,8 @@ class GtTracingInterface(MaskTracingInterface):
             registry = default_registry()
             self._registry_error = str(exc)
             self.notice.emit(
-                f"{_REGISTRY_NAME} is invalid ({exc}). Saving GT is off until it is fixed.",
+                f"{_REGISTRY_NAME} is invalid ({exc}). Saving GT is off: fix the file, "
+                "then reopen the image.",
                 "danger",
             )
         self._set_registry(registry)
@@ -424,7 +432,9 @@ class GtTracingInterface(MaskTracingInterface):
             return
 
         project_dir = os.path.dirname(image_path)
-        if project_dir != self._project_dir:
+        # New folder, or the registry was invalid: (re)read it, so a fixed
+        # gt/classes.json takes effect on the next image load.
+        if project_dir != self._project_dir or self._registry_error:
             self._load_registry(project_dir)
 
         self.current_image_path = image_path
@@ -464,7 +474,9 @@ class GtTracingInterface(MaskTracingInterface):
             return False
         if self._registry_error:
             self.notice.emit(
-                f"Not saved: {_REGISTRY_NAME} is invalid ({self._registry_error}).", "danger"
+                f"Not saved: {_REGISTRY_NAME} is invalid ({self._registry_error}). "
+                "Fix the file, then reopen the image.",
+                "danger",
             )
             return False
 

@@ -357,6 +357,78 @@ def test_prompt_names_the_gt(app, project, monkeypatch):
     assert not os.path.exists(gt_path(image_path))
 
 
+def _fake_class_editor(monkeypatch, result):
+    """Replace ClassEditorDialog with a stub that 'accepts' with ``result``."""
+
+    class _FakeDialog:
+        def __init__(self, registry, parent=None):
+            pass
+
+        def exec(self):
+            return 1
+
+        def result_registry(self):
+            return result
+
+    fake = types.ModuleType("app.gui.class_editor_dialog")
+    fake.ClassEditorDialog = _FakeDialog
+    monkeypatch.setitem(sys.modules, "app.gui.class_editor_dialog", fake)
+
+
+def test_class_panel_resizes_after_classes_added(app, project, monkeypatch):
+    _, image_path = project
+    iface = _editor(app, image_path)
+    iface.show()
+    QApplication.processEvents()
+    try:
+        bigger = iface.registry.add(key="dead_root", name="Dead root", color="#7f5af0").add(
+            key="hypha", name="Hypha", color="#3fa7ff"
+        )
+        _fake_class_editor(monkeypatch, bigger)
+        iface.edit_classes()
+        QApplication.processEvents()
+
+        panel = iface.class_panel
+        assert set(panel._rows) == {c.key for c in bigger.active()}
+        content = panel._rows_container.sizeHint().height()
+        assert panel._scroll.height() >= content, (panel._scroll.height(), content)
+        # Still pinned to the right edge and vertically centred.
+        assert panel.geometry().right() < iface.width()
+        assert abs(panel.geometry().center().y() - iface.height() // 2) <= 2
+    finally:
+        iface.close()
+
+
+def test_fixed_registry_unblocks_save(app, project):
+    """An invalid classes.json blocks saving only until the file is fixed."""
+    folder, image_path = project
+    (folder / "gt").mkdir()
+    reg_file = folder / "gt" / "classes.json"
+    reg_file.write_text("{", encoding="utf-8")
+    second = folder / "plot_002.png"
+    cv2.imwrite(str(second), np.full((H, W, 3), 60, np.uint8))
+
+    iface = _editor(app, image_path)
+    _stroke(iface, (10, 10), (30, 10))
+    assert iface.save_mask() is False
+
+    save_registry(str(folder), default_registry())  # the user fixes the file
+    iface._set_clean()  # discard the unsaveable edit (no prompt on the next load)
+    iface.load_image(str(second))
+    _stroke(iface, (10, 10), (30, 10))
+    assert iface.save_mask() is True
+    assert os.path.exists(gt_path(str(second)))
+
+    # Reopening the same image after the fix works too.
+    reg_file.write_text("{", encoding="utf-8")
+    other = _editor(app, image_path)
+    assert other.save_mask() is False
+    save_registry(str(folder), default_registry())
+    other.load_image(image_path)
+    assert other.save_mask() is True
+    assert os.path.exists(gt_path(image_path))
+
+
 def test_edit_classes_recolours_without_changing_ids(app, project, monkeypatch):
     folder, image_path = project
     iface = _editor(app, image_path)
