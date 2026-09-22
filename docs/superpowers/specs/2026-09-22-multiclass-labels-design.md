@@ -113,7 +113,10 @@ no-op except for files copied between projects.
   ground-truth classes for a segmentation dataset."). Seven stages again.
 - Its right-panel page is a new `GtTracingInterface`, added to `right_panel` at index 4
   (indexes 0–3 unchanged); `switch_right_panel("gt_tracing")`.
-- Stage action bar: **Save GT** (primary), **Classes…**, **Export dataset…**.
+- Stage action bar: **Classes…**, **Export dataset…** (Save stays in the editor dock, as in
+  Correct Mask; its label reads "Save GT").
+- App lifecycle: closing the window, opening another folder, and leaving the stage all run the
+  GT editor's unsaved-changes prompt, exactly like the mask editor today.
 - Correct Mask is untouched.
 
 ### 3.2 `GtTracingInterface` (`app/gui/gt_tracing_interface.py`)
@@ -135,7 +138,11 @@ behaviour must not change (`tests/test_mask_tracing_interface_smoke.py` stays gr
   pixels only) with the active class. **Clear:** whole tracing to background (undoable).
 - **Per-class brush size:** each class remembers its last brush size (so tip dots stay small).
 - **Load:** `gt/<stem>.png` if present (read → align, warnings as notices; `changed` marks
-  dirty), else an empty tracing. Never reads `mask/`.
+  dirty), else an empty tracing. Never reads `mask/`. A GT file whose size differs from the
+  image, or a `GtFileError`, → danger notice, empty canvas, and the file on disk is left
+  untouched unless the user saves. An invalid `gt/classes.json` (`RegistryError`) → danger
+  notice naming the error; the editor shows the image but saving is refused until the file
+  is fixed (the registry file is never overwritten).
 - **Save:** always writes `gt/<stem>.png` (even when empty) with
   `reviewed = ticked ∪ keys of classes with pixels` (Ignore excluded), then writes
   `gt/classes.json` if missing. Emits `gt_saved(image_path)`. Status chip:
@@ -147,7 +154,7 @@ behaviour must not change (`tests/test_mask_tracing_interface_smoke.py` stays gr
 Floating overlay on the right edge, vertically centred, clear of the enhance popover (top
 right) and zoom cluster (bottom right). One row per active class, registry order:
 number key hint, colour swatch, name, **checked ✓** checkbox. Active row highlighted
-`#b794f6`. Gear button → class editor. Signals: `active_changed(str key)`,
+`#b794f6`. More than 10 rows scroll inside the panel (max height 60% of the canvas). Gear button → class editor. Signals: `active_changed(str key)`,
 `reviewed_changed(str key, bool)`, `edit_requested()`.
 
 ### 3.4 Checked (reviewed) per class
