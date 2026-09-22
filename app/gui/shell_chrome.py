@@ -5,7 +5,7 @@ titlebar (48px, a logo and nothing else), the stage ribbon (52px) and the action
 bar (52px, the left half of it a hint sentence restating the stage already
 highlighted in the ribbon above it) into a single 46px row:
 
-    [logo SPROUTS] | Library  Generate  Correct Mask  … | <stage actions> | [load]
+    [logo SPROUTS] | Library  Trace GT  Generate  Correct Mask  … | <stage actions> | [load]
 
 152px of chrome becomes 46px. On the 1200x700 window that is ~19% of the window
 height handed back to the image canvas. Every stage button keeps its name and
@@ -13,12 +13,14 @@ icon — no step numbers, nothing collapsed to a bare glyph — and the per-stag
 explanation that used to occupy the action bar now lives in each button's
 tooltip.
 
-The pipeline is also six stages instead of seven: mask and skeleton generation
-are one button (``mw.generate_all_button``), and the two corrections are
-separate stages because they open different editors.
+The pipeline has seven stages: Library, then Trace GT (hand-traced multi-class
+ground truth for a segmentation dataset, independent of the ML pipeline), then
+the measurement pipeline. Mask and skeleton generation are one button
+(``mw.generate_all_button``), and the two corrections are separate stages
+because they open different editors.
 
 Wiring is unchanged. Stage buttons forward to the same MainWindow handlers,
-``mw.ribbon_buttons`` keeps its six canonical keys in order, and
+``mw.ribbon_buttons`` keeps its seven canonical keys in order, and
 ``mw._populate_action_bar`` / ``mw._activate_action_stage`` keep their names and
 contracts.
 """
@@ -31,11 +33,13 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QStackedWidget,
     QToolButton,
     QWidget,
 )
 
+from app.gui.mask_tracing_interface import _GHOST_QSS
 from app.gui.widgets import SegmentedControl, tokens
 from app.gui.widgets.icons import load_icon, load_pixmap
 
@@ -70,14 +74,16 @@ def _vrule() -> QFrame:
 # --------------------------------------------------------------------------- #
 #  Stage table: (canonical key, displayed name, icon, tooltip blurb)
 #
-#  Six stages, not seven: mask + skeleton generation is ONE step (one button,
-#  one run), and the two corrections are separate stages because they are
-#  separate editors. Displayed names are full words — no step numbers, nothing
+#  Seven stages: Trace GT (the multi-class ground-truth editor) sits right
+#  after Library; mask + skeleton generation is ONE step (one button, one run),
+#  and the two corrections are separate stages because they are separate
+#  editors. Displayed names are full words — no step numbers, nothing
 #  collapsed to a bare glyph. The tooltip carries the sentence that used to
 #  live in the deleted hint band.
 # --------------------------------------------------------------------------- #
 _STAGES = [
     ("Library", "Library", "image", "Browse and select minirhizotron images from the tree."),
+    ("Trace GT", "Trace GT", "layers", "Paint ground-truth classes for a segmentation dataset."),
     (
         "Generate",
         "Generate",
@@ -172,8 +178,9 @@ def build_topbar(mw) -> QWidget:
 
     base_handlers = {
         "Library": lambda: mw.switch_right_panel("display"),
-        "Generate": lambda: mw.switch_right_panel("display"),
         # Enter-only: clicking the active stage again must not toggle it off.
+        "Trace GT": lambda: mw.toggle_gt_tracing() if mw.right_panel.currentIndex() != 4 else None,
+        "Generate": lambda: mw.switch_right_panel("display"),
         "Correct Mask": lambda: (
             mw.toggle_mask_tracing() if mw.right_panel.currentIndex() != 1 else None
         ),
@@ -208,9 +215,7 @@ def build_topbar(mw) -> QWidget:
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         btn.setStyleSheet(_STEP_QSS)
-        btn.clicked.connect(
-            lambda _=False, h=_make_handler(key, base_handlers[key]): h()
-        )
+        btn.clicked.connect(lambda _=False, h=_make_handler(key, base_handlers[key]): h())
         group.addButton(btn)
         steps_row.addWidget(btn)
         mw.ribbon_buttons[key] = btn
@@ -290,8 +295,20 @@ def build_topbar(mw) -> QWidget:
             getattr(mw, "skeleton_correction_interface", None), "reset_button", None
         )
 
+        # Trace GT actions: ghost buttons styled like the Correct Mask "Clear".
+        # Save stays in the editor dock ("Save GT"), as in Correct Mask.
+        mw.gt_classes_button = _ghost_button(
+            "Classes…", "settings", "Add, rename, recolour or retire GT classes"
+        )
+        mw.gt_classes_button.clicked.connect(mw.gt_tracing_interface.edit_classes)
+        mw.gt_export_button = _ghost_button(
+            "Export dataset…", "export", "Export images + class-id masks as a dataset"
+        )
+        mw.gt_export_button.clicked.connect(mw.export_gt_dataset)
+
         pages = {
             "Library": _page(view_seg),
+            "Trace GT": _page(mw.gt_classes_button, mw.gt_export_button),
             # ONE generate button — masks then skeletons, single run.
             "Generate": _page(mw.generate_all_button),
             "Correct Mask": _page(trace_clear),
@@ -315,6 +332,17 @@ def build_topbar(mw) -> QWidget:
     mw._activate_action_stage = _activate_action_stage
 
     return bar
+
+
+def _ghost_button(text: str, icon_name: str, tooltip: str) -> QPushButton:
+    """A topbar action button in the editors' ghost style (see ``trace_clear``)."""
+    btn = QPushButton(text)
+    btn.setObjectName("ghostBtn")
+    btn.setStyleSheet(_GHOST_QSS)
+    btn.setIcon(load_icon(icon_name, tokens.TEXT_MUTED, 15))
+    btn.setToolTip(tooltip)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    return btn
 
 
 # --------------------------------------------------------------------------- #

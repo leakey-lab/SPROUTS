@@ -21,9 +21,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.gt import load_registry
+
 from . import file_tree_manager, ui_panels, visualization_manager
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
+from .gt_tracing_interface import GtTracingInterface
 from .image_manager import ImageManager
 from .mask_tracing_interface import MaskTracingInterface
 from .skeleton_correction_interface import SkeletonCorrectionInterface
@@ -103,6 +106,9 @@ class MainWindow(QMainWindow):
         self.mask_handler = MaskHandler(self)
         self.mask_generation_handler = MaskGenerationHandler(self)
         self.mask_tracing_interface = MaskTracingInterface()
+        # Multi-class ground-truth editor (Trace GT stage). Independent of the
+        # ML pipeline: it reads/writes only gt/, never mask/ or skeletons/.
+        self.gt_tracing_interface = GtTracingInterface()
         self.skeleton_correction_interface = SkeletonCorrectionInterface()
         self.root_length_viz = None
         self.root_area_viz = None
@@ -118,6 +124,11 @@ class MainWindow(QMainWindow):
 
         # Transient editor feedback (fill hints, clear/undo notes) -> toasts.
         self.mask_tracing_interface.notice.connect(self.notify)
+        self.gt_tracing_interface.notice.connect(self.notify)
+        self.gt_tracing_interface.navigate_requested.connect(self.navigate_image)
+        self.gt_tracing_interface.gt_saved.connect(
+            lambda p: self.notify(f"GT saved for {os.path.basename(p)}")
+        )
 
         self.init_ui()
 
@@ -139,6 +150,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Stop Dash server threads before the window (and embedded viz widgets) are destroyed."""
         self.mask_tracing_interface.maybe_save_changes()
+        self.gt_tracing_interface.maybe_save_changes()
         try:
             if self.root_length_viz is not None:
                 self.close_root_length_visualization()
@@ -152,9 +164,10 @@ class MainWindow(QMainWindow):
     def _build_body(self) -> QWidget:
         """Build the left/right splitter body (presentation extract of init_ui).
 
-        Returns a container widget holding the QSplitter. PRESERVES the four
+        Returns a container widget holding the QSplitter. PRESERVES the
         ``right_panel.addWidget`` calls in their fixed index order
-        (0=display, 1=mask_tracing, 2=visualization, 3=skeleton_correction).
+        (0=display, 1=mask_tracing, 2=visualization, 3=skeleton_correction,
+        4=gt_tracing).
         """
         from app.gui.widgets import tokens
 
@@ -187,6 +200,7 @@ class MainWindow(QMainWindow):
         self.visualization_widget = QWidget()  # Placeholder for visualization
         self.right_panel.addWidget(self.visualization_widget)
         self.right_panel.addWidget(self.skeleton_correction_interface)
+        self.right_panel.addWidget(self.gt_tracing_interface)
         splitter.addWidget(self.right_panel)
 
         splitter.setStretchFactor(0, 0)
@@ -339,6 +353,14 @@ class MainWindow(QMainWindow):
         except RuntimeError as e:
             logger.warning("Failed to toggle OpenGL on mask tracing view: %s", e)
 
+        # GT tracing view
+        try:
+            gv = getattr(self.gt_tracing_interface, "graphics_view", None)
+            if gv is not None and hasattr(gv, "set_opengl_viewport_enabled"):
+                gv.set_opengl_viewport_enabled(enabled)
+        except RuntimeError as e:
+            logger.warning("Failed to toggle OpenGL on GT tracing view: %s", e)
+
         # Skeleton correction view
         try:
             gv = getattr(self.skeleton_correction_interface, "graphics_view", None)
@@ -441,9 +463,11 @@ class MainWindow(QMainWindow):
         # Show progress before loading.
         self.task_progress.start("Loading images")
 
-        # Offer to save pending mask edits, then drop the editor's history.
+        # Offer to save pending mask / GT edits, then drop the editors' history.
         if hasattr(self, "mask_tracing_interface"):
             self.mask_tracing_interface.reset()
+        if hasattr(self, "gt_tracing_interface"):
+            self.gt_tracing_interface.reset()
 
         # Load images through image manager
         self.image_manager.load_images(dir_name)
@@ -612,6 +636,8 @@ class MainWindow(QMainWindow):
 
         if self.right_panel.currentWidget() == self.mask_tracing_interface:
             self.mask_tracing_interface.load_image(image_path)
+        elif self.right_panel.currentWidget() == self.gt_tracing_interface:
+            self.gt_tracing_interface.load_image(image_path)
         elif self.right_panel.currentWidget() == self.skeleton_correction_interface:
             self.skeleton_correction_interface.load_image(
                 image_path, images_base_folder=self.image_manager.original_folder
@@ -763,6 +789,63 @@ class MainWindow(QMainWindow):
             if item:
                 item.setForeground(0, QColor("white"))
 
+    # ==================== Ground-truth Tracing (Trace GT) ====================
+
+    def toggle_gt_tracing(self) -> None:
+        """Enter / leave the multi-class GT editor (right panel index 4)."""
+        if self.right_panel.currentIndex() != 4:
+            # Leaving mask tracing: go through its toggle so its signals are
+            # disconnected and its tree colours restored.
+            if self.right_panel.currentIndex() == 1:
+                self.toggle_mask_tracing()
+            self.switch_right_panel("gt_tracing")
+        else:
+            self.switch_right_panel("display")
+
+        current_item = self.file_list.currentItem()
+        if current_item:
+            self.on_image_selected(current_item)
+
+    def navigate_image(self, delta: int) -> None:
+        """Select the next/previous visible image leaf in the library tree."""
+        from PyQt6.QtWidgets import QTreeWidgetItemIterator
+
+        leaves = []
+        it = QTreeWidgetItemIterator(self.file_list)
+        while it.value():
+            item = it.value()
+            if item.data(0, Qt.ItemDataRole.UserRole) and not item.isHidden():
+                leaves.append(item)
+            it += 1
+        if not leaves:
+            return
+        current = self.file_list.currentItem()
+        idx = leaves.index(current) if current in leaves else -1
+        new = idx + delta
+        if 0 <= new < len(leaves):
+            self.file_list.setCurrentItem(leaves[new])
+            self.file_list.scrollToItem(leaves[new])
+            self.on_image_selected(leaves[new])
+
+    def export_gt_dataset(self) -> None:
+        """Open the dataset-export dialog for the loaded folder's GT tracings."""
+        folder = getattr(self.image_manager, "original_folder", None)
+        if not folder:
+            self.notify("Load an image folder first", "warn")
+            return
+        # Pending edits on the open image belong in the export.
+        self.gt_tracing_interface.maybe_save_changes()
+        # The folder's own registry: the editor's copy is only in sync once Trace
+        # GT has opened an image from this folder (it holds the defaults before).
+        try:
+            registry = load_registry(folder)
+        except (ValueError, AttributeError, TypeError) as exc:  # RegistryError, bad JSON shape
+            self.notify(f"Cannot export: gt/classes.json is invalid ({exc})", "danger")
+            return
+        from .export_dataset_dialog import ExportDatasetDialog
+
+        ExportDatasetDialog(folder, dict(self.image_manager.images), registry, self).exec()
+
     # ==================== Skeleton Correction (isolated stream) ====================
 
     def toggle_skeleton_correction(self):
@@ -773,7 +856,8 @@ class MainWindow(QMainWindow):
         skeleton generation + main display streams.
         """
         # Right panel indexes:
-        # 0 = display, 1 = mask tracing, 2 = visualization, 3 = skeleton correction
+        # 0 = display, 1 = mask tracing, 2 = visualization, 3 = skeleton correction,
+        # 4 = GT tracing
         if self.right_panel.currentIndex() != 3:
             # If leaving mask tracing, ensure its signals are disconnected cleanly
             if self.right_panel.currentIndex() == 1:
@@ -795,9 +879,11 @@ class MainWindow(QMainWindow):
     # ==================== Panel Switching ====================
 
     def switch_right_panel(self, panel):
-        # Leaving the mask editor: offer to save pending edits first.
+        # Leaving the mask / GT editor: offer to save pending edits first.
         if self.right_panel.currentIndex() == 1 and panel != "mask_tracing":
             self.mask_tracing_interface.maybe_save_changes()
+        if self.right_panel.currentIndex() == 4 and panel != "gt_tracing":
+            self.gt_tracing_interface.maybe_save_changes()
         if panel == "display":
             self.right_panel.setCurrentIndex(0)
         elif panel == "mask_tracing":
@@ -806,3 +892,5 @@ class MainWindow(QMainWindow):
             self.right_panel.setCurrentIndex(2)
         elif panel == "skeleton_correction":
             self.right_panel.setCurrentIndex(3)
+        elif panel == "gt_tracing":
+            self.right_panel.setCurrentIndex(4)

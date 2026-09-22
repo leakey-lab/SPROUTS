@@ -112,6 +112,9 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
 
     DEFAULT_BRUSH = 8
     DEFAULT_OPACITY = 60
+    # What the editor saves, as shown in its labels and the unsaved-changes
+    # prompt. Subclasses that edit something else (the GT editor) override it.
+    EDITOR_NOUN = "mask"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -231,7 +234,7 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
         self.redo_button = IconButton("redo", "Redo (Ctrl+Y)")
         self.clear_icon_button = IconButton("trash", "Clear mask (undoable)")
 
-        self.save_button = QPushButton("Save mask")
+        self.save_button = QPushButton(f"Save {self.EDITOR_NOUN}")
         self.save_button.setObjectName("primaryBtn")
         self.save_button.setStyleSheet(_PRIMARY_QSS)
         self.save_button.setIcon(load_icon("save", tokens.ACCENT_INK, 16))
@@ -241,7 +244,7 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
 
         # Text variant of Clear for the topbar action bar (shell_chrome
         # reparents it there); intentionally not placed in the dock.
-        self.clear_button = QPushButton("Clear mask")
+        self.clear_button = QPushButton(f"Clear {self.EDITOR_NOUN}")
         self.clear_button.setObjectName("ghostBtn")
         self.clear_button.setStyleSheet(_GHOST_QSS)
         self.clear_button.setIcon(load_icon("trash", tokens.TEXT_MUTED, 15))
@@ -510,6 +513,7 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
                 self.undo_stack.append(snapshot)
                 self.redo_stack.clear()
                 self.mark_dirty()
+                self._after_stroke()
             else:
                 self.notice.emit(
                     "Fill works inside a closed outline. Close the loop first.", "info"
@@ -526,6 +530,10 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
     def end_stroke(self):
         self.drawing = False
         self.last_point = None
+        self._after_stroke()
+
+    def _after_stroke(self):
+        """Hook: a stroke or fill has been committed to ``mask_pixmap``. No-op here."""
 
     # ====================================================== dirty / status
     def mark_dirty(self):
@@ -570,8 +578,8 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
         name = os.path.basename(self.current_image_path)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle("Unsaved mask")
-        box.setText(f"Save changes to the mask for {name}?")
+        box.setWindowTitle(f"Unsaved {self.EDITOR_NOUN}")
+        box.setText(f"Save changes to the {self.EDITOR_NOUN} for {name}?")
         box.setInformativeText("Discarded edits cannot be recovered.")
         box.setStandardButtons(QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard)
         box.setDefaultButton(QMessageBox.StandardButton.Save)

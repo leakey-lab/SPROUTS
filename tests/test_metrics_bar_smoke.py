@@ -66,8 +66,9 @@ def test_metrics_bar_mounts_without_disturbing_stack(app):
         # Bar is a child of the display page (stack index 0), not its own page.
         display_page = w.display_page_stack.widget(0)
         assert w.metrics_bar in display_page.findChildren(MetricsBar)
-        # Right panel page count unchanged (display/mask/skeleton/normalization).
-        assert w.right_panel.count() == 4
+        # Right panel pages: display / mask tracing / visualization / skeleton
+        # correction / GT tracing (the metrics bar adds none).
+        assert w.right_panel.count() == 5
         # Read-only refresh runs without error.
         w._refresh_metrics_bar(None)
     finally:
