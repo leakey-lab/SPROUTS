@@ -67,11 +67,58 @@ image/mask resolution, so they are resolution-independent:
 If your imaging system has a different FOV, change it in one place:
 `app/config.py`.
 
+## Ground-truth tracing (Trace GT)
+
+The **Trace GT** stage paints hand-traced, multi-class ground truth for training
+segmentation models (for example, roots vs nodules). It is independent of every
+model in the app: it never starts from the ResNet mask and never reads or writes
+`mask/` or `skeletons/`. It traces classes; it does not measure them.
+
+**Files** (next to the images, in the loaded folder):
+
+- `gt/<stem>.png` — the tracing: an 8-bit palette PNG where each pixel is one
+  class id (`0` background, `1`–`254` classes, `255` Ignore). Any image viewer
+  shows it in the class colours. A text chunk records the class list and which
+  classes were checked on that image.
+- `gt/classes.json` — the project's classes (id, key, name, colour). Defaults:
+  Root, Nodule, Root tip, Ignore. Edit them with **Classes…**; a deleted class is
+  retired (its id is never reused).
+
+A saved file means the image was annotated, even when nothing is painted
+("checked, nothing present" is a valid negative example).
+
+**Editor:** the same brush / eraser / fill canvas as Correct Mask, plus a class
+panel on the right. The brush paints the active class and replaces whatever was
+under it (one class per pixel). Each class has a ✓ box: it ticks itself when the
+class has pixels, and you tick it by hand for "looked for it, none present".
+
+| Key | Action |
+|---|---|
+| `1`–`9` | select the n-th class |
+| `0` | select Ignore |
+| `PgDn` / `PgUp` | save and open the next / previous image |
+| `B` `E` `F`, `[` `]`, Space, `H`, `Ctrl+S`, `Ctrl+Z`/`Ctrl+Y` | as in Correct Mask |
+
+**Export dataset…** writes a training set to an empty folder:
+
+```
+images/<stem>.<ext>    copied originals
+masks/<stem>.png       class-id PNG: background 0, classes 1..N, Ignore 255
+classes.json           id → name/colour, ignore_index 255
+splits/train.txt, splits/val.txt
+manifest.csv           stem, source image, split, tube, position, date, classes present
+```
+
+By default only images where every class is checked are exported, and all images
+of one tube stay in the same split (so the same root on different dates cannot
+leak between train and validation).
+
 ## Project layout
 
 ```
 app/
   config.py            # single source of calibration, ports, paths, batch sizes
+  gt/                  # ground-truth tracing core: class registry, GT PNG store, export
   inference/           # metrics (length/area), skeleton & mask inference
   handlers/            # batch orchestration (QThread)
   gui/                 # PyQt6 widgets, editors, graphics views

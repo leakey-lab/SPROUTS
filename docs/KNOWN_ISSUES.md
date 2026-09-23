@@ -26,3 +26,18 @@ Root area show `—`**: measured values are produced only by batch threads
 to CSV outputs; they are never loaded back into per-image state. Populating them
 read-only would need parsing those CSVs (or caching the measurements in
 `image_manager`). Deferred — do not fabricate values.
+
+## 4. Ground-truth tracing (Trace GT) — v1 scope limits (OPEN, by design)
+
+Added on `feat/multiclass-labels` (spec:
+`docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`). Deliberately
+not in v1:
+
+- No measurement of GT classes (the stage builds a segmentation dataset only).
+- No ML overlay or seeding in the GT editor; GT is independent of the models.
+- No per-class visibility toggle (`H` hides the whole tracing), no GT badges in
+  the library tree, no deleting a GT file from the editor, no un-retiring a class.
+- Export is semantic segmentation only (no instance ids / COCO).
+- Only single-folder projects (the library already scans one folder).
+- The topbar needs about 1170 px of width with seven stages; narrower windows
+  clip the stage row.

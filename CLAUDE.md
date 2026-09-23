@@ -68,6 +68,7 @@ the SPROUTS dark palette, opens `MainWindow`.
 | Editors | `app/gui/` | `MaskTracingInterface` (interface + graphics view + drawing mixin + cursor) and `SkeletonCorrectionInterface` (interface + view + `SkeletonCorrectionModel`) are **isolated** editor streams. |
 | Visualization | `app/visualization/` | Dash/Plotly length + area dashboards, `DataProcessor` / `DataCache`, embedded via `QWebEngineView`. |
 | Mask model | `app/mask_model/` | ResNet segmentation (`EnhancedResnetGenerator`, SE/`DualAttention` blocks). |
+| GT tracing | `app/gt/` + `app/gui/gt_tracing_interface.py` | Multi-class **ground truth** for segmentation datasets ("Trace GT" stage, right_panel index 4). Qt-free core: `registry.py` (`gt/classes.json`), `store.py` (`gt/<stem>.png` 8-bit palette, id 255 = Ignore), `export.py` (dataset export). **Independent of every ML model**: never reads/writes `mask/` or `skeletons/`, never measures. Spec: `docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`. |
 
 **God nodes** (most-connected core abstractions, from the graph — touch with
 care): `SkeletonCorrectionInterface` (85 edges), `MainWindow` (72),
