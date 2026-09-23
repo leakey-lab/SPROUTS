@@ -94,9 +94,9 @@ class has pixels, and you tick it by hand for "looked for it, none present".
 
 | Key | Action |
 |---|---|
-| `1`–`9` | select the n-th class |
+| `1`–`9` (top row or keypad) | select the n-th class |
 | `0` | select Ignore |
-| `PgDn` / `PgUp` | save and open the next / previous image |
+| `PgDn` / `PgUp` | save and open the next / previous image (asks first if the file's classes had to be remapped on load) |
 | `B` `E` `F`, `[` `]`, Space, `H`, `Ctrl+S`, `Ctrl+Z`/`Ctrl+Y` | as in Correct Mask |
 
 **Export dataset…** writes a training set to an empty folder:
@@ -111,7 +111,11 @@ manifest.csv           stem, source image, split, tube, position, date, classes 
 
 By default only images where every class is checked are exported, and all images
 of one tube stay in the same split (so the same root on different dates cannot
-leak between train and validation).
+leak between train and validation). Images that fail to export are listed in the
+dialog and in `errors.txt`; the rest still export.
+
+If a GT save fails (for example the file is locked by another program), your edits
+are kept: the prompt offers **Keep editing** instead of silently moving on.
 
 ## Project layout
 

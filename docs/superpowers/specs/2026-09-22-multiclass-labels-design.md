@@ -141,12 +141,17 @@ behaviour must not change (`tests/test_mask_tracing_interface_smoke.py` stays gr
   dirty), else an empty tracing. Never reads `mask/`. A GT file whose size differs from the
   image, or a `GtFileError`, → danger notice, empty canvas, and the file on disk is left
   untouched unless the user saves. An invalid `gt/classes.json` (`RegistryError`) → danger
-  notice naming the error; the editor shows the image but saving is refused until the file
-  is fixed (the registry file is never overwritten).
+  notice naming the error; the editor shows the image but painting, fill, clear, ticks and
+  saving are refused until the file is fixed (the registry file is never overwritten). A
+  fixed file takes effect on the next image load.
 - **Save:** always writes `gt/<stem>.png` (even when empty) with
   `reviewed = ticked ∪ keys of classes with pixels` (Ignore excluded), then writes
   `gt/classes.json` if missing. Emits `gt_saved(image_path)`. Status chip:
-  `name ● Saved · 2/3 checked` / `● Unsaved` / `● No GT`.
+  `name ● Saved · 2/3 checked` / `● Unsaved` / `● No GT` / `● GT unreadable`.
+- **Failed save never loses edits:** if a save fails (invalid registry, locked or read-only
+  file, full disk), the unsaved-changes prompt offers Discard / Keep editing; choosing Keep
+  editing cancels the action that asked (image switch, stage switch, folder open, window
+  close) and the open image and its edits stay. The mask editor's behaviour is unchanged.
 - The base `mask_saved` / `mask_cleared` signals are not emitted in GT mode.
 
 ### 3.3 Class panel (`app/gui/class_panel.py`)
@@ -168,8 +173,12 @@ number key hint, colour swatch, name, **checked ✓** checkbox. Active row highl
 
 ### 3.5 Keys
 
-`1`–`9` select the n-th active class; `0` selects Ignore; `PgDn` / `PgUp` save (if dirty,
-without a prompt) and open the next / previous image in the library tree; plus every base
+`1`–`9` (top row or keypad) select the n-th active class; `0` selects Ignore; `PgDn` /
+`PgUp` save (if dirty, without a prompt) and open the next / previous image in the library
+tree, counted from the image open in the editor. Exception: after a lossy load-time remap
+(`align_to_registry` returned warnings, e.g. an unknown class key mapped to Ignore) they use
+the normal unsaved-changes prompt instead of saving silently. Class-panel widgets never take
+keyboard focus, so Space and the other canvas keys keep working after a panel click. Plus every base
 key (B/E/F, `[` `]`, Space, H, Ctrl+S, Ctrl+Z/Y, zoom keys). Navigation is a signal
 `navigate_requested(int delta)` that `MainWindow` handles by moving the tree selection.
 
@@ -221,8 +230,13 @@ Output layout:
   split" is on and the tube parses, else the stem. Groups are sorted, shuffled with
   `random.Random(seed)`, and assigned to val until val holds ≥ `val_fraction` of the images;
   with ≥ 2 groups both splits are non-empty. Deterministic for a given seed and input.
-- **Safety:** `out_dir` must not exist or be empty, else `ExportError`. `mask/`, `skeletons/`
-  and the GT files are never modified.
+- **Safety:** `out_dir` must not exist or be empty, and must not lie inside the project's
+  `mask/`, `skeletons/`, `skeleton_corrections/` or `gt/` folders, else `ExportError`.
+  `mask/`, `skeletons/` and the GT files are never modified.
+- **Errors:** a failure on one image adds `(stem, message)` to `errors`, leaves no partial
+  output for it, and the export continues. The dialog lists the failed images (first 10) and
+  writes `<out>/errors.txt`.
+- **Reserved key:** `background` cannot be used as a class key (the export uses it for id 0).
 
 ---
 
