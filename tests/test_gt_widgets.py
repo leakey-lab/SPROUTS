@@ -18,7 +18,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QScrollArea, QWidget  # noqa: E402
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialogButtonBox,
+    QFrame,
+    QScrollArea,
+    QWidget,
+)
 
 from app.gt.registry import default_registry  # noqa: E402
 from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
@@ -257,3 +263,123 @@ def test_unchanged_registry_returns_none(app):
     dialog = ClassEditorDialog(default_registry())
     dialog._on_accept()
     assert dialog.result_registry() is None
+
+
+# --------------------------------------------------------------------------- #
+#  Fix wave: stale rows, sticky errors, default colour, scrolling
+# --------------------------------------------------------------------------- #
+def test_set_registry_drops_old_rows_at_once(app):
+    """Rebuilt rows replace the old ones immediately (no stale highlighted row)."""
+    host = _host()
+    panel = ClassPanel(host)
+    host.show()
+    try:
+        panel.set_registry(default_registry())
+        panel.set_active("root")
+        QApplication.processEvents()
+        old_rows = list(panel._rows.values())
+
+        panel.set_registry(default_registry())
+        rows = panel.findChildren(QFrame, "classRow")
+        assert len(rows) == 4, len(rows)
+        assert all(r.isHidden() and r.parent() is None for r in old_rows)
+
+        QApplication.processEvents()
+        visible = [r for r in panel.findChildren(QFrame, "classRow") if r.isVisible()]
+        assert len(visible) == 4
+        assert [r for r in visible if r._active] == [panel._rows["root"]]
+    finally:
+        host.close()
+
+
+def _ok(dialog):
+    return dialog._button_box.button(QDialogButtonBox.StandardButton.Ok)
+
+
+def test_restoring_a_blanked_name_clears_the_error(app):
+    dialog = ClassEditorDialog(default_registry())
+    row = dialog._rows["nodule"]
+    row.name_edit.setText("")
+    row.name_edit.editingFinished.emit()
+    assert dialog._error is not None and not _ok(dialog).isEnabled()
+
+    row.name_edit.setText("Nodule")  # back to the saved name
+    row.name_edit.editingFinished.emit()
+    assert dialog._error is None and _ok(dialog).isEnabled()
+
+
+def test_failed_add_error_clears_when_the_form_is_edited(app):
+    root_color = default_registry().by_key("root").color
+    for edit in ("name", "key", "colour"):
+        dialog = ClassEditorDialog(default_registry())
+        dialog._add_name_edit.setText("Copy Root")
+        dialog._set_add_color(root_color)
+        dialog._on_add_clicked()
+        assert dialog._error is not None and not _ok(dialog).isEnabled(), edit
+
+        if edit == "name":
+            dialog._add_name_edit.setText("")  # the user abandons the form
+        elif edit == "key":
+            QTest.keyClicks(dialog._add_key_edit, "x")
+        else:
+            dialog._set_add_color("#0a0b0c")
+        assert dialog._error is None and _ok(dialog).isEnabled(), edit
+        dialog._on_accept()
+        assert dialog.result_registry() is None, edit  # nothing was added
+
+
+def test_row_error_survives_add_form_edits(app):
+    """Editing the add form must not hide a still-invalid (blank) class name."""
+    dialog = ClassEditorDialog(default_registry())
+    row = dialog._rows["nodule"]
+    row.name_edit.setText("")
+    row.name_edit.editingFinished.emit()
+    dialog._add_name_edit.setText("Dead root")
+    assert dialog._error is not None and not _ok(dialog).isEnabled()
+
+
+def test_default_add_colour_is_never_taken(app):
+    retired = default_registry().add(key="old", name="Old", color="#4c9bd6").retire("old")
+    for registry in (default_registry(), retired):
+        dialog = ClassEditorDialog(registry)
+        for name in ("First", "Second", "Third"):
+            used = {c.color.lower() for c in dialog._candidate.classes}
+            assert dialog._add_color.lower() not in used
+            dialog._add_name_edit.setText(name)
+            dialog._on_add_clicked()  # no colour chosen: the default must be free
+            assert dialog._error is None, dialog._error
+        colours = [c.color.lower() for c in dialog._candidate.classes]
+        assert len(set(colours)) == len(colours)
+
+
+def test_default_add_colour_moves_off_a_colour_just_given_to_a_class(app):
+    dialog = ClassEditorDialog(default_registry())
+    dialog._apply_color("nodule", dialog._add_color)
+    assert dialog._error is None
+    dialog._add_name_edit.setText("New")
+    dialog._on_add_clicked()
+    assert dialog._error is None
+
+
+def test_editor_rows_scroll_when_there_are_many_classes(app):
+    dialog = ClassEditorDialog(_registry_with_many_classes(40))
+    scroll = dialog._rows_scroll
+    assert isinstance(scroll, QScrollArea)
+    assert scroll.widget() is dialog._rows_container
+    assert len(dialog._rows) == 41
+    assert dialog.sizeHint().height() <= 640, dialog.sizeHint()
+    assert scroll.maximumHeight() < dialog._rows_container.sizeHint().height()
+
+
+def test_retire_by_clicking_its_own_button(app, monkeypatch):
+    """The row holding the clicked Retire button is rebuilt inside that click."""
+    import app.gui.class_editor_dialog as mod
+
+    monkeypatch.setattr(
+        mod.QMessageBox, "question", lambda *a, **k: mod.QMessageBox.StandardButton.Yes
+    )
+    dialog = ClassEditorDialog(default_registry())
+    dialog._rows["nodule"].retire_button.click()
+    QApplication.processEvents()
+    assert "nodule" not in dialog._rows
+    assert dialog._candidate.by_key("nodule").retired is True

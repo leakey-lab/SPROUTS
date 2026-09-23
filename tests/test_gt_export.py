@@ -232,6 +232,56 @@ def test_export_non_empty_out_dir_raises(tmp_path):
         export_dataset(project_dir, images, export_registry, options)
 
 
+@pytest.mark.parametrize(
+    "sub",
+    [
+        "gt",
+        os.path.join("gt", "export"),
+        os.path.join("mask", "export"),
+        os.path.join("skeletons", "export"),
+        os.path.join("skeleton_corrections", "deep", "export"),
+    ],
+)
+def test_export_refuses_out_dir_inside_project_data_folders(tmp_path, sub):
+    project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
+    out_dir = os.path.join(project_dir, sub)
+    gt_before = sorted(os.listdir(os.path.join(project_dir, "gt")))
+
+    with pytest.raises(ExportError, match="inside"):
+        export_dataset(project_dir, images, export_registry, ExportOptions(out_dir=out_dir))
+    if sub != "gt":
+        assert not os.path.exists(out_dir)
+    assert sorted(os.listdir(os.path.join(project_dir, "gt"))) == gt_before
+
+
+def test_export_allows_sibling_folder_with_similar_name(tmp_path):
+    """``gt_export`` next to ``gt/`` is not inside it (no prefix matching)."""
+    project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
+    out_dir = os.path.join(project_dir, "gt_export")
+    result = export_dataset(project_dir, images, export_registry, ExportOptions(out_dir=out_dir))
+    assert result.exported == 6
+
+
+def test_export_writes_errors_txt_only_when_there_are_errors(tmp_path):
+    project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
+    clean_out = tmp_path / "clean"
+    export_dataset(project_dir, images, export_registry, ExportOptions(out_dir=str(clean_out)))
+    assert not (clean_out / "errors.txt").exists()
+
+    corrupt_stem = _STEMS[2]
+    with open(gt_path(images[corrupt_stem]), "wb") as fh:
+        fh.write(b"not a png")
+    out_dir = tmp_path / "out"
+    result = export_dataset(
+        project_dir, images, export_registry, ExportOptions(out_dir=str(out_dir))
+    )
+    assert [stem for stem, _ in result.errors] == [corrupt_stem]
+    lines = (out_dir / "errors.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    stem, message = lines[0].split("\t", 1)
+    assert stem == corrupt_stem and message == " ".join(result.errors[0][1].split())
+
+
 def test_export_missing_out_dir_is_created(tmp_path):
     project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
     out_dir = tmp_path / "nested" / "out"

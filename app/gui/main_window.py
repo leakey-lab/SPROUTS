@@ -17,11 +17,12 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStatusBar,
+    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
 
-from app.gt import load_registry
+from app.gt import RegistryError, load_registry
 
 from . import file_tree_manager, ui_panels, visualization_manager
 from .display_controller import DisplayController
@@ -33,6 +34,13 @@ from .skeleton_correction_interface import SkeletonCorrectionInterface
 from .task_progress import TaskProgressWidget
 
 logger = logging.getLogger(__name__)
+
+
+def _same_path(a: str | None, b: str | None) -> bool:
+    """True when both are set and name the same file (case/separator-insensitive on Windows)."""
+    if not a or not b:
+        return False
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 class _ProgressBarShim:
@@ -148,9 +156,14 @@ class MainWindow(QMainWindow):
         return _ProgressBarShim(self.task_progress)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Stop Dash server threads before the window (and embedded viz widgets) are destroyed."""
+        """Stop Dash server threads before the window (and embedded viz widgets) are destroyed.
+
+        Unsaved GT the user chose to keep (its save failed) cancels the close.
+        """
         self.mask_tracing_interface.maybe_save_changes()
-        self.gt_tracing_interface.maybe_save_changes()
+        if not self.gt_tracing_interface.maybe_save_changes():
+            event.ignore()
+            return
         try:
             if self.root_length_viz is not None:
                 self.close_root_length_visualization()
@@ -450,6 +463,10 @@ class MainWindow(QMainWindow):
         """
         if not dir_name:
             return
+        # Unsaved GT the user chose to keep (its save failed) cancels the open.
+        gt = getattr(self, "gt_tracing_interface", None)
+        if gt is not None and not gt.maybe_save_changes():
+            return
         # Stash for on_loading_finished so it can persist a recent entry.
         self._last_loaded_dir = dir_name
 
@@ -637,7 +654,13 @@ class MainWindow(QMainWindow):
         if self.right_panel.currentWidget() == self.mask_tracing_interface:
             self.mask_tracing_interface.load_image(image_path)
         elif self.right_panel.currentWidget() == self.gt_tracing_interface:
-            self.gt_tracing_interface.load_image(image_path)
+            gt = self.gt_tracing_interface
+            gt.load_image(image_path)
+            if gt.current_image_path and not _same_path(gt.current_image_path, image_path):
+                # The editor kept its open image (its save failed and the user
+                # kept editing): point the library back at that image.
+                self._select_tree_image(gt.current_image_path)
+                return
         elif self.right_panel.currentWidget() == self.skeleton_correction_interface:
             self.skeleton_correction_interface.load_image(
                 image_path, images_base_folder=self.image_manager.original_folder
@@ -687,7 +710,8 @@ class MainWindow(QMainWindow):
 
     def toggle_mask_tracing(self):
         if self.right_panel.currentIndex() != 1:  # If not in mask tracing view
-            self.switch_right_panel("mask_tracing")
+            if not self.switch_right_panel("mask_tracing"):
+                return  # the GT editor kept unsaved edits: stay there
             self.toggle_mask_tracing_button.setText("Return to Main View")
 
             # Connect signals for mask tracing interface.
@@ -799,27 +823,53 @@ class MainWindow(QMainWindow):
             if self.right_panel.currentIndex() == 1:
                 self.toggle_mask_tracing()
             self.switch_right_panel("gt_tracing")
-        else:
-            self.switch_right_panel("display")
+        elif not self.switch_right_panel("display"):
+            return  # unsaved GT the user kept: stay in the editor
 
         current_item = self.file_list.currentItem()
         if current_item:
             self.on_image_selected(current_item)
 
-    def navigate_image(self, delta: int) -> None:
-        """Select the next/previous visible image leaf in the library tree."""
-        from PyQt6.QtWidgets import QTreeWidgetItemIterator
-
+    def _image_leaves(self, *, visible_only: bool = False) -> list:
+        """Image leaves of the library tree, in display order."""
         leaves = []
         it = QTreeWidgetItemIterator(self.file_list)
         while it.value():
             item = it.value()
-            if item.data(0, Qt.ItemDataRole.UserRole) and not item.isHidden():
+            if item.data(0, Qt.ItemDataRole.UserRole) and not (visible_only and item.isHidden()):
                 leaves.append(item)
             it += 1
+        return leaves
+
+    def _leaf_for_image(self, image_path: str, leaves: list):
+        """The leaf among ``leaves`` whose image is ``image_path``, or None."""
+        if not image_path:
+            return None
+        for item in leaves:
+            name = item.data(0, Qt.ItemDataRole.UserRole)
+            if _same_path(self.image_manager.get_image_path(name), image_path):
+                return item
+        return None
+
+    def _select_tree_image(self, image_path: str) -> None:
+        """Make ``image_path``'s leaf the tree's current item (without loading it)."""
+        item = self._leaf_for_image(image_path, self._image_leaves())
+        if item is not None:
+            self.file_list.setCurrentItem(item)
+            self.file_list.scrollToItem(item)
+
+    def navigate_image(self, delta: int) -> None:
+        """Select the next/previous visible image leaf in the library tree.
+
+        Steps from the image open in the GT editor (arrow keys move the tree
+        selection without loading anything), else from the tree selection.
+        """
+        leaves = self._image_leaves(visible_only=True)
         if not leaves:
             return
-        current = self.file_list.currentItem()
+        current = self._leaf_for_image(self.gt_tracing_interface.current_image_path, leaves)
+        if current is None:
+            current = self.file_list.currentItem()
         idx = leaves.index(current) if current in leaves else -1
         new = idx + delta
         if 0 <= new < len(leaves):
@@ -833,18 +883,24 @@ class MainWindow(QMainWindow):
         if not folder:
             self.notify("Load an image folder first", "warn")
             return
-        # Pending edits on the open image belong in the export.
-        self.gt_tracing_interface.maybe_save_changes()
+        # Pending edits on the open image belong in the export; if they could
+        # not be saved and the user kept editing, do not export without them.
+        if not self.gt_tracing_interface.maybe_save_changes():
+            return
         # The folder's own registry: the editor's copy is only in sync once Trace
         # GT has opened an image from this folder (it holds the defaults before).
         try:
             registry = load_registry(folder)
-        except (ValueError, AttributeError, TypeError) as exc:  # RegistryError, bad JSON shape
+        except RegistryError as exc:
             self.notify(f"Cannot export: gt/classes.json is invalid ({exc})", "danger")
             return
         from .export_dataset_dialog import ExportDatasetDialog
 
-        ExportDatasetDialog(folder, dict(self.image_manager.images), registry, self).exec()
+        dialog = ExportDatasetDialog(folder, dict(self.image_manager.images), registry, self)
+        try:
+            dialog.exec()  # cannot close while its export thread runs
+        finally:
+            dialog.deleteLater()  # parented to the window: free it
 
     # ==================== Skeleton Correction (isolated stream) ====================
 
@@ -863,7 +919,8 @@ class MainWindow(QMainWindow):
             if self.right_panel.currentIndex() == 1:
                 self.toggle_mask_tracing()
 
-            self.switch_right_panel("skeleton_correction")
+            if not self.switch_right_panel("skeleton_correction"):
+                return  # the GT editor kept unsaved edits: stay there
             if hasattr(self, "toggle_skeleton_correction_button"):
                 self.toggle_skeleton_correction_button.setText("Return to Main View")
         else:
@@ -878,12 +935,17 @@ class MainWindow(QMainWindow):
 
     # ==================== Panel Switching ====================
 
-    def switch_right_panel(self, panel):
-        # Leaving the mask / GT editor: offer to save pending edits first.
+    def switch_right_panel(self, panel) -> bool:
+        """Show ``panel``; returns False (and stays put) if the GT editor refuses.
+
+        Leaving the mask / GT editor first offers to save pending edits. The
+        GT editor refuses when its save failed and the user kept editing.
+        """
         if self.right_panel.currentIndex() == 1 and panel != "mask_tracing":
             self.mask_tracing_interface.maybe_save_changes()
         if self.right_panel.currentIndex() == 4 and panel != "gt_tracing":
-            self.gt_tracing_interface.maybe_save_changes()
+            if not self.gt_tracing_interface.maybe_save_changes():
+                return False
         if panel == "display":
             self.right_panel.setCurrentIndex(0)
         elif panel == "mask_tracing":
@@ -894,3 +956,4 @@ class MainWindow(QMainWindow):
             self.right_panel.setCurrentIndex(3)
         elif panel == "gt_tracing":
             self.right_panel.setCurrentIndex(4)
+        return True

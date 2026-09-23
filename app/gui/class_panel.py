@@ -6,6 +6,11 @@ a number-key hint, a colour swatch, the class name and (for every class but
 Ignore) a "reviewed" checkbox. Clicking a row selects it as the active paint
 class; the gear button opens the class editor dialog.
 
+No part of the panel takes keyboard focus: a click on a row, checkbox or
+the gear leaves focus on the canvas, so Space still pans and can never toggle
+a "checked" box (spec §3.4: a flipped review flag silently changes the
+dataset).
+
 This module never touches ``app/gui/widgets/*`` — it only consumes the
 existing ``_FloatingPanel``/``IconButton`` primitives.
 """
@@ -33,6 +38,11 @@ _MAX_HEIGHT_FRACTION = 0.6
 _REVIEWED_TOOLTIP = "Checked: this class was looked for on this image"
 
 
+def _no_focus(*widgets: QWidget) -> None:
+    for w in widgets:
+        w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+
 class _ClassRow(QFrame):
     """One row of the class panel.
 
@@ -49,6 +59,7 @@ class _ClassRow(QFrame):
         self.key = class_def.key
         self.setObjectName("classRow")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        _no_focus(self)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 5, 8, 5)
@@ -77,6 +88,7 @@ class _ClassRow(QFrame):
         if not class_def.is_ignore:
             self.checkbox = QCheckBox()
             self.checkbox.setToolTip(_REVIEWED_TOOLTIP)
+            _no_focus(self.checkbox)
             self.checkbox.toggled.connect(self._on_checkbox_toggled)
             row.addWidget(self.checkbox)
 
@@ -169,6 +181,10 @@ class ClassPanel(_FloatingPanel):
         self._rows_layout.addStretch(1)
         self._scroll.setWidget(self._rows_container)
         self._scroll.viewport().setStyleSheet("background: transparent;")
+        # A click falls through to the nearest focusable ancestor, so every
+        # layer (not only the checkbox) must refuse focus.
+        _no_focus(self, header, self._gear, self._scroll, self._scroll.viewport())
+        _no_focus(self._rows_container)
 
         self._registry: Registry | None = None
         self._rows: dict[str, _ClassRow] = {}
@@ -183,6 +199,10 @@ class ClassPanel(_FloatingPanel):
             item = self._rows_layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                # Off-screen and out of the tree now: deleteLater alone leaves
+                # the old row visible (and findable) until the event loop runs.
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
         self._rows.clear()
 

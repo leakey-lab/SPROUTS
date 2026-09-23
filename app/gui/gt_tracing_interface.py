@@ -16,7 +16,15 @@ the storage:
 
 Keys, on top of the base editor's: 1-9 select the n-th class, 0 selects
 Ignore, PgDn / PgUp save (if there are unsaved edits, without a prompt) and
-ask for the next / previous image (``navigate_requested``).
+ask for the next / previous image (``navigate_requested``). A lossy class
+remap on load (unknown classes became Ignore) is never saved silently: PgDn
+then asks like any other unsaved change.
+
+Unsaved edits are never dropped behind the user's back: when a save fails,
+``maybe_save_changes`` asks again (Discard / Keep editing) and returns False
+on "Keep editing", so the caller (next image, stage switch, window close,
+open folder) stays on this image. While ``gt/classes.json`` is invalid,
+saving is impossible, so every edit is refused up front.
 """
 
 from __future__ import annotations
@@ -29,11 +37,13 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QPen, QPixmap, QShortcut
+from PyQt6.QtWidgets import QMessageBox
 
 from app.config import GT_BACKGROUND_ID, GT_CLASSES_FILENAME, GT_DIRNAME, GT_UNKNOWN_COLOR
 from app.gt import (
     GtFileError,
     Registry,
+    RegistryError,
     Tracing,
     align_to_registry,
     default_registry,
@@ -87,6 +97,10 @@ class GtTracingInterface(MaskTracingInterface):
         self._present: set[str] = set()  # classes with pixels on the canvas
         self._brush_sizes: dict[str, int] = {}
         self._active_key: str | None = None
+        # Warnings of a lossy remap on load (unknown classes -> Ignore); cleared on save.
+        self._remap_warnings: list[str] = []
+        # A GT file exists but could not be used (corrupt / wrong size).
+        self._gt_unreadable = False
 
         self._retitle_controls()
 
@@ -95,6 +109,9 @@ class GtTracingInterface(MaskTracingInterface):
         self.class_panel.active_changed.connect(self.set_active_class)
         self.class_panel.reviewed_changed.connect(self._on_reviewed_changed)
         self.class_panel.edit_requested.connect(self.edit_classes)
+        # Panel clicks never keep keyboard focus (Space must pan, not tick a box).
+        self.class_panel.active_changed.connect(self._focus_canvas)
+        self.class_panel.reviewed_changed.connect(self._focus_canvas)
         self._install_gt_shortcuts()
 
         self.set_active_class(self._default_key())
@@ -136,21 +153,35 @@ class GtTracingInterface(MaskTracingInterface):
             self._preview_inner.setPen(pen)
 
     def _update_status_chip(self):
-        """``name ● Saved · n/m checked`` / ``● Unsaved`` / ``● No GT``."""
+        """``name ● Saved · n/m checked`` / ``● Unsaved`` / ``● GT unreadable`` / ``● No GT``.
+
+        ``● Unsaved · remapped`` after a lossy class remap on load, until saved.
+        """
         registry = getattr(self, "registry", None)
         if not hasattr(self, "state_label") or registry is None or not self.current_image_path:
+            if hasattr(self, "state_label"):
+                self.state_label.setToolTip("")
             super()._update_status_chip()
             return
+        warnings = getattr(self, "_remap_warnings", [])
+        tooltip = ""
         if self.dirty:
             text, color = "Unsaved", tokens.WARN
+            if warnings:
+                text += " · remapped"
+                tooltip = "Unknown classes were mapped to Ignore:\n" + "\n".join(warnings)
         elif self._has_saved_mask:
             labelled = {c.key for c in registry.labelled()}
             checked = len(labelled & (self._reviewed | self._present))
             text, color = f"Saved · {checked}/{len(labelled)} checked", tokens.OK
+        elif getattr(self, "_gt_unreadable", False):
+            text, color = "GT unreadable", tokens.DANGER
+            tooltip = "The GT file could not be used; it is left as is unless you save."
         else:
             text, color = "No GT", tokens.TEXT_FAINT
         self.file_label.setText(os.path.basename(self.current_image_path))
         self.state_label.setText(f'<span style="color:{color}; font-size:11.5px;">● {text}</span>')
+        self.state_label.setToolTip(tooltip)
         self.state_label.setVisible(True)
         self.status_chip.reposition()
 
@@ -196,10 +227,17 @@ class GtTracingInterface(MaskTracingInterface):
         """Checked boxes = ticked by hand or has pixels; boxes of painted classes are locked."""
         self.class_panel.set_reviewed(set(self._reviewed), set(self._present))
 
+    def _focus_canvas(self, *_args):
+        """Give keyboard focus back to the canvas after a class-panel click."""
+        self.graphics_view.setFocus()
+
     def _on_reviewed_changed(self, key: str, checked: bool):
         if not self.current_image_path or key in self._present:
             # Nothing open, or the class has pixels (its box is locked checked).
             self._refresh_panel()
+            return
+        if self._edit_blocked():
+            self._refresh_panel()  # undo the tick: it could never be saved
             return
         was = key in self._reviewed
         if checked:
@@ -225,8 +263,12 @@ class GtTracingInterface(MaskTracingInterface):
         from .class_editor_dialog import ClassEditorDialog
 
         dialog = ClassEditorDialog(self.registry, self)
-        dialog.exec()
-        new_registry = dialog.result_registry()
+        try:
+            dialog.exec()
+            new_registry = dialog.result_registry()
+        finally:
+            dialog.deleteLater()  # parented to this long-lived editor: free it
+        self._focus_canvas()
         if new_registry is None or self._registry_error:
             return
         try:
@@ -302,6 +344,30 @@ class GtTracingInterface(MaskTracingInterface):
             self._present = present_keys(Tracing(self._pixmap_to_ids()), self.registry)
 
     # ============================================================= editing
+    def _registry_problem(self, prefix: str) -> str:
+        return (
+            f"{prefix}: {_REGISTRY_NAME} is invalid ({self._registry_error}). "
+            "Fix the file, then reopen the image."
+        )
+
+    def _edit_blocked(self) -> bool:
+        """True, with a danger notice, while an invalid registry makes saving impossible.
+
+        Edits made then could never be saved, so they are refused up front
+        instead of being lost later.
+        """
+        if not self._registry_error:
+            return False
+        self.notice.emit(self._registry_problem("Editing is off"), "danger")
+        return True
+
+    def begin_stroke(self, pos):
+        """Brush, eraser and fill all start here; refused while editing is blocked."""
+        if self._edit_blocked():
+            self.drawing = False  # continue_stroke then draws nothing
+            return
+        super().begin_stroke(pos)
+
     def _after_stroke(self):
         """A stroke/fill changed the canvas: re-derive which classes are present."""
         self._refresh_present()
@@ -344,7 +410,7 @@ class GtTracingInterface(MaskTracingInterface):
 
     def clear_mask(self):
         """Whole tracing to background. Undoable; Save writes the empty tracing."""
-        if not self.mask_pixmap:
+        if not self.mask_pixmap or self._edit_blocked():
             return
         self.save_for_undo()
         self.mask_pixmap.fill(Qt.GlobalColor.transparent)
@@ -354,15 +420,56 @@ class GtTracingInterface(MaskTracingInterface):
         self.notice.emit("Tracing cleared. Ctrl+Z to undo.", "info")
 
     def _navigate(self, delta: int):
-        """PgDn / PgUp: save pending edits (no prompt), then ask for the next image."""
-        if self.has_unsaved_changes() and not self.save_mask():
-            return  # stay put so the failure notice is not lost
+        """PgDn / PgUp: save pending edits, then ask for the next image.
+
+        Saves without a prompt, except after a lossy class remap on load
+        (unknown classes became Ignore): that is never written silently, so
+        the normal unsaved-changes prompt runs instead.
+        """
+        if self.has_unsaved_changes():
+            if self._remap_warnings:
+                if not self.maybe_save_changes():
+                    return  # the user kept editing
+            elif not self.save_mask():
+                return  # stay put so the failure notice is not lost
         self.navigate_requested.emit(delta)
 
     # ========================================================= load / save
+    def maybe_save_changes(self) -> bool:
+        """Offer to save unsaved GT. Returns True when it is safe to move on.
+
+        True = saved, discarded, or nothing to save. When the user chose Save
+        and the save failed (a notice says why), ask again: Discard, or Keep
+        editing, which returns False; the caller must then stay on this image.
+        """
+        if super().maybe_save_changes():
+            return True
+        name = os.path.basename(self.current_image_path)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("GT not saved")
+        box.setText(f"The GT for {name} could not be saved.")
+        box.setInformativeText("Discard the edits, or keep editing? Discarded edits are lost.")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+        )
+        box.button(QMessageBox.StandardButton.Cancel).setText("Keep editing")
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.setEscapeButton(QMessageBox.StandardButton.Cancel)
+        if box.exec() == QMessageBox.StandardButton.Discard:
+            self._set_clean()
+            return True
+        return False
+
     def reset(self):
-        """A new folder was opened: prompt, then drop the image and the registry."""
-        super().reset()
+        """A new folder was opened: prompt, then drop the image and the registry.
+
+        Keeps everything when the user chose to keep editing a tracing that
+        could not be saved (``MainWindow.open_path`` cancels the open then).
+        """
+        if not self.maybe_save_changes():
+            return
+        super().reset()  # its own prompt is a no-op now: the tracing is clean
         self.current_image_path = ""
         self.image_pixmap = None
         self.mask_pixmap = None
@@ -372,6 +479,8 @@ class GtTracingInterface(MaskTracingInterface):
         self._reviewed = set()
         self._present = set()
         self._has_saved_mask = False
+        self._remap_warnings = []
+        self._gt_unreadable = False
         self._project_dir = None  # reload gt/classes.json with the next image
         self._sync_brush_preview()
         self._refresh_panel()
@@ -382,7 +491,7 @@ class GtTracingInterface(MaskTracingInterface):
         try:
             registry = load_registry(project_dir)
             self._registry_error = None
-        except (ValueError, AttributeError, TypeError) as exc:  # RegistryError, bad JSON shape
+        except RegistryError as exc:
             registry = default_registry()
             self._registry_error = str(exc)
             self.notice.emit(
@@ -393,7 +502,12 @@ class GtTracingInterface(MaskTracingInterface):
         self._set_registry(registry)
 
     def _read_tracing(self, image_path: str, height: int, width: int):
-        """Return ``(tracing, changed_by_alignment, file_loaded)``; never raises."""
+        """Return ``(tracing, warnings, changed_by_alignment, status)``; never raises.
+
+        ``status`` is ``"loaded"``, ``"missing"`` (no GT file yet) or
+        ``"unreadable"`` (a GT file exists but is corrupt or the wrong size;
+        the canvas opens empty and the file is left as is unless you save).
+        """
         path = gt_path(image_path)
         name = os.path.basename(path)
         kept = "Opened empty; the file is left as is unless you save."
@@ -401,19 +515,19 @@ class GtTracingInterface(MaskTracingInterface):
             tracing = read_tracing(path)
         except GtFileError as exc:
             self.notice.emit(f"Could not read GT {name}: {exc}. {kept}", "danger")
-            return empty_tracing(height, width), False, False
+            return empty_tracing(height, width), [], False, "unreadable"
         if tracing is None:
-            return empty_tracing(height, width), False, False
+            return empty_tracing(height, width), [], False, "missing"
         if tracing.ids.shape != (height, width):
             fh, fw = tracing.ids.shape
             self.notice.emit(
                 f"GT {name} is {fw}x{fh} but the image is {width}x{height}. {kept}", "danger"
             )
-            return empty_tracing(height, width), False, False
+            return empty_tracing(height, width), [], False, "unreadable"
         tracing, warnings, changed = align_to_registry(tracing, self.registry)
         for warning in warnings:
             self.notice.emit(f"GT {name}: {warning}", "warn")
-        return tracing, changed, True
+        return tracing, warnings, changed, "loaded"
 
     def load_image(self, image_path: str) -> None:
         """Open ``image_path`` with its GT tracing (``gt/<stem>.png``), or empty.
@@ -422,7 +536,8 @@ class GtTracingInterface(MaskTracingInterface):
         calling it, because the base opens the ResNet mask from ``mask/``.
         """
         if image_path != self.current_image_path:
-            self.maybe_save_changes()
+            if not self.maybe_save_changes():
+                return  # its save failed and the user kept editing the open image
         elif self.has_unsaved_changes():
             return  # the open image was re-selected: keep editing, don't reload
 
@@ -444,11 +559,18 @@ class GtTracingInterface(MaskTracingInterface):
         self.last_point = None
         self.image_pixmap = pixmap
 
-        tracing, changed, loaded = self._read_tracing(image_path, pixmap.height(), pixmap.width())
+        tracing, warnings, changed, status = self._read_tracing(
+            image_path, pixmap.height(), pixmap.width()
+        )
+        # Remapped ids are unsaved edits, unless nothing can be saved anyway
+        # (invalid registry: the view is read-only and the file stays as is).
+        dirty_on_load = changed and not self._registry_error
+        self._remap_warnings = list(warnings) if dirty_on_load else []
+        self._gt_unreadable = status == "unreadable"
         self._ids_on_load = tracing.ids.copy()
         self._reviewed = set(tracing.reviewed)
         self._present = present_keys(tracing, self.registry)
-        self._has_saved_mask = loaded
+        self._has_saved_mask = status == "loaded"
         self.mask_pixmap = self._ids_to_pixmap(tracing.ids)
 
         self.update_display()
@@ -456,7 +578,7 @@ class GtTracingInterface(MaskTracingInterface):
         self._fit_pending = True
         self._fit_if_pending()
         self._refresh_panel()
-        if changed:
+        if dirty_on_load:
             self.mark_dirty()  # ids were remapped onto this project's registry
         else:
             self._set_clean()
@@ -473,11 +595,7 @@ class GtTracingInterface(MaskTracingInterface):
         if not (self.mask_pixmap and self.current_image_path):
             return False
         if self._registry_error:
-            self.notice.emit(
-                f"Not saved: {_REGISTRY_NAME} is invalid ({self._registry_error}). "
-                "Fix the file, then reopen the image.",
-                "danger",
-            )
+            self.notice.emit(self._registry_problem("Not saved"), "danger")
             return False
 
         ids = self._pixmap_to_ids()
@@ -496,6 +614,8 @@ class GtTracingInterface(MaskTracingInterface):
         self._ids_on_load = ids
         self._reviewed = reviewed
         self._has_saved_mask = True
+        self._remap_warnings = []
+        self._gt_unreadable = False
         self._set_clean()
         self._refresh_panel()
         self.gt_saved.emit(self.current_image_path)

@@ -33,6 +33,9 @@ _MAX_NAME_LEN = 40
 _MAX_KEY_LEN = 32
 _MIN_NORMAL_ID = 1
 _MAX_NORMAL_ID = 254
+# Keys no class may take: the dataset export writes id 0 as "background"
+# (spec §4), so a class keyed "background" would make its classes.json ambiguous.
+_RESERVED_KEYS = frozenset({"background"})
 
 
 class RegistryError(ValueError):
@@ -132,13 +135,25 @@ class Registry:
 
     @classmethod
     def from_dict(cls, data: dict) -> Registry:
-        """Parse and validate the JSON of spec §2. Ignore is moved last if needed."""
+        """Parse and validate the JSON of spec §2. Ignore is moved last if needed.
+
+        Any malformed input (wrong JSON shape included) raises ``RegistryError``.
+        """
+        if not isinstance(data, dict):
+            raise RegistryError(f"Registry must be a JSON object, got {type(data).__name__}")
         if data.get("version") != 1:
             raise RegistryError(f"Unsupported registry version: {data.get('version')!r}")
         try:
             raw_classes = data["classes"]
         except KeyError as exc:
             raise RegistryError("Registry data missing 'classes'") from exc
+        if not isinstance(raw_classes, list):
+            raise RegistryError(f"'classes' must be a list, got {type(raw_classes).__name__}")
+        for item in raw_classes:
+            if not isinstance(item, dict):
+                raise RegistryError(
+                    f"Each class entry must be a JSON object, got {type(item).__name__}"
+                )
         try:
             parsed = tuple(
                 ClassDef(
@@ -172,6 +187,8 @@ def _validate_classes(classes: tuple[ClassDef, ...]) -> None:
     for c in classes:
         if not _KEY_RE.match(c.key):
             raise RegistryError(f"Invalid class key: {c.key!r}")
+        if c.key in _RESERVED_KEYS:
+            raise RegistryError(f"Class key {c.key!r} is reserved")
         if not c.name or len(c.name) > _MAX_NAME_LEN:
             raise RegistryError(f"Invalid class name: {c.name!r}")
         if not _COLOR_RE.match(c.color):
@@ -208,13 +225,19 @@ def _validate_classes(classes: tuple[ClassDef, ...]) -> None:
 
 
 def slugify_key(name: str) -> str:
-    """Slug a display name into a valid registry key (``^[a-z][a-z0-9_]{0,31}$``)."""
+    """Slug a display name into a valid registry key (``^[a-z][a-z0-9_]{0,31}$``).
+
+    A reserved key gets a ``_class`` suffix (``"Background"`` -> ``"background_class"``).
+    """
     slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
     if not slug:
         slug = "class"
     if not slug[0].isalpha():
         slug = f"c_{slug}"
-    return slug[:_MAX_KEY_LEN]
+    slug = slug[:_MAX_KEY_LEN]
+    if slug in _RESERVED_KEYS:
+        slug = f"{slug}_class"
+    return slug
 
 
 def default_registry() -> Registry:
@@ -229,14 +252,18 @@ def registry_path(project_dir: str) -> str:
 
 
 def load_registry(project_dir: str) -> Registry:
-    """Load ``gt/classes.json``, or the defaults if it does not exist yet."""
+    """Load ``gt/classes.json``, or the defaults if it does not exist yet.
+
+    Every way the file can be bad (unreadable, not UTF-8, not JSON, wrong
+    shape, invalid classes) raises ``RegistryError``.
+    """
     path = registry_path(project_dir)
     if not os.path.exists(path):
         return default_registry()
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # ValueError: JSONDecodeError, UnicodeDecodeError
         raise RegistryError(f"Could not read registry {path}: {exc}") from exc
     return Registry.from_dict(data)
 
@@ -246,7 +273,18 @@ def save_registry(project_dir: str, registry: Registry) -> str:
     path = registry_path(project_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(registry.to_dict(), indent=2))
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(registry.to_dict(), indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        _remove_quietly(tmp)  # never leave a half-written .tmp behind
+        raise
     return path
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass

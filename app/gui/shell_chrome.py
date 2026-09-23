@@ -196,7 +196,10 @@ def build_topbar(mw) -> QWidget:
             base()
             activate = getattr(mw, "_activate_action_stage", None)
             if callable(activate):
-                activate(stage_key)
+                # Still on Trace GT after another stage was asked for: the GT
+                # editor kept unsaved edits (its save failed), so keep its stage.
+                stuck = stage_key != "Trace GT" and mw.right_panel.currentIndex() == 4
+                activate("Trace GT" if stuck else stage_key)
 
         return _h
 

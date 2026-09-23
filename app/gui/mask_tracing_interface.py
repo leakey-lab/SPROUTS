@@ -571,10 +571,16 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
         self.state_label.setVisible(bool(text))
         self.status_chip.reposition()
 
-    def maybe_save_changes(self):
-        """If the current mask has unsaved edits, ask whether to save them."""
+    def maybe_save_changes(self) -> bool:
+        """If the current mask has unsaved edits, ask whether to save them.
+
+        Returns ``False`` only when the user chose Save and saving failed (the
+        edits are still unsaved), ``True`` otherwise (saved, discarded, or
+        nothing to save). The mask editor's callers ignore the result; the GT
+        editor overrides this to keep the user on a tracing that did not save.
+        """
         if not self.has_unsaved_changes():
-            return
+            return True
         name = os.path.basename(self.current_image_path)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
@@ -584,9 +590,9 @@ class MaskTracingInterface(QWidget, MaskDrawingMixin):
         box.setStandardButtons(QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard)
         box.setDefaultButton(QMessageBox.StandardButton.Save)
         if box.exec() == QMessageBox.StandardButton.Save:
-            self.save_mask()
-        else:
-            self._set_clean()
+            return bool(self.save_mask())
+        self._set_clean()
+        return True
 
     def reset(self):
         """Drop the current image and history (e.g. a new folder was opened)."""

@@ -84,9 +84,17 @@ def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
     info.add_text(GT_META_CHUNK, json.dumps(meta))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "wb") as fh:
-        image.save(fh, format="PNG", pnginfo=info, transparency=GT_BACKGROUND_ID)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "wb") as fh:
+            image.save(fh, format="PNG", pnginfo=info, transparency=GT_BACKGROUND_ID)
+        os.replace(tmp, path)
+    except BaseException:
+        # Never leave a half-written .tmp behind; the old file (if any) is intact.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def read_tracing(path: str) -> Tracing | None:

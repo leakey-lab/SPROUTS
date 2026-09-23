@@ -4,7 +4,8 @@
 Collects the export options (output folder, validation share, tube grouping,
 completeness filter, seed), runs ``app.gt.export.export_dataset`` on a
 ``QThread`` with progress, and shows a summary (exported / train / val /
-skipped / errors) when it finishes. Constructed by ``MainWindow``'s
+skipped / errors, with the first failed images and why; the full list is in
+``<out>/errors.txt``) when it finishes. Constructed by ``MainWindow``'s
 "Export dataset…" action bar button (Track E / Task 4); the constructor
 signature is frozen so that caller can rely on it.
 """
@@ -30,6 +31,9 @@ from PyQt6.QtWidgets import (
 from app.gt.export import ExportError, ExportOptions, ExportResult, export_dataset
 from app.gt.registry import Registry
 from app.gui.widgets import tokens
+
+# Failed images listed in the summary; the rest are counted ("…and N more").
+_MAX_LISTED_ERRORS = 10
 
 
 class ExportThread(QThread):
@@ -64,8 +68,8 @@ class ExportThread(QThread):
             )
         except ExportError as exc:
             self.failed.emit(str(exc))
-        except OSError as exc:  # thread boundary: surface, never crash the app
-            self.failed.emit(str(exc))
+        except Exception as exc:  # thread boundary: surface anything, never crash the app
+            self.failed.emit(f"Export failed: {exc}")
         else:
             self.finished_ok.emit(result)
 
@@ -234,7 +238,15 @@ class ExportDatasetDialog(QDialog):
     def _is_running(self) -> bool:
         return self.export_thread is not None and self.export_thread.isRunning()
 
+    def _join_worker(self) -> None:
+        """The worker emitted its last signal: wait the few instructions until it
+        has really finished, so the dialog (and the thread object it owns) can
+        be closed and deleted right away."""
+        if self.export_thread is not None:
+            self.export_thread.wait()
+
     def _on_finished_ok(self, result: ExportResult) -> None:
+        self._join_worker()
         self.result_summary = result
         self.progress_bar.setValue(100)
         parts = [f"Exported {result.exported} image(s) ({result.train} train / {result.val} val)"]
@@ -242,11 +254,19 @@ class ExportDatasetDialog(QDialog):
             parts.append(f"{result.skipped_incomplete} skipped (incomplete)")
         if result.errors:
             parts.append(f"{len(result.errors)} error(s)")
-        self.status_label.setText(" — ".join(parts))
+        text = " — ".join(parts)
+        if result.errors:
+            lines = [f"{stem}: {message}" for stem, message in result.errors[:_MAX_LISTED_ERRORS]]
+            more = len(result.errors) - _MAX_LISTED_ERRORS
+            if more > 0:
+                lines.append(f"…and {more} more")
+            text += "\n\nNot exported (full list in errors.txt):\n" + "\n".join(lines)
+        self.status_label.setText(text)
         self.export_button.setText("Close")
         self._set_controls_enabled(True)
 
     def _on_failed(self, message: str) -> None:
+        self._join_worker()
         self.result_summary = None
         self.progress_bar.setValue(0)
         self.status_label.setText(message)

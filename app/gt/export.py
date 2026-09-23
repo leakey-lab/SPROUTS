@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from app.config import GT_BACKGROUND_ID, GT_IGNORE_ID
+from app.config import GT_BACKGROUND_ID, GT_DIRNAME, GT_IGNORE_ID
 from app.gt.registry import Registry
 from app.gt.store import (
     GtFileError,
@@ -41,6 +41,11 @@ from app.inference.metrics import parse_image_name
 logger = logging.getLogger(__name__)
 
 _MANIFEST_FIELDS = ["stem", "source_image", "split", "tube", "position", "date", "classes_present"]
+_ERRORS_FILENAME = "errors.txt"
+# Project folders the export must never write into (the ML pipeline's outputs
+# and the GT tracings themselves). Only their names are used here: nothing in
+# them is read.
+_PROTECTED_DIRS = ("mask", "skeletons", "skeleton_corrections", GT_DIRNAME)
 
 
 class ExportError(ValueError):
@@ -118,6 +123,21 @@ def _classes_json(registry: Registry) -> dict:
     return {"version": 1, "ignore_index": GT_IGNORE_ID, "classes": classes}
 
 
+def _check_out_dir(project_dir: str, out_dir: str) -> None:
+    """Refuse an ``out_dir`` inside (or equal to) one of the project's data folders."""
+    out = os.path.normcase(os.path.realpath(out_dir))
+    for name in _PROTECTED_DIRS:
+        protected = os.path.normcase(os.path.realpath(os.path.join(project_dir, name)))
+        try:
+            inside = os.path.commonpath([out, protected]) == protected
+        except ValueError:  # different drives (Windows): cannot be inside
+            inside = False
+        if inside:
+            raise ExportError(
+                f"Output folder must not be inside the project's {name}/ folder: {out_dir}"
+            )
+
+
 def _write_split_file(path: str, stems: list[str]) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         for stem in stems:
@@ -139,10 +159,14 @@ def export_dataset(
     writing that stem's mask/copy (``OSError``/``ValueError``) is recorded in
     ``errors`` and the export continues with the remaining stems (spec §5.4);
     any partial mask/image already written for that stem is removed so it is
-    never half-exported or counted in the splits/manifest. ``mask/``,
-    ``skeletons/`` and the GT files themselves are never modified.
+    never half-exported or counted in the splits/manifest. When there are
+    errors, ``<out_dir>/errors.txt`` lists them, one ``stem<TAB>message`` per
+    line. ``mask/``, ``skeletons/`` and the GT files themselves are never
+    modified: an ``out_dir`` inside ``mask/``, ``skeletons/``,
+    ``skeleton_corrections/`` or ``gt/`` raises ``ExportError``.
     """
     out_dir = options.out_dir
+    _check_out_dir(project_dir, out_dir)
     if os.path.exists(out_dir):
         if not os.path.isdir(out_dir):
             raise ExportError(f"Output path exists and is not a directory: {out_dir}")
@@ -241,6 +265,12 @@ def export_dataset(
             row = dict(manifest_rows[stem])
             row["split"] = splits.get(stem, "train")
             writer.writerow(row)
+
+    if errors:
+        with open(os.path.join(out_dir, _ERRORS_FILENAME), "w", encoding="utf-8") as fh:
+            for stem, message in errors:
+                # One line per error, whatever the message contains.
+                fh.write(stem + "\t" + " ".join(message.split()) + "\n")
 
     _emit_progress(progress_cb, n, n)
 

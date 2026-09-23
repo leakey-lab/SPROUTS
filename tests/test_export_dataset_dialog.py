@@ -4,7 +4,9 @@ Tests for the "Export dataset…" dialog (``app/gui/export_dataset_dialog.py``).
 Offscreen Qt: constructs the dialog against a small tmp project, drives the
 export via its start method (not a real click, to avoid relying on event-loop
 timing), and waits for the worker ``QThread`` to finish before asserting on
-the summary.
+the summary. Tests that act while the export runs hold the worker inside
+``export_dataset`` on a ``threading.Event`` (``blocked_export``), so they
+never race it.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import threading
 
 import numpy as np
 import pytest
@@ -54,6 +58,30 @@ def _build_project(tmp_path):
         ids = _make_ids((20, 20), [0, 1, 2, 3])
         write_tracing(gt_path(str(image_path)), Tracing(ids=ids, reviewed=reviewed), registry)
     return str(project_dir), images, registry
+
+
+@pytest.fixture
+def blocked_export(monkeypatch):
+    """Hold the worker inside ``export_dataset`` until the test releases it.
+
+    Returns ``(started, release)`` events: ``started`` is set once the worker
+    thread is inside the export, and the export proceeds only after
+    ``release`` is set (released on teardown too, so a failing test never
+    leaves the thread blocked).
+    """
+    import app.gui.export_dataset_dialog as mod
+
+    started, release = threading.Event(), threading.Event()
+    real_export = mod.export_dataset
+
+    def _blocking_export(*args, **kwargs):
+        started.set()
+        release.wait(30)
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "export_dataset", _blocking_export)
+    yield started, release
+    release.set()
 
 
 def _wait_for_thread(dialog, timeout_ms=10000):
@@ -121,14 +149,16 @@ def test_export_button_disabled_while_running(app, tmp_path):
     assert dialog.export_button.text() == "Close"
 
 
-def test_reject_during_run_is_ignored_and_thread_finishes_cleanly(app, tmp_path):
+def test_reject_during_run_is_ignored_and_thread_finishes_cleanly(app, tmp_path, blocked_export):
     """Cancel/Esc while exporting must not tear down the running QThread.
 
     Destroying a running QThread is a fatal Qt error; ``reject()`` must be a
     no-op while ``export_thread`` is running (verified by the ``rejected``
     signal not firing), and the export must still complete normally once it
-    is left alone.
+    is left alone. The worker is held inside ``export_dataset`` until the
+    assertions are done, so the test never races it.
     """
+    started, release = blocked_export
     project_dir, images, registry = _build_project(tmp_path)
     dialog = ExportDatasetDialog(project_dir, images, registry)
     dialog.output_edit.setText(str(tmp_path / "export_out_reject"))
@@ -136,6 +166,8 @@ def test_reject_during_run_is_ignored_and_thread_finishes_cleanly(app, tmp_path)
     dialog.start_export()
     thread = dialog.export_thread
     assert thread is not None
+    assert started.wait(10), "worker never entered export_dataset"
+    assert thread.isRunning()
 
     rejected_calls = []
     dialog.rejected.connect(lambda: rejected_calls.append(1))
@@ -144,7 +176,9 @@ def test_reject_during_run_is_ignored_and_thread_finishes_cleanly(app, tmp_path)
 
     assert rejected_calls == []  # reject() is ignored while the thread runs
     assert dialog.export_thread is thread  # the worker thread was not torn down
+    assert "in progress" in dialog.status_label.text()
 
+    release.set()
     _wait_for_thread(dialog)
     assert dialog.result_summary is not None
     assert dialog.result_summary.exported > 0
@@ -154,20 +188,80 @@ def test_reject_during_run_is_ignored_and_thread_finishes_cleanly(app, tmp_path)
     assert rejected_calls == [1]
 
 
-def test_close_event_during_run_is_ignored(app, tmp_path):
+def test_close_event_during_run_is_ignored(app, tmp_path, blocked_export):
     from PyQt6.QtGui import QCloseEvent
 
+    started, release = blocked_export
     project_dir, images, registry = _build_project(tmp_path)
     dialog = ExportDatasetDialog(project_dir, images, registry)
     dialog.output_edit.setText(str(tmp_path / "export_out_close"))
 
     dialog.start_export()
+    assert started.wait(10), "worker never entered export_dataset"
+    assert dialog.export_thread.isRunning()
     event = QCloseEvent()
     dialog.closeEvent(event)
 
     assert not event.isAccepted()
     assert dialog.export_thread is not None
 
+    release.set()
     _wait_for_thread(dialog)
     assert dialog.result_summary is not None
     assert dialog.result_summary.exported > 0
+    assert not dialog.export_thread.isRunning()  # finished before Close is offered
+
+
+def test_unexpected_worker_exception_is_reported_not_fatal(app, tmp_path, monkeypatch):
+    import app.gui.export_dataset_dialog as mod
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("unexpected boom")
+
+    monkeypatch.setattr(mod, "export_dataset", _boom)
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_boom"))
+
+    dialog.start_export()
+    _wait_for_thread(dialog)
+
+    assert dialog.result_summary is None
+    assert "unexpected boom" in dialog.status_label.text()
+    assert dialog.export_button.text() == "Export" and dialog.export_button.isEnabled()
+
+
+def test_summary_lists_failed_images(app, tmp_path, monkeypatch):
+    import app.gui.export_dataset_dialog as mod
+
+    errors = [(f"img_{i:02d}", f"reason {i}") for i in range(12)]
+
+    def _fake(project_dir, images, registry, options, progress_cb=None):
+        return ExportResult(
+            out_dir=options.out_dir, exported=3, train=2, val=1, skipped_incomplete=1, errors=errors
+        )
+
+    monkeypatch.setattr(mod, "export_dataset", _fake)
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_errors"))
+    dialog.start_export()
+    _wait_for_thread(dialog)
+
+    text = dialog.status_label.text()
+    assert "12 error(s)" in text
+    for stem, reason in errors[:10]:
+        assert f"{stem}: {reason}" in text
+    for stem, _reason in errors[10:]:
+        assert stem not in text
+    assert "…and 2 more" in text
+    assert "errors.txt" in text
+
+
+def test_summary_without_errors_lists_none(app, tmp_path):
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_ok"))
+    dialog.start_export()
+    _wait_for_thread(dialog)
+    assert "error" not in dialog.status_label.text().lower()

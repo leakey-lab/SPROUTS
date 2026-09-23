@@ -213,3 +213,71 @@ def test_load_registry_invalid_json_raises_registry_error(tmp_path):
     (gt_dir / "classes.json").write_text("{not valid json", encoding="utf-8")
     with pytest.raises(RegistryError):
         load_registry(str(tmp_path))
+
+
+# --- "background" is reserved: the dataset export writes id 0 as "background" ---
+def test_background_key_is_reserved():
+    data = _default_dict()
+    data["classes"][0]["key"] = "background"
+    with pytest.raises(RegistryError):
+        Registry.from_dict(data)
+    with pytest.raises(RegistryError):
+        default_registry().add(key="background", name="Background", color="#010203")
+
+
+@pytest.mark.parametrize("name", ["Background", "background", " BACKGROUND "])
+def test_slugify_key_never_produces_a_reserved_key(name):
+    slug = slugify_key(name)
+    assert slug == "background_class"
+    # The slug is usable as a key as-is.
+    reg = default_registry().add(key=slug, name=name.strip(), color="#010203")
+    assert reg.by_key("background_class").id == 4
+
+
+# --- wrong-shaped JSON is a RegistryError, never AttributeError/TypeError ---
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param([], id="top-level-list"),
+        pytest.param("registry", id="top-level-str"),
+        pytest.param(None, id="top-level-null"),
+        pytest.param(7, id="top-level-int"),
+        pytest.param({"version": 1, "classes": {"root": 1}}, id="classes-dict"),
+        pytest.param({"version": 1, "classes": "root"}, id="classes-str"),
+        pytest.param({"version": 1, "classes": 5}, id="classes-int"),
+        pytest.param({"version": 1, "classes": [1]}, id="entry-int"),
+        pytest.param({"version": 1, "classes": ["root"]}, id="entry-str"),
+        pytest.param({"version": 1, "classes": [["root"]]}, id="entry-list"),
+    ],
+)
+def test_from_dict_wrong_shape_raises_registry_error(data):
+    with pytest.raises(RegistryError):
+        Registry.from_dict(data)
+
+
+@pytest.mark.parametrize("text", ["[]", '"x"', "null", '{"version": 1, "classes": {}}'])
+def test_load_registry_wrong_shape_raises_registry_error(tmp_path, text):
+    (tmp_path / "gt").mkdir()
+    (tmp_path / "gt" / "classes.json").write_text(text, encoding="utf-8")
+    with pytest.raises(RegistryError):
+        load_registry(str(tmp_path))
+
+
+def test_load_registry_non_utf8_raises_registry_error(tmp_path):
+    (tmp_path / "gt").mkdir()
+    (tmp_path / "gt" / "classes.json").write_bytes(b"\xff\xfe\x00\x81 not utf-8")
+    with pytest.raises(RegistryError):
+        load_registry(str(tmp_path))
+
+
+def test_save_registry_failure_leaves_no_tmp_file(tmp_path, monkeypatch):
+    import os
+
+    def _boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        save_registry(str(tmp_path), default_registry())
+    assert not (tmp_path / "gt" / "classes.json.tmp").exists()
+    assert not (tmp_path / "gt" / "classes.json").exists()

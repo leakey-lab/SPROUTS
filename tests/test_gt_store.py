@@ -98,6 +98,22 @@ def test_atomic_no_tmp_left(tmp_path):
     assert not (tmp_path / "gt" / "a.png.tmp").exists()
 
 
+def test_failed_write_removes_tmp_and_keeps_old_file(tmp_path, monkeypatch):
+    path = str(tmp_path / "gt" / "a.png")
+    write_tracing(path, empty_tracing(8, 8), default_registry())
+    before = open(path, "rb").read()
+
+    def _boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    ids = np.ones((8, 8), np.uint8)
+    with pytest.raises(OSError, match="disk full"):
+        write_tracing(path, Tracing(ids=ids), default_registry())
+    assert not (tmp_path / "gt" / "a.png.tmp").exists()
+    assert open(path, "rb").read() == before
+
+
 def test_empty_tracing_still_written(tmp_path):
     path = str(tmp_path / "gt" / "a.png")
     write_tracing(path, empty_tracing(6, 7), default_registry())

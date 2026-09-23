@@ -169,7 +169,10 @@ def main_window(app, monkeypatch):
 def test_lifecycle_hooks_call_gt_prompt(main_window, monkeypatch):
     mw = main_window
     calls = []
-    monkeypatch.setattr(mw.gt_tracing_interface, "maybe_save_changes", lambda: calls.append(1))
+    # maybe_save_changes returns True when it is safe to move on.
+    monkeypatch.setattr(
+        mw.gt_tracing_interface, "maybe_save_changes", lambda: calls.append(1) or True
+    )
 
     mw.open_path("")  # no-op: no folder
     assert calls == []
@@ -261,6 +264,9 @@ def test_export_gt_dataset_opens_dialog(main_window, monkeypatch, tmp_path):
         def exec(self):
             return 0
 
+        def deleteLater(self):  # noqa: N802 - Qt API
+            pass
+
     fake = types.ModuleType("app.gui.export_dataset_dialog")
     fake.ExportDatasetDialog = _FakeDialog
     monkeypatch.setitem(sys.modules, "app.gui.export_dataset_dialog", fake)
@@ -301,6 +307,9 @@ def test_export_uses_the_folders_registry(main_window, monkeypatch, tmp_path):
         def exec(self):
             return 0
 
+        def deleteLater(self):  # noqa: N802 - Qt API
+            pass
+
     fake = types.ModuleType("app.gui.export_dataset_dialog")
     fake.ExportDatasetDialog = _FakeDialog
     monkeypatch.setitem(sys.modules, "app.gui.export_dataset_dialog", fake)
@@ -316,3 +325,190 @@ def test_export_uses_the_folders_registry(main_window, monkeypatch, tmp_path):
     (tmp_path / "gt" / "classes.json").write_text("{", encoding="utf-8")
     mw.export_gt_dataset()
     assert opened == [custom] and toasts == ["danger"]
+
+
+# --------------------------------------------------------------------------- #
+#  Unsaved GT the user keeps (a failed save) blocks every way out
+# --------------------------------------------------------------------------- #
+def _gt_tree(mw, tmp_path, names=("a", "b")):
+    """Real images ``<name>.png`` in ``tmp_path`` plus a library tree of them."""
+    import cv2
+    import numpy as np
+    from PyQt6.QtWidgets import QTreeWidgetItem
+
+    paths, leaves = {}, {}
+    mw.file_list.clear()
+    folder = QTreeWidgetItem(["Field"])
+    for name in names:
+        path = tmp_path / f"{name}.png"
+        cv2.imwrite(str(path), np.full((40, 50, 3), 90, np.uint8))
+        paths[name] = str(path)
+        leaf = QTreeWidgetItem([f"{name}.png"])
+        leaf.setData(0, Qt.ItemDataRole.UserRole, name)
+        folder.addChild(leaf)
+        leaves[name] = leaf
+    mw.file_list.addTopLevelItem(folder)
+    mw.image_manager.images = dict(paths)
+    mw.image_manager.original_folder = str(tmp_path)
+    return paths, leaves
+
+
+def _open_dirty_gt_with_failing_save(mw, monkeypatch, tmp_path):
+    """Trace GT open on ``a`` with a stroke; every GT write fails; prompts answer
+    Save, then "Keep editing" (Cancel) on the "GT not saved" follow-up."""
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QMessageBox
+
+    import app.gui.gt_tracing_interface as gti
+
+    paths, leaves = _gt_tree(mw, tmp_path)
+    gt = mw.gt_tracing_interface
+    mw.toggle_gt_tracing()
+    mw.file_list.setCurrentItem(leaves["a"])
+    mw.on_image_selected(leaves["a"])
+    assert gt.current_image_path == paths["a"]
+    gt.begin_stroke(QPoint(10, 10))
+    gt.continue_stroke(QPoint(30, 10))
+    gt.end_stroke()
+    assert gt.has_unsaved_changes()
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(gti, "write_tracing", _boom)
+    titles = []
+
+    def _exec(box):
+        titles.append(box.windowTitle())
+        if box.windowTitle() == "Unsaved GT":
+            return QMessageBox.StandardButton.Save
+        return QMessageBox.StandardButton.Cancel  # "Keep editing"
+
+    monkeypatch.setattr(QMessageBox, "exec", _exec)
+    return paths, leaves, titles
+
+
+def _drop_edits(mw):
+    """Let the fixture teardown close the window without a prompt."""
+    mw.gt_tracing_interface._set_clean()
+
+
+def test_failed_gt_save_keeps_the_open_image_on_tree_click(main_window, monkeypatch, tmp_path):
+    mw = main_window
+    gt = mw.gt_tracing_interface
+    paths, leaves, titles = _open_dirty_gt_with_failing_save(mw, monkeypatch, tmp_path)
+
+    mw.file_list.setCurrentItem(leaves["b"])  # the tree click selects b first
+    mw.on_image_selected(leaves["b"])
+
+    assert titles == ["Unsaved GT", "GT not saved"]
+    assert gt.current_image_path == paths["a"]
+    assert gt.has_unsaved_changes()
+    assert mw.file_list.currentItem() is leaves["a"]  # the tree points back at a
+    _drop_edits(mw)
+
+
+def test_failed_gt_save_cancels_window_close(main_window, monkeypatch, tmp_path):
+    from PyQt6.QtGui import QCloseEvent
+
+    mw = main_window
+    _open_dirty_gt_with_failing_save(mw, monkeypatch, tmp_path)
+    event = QCloseEvent()
+    mw.closeEvent(event)
+    assert not event.isAccepted()
+    assert mw.gt_tracing_interface.has_unsaved_changes()
+    _drop_edits(mw)
+
+
+def test_failed_gt_save_blocks_leaving_the_stage(main_window, monkeypatch, tmp_path):
+    mw = main_window
+    gt = mw.gt_tracing_interface
+    paths, _leaves, titles = _open_dirty_gt_with_failing_save(mw, monkeypatch, tmp_path)
+
+    assert mw.switch_right_panel("display") is False
+    assert mw.right_panel.currentIndex() == 4
+    for stage in ("Library", "Generate", "Correct Mask", "Correct Skeleton", "Measure"):
+        mw.ribbon_buttons[stage].click()
+        assert mw.right_panel.currentIndex() == 4, stage
+        assert mw.ribbon_buttons["Trace GT"].isChecked(), stage
+    assert mw._mask_tracing_signals_connected is False
+    assert gt.current_image_path == paths["a"] and gt.has_unsaved_changes()
+    assert set(titles) == {"Unsaved GT", "GT not saved"}
+    _drop_edits(mw)
+
+
+def test_failed_gt_save_cancels_open_folder_and_export(main_window, monkeypatch, tmp_path):
+    import app.gui.export_dataset_dialog as edd
+
+    mw = main_window
+    gt = mw.gt_tracing_interface
+    paths, _leaves, _titles = _open_dirty_gt_with_failing_save(mw, monkeypatch, tmp_path)
+    loads, dialogs = [], []
+    monkeypatch.setattr(mw.image_manager, "load_images", loads.append)
+    monkeypatch.setattr(edd.ExportDatasetDialog, "exec", lambda d: dialogs.append(d) or 0)
+
+    other = tmp_path / "other"
+    other.mkdir()
+    mw.open_path(str(other))
+    assert loads == []
+    assert gt.current_image_path == paths["a"] and gt.has_unsaved_changes()
+    mw.export_gt_dataset()
+    assert dialogs == []
+    _drop_edits(mw)
+
+
+def test_navigate_starts_from_the_open_gt_image(main_window, monkeypatch):
+    """Arrow keys move the tree selection without loading; PgDn must still step
+    from the image that is open in the editor."""
+    from PyQt6.QtWidgets import QTreeWidgetItem
+
+    mw = main_window
+    gt = mw.gt_tracing_interface
+    mw.file_list.clear()
+    folder = QTreeWidgetItem(["Field"])
+    leaves = {}
+    for name in ("a", "b", "c", "d"):
+        leaf = QTreeWidgetItem([f"{name}.png"])
+        leaf.setData(0, Qt.ItemDataRole.UserRole, name)
+        folder.addChild(leaf)
+        leaves[name] = leaf
+    mw.file_list.addTopLevelItem(folder)
+    mw.image_manager.images = {n: f"/project/{n}.png" for n in leaves}
+
+    loaded = []
+
+    def _load(path):
+        loaded.append(path)
+        gt.current_image_path = path
+
+    monkeypatch.setattr(gt, "load_image", _load)
+    mw.switch_right_panel("gt_tracing")
+    gt.current_image_path = "/project/a.png"
+    mw.file_list.setCurrentItem(leaves["c"])  # moved by arrow keys, nothing loaded
+
+    mw.navigate_image(1)
+    assert loaded == ["/project/b.png"]
+    assert mw.file_list.currentItem() is leaves["b"]
+
+    # Nothing open in the editor: fall back to the tree selection.
+    gt.current_image_path = ""
+    mw.file_list.setCurrentItem(leaves["c"])
+    mw.navigate_image(1)
+    assert loaded[-1] == "/project/d.png"
+    gt.current_image_path = ""
+
+
+def test_export_dialog_is_deleted_after_use(main_window, monkeypatch, tmp_path):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QEvent
+
+    import app.gui.export_dataset_dialog as edd
+
+    mw = main_window
+    mw.image_manager.original_folder = str(tmp_path)
+    mw.image_manager.images = {}
+    opened = []
+    monkeypatch.setattr(edd.ExportDatasetDialog, "exec", lambda d: opened.append(d) or 0)
+    mw.export_gt_dataset()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert len(opened) == 1 and sip.isdeleted(opened[0])
