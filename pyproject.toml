@@ -86,6 +86,8 @@ testpaths = ["tests"]
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
 
+# Ruff is the single lint + import-sort ("I") + format tool (pre-commit and CI run it).
+# Do not add [tool.black] / [tool.isort] back: the formatters disagree on some lines.
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -93,11 +95,3 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501"]
-
-[tool.black]
-line-length = 100
-target-version = ["py310"]
-
-[tool.isort]
-profile = "black"
-line_length = 100

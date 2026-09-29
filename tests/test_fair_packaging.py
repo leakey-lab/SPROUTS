@@ -93,9 +93,9 @@ def test_runtime_dependencies_mirror_requirements_txt_without_torch():
     for name, pin in pinned.items():
         (spec,) = pin.specifier
         assert spec.operator == "==", f"requirements.txt must pin {name} exactly"
-        assert declared[name].specifier.contains(
-            spec.version
-        ), f"{name} pin outside pyproject range"
+        assert declared[name].specifier.contains(spec.version), (
+            f"{name} pin outside pyproject range"
+        )
         assert str(declared[name].marker) == str(pin.marker), f"{name} platform marker differs"
 
 

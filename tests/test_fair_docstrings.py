@@ -71,6 +71,6 @@ def test_app_public_function_docstring_coverage_stays_above_the_floor():
             total += 1
             documented += ast.get_docstring(node) is not None
     coverage = documented / total
-    assert (
-        coverage >= _APP_FLOOR
-    ), f"docstring coverage fell to {coverage:.1%} ({documented}/{total})"
+    assert coverage >= _APP_FLOOR, (
+        f"docstring coverage fell to {coverage:.1%} ({documented}/{total})"
+    )

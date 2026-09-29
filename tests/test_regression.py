@@ -159,7 +159,6 @@ def test_undo_stack_is_bounded():
 def test_process_single_image_row_schema(tmp_path):
     import cv2
 
-    sk = _row_skeleton(40)
     # process_single_image reads from disk; write a binary image it will threshold/skeletonize
     img = np.zeros((20, 120), dtype=np.uint8)
     img[10, 0:40] = 255

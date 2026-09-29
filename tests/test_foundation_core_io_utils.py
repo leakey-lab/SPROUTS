@@ -139,8 +139,7 @@ def test_sharing_violation_retries_then_raises_file_locked(tmp_path, monkeypatch
     err = info.value
     assert isinstance(err, PermissionError)
     assert str(err) == (
-        "root_lengths.csv is open in another program (for example Excel). "
-        "Close it and try again."
+        "root_lengths.csv is open in another program (for example Excel). Close it and try again."
     )
     assert err.filename == str(target)
     assert len(calls) == len(io_utils.REPLACE_RETRY_DELAYS) + 1
