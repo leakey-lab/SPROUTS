@@ -51,9 +51,27 @@ _ADD_PALETTE = (
 )
 # Class rows scroll beyond this height, so the dialog fits on screen.
 _ROWS_MAX_HEIGHT = 360
+# Side of a class row's colour swatch and of the add form's (slightly larger) one.
+_SWATCH_PX = 20
+_ADD_SWATCH_PX = 22
 # Error sources for a refused one-off action: nothing stays pending, so they
 # never block OK and are cleared by the next successful edit.
 _TRANSIENT_SOURCES = ("color", "retire")
+
+
+def _swatch_qss(hex_color: str) -> str:
+    """Colour chip for a swatch button.
+
+    Zero min-size and padding keep ``setFixedSize`` square: the app QSS gives every
+    QPushButton ``padding: 9px 14px; min-height: 22px``, which stretched swatches to
+    20x42. The focus ring is the text colour so it shows on any class colour.
+    """
+    return (
+        f"QPushButton {{ background-color: {hex_color}; "
+        f"border: 1px solid {tokens.BORDER_STRONG}; border-radius: 4px; "
+        "min-height: 0; min-width: 0; padding: 0; } "
+        + tokens.focus_rule("QPushButton", tokens.FOCUS_ON_FILL)
+    )
 
 
 class _EditorRow(QWidget):
@@ -84,8 +102,10 @@ class _EditorRow(QWidget):
         row.addWidget(key_label)
 
         self.swatch_button = QPushButton()
-        self.swatch_button.setFixedSize(20, 20)
+        self.swatch_button.setFixedSize(_SWATCH_PX, _SWATCH_PX)
         self.swatch_button.setToolTip("Change colour")
+        # The key is read-only, so this name never goes stale after a rename.
+        self.swatch_button.setAccessibleName(f"Colour of class {class_def.key}")
         self.set_swatch_color(class_def.color)
         row.addWidget(self.swatch_button)
 
@@ -98,10 +118,7 @@ class _EditorRow(QWidget):
             row.addWidget(self.retire_button)
 
     def set_swatch_color(self, hex_color: str) -> None:
-        self.swatch_button.setStyleSheet(
-            f"background-color: {hex_color}; border: 1px solid {tokens.BORDER_STRONG}; "
-            "border-radius: 4px;"
-        )
+        self.swatch_button.setStyleSheet(_swatch_qss(hex_color))
 
 
 class ClassEditorDialog(QDialog):
@@ -112,7 +129,6 @@ class ClassEditorDialog(QDialog):
         self.setWindowTitle("Edit classes")
         self.setModal(True)
         self.setMinimumWidth(440)
-        self.setStyleSheet(f"QDialog {{ background-color: {tokens.BG_1}; }}")
 
         self._original = registry
         self._candidate = registry
@@ -196,8 +212,9 @@ class ClassEditorDialog(QDialog):
         row.addWidget(self._add_key_edit, 1)
 
         self._add_swatch = QPushButton()
-        self._add_swatch.setFixedSize(22, 22)
+        self._add_swatch.setFixedSize(_ADD_SWATCH_PX, _ADD_SWATCH_PX)
         self._add_swatch.setToolTip("Choose colour")
+        self._add_swatch.setAccessibleName("Colour of the new class")
         self._add_swatch.clicked.connect(self._on_add_swatch_clicked)
         row.addWidget(self._add_swatch)
 
@@ -232,10 +249,7 @@ class ClassEditorDialog(QDialog):
 
     def _show_add_color(self, hex_color: str) -> None:
         self._add_color = hex_color
-        self._add_swatch.setStyleSheet(
-            f"background-color: {hex_color}; border: 1px solid {tokens.BORDER_STRONG}; "
-            "border-radius: 4px;"
-        )
+        self._add_swatch.setStyleSheet(_swatch_qss(hex_color))
 
     def _set_add_color(self, hex_color: str) -> None:
         """Set the pending add-form colour (as if picked) without opening ``QColorDialog``."""

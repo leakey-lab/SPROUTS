@@ -1,15 +1,23 @@
 /* ==========================================================================
-   SPROUTS — refined dark design system  (PyQt6 QSS port of styles.css :root)
+   SPROUTS - refined dark design system  (PyQt6 QSS port of styles.css :root)
    Direction: Guided + comfy density + purple accent.
-   Tokens:
+   Every colour below is a token of app/design/tokens.py (single source; the
+   test suite fails on any other colour). Tokens:
      bg-0 #15161c  bg-1 #1b1c24  bg-2 #21232e  bg-3 #282a37
      hover #2f3242  active #363a4d  border #2a2c39  border-strong #373a4c
-     text #eceef5  muted #9498ad  faint #686c82
-     accent #c39af6  accent-press #ab87d8  accent-soft rgba(195,154,246,.14)
+     border-hover #454963
+     text #eceef5  muted #9498ad  faint #8c90a6 (AA on bg-0..3)
+     disabled #686c82 (:disabled rules only - fails AA, WCAG-exempt)
+     accent #c39af6  accent-bright #d3b0fa  accent-press #ab87d8
+     accent-deep #9a78c6  accent-ink #1a1322  accent-soft rgba(195,154,246,.14)
+     accent-disabled #3a3050  accent-disabled-ink #8a7fa6
      sel #b794f6  sel-soft rgba(183,148,246,.16)
+     focus = accent (on neutral surfaces), focus-on-fill = text
      mask #5fd6a0  skel #f0a868  warn #e8b25e  info #79c0e8  danger #ec6a78
-   Note: QSS is a CSS2 subset — no box-shadow/text-shadow/opacity/backdrop-filter.
+   Note: QSS is a CSS2 subset - no box-shadow/text-shadow/opacity/backdrop-filter.
    Depth/blur are done in code via QGraphicsDropShadowEffect, not here.
+   Keep this file ASCII: any reader using the platform default codec (cp1252
+   on Windows) would crash or garble on UTF-8 punctuation.
    ========================================================================== */
 
 QWidget {
@@ -18,12 +26,19 @@ QWidget {
     background-color: transparent;
 }
 
-QMainWindow, #centralwidget {
+QMainWindow {
     background-color: #15161c;
 }
 
+/* Top-level dialogs (QMessageBox, QColorDialog, QInputDialog, QProgressDialog,
+   Qt's own file dialog and every QDialog subclass) would otherwise inherit the
+   transparent QWidget background and paint on opaque black. */
+QDialog {
+    background-color: #1b1c24;            /* --bg-1 */
+}
+
 QWidget:disabled {
-    color: #686c82;
+    color: #686c82;                       /* --text-disabled (WCAG-exempt) */
 }
 
 /* ---- Tooltip ---- */
@@ -36,24 +51,16 @@ QToolTip {
     border-radius: 7px;
 }
 
-/* ---- Containers / panels ---- */
-#leftMenuBg, #panel, .panel {
-    background-color: #1b1c24;
-}
-#contentTopBg, #titlebar {
-    background-color: #1b1c24;
-}
-#pagesContainer, #contentBottom {
-    background-color: #15161c;
-}
-
-#titleLeftApp {
-    font: 600 12pt "IBM Plex Sans", "Segoe UI";
-}
-#titleLeftDescription {
-    font: 8pt "IBM Plex Sans", "Segoe UI";
-    color: #c39af6;
-}
+/* ==========================================================================
+   Keyboard focus (WCAG 2.4.7). Every ring below recolours a border that the
+   base rule already draws at the same width, so focusing never shifts
+   content. Each :focus rule sits AFTER the :hover / :checked rules of its
+   widget so focus wins ties. A widget's OWN stylesheet beats these rules
+   whenever it sets `border` (Qt weighs origin before specificity): such
+   widgets must append tokens.focus_rule(<selector>) (app/design/tokens.py).
+   Ring colours: accent #c39af6 on neutral surfaces, text #eceef5 on accent
+   or arbitrary-colour fills (primary buttons, checked indicators, handles).
+   ========================================================================== */
 
 /* ==========================================================================
    Buttons
@@ -70,18 +77,29 @@ QPushButton {
 }
 QPushButton:hover {
     background-color: #2f3242;            /* --bg-hover */
-    border-color: #454963;
+    border-color: #454963;                /* --border-hover */
 }
 QPushButton:pressed {
     background-color: #21232e;
 }
+QPushButton:focus {
+    border-color: #c39af6;                /* --focus */
+}
 QPushButton:disabled {
-    color: #686c82;
+    color: #686c82;                       /* --text-disabled */
     background-color: #21232e;
     border-color: #2a2c39;
 }
+/* Compact density for editor docks and the top bar: 32px tall instead of 42.
+   Set the dynamic property density="compact" (buttons.py: compact=True). */
+QPushButton[density="compact"] {
+    padding: 5px 12px;
+    min-height: 20px;
+    font-size: 9.5pt;
+}
 
-/* Primary / accent buttons — set objectName("primaryButton") */
+/* Primary / accent buttons - set objectName("primaryButton")
+   (app/gui/widgets/buttons.py: primary_button) */
 #primaryButton, QPushButton#primaryButton {
     background-color: #c39af6;            /* --accent (purple) */
     border: 1px solid transparent;
@@ -92,14 +110,18 @@ QPushButton:disabled {
     background-color: #ab87d8;            /* --accent-press */
 }
 #primaryButton:pressed, QPushButton#primaryButton:pressed {
-    background-color: #9a78c6;
+    background-color: #9a78c6;            /* --accent-deep */
+}
+#primaryButton:focus, QPushButton#primaryButton:focus {
+    border-color: #eceef5;                /* --focus-on-fill: accent ring is invisible on accent */
 }
 #primaryButton:disabled {
-    background-color: #3a3050;
-    color: #8a7fa6;
+    background-color: #3a3050;           /* --accent-disabled */
+    color: #8a7fa6;                       /* --accent-disabled-ink */
 }
 
-/* Ghost / flat buttons — set objectName("ghostButton") */
+/* Ghost / flat buttons - set objectName("ghostButton")
+   (app/gui/widgets/buttons.py: ghost_button) */
 #ghostButton {
     background-color: transparent;
     border: 1px solid transparent;
@@ -108,6 +130,9 @@ QPushButton:disabled {
 #ghostButton:hover {
     background-color: #282a37;
     color: #eceef5;
+}
+#ghostButton:focus {
+    border-color: #c39af6;                /* --focus */
 }
 
 /* ---- Tool buttons ---- */
@@ -125,6 +150,9 @@ QToolButton:hover {
 QToolButton:checked, QToolButton:pressed {
     background-color: rgba(195, 154, 246, 0.14);   /* --accent-soft */
     color: #c39af6;
+}
+QToolButton:focus {
+    border-color: #c39af6;                /* --focus (checked keeps its soft fill) */
 }
 
 /* ==========================================================================
@@ -146,6 +174,25 @@ QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
 QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
     border-color: #c39af6;                /* --accent */
+}
+
+/* Spin-box steppers: the native arrows are only drawn in buttons >= 16px wide
+   (the default ~12px showed none). Placing the buttons in the content box keeps
+   the rounded border and its focus ring whole. Do not give the buttons a
+   background or border: that makes the style drop the native arrows, and url()
+   arrow images would resolve against the working directory. */
+QSpinBox, QDoubleSpinBox {
+    padding-right: 4px;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: content;
+    subcontrol-position: top right;
+    width: 18px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: content;
+    subcontrol-position: bottom right;
+    width: 18px;
 }
 
 QComboBox::drop-down {
@@ -171,6 +218,23 @@ QTreeWidget, QTreeView, QListWidget, QListView {
     outline: none;
     color: #9498ad;
 }
+QTreeWidget, QTreeView {
+    border: 1px solid transparent;        /* reserves the focus ring's width */
+    /* No palette(Highlight) block in the indentation of the selected row: with
+       the hint on, the base style fills it before the item's own background. */
+    show-decoration-selected: 0;
+}
+QTreeWidget:focus, QTreeView:focus {
+    border-color: #c39af6;                /* --focus */
+}
+/* Qt still paints the selected item's background under its indentation.
+   Keep the indentation plain so the item reads as one pill with its accent bar.
+   ONLY cells without children: any ::branch rule with a background replaces
+   the native expand arrow (Qt then draws none), and url() arrow images would
+   resolve against the working directory. */
+QTreeView::branch:selected:!has-children {
+    background: palette(base);
+}
 QTreeWidget::item, QTreeView::item, QListWidget::item {
     height: 30px;
     border-radius: 7px;
@@ -188,7 +252,7 @@ QTreeWidget::item:selected, QTreeView::item:selected, QListWidget::item:selected
 }
 QHeaderView::section {
     background-color: #1b1c24;
-    color: #686c82;
+    color: #8c90a6;                       /* --text-faint (AA) */
     border: none;
     border-bottom: 1px solid #2a2c39;
     padding: 6px 8px;
@@ -234,12 +298,12 @@ QGroupBox::title {
     subcontrol-position: top left;
     left: 12px;
     padding: 0 4px;
-    color: #686c82;
+    color: #8c90a6;                       /* --text-faint (AA) */
     font-size: 9pt;
 }
 
 /* ==========================================================================
-   Sliders — filled track via sub-page (accent) / add-page (bg-active).
+   Sliders - filled track via sub-page (accent) / add-page (bg-active).
    No paintEvent needed; every plain QSlider inherits the fill.
    ========================================================================== */
 QSlider::groove:horizontal {
@@ -265,10 +329,13 @@ QSlider::handle:horizontal {
     border-radius: 9px;
 }
 QSlider::handle:horizontal:hover {
-    background-color: #d3b0fa;
+    background-color: #d3b0fa;            /* --accent-bright */
 }
 QSlider::handle:horizontal:pressed {
-    background-color: #ab87d8;
+    background-color: #ab87d8;            /* --accent-press */
+}
+QSlider::handle:horizontal:focus {
+    border-color: #eceef5;                /* --focus-on-fill: ring around the handle */
 }
 
 QSlider::groove:vertical {
@@ -291,6 +358,9 @@ QSlider::handle:vertical {
     height: 15px;
     margin: 0 -7px;
     border-radius: 9px;
+}
+QSlider::handle:vertical:focus {
+    border-color: #eceef5;                /* --focus-on-fill */
 }
 
 /* ==========================================================================
@@ -335,9 +405,12 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {
     background: #c39af6;
     border-color: #c39af6;
 }
+QCheckBox::indicator:focus, QRadioButton::indicator:focus {
+    border-color: #eceef5;                /* --focus-on-fill: visible on the checked fill too */
+}
 
 /* ==========================================================================
-   Scrollbars — 10px bg-3 thumb
+   Scrollbars - 10px bg-3 thumb
    ========================================================================== */
 QScrollBar:vertical {
     border: none;
@@ -390,7 +463,7 @@ QMenu::item:selected { background-color: rgba(183, 148, 246, 0.16); }
 
 QStatusBar {
     background-color: #1b1c24;
-    color: #686c82;
+    color: #8c90a6;                       /* --text-faint (AA): messages are information */
     border-top: 1px solid #2a2c39;
     font: 9pt "IBM Plex Mono", "Consolas", monospace;
 }
@@ -400,18 +473,4 @@ QSplitter::handle {
 }
 QSplitter::handle:hover {
     background-color: #373a4c;
-}
-
-/* Generic raised page buttons (legacy left-panel groups, pre-Phase-3 shell) */
-#pagesContainer QPushButton {
-    border: 1px solid #373a4c;
-    border-radius: 7px;
-    background-color: #282a37;
-}
-#pagesContainer QPushButton:hover {
-    background-color: #2f3242;
-    border-color: #454963;
-}
-#pagesContainer QPushButton:pressed {
-    background-color: #21232e;
 }

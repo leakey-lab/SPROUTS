@@ -34,6 +34,9 @@ from app.gui.widgets import tokens
 
 # Failed images listed in the summary; the rest are counted ("…and N more").
 _MAX_LISTED_ERRORS = 10
+# The action button reads "Export" until an export succeeds, then "Close".
+_EXPORT_LABEL = "Export"
+_CLOSE_LABEL = "Close"
 
 
 class ExportThread(QThread):
@@ -94,8 +97,8 @@ class ExportDatasetDialog(QDialog):
         self.setWindowTitle("Export dataset")
         self.setModal(True)
         self.setMinimumWidth(420)
-        self.setStyleSheet(f"QDialog {{ background-color: {tokens.BG_1}; }}")
         self._build_ui()
+        self._sync_export_enabled()
 
     # ------------------------------------------------------------------ UI
 
@@ -121,6 +124,7 @@ class ExportDatasetDialog(QDialog):
         out_row = QHBoxLayout()
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("Choose an output folder…")
+        self.output_edit.textChanged.connect(self._sync_export_enabled)
         self.browse_button = QPushButton("Browse…")
         self.browse_button.setObjectName("ghostButton")
         self.browse_button.clicked.connect(self._on_browse)
@@ -151,9 +155,15 @@ class ExportDatasetDialog(QDialog):
         layout.addLayout(_labeled("Random seed", self.seed_spin))
 
         # --- Progress + status ---
+        # Hidden until an export runs (a "0%" bar before anything happens reads as a
+        # stalled job); its row stays reserved so the dialog does not jump when it shows.
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        policy = self.progress_bar.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.progress_bar.setSizePolicy(policy)
+        self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("")
@@ -169,7 +179,7 @@ class ExportDatasetDialog(QDialog):
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setObjectName("ghostButton")
         self.cancel_button.clicked.connect(self.reject)
-        self.export_button = QPushButton("Export")
+        self.export_button = QPushButton(_EXPORT_LABEL)
         self.export_button.setObjectName("primaryButton")
         self.export_button.clicked.connect(self._on_export_button_clicked)
         button_row.addWidget(self.cancel_button)
@@ -184,10 +194,21 @@ class ExportDatasetDialog(QDialog):
             self.output_edit.setText(path)
 
     def _on_export_button_clicked(self) -> None:
-        if self.export_button.text() == "Close":
+        if self._is_done():
             self.accept()
             return
         self.start_export()
+
+    def _is_done(self) -> bool:
+        """An export finished: the action button now closes the dialog."""
+        return self.export_button.text() == _CLOSE_LABEL
+
+    def _sync_export_enabled(self) -> None:
+        """Export needs an output folder; Close is always offered once an export is done."""
+        if self._is_running():
+            return  # every control stays disabled until the worker reports back
+        has_output = bool(self.output_edit.text().strip())
+        self.export_button.setEnabled(self._is_done() or has_output)
 
     def start_export(self) -> None:
         """Validate options and start the export ``QThread``.
@@ -213,6 +234,7 @@ class ExportDatasetDialog(QDialog):
 
         self.result_summary = None
         self.progress_bar.setValue(0)
+        self.progress_bar.show()
         self.status_label.setText("Exporting…")
         self._set_controls_enabled(False)
 
@@ -234,6 +256,8 @@ class ExportDatasetDialog(QDialog):
             self.export_button,
         ):
             widget.setEnabled(enabled)
+        if enabled:
+            self._sync_export_enabled()
 
     def _is_running(self) -> bool:
         return self.export_thread is not None and self.export_thread.isRunning()
@@ -262,13 +286,14 @@ class ExportDatasetDialog(QDialog):
                 lines.append(f"…and {more} more")
             text += "\n\nNot exported (full list in errors.txt):\n" + "\n".join(lines)
         self.status_label.setText(text)
-        self.export_button.setText("Close")
+        self.export_button.setText(_CLOSE_LABEL)
         self._set_controls_enabled(True)
 
     def _on_failed(self, message: str) -> None:
         self._join_worker()
         self.result_summary = None
         self.progress_bar.setValue(0)
+        self.progress_bar.hide()  # the status line carries the error
         self.status_label.setText(message)
         self._set_controls_enabled(True)
 

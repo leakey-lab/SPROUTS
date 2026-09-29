@@ -265,3 +265,58 @@ def test_summary_without_errors_lists_none(app, tmp_path):
     dialog.start_export()
     _wait_for_thread(dialog)
     assert "error" not in dialog.status_label.text().lower()
+
+
+def test_progress_bar_hidden_until_an_export_starts(app, tmp_path):
+    """No '0%' bar before anything runs (audit UXS-13); it shows the run, then 100%."""
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    assert dialog.progress_bar.isHidden()
+
+    dialog.output_edit.setText(str(tmp_path / "export_out_progress"))
+    dialog.start_export()
+    assert not dialog.progress_bar.isHidden()
+    _wait_for_thread(dialog)
+    assert not dialog.progress_bar.isHidden()
+    assert dialog.progress_bar.value() == 100
+
+
+def test_failed_export_hides_the_progress_bar_again(app, tmp_path):
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    taken = tmp_path / "export_out_taken_again"
+    taken.mkdir()
+    (taken / "existing.txt").write_text("x")
+    dialog.output_edit.setText(str(taken))
+
+    dialog.start_export()
+    _wait_for_thread(dialog)
+
+    assert dialog.progress_bar.isHidden()
+    assert dialog.export_button.isEnabled() and dialog.export_button.text() == "Export"
+
+
+def test_export_button_needs_an_output_folder(app, tmp_path):
+    """Export is only offered once there is somewhere to export to (audit UXS-13)."""
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    assert not dialog.export_button.isEnabled()
+
+    dialog.output_edit.setText("   ")
+    assert not dialog.export_button.isEnabled()
+    dialog.output_edit.setText(str(tmp_path / "export_out_gate"))
+    assert dialog.export_button.isEnabled()
+    dialog.output_edit.setText("")
+    assert not dialog.export_button.isEnabled()
+
+
+def test_close_stays_available_after_a_finished_export(app, tmp_path):
+    project_dir, images, registry = _build_project(tmp_path)
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(tmp_path / "export_out_close_mode"))
+    dialog.start_export()
+    _wait_for_thread(dialog)
+    assert dialog.export_button.text() == "Close"
+
+    dialog.output_edit.setText("")  # the output gate only applies to "Export"
+    assert dialog.export_button.isEnabled()
