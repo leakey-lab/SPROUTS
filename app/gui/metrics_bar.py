@@ -11,19 +11,40 @@ fixed FOV, then STATUS. Cells with nothing to say are hidden rather than shown
 as ``—``, so the strip stays quiet until it has content.
 
 Still pure presentation: ``set_metrics`` formats what it is handed and never
-computes anything. The value QLabels keep their ``—`` fallback text (and their
-``_length_value`` / ``_area_value`` / ``_status_value`` names) so existing
-callers and tests are unaffected.
+computes anything. Measured values come from the Measure CSVs through
+:class:`app.data_processing.measurement_index.MeasurementIndex` (read by the
+caller); a failed measurement shows ``failed`` with its message, and a value
+whose inputs changed after it was measured is shown in the warning colour with a
+"Measure again" tooltip. The FOV text is derived from
+:data:`app.config.CALIBRATION` (the single source of the field of view). The
+value QLabels keep their ``—`` fallback text (and their ``_length_value`` /
+``_area_value`` / ``_status_value`` names) so existing callers and tests are
+unaffected.
 """
 
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
 
+from app import config
 from app.gui.widgets import tokens
 
 _DASH = "—"
-_FOV_VALUE = "18×13 mm"
+_FAILED = "failed"
+_OUTDATED_TIP = "Edited after this measurement — run Measure again for a current value."
+
+
+def fov_text() -> str:
+    """Display text of the calibrated field of view, e.g. ``18×13 mm``."""
+    cal = config.CALIBRATION
+    return f"{cal.fov_width_mm:g}×{cal.fov_height_mm:g} mm"
+
+
+def _value_qss(color: str) -> str:
+    return (
+        f"color: {color}; font-family: {tokens.MONO}; font-size: 9.5pt; "
+        f"font-weight: 600; border: none;"
+    )
 
 
 class MetricsBar(QWidget):
@@ -50,8 +71,9 @@ class MetricsBar(QWidget):
         )
         self._length_cell, self._length_value = self._add_cell(row, "LENGTH", accent=True)
         self._area_cell, self._area_value = self._add_cell(row, "AREA")
-        _fov_cell, fov_value = self._add_cell(row, "FOV")
-        fov_value.setText(_FOV_VALUE)
+        self._fov_cell, self._fov_value = self._add_cell(row, "FOV")
+        self._fov_value.setText(fov_text())
+        self._fov_cell.setToolTip("Calibrated field of view (app.config.CALIBRATION)")
         self._status_cell, self._status_value = self._add_cell(row, "STATUS")
 
         row.addStretch(1)
@@ -84,10 +106,8 @@ class MetricsBar(QWidget):
             line.addWidget(label)
 
         value = QLabel(_DASH)
-        value.setStyleSheet(
-            f"color: {tokens.ACCENT if accent else tokens.TEXT}; "
-            f"font-family: {tokens.MONO}; font-size: 9.5pt; font-weight: 600; border: none;"
-        )
+        value.setProperty("baseColor", tokens.ACCENT if accent else tokens.TEXT)
+        value.setStyleSheet(_value_qss(value.property("baseColor")))
         line.addWidget(value)
 
         row.addWidget(cell)
@@ -99,14 +119,59 @@ class MetricsBar(QWidget):
         area: float | None = None,
         status: str | None = None,
         name: str | None = None,
+        *,
+        error: str | None = None,
+        stale: bool = False,
+        source: str | None = None,
     ) -> None:
-        """Update the displayed values (read-only). Empty cells are hidden."""
-        self._length_value.setText(f"{length:.2f} mm" if length is not None else _DASH)
-        self._area_value.setText(f"{area:.2f} mm²" if area is not None else _DASH)
+        """Update the displayed values (read-only). Empty cells are hidden.
+
+        ``error`` (a failed Measure row) is shown as ``failed`` in the first
+        metric cell that has no value, with the message as its tooltip.
+        ``stale`` flags values whose inputs changed after they were measured;
+        ``source`` names the CSV the values were read from (tooltip).
+        """
+        length_error = error if error and length is None else None
+        area_error = error if error and length is not None and area is None else None
+        self._show_metric(
+            self._length_cell, self._length_value, length, "mm", length_error, stale, source
+        )
+        self._show_metric(self._area_cell, self._area_value, area, "mm²", area_error, stale, source)
         self._status_value.setText(status if status else _DASH)
         self._name_value.setText(name if name else _DASH)
-
-        self._length_cell.setVisible(length is not None)
-        self._area_cell.setVisible(area is not None)
         self._status_cell.setVisible(bool(status))
         self._name_cell.setVisible(bool(name))
+
+    @staticmethod
+    def _show_metric(
+        cell: QFrame,
+        label: QLabel,
+        value: float | None,
+        unit: str,
+        error: str | None,
+        stale: bool,
+        source: str | None,
+    ) -> None:
+        """Fill one metric cell: a value, ``failed`` + message, or hidden."""
+        if value is not None:
+            label.setText(f"{value:.2f} {unit}")
+            outdated = bool(stale)
+            color = tokens.WARN if outdated else label.property("baseColor")
+            tips = [f"Measured value from {source}" if source else "Measured value"]
+            if outdated:
+                tips.append(_OUTDATED_TIP)
+        elif error:
+            label.setText(_FAILED)
+            outdated = False
+            color = tokens.DANGER
+            tips = [f"Measurement failed — {error}"]
+        else:
+            label.setText(_DASH)
+            label.setProperty("stale", False)
+            cell.setToolTip("")
+            cell.setVisible(False)
+            return
+        label.setProperty("stale", outdated)
+        label.setStyleSheet(_value_qss(color))
+        cell.setToolTip("\n".join(tips))
+        cell.setVisible(True)

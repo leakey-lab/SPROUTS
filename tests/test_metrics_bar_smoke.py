@@ -73,3 +73,39 @@ def test_metrics_bar_mounts_without_disturbing_stack(app):
         w._refresh_metrics_bar(None)
     finally:
         w.close()
+
+
+def test_fov_cell_is_derived_from_calibration(app, monkeypatch):
+    """PG-12 / AR-06: the FOV text comes from app.config.CALIBRATION (single source)."""
+    from app import config
+    from app.gui import metrics_bar
+
+    assert MetricsBar()._fov_value.text() == "18×13 mm"
+    monkeypatch.setattr(config, "CALIBRATION", config.Calibration(20.5, 13.0))
+    assert metrics_bar.fov_text() == "20.5×13 mm"
+    assert MetricsBar()._fov_value.text() == "20.5×13 mm"
+
+
+def test_measured_values_show_source_tooltip(app):
+    """UXS-03: a measured value names the CSV it was read from."""
+    bar = MetricsBar()
+    bar.set_metrics(length=18.77, area=16.41, source="D:/p/skeletons/root_lengths.csv")
+    assert not bar._length_cell.isHidden()
+    assert "root_lengths.csv" in bar._length_cell.toolTip()
+
+
+def test_outdated_measurement_is_flagged_not_hidden(app):
+    bar = MetricsBar()
+    bar.set_metrics(length=18.77, area=None, stale=True)
+    assert bar._length_value.text() == "18.77 mm"
+    assert "Measure again" in bar._length_cell.toolTip()
+    assert bar._length_value.property("stale") is True
+
+
+def test_measurement_error_is_shown_instead_of_a_value(app):
+    """A failed Measure row shows 'failed' with the message, never a fabricated 0."""
+    bar = MetricsBar()
+    bar.set_metrics(length=None, area=None, error="Length: cannot read image")
+    assert not bar._length_cell.isHidden()
+    assert bar._length_value.text() == "failed"
+    assert "cannot read image" in bar._length_cell.toolTip()
