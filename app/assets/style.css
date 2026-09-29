@@ -6,6 +6,8 @@
    It restyles the dbc/dash HTML chrome (body, cards, dropdowns,
    tabs, inputs, modebar) to match the SPROUTS desktop shell.
    The Plotly *figures* are themed separately by theme.py.
+   Loaded after 00_bootswatch-darkly.min.css and 01_ibm-plex.css
+   (Dash includes assets alphabetically), so these rules win.
    ============================================================ */
 
 :root{
@@ -19,6 +21,32 @@
   --radius:10px; --radius-sm:7px;
   --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* Bootstrap components use these; Darkly's Lato is never loaded. */
+  --bs-font-sans-serif:var(--sans);
+  --bs-font-monospace:var(--mono);
+}
+
+/* Dash 4 components (dcc.Dropdown, Checklist, Input, ...) paint themselves
+   from these design tokens. Dash declares light defaults on :root at run time
+   (after this file), so they are overridden with a more specific selector.
+   Without this the dropdowns render white on the dark page. */
+html:root{
+  --Dash-Fill-Inverse-Strong:var(--bg-3);
+  --Dash-Fill-Interactive-Strong:var(--accent);
+  --Dash-Fill-Interactive-Weak:var(--accent-soft);
+  --Dash-Fill-Primary-Hover:var(--bg-hover);
+  --Dash-Fill-Primary-Active:var(--bg-active);
+  --Dash-Fill-Disabled:var(--bg-2);
+  --Dash-Stroke-Strong:var(--border-strong);
+  --Dash-Stroke-Weak:var(--border);
+  --Dash-Text-Primary:var(--text);
+  --Dash-Text-Strong:var(--text);
+  --Dash-Text-Weak:var(--text-muted);
+  --Dash-Text-Disabled:var(--text-faint);
+  --Dash-Shading-Strong:rgba(0,0,0,.55);
+  --Dash-Shading-Weak:rgba(0,0,0,.35);
+  --Dash-Tooltip-Background-Color:var(--bg-3);
+  --Dash-Tooltip-Border-Color:var(--border-strong);
 }
 
 /* ---- base ------------------------------------------------- */
@@ -84,7 +112,7 @@ hr{ border-color:var(--border) !important; opacity:1; }
 .btn-warning{ color:var(--warn) !important; }
 
 /* keyboard focus only */
-.btn:focus-visible, .Select-control:focus-within{
+.btn:focus-visible, .dash-dropdown:focus-visible{
   outline:2px solid var(--accent); outline-offset:2px;
 }
 
@@ -100,40 +128,15 @@ input[type=text], input[type=number], .form-control{
   background:var(--bg-3) !important; color:var(--text) !important;
   border:1px solid var(--border-strong) !important; border-radius:var(--radius-sm) !important;
 }
-input::placeholder{ color:var(--text-faint) !important; }
+input::placeholder{ color:var(--text-muted) !important; }
 input:focus, .form-control:focus{
   border-color:var(--accent-line) !important;
   box-shadow:0 0 0 3px var(--accent-soft) !important; outline:none !important;
 }
 
-/* ---- dcc.Dropdown (react-select v1: .Select-*) ------------ */
-.Select-control{
-  background:var(--bg-3) !important; border:1px solid var(--border-strong) !important;
-  border-radius:var(--radius-sm) !important; color:var(--text) !important;
-}
-.Select-control:hover{ border-color:var(--border-strong) !important; }
-.is-focused:not(.is-open) > .Select-control{
-  border-color:var(--accent-line) !important;
-  box-shadow:0 0 0 3px var(--accent-soft) !important;
-}
-.Select-placeholder, .Select--single > .Select-control .Select-value{ color:var(--text-muted) !important; }
-.Select-value-label{ color:var(--text) !important; }
-.Select-input > input{ color:var(--text) !important; }
-.Select-menu-outer{
-  background:var(--bg-2) !important; border:1px solid var(--border-strong) !important;
-  border-radius:var(--radius-sm) !important; box-shadow:0 18px 50px -12px rgba(0,0,0,.7) !important;
-}
-.Select-option{ background:var(--bg-2) !important; color:var(--text-muted) !important; }
-.Select-option.is-focused{ background:var(--bg-hover) !important; color:var(--text) !important; }
-.Select-option.is-selected{ background:var(--accent-soft) !important; color:var(--accent) !important; }
-.Select-arrow{ border-color:var(--text-faint) transparent transparent !important; }
-/* multi-select value chips */
-.Select--multi .Select-value{
-  background:var(--accent-soft) !important; border:1px solid var(--accent-line) !important;
-  color:var(--accent) !important; border-radius:6px !important;
-}
-.Select--multi .Select-value-icon{ border-right:1px solid var(--accent-line) !important; }
-.Select--multi .Select-value-icon:hover{ background:rgba(95,214,160,.25) !important; color:var(--text) !important; }
+/* ---- dcc.Dropdown (Dash 4: colours come from the --Dash-* tokens above) */
+.dash-dropdown{ border:1px solid var(--border-strong); border-radius:var(--radius-sm); }
+.dash-dropdown-placeholder{ color:var(--text-muted) !important; }
 
 /* ---- dcc.Tabs --------------------------------------------- */
 .dash-tabs, .tab-container{ border-color:var(--border) !important; }
@@ -180,7 +183,7 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
 
 /* ============================================================
    SPROUTS VizView — full-bleed, width-fluid dashboard shell
-   (Track V redesign). Layout-tree + CSS only; no data changes.
+   (Track V redesign; built by app/visualization/dash_shell.py).
    ============================================================ */
 
 /* page root: 100vh flex column, full-bleed (no centering/max-width) */
@@ -193,16 +196,16 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
 
 /* ---- header band (thin, fixed height) --------------------- */
 .viz-header{
-  display:flex; align-items:center; justify-content:space-between;
-  gap:16px; padding:10px 18px;
+  display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
+  gap:8px 16px; padding:10px 18px;
   background:var(--bg-1); border-bottom:1px solid var(--border);
   flex:0 0 auto;
 }
 .viz-header-left{ display:flex; flex-direction:column; gap:2px; min-width:0; }
-.viz-header-right{ display:flex; align-items:center; gap:12px; flex:0 0 auto; }
+.viz-header-right{ display:flex; align-items:center; gap:12px; flex:0 1 auto; flex-wrap:wrap; }
 .viz-eyebrow{
   font-family:var(--mono); font-size:11px; letter-spacing:.16em;
-  text-transform:uppercase; color:var(--text-faint);
+  text-transform:uppercase; color:var(--text-muted);
 }
 .viz-title{
   font-family:var(--sans); font-size:18px; font-weight:600;
@@ -210,47 +213,102 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
   margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 
+/* view selector: one segmented control (was four Darkly outline buttons
+   whose #444 labels were barely readable on the dark header) */
+.viz-view-selector{
+  display:inline-flex; flex-wrap:wrap; gap:2px; padding:3px;
+  background:var(--bg-0); border:1px solid var(--border); border-radius:9px;
+}
+.viz-view-selector .form-check{ padding:0; margin:0; min-height:0; }
+.viz-view-selector .btn{
+  border:0 !important; border-radius:6px !important;
+  background:transparent !important; color:var(--text-muted) !important;
+  font:500 13px/1 var(--sans); padding:8px 12px; margin:0;
+}
+.viz-view-selector .btn:hover{ background:var(--bg-hover) !important; color:var(--text) !important; }
+.viz-view-selector .btn-check:checked + .btn{
+  background:var(--bg-3) !important; color:var(--text) !important;
+  box-shadow:0 1px 2px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.viz-view-selector .btn-check:focus-visible + .btn{ outline:2px solid var(--accent); outline-offset:1px; }
+
+.viz-export-btn{
+  background:transparent !important; color:var(--text-muted) !important;
+  font:500 13px/1 var(--sans); padding:8px 12px;
+}
+.viz-export-btn:hover{ background:var(--bg-hover) !important; color:var(--text) !important; }
+
 /* ---- collapsible control strip ---------------------------- */
 .viz-controls{
   flex:0 0 auto;
   background:var(--bg-1); border-bottom:1px solid var(--border);
 }
-.viz-controls-toggle{
+.viz-controls-toggle.btn{
   display:flex; align-items:center; gap:10px;
   padding:8px 18px; cursor:pointer; user-select:none;
   font-family:var(--sans); font-size:13px; color:var(--text-muted);
-  background:transparent; border:none; width:100%; text-align:left;
+  background:transparent; width:100%; text-align:left;
+  border:0 !important; border-radius:0 !important; box-shadow:none !important;
+  text-decoration:none;
 }
-.viz-controls-toggle:hover{ color:var(--text); }
+.viz-controls-toggle.btn:hover{ color:var(--text); }
 .viz-controls-toggle .viz-controls-caret{
-  font-family:var(--mono); color:var(--text-faint);
+  font-family:var(--mono); font-size:14px; width:12px; color:var(--text-muted);
 }
+.viz-controls-toggle .viz-controls-label{ color:var(--text); font-weight:500; }
 .viz-controls-toggle .viz-controls-summary{
-  color:var(--text-faint); font-family:var(--mono); font-size:12px;
+  color:var(--text-muted); font-family:var(--mono); font-size:12px;
   margin-left:auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
+/* The strip opens with the view; cap its height so the chart keeps most of
+   the window (the time-view cards alone are taller than a laptop screen). */
 .viz-controls-body{
-  padding:8px 18px 14px;
+  padding:10px 18px 4px;
   border-top:1px solid var(--border);
+  max-height:min(46vh, 520px); overflow-y:auto;
 }
+.viz-controls-body .card{ margin-bottom:10px; }
+.viz-controls-body .card-body{ padding:12px 16px; }
+.viz-tube-dropdown{ margin-bottom:10px; max-width:420px; }
 
-/* ---- thin metric chips ------------------------------------ */
-.viz-metrics{
-  display:flex; flex-wrap:wrap; gap:10px;
-  padding:8px 18px;
-  background:var(--bg-1); border-bottom:1px solid var(--border);
-  flex:0 0 auto;
+/* control cards: compact type, no inline styles (PV-14) */
+.viz-card-title{ font-size:14px; margin:0 0 10px; }
+.viz-field-label{
+  display:block; font-size:12.5px; font-weight:600; color:var(--text-muted);
+  margin:10px 0 6px;
 }
-.metric{
-  display:inline-flex; align-items:baseline; gap:7px;
-  background:var(--bg-2); border:1px solid var(--border);
-  border-radius:999px; padding:4px 12px;
+.viz-tabs .tab{ padding:8px 10px !important; font-size:13px; }
+.viz-tab-body{ padding:8px 2px 2px; }
+.viz-inline-fields{ display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.viz-inline-fields .viz-field-label{ margin:0; }
+.viz-number-input{ width:96px; }
+.viz-text-input{ width:100%; }
+.viz-checklist input{ margin-right:8px; }
+.viz-check-label{ display:block; margin-bottom:6px; }
+.viz-selected-tubes{ min-height:36px; padding:4px 0; margin-bottom:8px; }
+.viz-badges{ display:flex; flex-wrap:wrap; gap:6px; }
+.viz-button-row{ display:flex; gap:8px; }
+.viz-empty-hint{ color:var(--text-muted); font-style:italic; padding:4px 0; }
+.viz-more-hint{ color:var(--text-muted); font-style:italic; align-self:center; }
+
+/* faceted selection feedback and availability table */
+.viz-note-box{ margin:12px 0 4px; }
+.viz-note{ font-size:13px; }
+.viz-note--split{ display:flex; flex-direction:column; gap:2px; }
+.viz-note--muted{ color:var(--text-muted); }
+.viz-note--danger{ color:var(--danger); }
+.viz-note--ok{ color:var(--accent); }
+.viz-note--info{ color:var(--info); }
+.viz-availability{ max-height:200px; overflow-y:auto; font-size:12px; padding:2px 0 6px; }
+.viz-availability-table{ border-collapse:collapse; width:100%; }
+.viz-availability-table th, .viz-availability-table td{
+  border:1px solid var(--border); padding:4px 6px; text-align:center;
 }
-.metric-value{ font-family:var(--mono); font-size:13px; font-weight:500; color:var(--text); }
-.metric-label{
-  font-family:var(--mono); font-size:10px; letter-spacing:.08em;
-  text-transform:uppercase; color:var(--text-muted);
-}
+.viz-availability-table th{ font-size:10.5px; font-weight:600; color:var(--text-muted); }
+.viz-avail-tube{ font-weight:600; }
+.viz-avail-yes{ color:var(--accent); font-weight:600; }
+.viz-avail-no{ color:var(--danger); font-weight:600; }
+.viz-avail-line{ font-size:11.5px; margin-bottom:4px; color:var(--text-muted); }
 
 /* ---- chart card: fills remaining space, full width -------- */
 .viz-chart-card{
@@ -262,11 +320,13 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
      keeps its tall computed height and scrolls internally instead. */
   overflow-y:auto; overflow-x:hidden;
 }
-.viz-chart-card > ._dash-loading-callback,
-.viz-chart-card .dash-graph,
-.viz-chart-card .js-plotly-plot{
-  flex:1 1 auto; min-height:0; width:100%;
-}
+/* dcc.Loading renders two wrapper divs around the graph, both with
+   parent_className="viz-loading". They must stretch too, or the chart
+   collapses to Plotly's 450 px default (PV-05). Basis 0 sizes them from the
+   card, never from the previous figure (a tall faceted grid would otherwise
+   keep the next chart tall). */
+.viz-loading{ flex:1 1 0%; min-height:0; display:flex; flex-direction:column; }
+.viz-chart-card .dash-graph{ flex:1 1 auto; min-height:0; width:100%; }
 
 /* ---- Growth-Lines two-pane row ---------------------------- */
 .viz-lines-row{
@@ -283,4 +343,14 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
   display:flex; flex-direction:column; gap:8px;
   background:var(--bg-2); border:1px solid var(--border);
   border-radius:var(--radius-sm); padding:8px;
+}
+/* hover thumbnails (served by URL; 4:3 box reserved while they load) */
+.viz-thumb-card{ width:100%; padding:2px 0; box-sizing:border-box; }
+.viz-thumb{
+  display:block; width:100%; min-width:100px; aspect-ratio:4/3; object-fit:contain;
+  border:1px solid var(--border); border-radius:6px; background:var(--bg-0);
+}
+.viz-thumb-label{
+  text-align:center; font:600 11.5px/1.3 var(--mono); color:var(--text-muted);
+  margin:4px 0 0;
 }

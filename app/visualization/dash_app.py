@@ -1,594 +1,591 @@
 """
-Main Dash application for root length visualization.
-Orchestrates layout, callbacks, and visualization components.
+Root-length dashboard (Dash): layout, callbacks and Growth-Lines hover images.
+
+The page chrome (header, view selector, control strip, chart card, CSV export)
+comes from :mod:`.dash_shell`; figures from :class:`.dash_visualizations.DashVisualizations`
+over a :class:`.dash_data_cache.DataCache`; hover thumbnails from
+:mod:`.dash_image_utils`. Component ids, callback Outputs and figure customdata
+are a contract with the renderer and the embedding window: keep them stable.
 """
 
 import logging
-import os
 import re
 from typing import Any
 
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
-import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, dcc, html
+from dash import Input, Output, Patch, State, dcc, html
+from dash.exceptions import PreventUpdate
 
-from app.config import DASH_LENGTH_PORT
+from app.config import DASH_HOST, DASH_LENGTH_PORT
 
-from . import theme
+from . import dash_export, theme
 from .dash_data_cache import DataCache
-from .dash_image_utils import build_available_images_map, get_encoded_image
-from .dash_visualizations import DashVisualizations
+from .dash_image_utils import ThumbnailServer, build_available_images_map
+from .dash_shell import (
+    NO_OPTIONS_SUMMARY,
+    DashboardShell,
+    ShellSpec,
+    ViewOption,
+    count_label,
+    create_dash_app,
+    tube_options,
+    with_uirevision,
+)
+from .dash_visualizations import GROWTH_LINES_INTERVAL, DashVisualizations, parse_tube_selection
+from .faceted_profile import MAX_TUBES, build_faceted_profile
 
 theme.use("sprouts")
 
 logger = logging.getLogger(__name__)
 
+LENGTH_SHELL = ShellSpec(
+    title="Root Length — trial overview",
+    controls_label="Tube & date range",
+    views=(
+        ViewOption("Stacked Bar View", "stacked"),
+        ViewOption("Growth Over Time", "time", has_controls=True),
+        ViewOption("Growth Lines", "lines", has_controls=True),
+        ViewOption("Faceted Depth Profile", "faceted", has_controls=True),
+    ),
+    plot_filename="root_length_plot",
+    tube_view="lines",
+)
+
+_SHOWN = {"display": "block"}
+_HIDDEN = {"display": "none"}
+_IMAGES_SHOWN = {"display": "flex"}  # .viz-image-panel CSS owns size and layout
+# The chart fills the chart card (a flex column of the 100vh page).
+_GRAPH_STYLE = {"height": "100%", "width": "100%", "overflow": "hidden"}
+# The faceted grid keeps its computed height; the chart card scrolls instead.
+_FACETED_GRAPH_STYLE = {
+    "height": "auto",
+    "width": "100%",
+    "overflow": "visible",
+    "flex": "0 0 auto",
+}
+
+_DATE_TOKEN = re.compile(r"\d{4}\.\d{2}\.\d{2}")
+
+
+def _card_style(visible: bool) -> dict:
+    return _SHOWN if visible else _HIDDEN
+
 
 class DashApp(DashVisualizations):
-    """Manages the Dash application."""
+    """The root-length dashboard: one Dash app over one root_lengths.csv."""
 
     def __init__(self, data_processor: Any, save_directory: str, image_manager=None):
         self.data_processor = data_processor
         self.save_directory = save_directory
         self.image_manager = image_manager
 
-        # Build available images map for hover display
+        # (tube, position, date) -> image path, parsed on first use (PV-17).
         self.available_images = build_available_images_map(image_manager)
-
-        # Initialize data cache
         self.data_cache = DataCache(data_processor)
+        self._tube_options = tube_options(self.data_cache.tubes)
+        self._date_options = [
+            {"label": date.strftime("%Y-%m-%d"), "value": date.isoformat()}
+            for date in self.data_cache.dates
+        ]
 
-        # Initialize Dash app
-        self.app = Dash(
-            __name__,
-            external_stylesheets=[dbc.themes.DARKLY],
-            assets_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets"),
-            suppress_callback_exceptions=True,
-            update_title=None,
-            compress=True,
-        )
-        self.app.index_string = """<!DOCTYPE html><html><head>{%metas%}<title>{%title%}</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-{%favicon%}{%css%}</head><body>{%app_entry%}<footer>{%config%}{%scripts%}{%renderer%}</footer></body></html>"""
+        self.shell = DashboardShell(LENGTH_SHELL)
+        self.app = create_dash_app(__name__, title="SPROUTS — Root Length")
+        # Hover thumbnails are served by URL from this app's own server (PV-09).
+        self.thumbnail_server = ThumbnailServer(self.available_images.thumbnails)
+        self.thumbnail_server.register(self.app.server)
 
-        # Set up layout and callbacks
         self._setup_layout()
         self._setup_callbacks()
 
     def get_encoded_image(self, tube: int, position: int, date: pd.Timestamp) -> str:
-        """Get base64 encoded image for hover display."""
-        return get_encoded_image(self.available_images, tube, position, date)
-
-    def _setup_layout(self):
-        """Define the Dash app layout."""
+        """Hover thumbnail as a ``data:image/jpeg`` URL (``""`` if unavailable)."""
         try:
-            options = [
-                {"label": "Stacked Bar View", "value": "stacked"},
-                {"label": "Growth Over Time", "value": "time"},
-                {"label": "Growth Lines", "value": "lines"},
-                {"label": "Faceted Depth Profile", "value": "faceted"},
-            ]
+            key = (tube, position, date.strftime("%Y.%m.%d"))
+        except (AttributeError, ValueError):
+            return ""
+        return self.available_images.thumbnails.data_url(key)
 
-            self.app.layout = html.Div(
-                className="sprouts-app viz-page",
+    # ---- layout ------------------------------------------------------------
+
+    def _setup_layout(self) -> None:
+        """Build the page: shell chrome around the length controls and chart."""
+        self.app.layout = self.shell.page(
+            controls=self._controls(),
+            # Lines view: chart and hover-image panel side by side; other views
+            # hide the panel. Both keep the same component ids.
+            chart=html.Div(
+                className="viz-lines-row",
                 children=[
-                    # ---- header band: eyebrow + title + view selector ----
-                    html.Div(
-                        className="viz-header",
-                        children=[
-                            html.Div(
-                                className="viz-header-left",
-                                children=[
-                                    html.Div("INTERACTIVE DASHBOARD", className="viz-eyebrow"),
-                                    html.H1("Root Length — trial overview", className="viz-title"),
-                                ],
-                            ),
-                            html.Div(
-                                className="viz-header-right",
-                                children=[
-                                    dbc.RadioItems(
-                                        id="view-selector",
-                                        options=options,
-                                        value="stacked",
-                                        class_name="btn-group",
-                                        input_class_name="btn-check",
-                                        label_class_name="btn btn-outline-secondary",
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                    # ---- collapsible control strip ----
-                    html.Div(
-                        className="viz-controls",
-                        children=[
-                            dbc.Button(
-                                [
-                                    html.Span("▸", className="viz-controls-caret"),
-                                    html.Span("Tube & date range"),
-                                    html.Span("controls", className="viz-controls-summary"),
-                                ],
-                                id="viz-controls-toggle",
-                                n_clicks=0,
-                                className="viz-controls-toggle",
-                                color="link",
-                            ),
-                            dbc.Collapse(
-                                id="viz-controls-collapse",
-                                is_open=False,
-                                children=html.Div(
-                                    className="viz-controls-body",
-                                    children=[
-                                        # Tube selector (for Growth Lines view)
-                                        dcc.Dropdown(
-                                            id="tube-selector",
-                                            placeholder="Select Tube",
-                                            className="mb-3",
-                                            style={"display": "none", "fontSize": "16px"},
-                                        ),
-                                        dbc.Container(
-                                            [
-                                                # Tube Selection Panel (for Growth Over Time view)
-                                                dbc.Row(
-                                                    dbc.Col(
-                                                        dbc.Card(
-                                                            dbc.CardBody(
-                                                                [
-                                                                    html.H4(
-                                                                        "Tube Selection",
-                                                                        className="card-title text-center",
-                                                                        style={
-                                                                            "fontSize": "22px",
-                                                                            "marginBottom": "20px",
-                                                                        },
-                                                                    ),
-                                                                    dcc.Tabs(
-                                                                        id="tube-selection-tabs",
-                                                                        value="tab-multiselect",
-                                                                        children=[
-                                                                            dcc.Tab(
-                                                                                label="Multi-Select",
-                                                                                value="tab-multiselect",
-                                                                                children=[
-                                                                                    html.Div(
-                                                                                        [
-                                                                                            html.Label(
-                                                                                                "Select Tubes:",
-                                                                                                style={
-                                                                                                    "fontWeight": "bold",
-                                                                                                    "marginTop": "15px",
-                                                                                                },
-                                                                                            ),
-                                                                                            dcc.Dropdown(
-                                                                                                id="tube-multiselect",
-                                                                                                multi=True,
-                                                                                                placeholder="Select tubes...",
-                                                                                                style={
-                                                                                                    "fontSize": "14px"
-                                                                                                },
-                                                                                            ),
-                                                                                        ],
-                                                                                        style={
-                                                                                            "padding": "15px"
-                                                                                        },
-                                                                                    )
-                                                                                ],
-                                                                            ),
-                                                                            dcc.Tab(
-                                                                                label="Range",
-                                                                                value="tab-range",
-                                                                                children=[
-                                                                                    html.Div(
-                                                                                        [
-                                                                                            html.Label(
-                                                                                                "From:",
-                                                                                                style={
-                                                                                                    "fontWeight": "bold",
-                                                                                                    "marginTop": "15px",
-                                                                                                    "marginRight": "10px",
-                                                                                                },
-                                                                                            ),
-                                                                                            dcc.Input(
-                                                                                                id="tube-range-from",
-                                                                                                type="number",
-                                                                                                placeholder="Start",
-                                                                                                style={
-                                                                                                    "width": "100px",
-                                                                                                    "marginRight": "20px",
-                                                                                                    "fontSize": "14px",
-                                                                                                },
-                                                                                            ),
-                                                                                            html.Label(
-                                                                                                "To:",
-                                                                                                style={
-                                                                                                    "fontWeight": "bold",
-                                                                                                    "marginRight": "10px",
-                                                                                                },
-                                                                                            ),
-                                                                                            dcc.Input(
-                                                                                                id="tube-range-to",
-                                                                                                type="number",
-                                                                                                placeholder="End",
-                                                                                                style={
-                                                                                                    "width": "100px",
-                                                                                                    "marginRight": "20px",
-                                                                                                    "fontSize": "14px",
-                                                                                                },
-                                                                                            ),
-                                                                                            html.Button(
-                                                                                                "Add Range",
-                                                                                                id="add-range-btn",
-                                                                                                n_clicks=0,
-                                                                                                className="btn btn-primary",
-                                                                                                style={
-                                                                                                    "fontSize": "14px"
-                                                                                                },
-                                                                                            ),
-                                                                                        ],
-                                                                                        style={
-                                                                                            "padding": "15px",
-                                                                                            "display": "flex",
-                                                                                            "alignItems": "center",
-                                                                                        },
-                                                                                    )
-                                                                                ],
-                                                                            ),
-                                                                            dcc.Tab(
-                                                                                label="Manual Entry",
-                                                                                value="tab-manual",
-                                                                                children=[
-                                                                                    html.Div(
-                                                                                        [
-                                                                                            html.Label(
-                                                                                                "Enter tube numbers (e.g., 1,3,5,10-15):",
-                                                                                                style={
-                                                                                                    "fontWeight": "bold",
-                                                                                                    "marginTop": "15px",
-                                                                                                    "marginBottom": "10px",
-                                                                                                },
-                                                                                            ),
-                                                                                            dcc.Input(
-                                                                                                id="tube-manual-entry",
-                                                                                                type="text",
-                                                                                                placeholder="1,3,5,10-15",
-                                                                                                style={
-                                                                                                    "width": "100%",
-                                                                                                    "fontSize": "14px",
-                                                                                                },
-                                                                                            ),
-                                                                                        ],
-                                                                                        style={
-                                                                                            "padding": "15px"
-                                                                                        },
-                                                                                    )
-                                                                                ],
-                                                                            ),
-                                                                        ],
-                                                                        style={"fontSize": "16px"},
-                                                                    ),
-                                                                    html.Hr(
-                                                                        style={"margin": "20px 0"}
-                                                                    ),
-                                                                    html.Div(
-                                                                        [
-                                                                            html.Label(
-                                                                                "Selected Tubes:",
-                                                                                style={
-                                                                                    "fontWeight": "bold",
-                                                                                    "marginBottom": "10px",
-                                                                                },
-                                                                            ),
-                                                                            html.Div(
-                                                                                id="selected-tubes-display",
-                                                                                style={
-                                                                                    "minHeight": "50px",
-                                                                                    "padding": "10px",
-                                                                                    "borderRadius": "5px",
-                                                                                    "marginBottom": "15px",
-                                                                                },
-                                                                            ),
-                                                                            html.Div(
-                                                                                [
-                                                                                    html.Button(
-                                                                                        "Clear All",
-                                                                                        id="clear-all-btn",
-                                                                                        n_clicks=0,
-                                                                                        className="btn btn-warning",
-                                                                                        style={
-                                                                                            "marginRight": "10px",
-                                                                                            "fontSize": "14px",
-                                                                                        },
-                                                                                    ),
-                                                                                    html.Button(
-                                                                                        "Select All",
-                                                                                        id="select-all-btn",
-                                                                                        n_clicks=0,
-                                                                                        className="btn btn-info",
-                                                                                        style={
-                                                                                            "fontSize": "14px"
-                                                                                        },
-                                                                                    ),
-                                                                                ],
-                                                                                style={
-                                                                                    "display": "flex",
-                                                                                    "gap": "10px",
-                                                                                },
-                                                                            ),
-                                                                        ]
-                                                                    ),
-                                                                ]
-                                                            ),
-                                                            id="tube-selection-card",
-                                                            style={
-                                                                "marginBottom": "30px",
-                                                                "padding": "20px",
-                                                                "display": "none",
-                                                            },
-                                                        ),
-                                                        md=12,
-                                                        className="mx-auto",
-                                                    ),
-                                                    className="mb-4 justify-content-center",
-                                                ),
-                                                # Visualization Options Panel (for Growth Over Time view)
-                                                dbc.Row(
-                                                    dbc.Col(
-                                                        dbc.Card(
-                                                            dbc.CardBody(
-                                                                [
-                                                                    html.H4(
-                                                                        "Visualization Options",
-                                                                        className="card-title text-center",
-                                                                        style={
-                                                                            "fontSize": "22px",
-                                                                            "marginBottom": "20px",
-                                                                        },
-                                                                    ),
-                                                                    dcc.Checklist(
-                                                                        id="growth-viz-options",
-                                                                        options=[
-                                                                            {
-                                                                                "label": " Show Field Average",
-                                                                                "value": "show_field_avg",
-                                                                            },
-                                                                            {
-                                                                                "label": " Show Field Variance Shading",
-                                                                                "value": "show_field_var",
-                                                                            },
-                                                                        ],
-                                                                        value=[
-                                                                            "show_field_avg",
-                                                                            "show_field_var",
-                                                                        ],
-                                                                        style={"fontSize": "16px"},
-                                                                        labelStyle={
-                                                                            "display": "block",
-                                                                            "marginBottom": "10px",
-                                                                        },
-                                                                    ),
-                                                                    html.Hr(
-                                                                        style={"margin": "20px 0"}
-                                                                    ),
-                                                                    html.Button(
-                                                                        "Toggle Legend",
-                                                                        id="toggle-legend-btn",
-                                                                        n_clicks=0,
-                                                                        className="btn btn-secondary",
-                                                                        style={
-                                                                            "width": "100%",
-                                                                            "fontSize": "16px",
-                                                                        },
-                                                                    ),
-                                                                ]
-                                                            ),
-                                                            id="viz-options-card",
-                                                            style={
-                                                                "marginBottom": "30px",
-                                                                "padding": "20px",
-                                                                "display": "none",
-                                                            },
-                                                        ),
-                                                        md=12,
-                                                        className="mx-auto",
-                                                    ),
-                                                    className="mb-4 justify-content-center",
-                                                ),
-                                                # Faceted View Options Panel
-                                                dbc.Row(
-                                                    dbc.Col(
-                                                        dbc.Card(
-                                                            dbc.CardBody(
-                                                                [
-                                                                    html.H4(
-                                                                        "Faceted View Options",
-                                                                        className="card-title text-center",
-                                                                        style={
-                                                                            "fontSize": "22px",
-                                                                            "marginBottom": "20px",
-                                                                        },
-                                                                    ),
-                                                                    html.Label(
-                                                                        "Select Dates for Rows:",
-                                                                        style={
-                                                                            "fontWeight": "bold",
-                                                                            "marginBottom": "10px",
-                                                                        },
-                                                                    ),
-                                                                    dcc.Dropdown(
-                                                                        id="faceted-date-selector",
-                                                                        multi=True,
-                                                                        placeholder="Select dates (all if none selected)...",
-                                                                        style={
-                                                                            "fontSize": "14px",
-                                                                            "marginBottom": "15px",
-                                                                        },
-                                                                    ),
-                                                                    html.Hr(
-                                                                        style={"margin": "15px 0"}
-                                                                    ),
-                                                                    html.Label(
-                                                                        "Select Tubes for Columns (up to 6):",
-                                                                        style={
-                                                                            "fontWeight": "bold",
-                                                                            "marginBottom": "10px",
-                                                                        },
-                                                                    ),
-                                                                    dcc.Dropdown(
-                                                                        id="faceted-tube-selector",
-                                                                        multi=True,
-                                                                        placeholder="Select up to 6 tubes...",
-                                                                        style={
-                                                                            "fontSize": "14px",
-                                                                            "marginBottom": "15px",
-                                                                        },
-                                                                    ),
-                                                                    html.Div(
-                                                                        id="faceted-selection-info",
-                                                                        style={
-                                                                            "padding": "10px",
-                                                                            "borderRadius": "5px",
-                                                                            "marginBottom": "15px",
-                                                                        },
-                                                                    ),
-                                                                    html.Hr(
-                                                                        style={"margin": "15px 0"}
-                                                                    ),
-                                                                    html.Label(
-                                                                        "Tube-Date Availability:",
-                                                                        style={
-                                                                            "fontWeight": "bold",
-                                                                            "marginBottom": "10px",
-                                                                        },
-                                                                    ),
-                                                                    html.Div(
-                                                                        id="tube-date-availability",
-                                                                        style={
-                                                                            "padding": "10px",
-                                                                            "borderRadius": "5px",
-                                                                            "maxHeight": "200px",
-                                                                            "overflowY": "auto",
-                                                                            "fontSize": "12px",
-                                                                        },
-                                                                    ),
-                                                                ]
-                                                            ),
-                                                            id="faceted-options-card",
-                                                            style={
-                                                                "marginBottom": "30px",
-                                                                "padding": "20px",
-                                                                "display": "none",
-                                                            },
-                                                        ),
-                                                        md=12,
-                                                        className="mx-auto",
-                                                    ),
-                                                    className="mb-4 justify-content-center",
-                                                ),
-                                            ],
-                                            fluid=True,
-                                            className="px-2",
-                                        ),
-                                    ],
-                                ),
-                            ),
-                        ],
-                    ),
-                    # click-data kept as a hidden callback target; the visible
-                    # metric band was an always-empty row and is removed.
-                    html.Div(id="click-data", style={"display": "none"}),
-                    # ---- chart card: full-bleed, fills remaining space ----
-                    # Lines view renders chart + image panel side-by-side; other
-                    # views are full-width chart. Both keep the same component ids.
-                    html.Div(
-                        className="viz-chart-card",
-                        children=html.Div(
-                            className="viz-lines-row",
-                            children=[
-                                html.Div(
-                                    className="viz-chart-pane",
-                                    children=dcc.Loading(
-                                        type="default",
-                                        color="#5fd6a0",
-                                        children=dcc.Graph(
-                                            id="main-graph",
-                                            style={"width": "100%"},
-                                            config={
-                                                "scrollZoom": True,
-                                                "doubleClick": "reset",
-                                                "showTips": False,
-                                                "displayModeBar": True,
-                                                "watermark": False,
-                                                "responsive": True,
-                                                "autosizable": True,
-                                                "toImageButtonOptions": {
-                                                    "format": "svg",
-                                                    "filename": "root_length_plot",
-                                                    "scale": 2,
-                                                },
-                                                "modeBarButtonsToAdd": ["downloadCsv"],
-                                            },
-                                        ),
-                                    ),
-                                ),
-                                # Growth-Lines hover images sit beside the chart.
-                                html.Div(
-                                    id="image-container",
-                                    className="viz-image-panel",
-                                ),
-                            ],
-                        ),
-                    ),
-                    # no-op Output target for the clientside resize callback
-                    dcc.Store(id="viz-resize-dummy"),
-                    dcc.Store(id="cached-data"),
-                    dcc.Store(id="selected-tubes-store", data=[]),
-                    dcc.Store(id="legend-visible-store", data=True),
-                    dcc.Store(id="faceted-tubes-store", data=[]),
-                    dcc.Store(id="faceted-dates-store", data=[]),
+                    html.Div(className="viz-chart-pane", children=self.shell.chart_graph()),
+                    html.Div(id="image-container", className="viz-image-panel", style=_HIDDEN),
                 ],
+            ),
+            stores=[
+                dcc.Store(id="selected-tubes-store", data=[]),
+                dcc.Store(id="legend-visible-store", data=True),
+                dcc.Store(id="faceted-tubes-store", data=[]),
+                dcc.Store(id="faceted-dates-store", data=[]),
+            ],
+        )
+
+    def _controls(self) -> list:
+        # Dropdown options are static: Dash 4's Dropdown drops a selected value
+        # whenever its options change without it, so they are never blanked.
+        return [
+            dcc.Dropdown(
+                id="tube-selector",
+                options=self._tube_options,
+                placeholder="Select Tube",
+                clearable=False,
+                className="viz-tube-dropdown",
+                style=_HIDDEN,
+            ),
+            dbc.Row(
+                className="gx-3",
+                children=[
+                    dbc.Col(self._tube_selection_card(), lg=8),
+                    dbc.Col(self._viz_options_card(), lg=4),
+                    dbc.Col(self._faceted_options_card(), lg=12),
+                ],
+            ),
+        ]
+
+    def _tube_selection_card(self) -> dbc.Card:
+        """Tube pickers of the Growth Over Time view."""
+        tabs = dcc.Tabs(
+            id="tube-selection-tabs",
+            value="tab-multiselect",
+            className="viz-tabs",
+            children=[
+                dcc.Tab(
+                    label="Multi-Select",
+                    value="tab-multiselect",
+                    children=html.Div(
+                        className="viz-tab-body",
+                        children=[
+                            html.Label("Select Tubes:", className="viz-field-label"),
+                            dcc.Dropdown(
+                                id="tube-multiselect",
+                                options=self._tube_options,
+                                multi=True,
+                                placeholder="Select tubes...",
+                            ),
+                        ],
+                    ),
+                ),
+                dcc.Tab(
+                    label="Range",
+                    value="tab-range",
+                    children=html.Div(
+                        className="viz-tab-body viz-inline-fields",
+                        children=[
+                            html.Label("From:", className="viz-field-label"),
+                            dcc.Input(
+                                id="tube-range-from",
+                                type="number",
+                                placeholder="Start",
+                                className="viz-number-input",
+                            ),
+                            html.Label("To:", className="viz-field-label"),
+                            dcc.Input(
+                                id="tube-range-to",
+                                type="number",
+                                placeholder="End",
+                                className="viz-number-input",
+                            ),
+                            html.Button(
+                                "Add Range",
+                                id="add-range-btn",
+                                n_clicks=0,
+                                className="btn btn-primary btn-sm",
+                            ),
+                        ],
+                    ),
+                ),
+                dcc.Tab(
+                    label="Manual Entry",
+                    value="tab-manual",
+                    children=html.Div(
+                        className="viz-tab-body",
+                        children=[
+                            html.Label(
+                                "Enter tube numbers (e.g., 1,3,5,10-15), then press Enter:",
+                                className="viz-field-label",
+                            ),
+                            # debounce: the entry is added on Enter / blur. Per keystroke,
+                            # typing "12" first added tube 1 (selections accumulate).
+                            dcc.Input(
+                                id="tube-manual-entry",
+                                type="text",
+                                placeholder="1,3,5,10-15",
+                                debounce=True,
+                                className="viz-text-input",
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        )
+        return dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H4("Tube Selection", className="card-title viz-card-title"),
+                    tabs,
+                    html.Hr(),
+                    html.Label("Selected Tubes:", className="viz-field-label"),
+                    html.Div(id="selected-tubes-display", className="viz-selected-tubes"),
+                    html.Div(
+                        className="viz-button-row",
+                        children=[
+                            html.Button(
+                                "Clear All",
+                                id="clear-all-btn",
+                                n_clicks=0,
+                                className="btn btn-warning btn-sm",
+                            ),
+                            html.Button(
+                                "Select All",
+                                id="select-all-btn",
+                                n_clicks=0,
+                                className="btn btn-info btn-sm",
+                            ),
+                        ],
+                    ),
+                ]
+            ),
+            id="tube-selection-card",
+            style=_HIDDEN,
+        )
+
+    @staticmethod
+    def _viz_options_card() -> dbc.Card:
+        """Field-average and legend options of the Growth Over Time view."""
+        return dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H4("Visualization Options", className="card-title viz-card-title"),
+                    dcc.Checklist(
+                        id="growth-viz-options",
+                        options=[
+                            {"label": "Show Field Average", "value": "show_field_avg"},
+                            {"label": "Show Field Variance Shading", "value": "show_field_var"},
+                        ],
+                        value=["show_field_avg", "show_field_var"],
+                        className="viz-checklist",
+                        labelClassName="viz-check-label",
+                    ),
+                    html.Hr(),
+                    html.Button(
+                        "Toggle Legend",
+                        id="toggle-legend-btn",
+                        n_clicks=0,
+                        className="btn btn-secondary btn-sm w-100",
+                    ),
+                ]
+            ),
+            id="viz-options-card",
+            style=_HIDDEN,
+        )
+
+    def _faceted_options_card(self) -> dbc.Card:
+        """Date rows and tube columns of the Faceted Depth Profile view."""
+        return dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H4("Faceted View Options", className="card-title viz-card-title"),
+                    dbc.Row(
+                        className="gx-3",
+                        children=[
+                            dbc.Col(
+                                [
+                                    html.Label(
+                                        "Select Dates for Rows:", className="viz-field-label"
+                                    ),
+                                    dcc.Dropdown(
+                                        id="faceted-date-selector",
+                                        options=self._date_options,
+                                        multi=True,
+                                        placeholder="Select dates (all if none selected)...",
+                                    ),
+                                ],
+                                md=6,
+                            ),
+                            dbc.Col(
+                                [
+                                    html.Label(
+                                        f"Select Tubes for Columns (up to {MAX_TUBES}):",
+                                        className="viz-field-label",
+                                    ),
+                                    dcc.Dropdown(
+                                        id="faceted-tube-selector",
+                                        options=self._tube_options,
+                                        multi=True,
+                                        placeholder=f"Select up to {MAX_TUBES} tubes...",
+                                    ),
+                                ],
+                                md=6,
+                            ),
+                        ],
+                    ),
+                    html.Div(id="faceted-selection-info", className="viz-note-box"),
+                    html.Label("Tube-Date Availability:", className="viz-field-label"),
+                    html.Div(id="tube-date-availability", className="viz-availability"),
+                ]
+            ),
+            id="faceted-options-card",
+            style=_HIDDEN,
+        )
+
+    # ---- pure helpers --------------------------------------------------------
+
+    def _lines_tube(self, selected_tube: Any) -> int | None:
+        """The tube the Growth Lines view plots: the dropdown's, else the first."""
+        tubes = [int(t) for t in self.data_cache.tubes]
+        if selected_tube in tubes:
+            return int(selected_tube)
+        return tubes[0] if tubes else None
+
+    def _controls_summary(self, view, tube, selected_tubes, faceted_tubes, faceted_dates) -> str:
+        """One line for the collapsed control strip (PV-15)."""
+        if view == "lines":
+            plotted = self._lines_tube(tube)
+            return f"Tube {plotted}" if plotted is not None else "No tubes"
+        if view == "time":
+            count = len(selected_tubes or [])
+            return f"{count_label(count, 'tube')} selected" if count else "No tubes selected"
+        if view == "faceted":
+            dates = faceted_dates or []
+            date_text = count_label(len(dates), "date") if dates else "all dates"
+            return f"{len(faceted_tubes or [])}/{MAX_TUBES} tubes · {date_text}"
+        return NO_OPTIONS_SUMMARY
+
+    @staticmethod
+    def _faceted_info(tubes: list, dates: list) -> html.Div:
+        """Validation note under the faceted selectors (theme classes, PV-14)."""
+        count = len(tubes)
+        if count == 0:
+            return html.Div(
+                f"No tubes selected. Select 1 to {MAX_TUBES} tubes.",
+                className="viz-note viz-note--muted",
             )
-        except Exception:
-            logger.exception("Failed to build Dash length-visualization layout")
-            raise
-
-    def _setup_callbacks(self):
-        """Define Dash callbacks."""
-
-        # Import parse_tube_selection function
-        from .dash_visualizations import parse_tube_selection
-
-        # Collapsible control strip toggle (new; touches only new ids).
-        @self.app.callback(
-            Output("viz-controls-collapse", "is_open"),
-            Input("viz-controls-toggle", "n_clicks"),
-            State("viz-controls-collapse", "is_open"),
-            prevent_initial_call=True,
-        )
-        def toggle_controls(n_clicks, is_open):
-            return not is_open
-
-        # Clientside refit: when the control strip toggles or the view changes,
-        # force Plotly to re-fit the chart width. Writes a no-op Store output;
-        # touches NO figure Output.
-        self.app.clientside_callback(
-            """
-            function(_n, _v) {
-                if (window.Plotly) {
-                    var g = document.getElementById('main-graph');
-                    if (g) { try { window.Plotly.Plots.resize(g); } catch (e) {} }
-                }
-                window.dispatchEvent(new Event('resize'));
-                return '';
-            }
-            """,
-            Output("viz-resize-dummy", "data"),
-            Input("viz-controls-collapse", "is_open"),
-            Input("view-selector", "value"),
+        if count > MAX_TUBES:
+            return html.Div(
+                f"Too many tubes: {count}/{MAX_TUBES} selected. "
+                f"Remove {count - MAX_TUBES} to draw the chart.",
+                className="viz-note viz-note--danger",
+            )
+        date_text = count_label(len(dates), "date") if dates else "all dates"
+        return html.Div(
+            [
+                html.Span(f"Tubes: {count}/{MAX_TUBES} selected", className="viz-note--ok"),
+                html.Span(f"Dates: {date_text}", className="viz-note--info"),
+            ],
+            className="viz-note viz-note--split",
         )
 
-        # Callback to show/hide tube selection, viz options, and faceted panels based on view type
+    def _availability_view(self, tubes: list, dates: list):
+        """Which selected tubes were measured on which dates."""
+        availability = self.get_tube_date_availability()
+        if tubes and dates:
+            header = [html.Th("Tube/Date")] + [html.Th(d.strftime("%m/%d")) for d in dates]
+            rows = [html.Tr(header)]
+            for tube in tubes:
+                cells = [html.Td(f"T{int(tube)}", className="viz-avail-tube")]
+                for date in dates:
+                    has_data = availability.get((tube, date), False)
+                    cells.append(
+                        html.Td(
+                            "✓" if has_data else "✗",
+                            className="viz-avail-yes" if has_data else "viz-avail-no",
+                            title="has data" if has_data else "no data",
+                        )
+                    )
+                rows.append(html.Tr(cells))
+            return [
+                html.Div("Availability (✓ = has data, ✗ = no data):", className="viz-field-label"),
+                html.Table(rows, className="viz-availability-table"),
+            ]
+        if tubes:
+            lines = [
+                html.Div("Dates with data for the selected tubes:", className="viz-field-label")
+            ]
+            for tube in tubes:
+                measured = [
+                    date.strftime("%Y-%m-%d")
+                    for (tube_id, date), present in availability.items()
+                    if tube_id == tube and present
+                ]
+                if measured:
+                    lines.append(
+                        html.Div(
+                            f"Tube {int(tube)}: {', '.join(measured)}", className="viz-avail-line"
+                        )
+                    )
+            return lines
+        return html.Div("Select tubes to see availability information.", className="viz-empty-hint")
+
+    def _thumbnail(self, tube: int, position: int, date_str: str) -> html.Div:
+        """One hover image (served by URL) with its position label."""
+        return html.Div(
+            [
+                html.Img(
+                    src=self.thumbnail_server.url(tube, position, date_str),
+                    alt=f"Tube {tube} L{position} {date_str}",
+                    className="viz-thumb",
+                ),
+                html.P(f"Position L{position}", className="viz-thumb-label"),
+            ],
+            key=f"image-{position}-{date_str}",
+            className="viz-thumb-card",
+        )
+
+    # ---- figures -----------------------------------------------------------
+
+    def _render_view(
+        self, view, selected_tube, selected_tubes, viz_options, legend_visible, tubes, dates
+    ) -> tuple:
+        """Outputs of update_visualization for ``view`` (figure, message, styles)."""
+        keep = dash.no_update  # tube-selector options are static (see _controls)
+        if view == "time":
+            options = viz_options or []
+            figure = self.show_growth_over_time(
+                selected_tubes=selected_tubes,
+                show_field_average="show_field_avg" in options,
+                show_field_variance="show_field_var" in options,
+                show_legend=legend_visible,
+            )
+            return with_uirevision(figure, "time"), "", _HIDDEN, keep, _GRAPH_STYLE, _HIDDEN
+        if view == "lines":
+            tube = self._lines_tube(selected_tube)
+            if tube is None:
+                message = "No tube data available"
+                return theme.message_figure(message), message, _HIDDEN, keep, _GRAPH_STYLE, _HIDDEN
+            figure = with_uirevision(self.show_growth_lines(tube), "lines", tube)
+            return figure, "", _SHOWN, keep, _GRAPH_STYLE, _IMAGES_SHOWN
+        if view == "faceted":
+            return (*self._faceted_outputs(tubes, dates), keep, *self._faceted_styles(tubes))
+        figure = with_uirevision(self.create_stacked_bar_chart(), "stacked")
+        return figure, "", _HIDDEN, keep, _GRAPH_STYLE, _HIDDEN
+
+    def _faceted_outputs(self, tubes, dates) -> tuple:
+        """(figure, message, tube-selector style) of the faceted view."""
+        count = len(tubes or [])
+        if count == 0 or count > MAX_TUBES:
+            if count > MAX_TUBES:
+                text = (
+                    f"Too many tubes selected ({count}/{MAX_TUBES}). "
+                    f"Please remove {count - MAX_TUBES} tubes."
+                )
+                figure = theme.message_figure(text, color=theme.DANGER)
+            else:
+                figure = theme.message_figure(
+                    f"Select 1 to {MAX_TUBES} tubes under “{LENGTH_SHELL.controls_label}”"
+                )
+            return figure, "", _HIDDEN
+        selected_dates = [pd.Timestamp(d) for d in dates] if dates else None
+        figure = self.create_faceted_depth_profile(tubes, selected_dates)
+        key = (tuple(tubes), tuple(d.isoformat() for d in selected_dates or ()))
+        return with_uirevision(figure, "faceted", *key), "", _HIDDEN
+
+    @staticmethod
+    def _faceted_styles(tubes) -> tuple:
+        """(main-graph style, image-container style) of the faceted view."""
+        drawable = 0 < len(tubes or []) <= MAX_TUBES
+        return (_FACETED_GRAPH_STYLE if drawable else _GRAPH_STYLE), _HIDDEN
+
+    @staticmethod
+    def _legend_patch(view: str, visible: bool) -> tuple:
+        """Flip the legend in place: a Patch instead of re-sending every trace (PV-07)."""
+        if view != "time":
+            raise PreventUpdate
+        patch = Patch()
+        patch["layout"]["showlegend"] = bool(visible)
+        return (patch, *([dash.no_update] * 5))
+
+    # ---- export (PV-16) ------------------------------------------------------
+
+    def _export_table(
+        self, view, tube, selected_tubes, viz_options, faceted_tubes, faceted_dates
+    ) -> dash_export.ExportTable | None:
+        """The rows behind ``view``, from the same DataCache aggregates as the chart."""
+        cache = self.data_cache
+        if view == "stacked":
+            return dash_export.ExportTable(
+                dash_export.tube_date_totals(cache),
+                "Total root length per tube and measurement date (sum over positions)",
+                {"tubes": "all", "dates": "all"},
+            )
+        if view == "time":
+            tubes = [int(t) for t in selected_tubes or []]
+            field_average = "show_field_avg" in (viz_options or [])
+            return dash_export.ExportTable(
+                dash_export.growth_over_time(cache, tubes, field_average=field_average),
+                "Root length over time: field average of per-tube totals (dates within "
+                "3 days merged; SD across tubes) and per-tube totals per measurement date",
+                {
+                    "tubes": ", ".join(map(str, tubes)) or "none",
+                    "field average": "shown" if field_average else "hidden",
+                },
+            )
+        if view == "lines":
+            plotted = self._lines_tube(tube)
+            if plotted is None:
+                return None
+            return dash_export.ExportTable(
+                dash_export.depth_intervals(cache, plotted, interval_size=GROWTH_LINES_INTERVAL),
+                f"Root length statistics per {GROWTH_LINES_INTERVAL}-position depth interval "
+                "and measurement date for one tube",
+                {"tube": str(plotted), "dates": "all"},
+            )
+        if view == "faceted":
+            tubes = [int(t) for t in faceted_tubes or []]
+            if not tubes or len(tubes) > MAX_TUBES:
+                return None
+            dates = [pd.Timestamp(d) for d in faceted_dates] if faceted_dates else None
+            profile = build_faceted_profile(cache, tubes, dates)
+            return dash_export.ExportTable(
+                dash_export.faceted_intervals(profile, cache.value_column),
+                "Mean root length per depth interval: each tube next to the field average "
+                "(all tubes) of the same interval and date",
+                {
+                    "tubes": ", ".join(map(str, tubes)),
+                    "dates": ", ".join(d.strftime("%Y-%m-%d") for d in dates) if dates else "all",
+                },
+            )
+        return None
+
+    # ---- callbacks -----------------------------------------------------------
+
+    def _setup_callbacks(self) -> None:
+        """Register every callback of the dashboard."""
+        self.shell.register_callbacks(
+            self.app,
+            tubes=lambda: self.data_cache.tubes,
+            summary_inputs=[
+                Input("tube-selector", "value"),
+                Input("selected-tubes-store", "data"),
+                Input("faceted-tubes-store", "data"),
+                Input("faceted-dates-store", "data"),
+            ],
+            summarize=self._controls_summary,
+        )
+        self.shell.register_export(
+            self.app,
+            states=[
+                State("tube-selector", "value"),
+                State("selected-tubes-store", "data"),
+                State("growth-viz-options", "value"),
+                State("faceted-tubes-store", "data"),
+                State("faceted-dates-store", "data"),
+            ],
+            build_table=self._export_table,
+            source_csv=self.data_processor.csv_path,
+            metric_column=self.data_cache.value_column,
+            metric_slug="root_length",
+        )
+
         @self.app.callback(
             [
                 Output("tube-selection-card", "style"),
@@ -601,50 +598,22 @@ class DashApp(DashVisualizations):
             [Input("view-selector", "value")],
         )
         def toggle_view_panels(view_type):
-            """Show appropriate panels based on view type."""
-            # Get available tubes and dates
-            tube_options = [
-                {"label": f"Tube {int(tube)}", "value": int(tube)}
-                for tube in self.data_processor.get_unique_tubes()
-            ]
+            """Show the control cards of the selected view.
 
-            date_options = [
-                {"label": date.strftime("%Y-%m-%d"), "value": date.isoformat()}
-                for date in sorted(self.data_processor.get_unique_dates())
-            ]
+            The options Outputs are kept for compatibility but never re-sent:
+            blanking them made Dash 4's Dropdown drop the user's selection.
+            """
+            time_view, faceted_view = view_type == "time", view_type == "faceted"
+            keep = dash.no_update
+            return (
+                _card_style(time_view),
+                _card_style(time_view),
+                keep,
+                _card_style(faceted_view),
+                keep,
+                keep,
+            )
 
-            visible_style = {"marginBottom": "30px", "padding": "20px", "display": "block"}
-            hidden_style = {"marginBottom": "30px", "padding": "20px", "display": "none"}
-
-            if view_type == "time":
-                return (
-                    visible_style,  # tube-selection-card
-                    visible_style,  # viz-options-card
-                    tube_options,  # tube-multiselect options
-                    hidden_style,  # faceted-options-card
-                    [],  # faceted-tube-selector options
-                    [],  # faceted-date-selector options
-                )
-            elif view_type == "faceted":
-                return (
-                    hidden_style,  # tube-selection-card
-                    hidden_style,  # viz-options-card
-                    [],  # tube-multiselect options
-                    visible_style,  # faceted-options-card
-                    tube_options,  # faceted-tube-selector options
-                    date_options,  # faceted-date-selector options
-                )
-            else:
-                return (
-                    hidden_style,  # tube-selection-card
-                    hidden_style,  # viz-options-card
-                    [],  # tube-multiselect options
-                    hidden_style,  # faceted-options-card
-                    [],  # faceted-tube-selector options
-                    [],  # faceted-date-selector options
-                )
-
-        # Callback to manage faceted selection and show availability
         @self.app.callback(
             [
                 Output("faceted-tubes-store", "data"),
@@ -658,143 +627,16 @@ class DashApp(DashVisualizations):
             ],
         )
         def manage_faceted_selection(selected_tubes, selected_dates):
-            """Manage faceted selection and show availability info."""
-            # Convert dates from ISO format
-            if selected_dates:
-                selected_dates = [pd.Timestamp(d) for d in selected_dates]
-            else:
-                selected_dates = []
+            """Store the faceted selection and describe it."""
+            tubes = sorted(selected_tubes or [])
+            dates = sorted(pd.Timestamp(d) for d in selected_dates or [])
+            return (
+                tubes,
+                dates,
+                self._faceted_info(tubes, dates),
+                self._availability_view(tubes, dates),
+            )
 
-            # Validate tubes
-            if not selected_tubes:
-                selected_tubes = []
-            else:
-                selected_tubes = sorted(selected_tubes)
-
-            tube_count = len(selected_tubes)
-            date_count = len(selected_dates)
-
-            # Create selection info message
-            if tube_count == 0:
-                info_msg = html.Span(
-                    "No tubes selected. Please select up to 6 tubes.", style={"color": "red"}
-                )
-            elif tube_count > 6:
-                info_msg = html.Span(
-                    f"Too many tubes! {tube_count}/6 selected. Please remove {tube_count - 6} tubes.",
-                    style={"color": "red"},
-                )
-            else:
-                info_msg = html.Div(
-                    [
-                        html.Span(
-                            f"Tubes: {tube_count}/6 selected",
-                            style={"color": "green" if tube_count <= 6 else "red"},
-                        ),
-                        html.Br(),
-                        html.Span(
-                            f"Dates: {date_count} selected (all dates if none selected)",
-                            style={"color": "blue"},
-                        ),
-                    ]
-                )
-
-            # Get availability info
-            availability = self.get_tube_date_availability()
-
-            if selected_tubes and selected_dates:
-                # Show availability matrix for selected tubes and dates
-                availability_display = []
-                availability_display.append(
-                    html.Div(
-                        "Availability Matrix (✓ = has data, ✗ = no data):",
-                        style={"fontWeight": "bold", "marginBottom": "10px"},
-                    )
-                )
-
-                # Create table
-                table_rows = []
-                # Header row
-                header = [
-                    html.Th("Tube/Date", style={"padding": "5px", "border": "1px solid #ccc"})
-                ]
-                for date in sorted(selected_dates):
-                    header.append(
-                        html.Th(
-                            date.strftime("%m/%d"),
-                            style={
-                                "padding": "5px",
-                                "border": "1px solid #ccc",
-                                "fontSize": "10px",
-                            },
-                        )
-                    )
-                table_rows.append(html.Tr(header))
-
-                # Data rows
-                for tube in sorted(selected_tubes):
-                    row = [
-                        html.Td(
-                            f"T{int(tube)}",
-                            style={
-                                "padding": "5px",
-                                "border": "1px solid #ccc",
-                                "fontWeight": "bold",
-                            },
-                        )
-                    ]
-                    for date in sorted(selected_dates):
-                        has_data = availability.get((tube, date), False)
-                        symbol = "✓" if has_data else "✗"
-                        color = "green" if has_data else "red"
-                        row.append(
-                            html.Td(
-                                symbol,
-                                style={
-                                    "padding": "5px",
-                                    "border": "1px solid #ccc",
-                                    "textAlign": "center",
-                                    "color": color,
-                                    "fontWeight": "bold",
-                                },
-                            )
-                        )
-                    table_rows.append(html.Tr(row))
-
-                availability_display.append(
-                    html.Table(table_rows, style={"borderCollapse": "collapse", "width": "100%"})
-                )
-            elif selected_tubes:
-                # Show which dates have data for selected tubes
-                availability_display = []
-                availability_display.append(
-                    html.Div(
-                        "Dates with data for selected tubes:",
-                        style={"fontWeight": "bold", "marginBottom": "10px"},
-                    )
-                )
-                for tube in sorted(selected_tubes):
-                    dates_with_data = [
-                        date.strftime("%Y-%m-%d")
-                        for tube_id, date in availability.keys()
-                        if tube_id == tube and availability[(tube_id, date)]
-                    ]
-                    if dates_with_data:
-                        availability_display.append(
-                            html.Div(
-                                f"Tube {int(tube)}: {', '.join(dates_with_data)}",
-                                style={"fontSize": "11px", "marginBottom": "5px"},
-                            )
-                        )
-            else:
-                availability_display = html.Div(
-                    "Select tubes to see availability information.",
-                    style={"color": "gray", "fontStyle": "italic"},
-                )
-
-            return selected_tubes, selected_dates, info_msg, availability_display
-
-        # Callback to manage tube selection from multiple sources
         @self.app.callback(
             Output("selected-tubes-store", "data"),
             [
@@ -820,97 +662,56 @@ class DashApp(DashVisualizations):
             range_to,
             current_selection,
         ):
-            """Manage tube selection from multiple input methods."""
+            """Merge the tube choices of the three tabs and the two buttons."""
             ctx = dash.callback_context
-
             if not ctx.triggered:
                 return current_selection or []
-
             trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
-            # Clear all selections
             if trigger_id == "clear-all-btn":
                 return []
-
-            # Select all tubes
             if trigger_id == "select-all-btn":
-                all_tubes = [int(tube) for tube in self.data_processor.get_unique_tubes()]
-                return sorted(all_tubes)
+                return sorted(int(tube) for tube in self.data_cache.tubes)
 
-            # Start with current selection
             selected = set(current_selection or [])
-
-            # Add from multiselect dropdown
             if trigger_id == "tube-multiselect" and multiselect_values:
                 selected = set(multiselect_values)
-
-            # Add from range input
             if trigger_id == "add-range-btn" and range_from is not None and range_to is not None:
                 if range_from <= range_to:
                     selected.update(range(int(range_from), int(range_to) + 1))
-
-            # Add from manual entry
             if trigger_id == "tube-manual-entry" and manual_entry:
-                parsed_tubes = parse_tube_selection(manual_entry)
-                selected.update(parsed_tubes)
+                selected.update(parse_tube_selection(manual_entry))
+            return sorted(selected)
 
-            return sorted(list(selected))
-
-        # Callback to display selected tubes as badges
         @self.app.callback(
             Output("selected-tubes-display", "children"),
             [Input("selected-tubes-store", "data")],
         )
         def display_selected_tubes(selected_tubes):
-            """Display selected tubes as removable badges."""
+            """Selected tubes as chips (first 50)."""
             if not selected_tubes:
-                return html.Div(
-                    "No tubes selected",
-                    style={"color": "#999", "fontStyle": "italic", "padding": "10px"},
-                )
-
-            badges = []
-            for tube in selected_tubes[:50]:  # Limit display to first 50
-                badges.append(
-                    html.Span(
-                        f"Tube {tube}",
-                        className="badge bg-primary",
-                        style={
-                            "marginRight": "5px",
-                            "marginBottom": "5px",
-                            "fontSize": "14px",
-                            "padding": "8px 12px",
-                        },
-                    )
-                )
-
+                return html.Div("No tubes selected", className="viz-empty-hint")
+            chips = [
+                html.Span(f"Tube {tube}", className="badge bg-primary viz-tube-badge")
+                for tube in selected_tubes[:50]
+            ]
             if len(selected_tubes) > 50:
-                badges.append(
-                    html.Span(
-                        f"... and {len(selected_tubes) - 50} more",
-                        style={
-                            "color": "#666",
-                            "fontStyle": "italic",
-                            "marginLeft": "10px",
-                        },
-                    )
+                chips.append(
+                    html.Span(f"... and {len(selected_tubes) - 50} more", className="viz-more-hint")
                 )
+            return html.Div(chips, className="viz-badges")
 
-            return html.Div(badges, style={"display": "flex", "flexWrap": "wrap"})
-
-        # Callback to toggle legend visibility
         @self.app.callback(
             Output("legend-visible-store", "data"),
             [Input("toggle-legend-btn", "n_clicks")],
             [State("legend-visible-store", "data")],
         )
         def toggle_legend(n_clicks, current_state):
-            """Toggle legend visibility."""
+            """Flip the Growth Over Time legend."""
             if n_clicks:
                 return not current_state
             return current_state
 
-        # Main visualization callback
         @self.app.callback(
             [
                 Output("main-graph", "figure"),
@@ -934,7 +735,7 @@ class DashApp(DashVisualizations):
         def update_visualization(
             view_type,
             selected_tube,
-            click_data,
+            _click_data,
             selected_tubes,
             viz_options,
             legend_visible,
@@ -942,311 +743,90 @@ class DashApp(DashVisualizations):
             faceted_dates,
         ):
             ctx = dash.callback_context
-            # Fill the chart card completely: the card is flex:1 of the 100vh
-            # page, so height:100% + width:100% makes the graph occupy the whole
-            # visible viewport (no fixed vh / minHeight gaps, no outer margin).
-            default_style = {
-                "height": "100%",
-                "width": "100%",
-                "overflow": "hidden",
-            }
-
-            # Display-only: the .viz-image-panel CSS owns the side-panel size/
-            # layout (300px column, internal scroll). Inline width/flex-wrap here
-            # would override it and force the old below-chart strip.
-            hidden_images_style = {"display": "none"}
-
-            if not ctx.triggered:
-                return (
-                    self.create_stacked_bar_chart(),
-                    "",
-                    {"display": "none"},
-                    [],
-                    default_style,
-                    hidden_images_style,
-                )
-
-            trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-
+            # Not ctx.triggered_id: on page load this callback is triggered by the
+            # stores the other initial callbacks wrote, and it must still draw.
+            changed = (
+                {t["prop_id"].split(".")[0] for t in ctx.triggered} if ctx.triggered else set()
+            )
+            if changed == {"main-graph"}:
+                # A click selects nothing; re-sending the figure only reset the zoom (PV-07).
+                raise PreventUpdate
+            if changed == {"legend-visible-store"}:
+                return self._legend_patch(view_type, legend_visible)
             try:
-                if view_type == "stacked":
-                    return (
-                        self.create_stacked_bar_chart(),
-                        "",
-                        {"display": "none"},
-                        [],
-                        default_style,
-                        hidden_images_style,
-                    )
-
-                elif view_type == "lines":
-                    tube_options = [
-                        {"label": f"Tube {tube}", "value": tube}
-                        for tube in self.data_processor.get_unique_tubes()
-                    ]
-
-                    # Lines view: chart pane fills its flex column too (the side
-                    # image panel sits beside it via .viz-lines-row).
-                    lines_graph_style = default_style.copy()
-
-                    # Display-only; .viz-image-panel CSS places it beside the
-                    # chart (300px right column) and stacks images vertically.
-                    visible_images_style = {"display": "flex"}
-
-                    if trigger_id == "view-selector":
-                        # Guard against empty/failed datasets so switching to the
-                        # lines view does not raise IndexError (F-009).
-                        tubes = self.data_processor.get_unique_tubes()
-                        if len(tubes) == 0:
-                            return (
-                                go.Figure(),
-                                "No tube data available",
-                                {"display": "none"},
-                                [],
-                                lines_graph_style,
-                                hidden_images_style,
-                            )
-                        first_tube = tubes[0]
-                        fig = self.show_growth_lines(first_tube)
-                        return (
-                            fig,
-                            "",
-                            {"display": "block"},
-                            tube_options,
-                            lines_graph_style,
-                            visible_images_style,
-                        )
-
-                    if trigger_id == "tube-selector" and selected_tube:
-                        fig = self.show_growth_lines(selected_tube)
-                        return (
-                            fig,
-                            "",
-                            {"display": "block"},
-                            tube_options,
-                            lines_graph_style,
-                            visible_images_style,
-                        )
-
-                elif view_type == "time":
-                    # Parse visualization options
-                    viz_options = viz_options or []
-                    show_field_avg = "show_field_avg" in viz_options
-                    show_field_var = "show_field_var" in viz_options
-
-                    return (
-                        self.show_growth_over_time(
-                            selected_tubes=selected_tubes,
-                            show_field_average=show_field_avg,
-                            show_field_variance=show_field_var,
-                            show_legend=legend_visible,
-                        ),
-                        "",
-                        {"display": "none"},
-                        [],
-                        default_style,
-                        hidden_images_style,
-                    )
-
-                elif view_type == "faceted":
-                    # Validate tubes selected (1-6)
-                    if not faceted_tubes or len(faceted_tubes) > 6:
-                        # Return empty figure with message
-                        fig = go.Figure()
-                        msg = "Please select between 1 and 6 tubes for the faceted view"
-                        if faceted_tubes and len(faceted_tubes) > 6:
-                            msg = f"Too many tubes selected ({len(faceted_tubes)}/6). Please remove {len(faceted_tubes) - 6} tubes."
-                        fig.add_annotation(
-                            text=msg,
-                            xref="paper",
-                            yref="paper",
-                            x=0.5,
-                            y=0.5,
-                            showarrow=False,
-                            font=dict(size=20, color="red"),
-                            align="center",
-                        )
-                        fig.update_layout(
-                            height=600,
-                        )
-                        return (
-                            fig,
-                            "",
-                            {"display": "none"},
-                            [],
-                            default_style,
-                            hidden_images_style,
-                        )
-
-                    # Convert dates to Timestamps if provided
-                    selected_dates_ts = None
-                    if faceted_dates:
-                        selected_dates_ts = [
-                            pd.Timestamp(d) if isinstance(d, str) else d for d in faceted_dates
-                        ]
-
-                    # Create faceted depth profile
-                    faceted_style = default_style.copy()
-                    faceted_style["height"] = "auto"  # Allow dynamic height based on dates
-                    faceted_style["minHeight"] = "90vh"
-                    faceted_style["overflow"] = "visible"
-                    faceted_style["padding"] = "6px"
-                    faceted_style["marginBottom"] = "8px"
-
-                    return (
-                        self.create_faceted_depth_profile(faceted_tubes, selected_dates_ts),
-                        "",
-                        {"display": "none"},
-                        [],
-                        faceted_style,
-                        hidden_images_style,
-                    )
-
-            except Exception as e:
-                # Surface the failure to the user instead of silently swallowing
-                # it with no feedback (F-032); also log with traceback.
+                return self._render_view(
+                    view_type,
+                    selected_tube,
+                    selected_tubes,
+                    viz_options,
+                    legend_visible,
+                    faceted_tubes,
+                    faceted_dates,
+                )
+            except Exception as exc:  # noqa: BLE001 -- show the failure instead of a stale chart
                 logger.exception("Error in visualization callback")
-                error_fig = go.Figure()
-                error_fig.add_annotation(
-                    text=f"Error generating visualization: {e}",
-                    xref="paper",
-                    yref="paper",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                    font=dict(size=16, color="red"),
-                    align="center",
+                figure = theme.message_figure(
+                    f"Error generating visualization: {exc}", color=theme.DANGER, size=16
                 )
-                error_fig.update_layout(height=600)
-                return (
-                    error_fig,
-                    "An error occurred while rendering this view.",
-                    {"display": "none"},
-                    [],
-                    default_style,
-                    hidden_images_style,
-                )
+                message = "An error occurred while rendering this view."
+                return figure, message, _HIDDEN, dash.no_update, _GRAPH_STYLE, _HIDDEN
 
-            return dash.no_update
-
-        # Callback to display the 10 images for hovered interval in Growth Lines view
         @self.app.callback(
             Output("image-container", "children"),
             Input("main-graph", "hoverData"),
             State("tube-selector", "value"),
             State("view-selector", "value"),
         )
-        def display_hover_images(hoverData, selected_tube, view_type):
-            if (
-                view_type != "lines"
-                or not hoverData
-                or "points" not in hoverData
-                or not hoverData["points"]
-                or not selected_tube
-            ):
-                return []
-
+        def display_hover_images(hover_data, selected_tube, view_type):
+            """Thumbnails of the hovered 10-position interval (Growth Lines only)."""
+            if view_type != "lines":
+                raise PreventUpdate  # PV-09: no round-trip DOM churn in other views
             try:
-                point = hoverData["points"][0]
-
-                # Extract date from customdata (more reliable than parsing HTML)
-                date_str = point.get("customdata")
-
-                # Fallback: try parsing from text if customdata is not available
-                if not date_str:
-                    text_lines = point.get("text", "").split("<br>")
-                    for line in text_lines:
-                        if "Date:" in line:
-                            # Extract date and remove HTML tags
-                            date_part = line.split("Date:")[-1].strip()
-                            if "<span" in date_part and "</span>" in date_part:
-                                start_idx = date_part.find(">") + 1
-                                end_idx = date_part.find("</span>")
-                                date_str = date_part[start_idx:end_idx].strip()
-                            else:
-                                date_str = re.sub(r"<[^>]+>", "", date_part).strip()
-                            break
-
-                if not date_str:
-                    return []
-
-                date = pd.to_datetime(date_str, format="%Y.%m.%d")
-                hovered_y = int(point["y"])
-
-                interval_start = hovered_y - 9
-                interval_end = hovered_y
-
-                images = []
-
-                for pos in range(interval_start, interval_end + 1):
-                    img_src = self.get_encoded_image(selected_tube, pos, date)
-                    if img_src:
-                        images.append(
-                            html.Div(
-                                [
-                                    html.Img(
-                                        src=img_src,
-                                        style={
-                                            # Fill the side panel width so each
-                                            # image is a meaningful >=100x100
-                                            # representation (panel is ~300px).
-                                            "width": "100%",
-                                            "minWidth": "100px",
-                                            "minHeight": "100px",
-                                            "height": "auto",
-                                            "objectFit": "contain",
-                                            "border": "1px solid #2a2c39",
-                                            "borderRadius": "6px",
-                                            "background": "#15161c",
-                                        },
-                                    ),
-                                    html.P(
-                                        f"Position L{pos}",
-                                        style={
-                                            "textAlign": "center",
-                                            "fontWeight": "600",
-                                            "margin": "4px 0 0",
-                                            "fontSize": "11.5px",
-                                            "fontFamily": "'IBM Plex Mono', monospace",
-                                            "color": "#9498ad",
-                                        },
-                                    ),
-                                ],
-                                key=f"image-{pos}-{date_str}",
-                                style={
-                                    # Full width of the .viz-image-panel column,
-                                    # stacked vertically (panel is flex-column).
-                                    "width": "100%",
-                                    "padding": "2px 0",
-                                    "boxSizing": "border-box",
-                                },
-                            )
-                        )
-
-                if not images:
-                    return [
-                        html.Div(
-                            "No images available for this interval",
-                            style={"textAlign": "center", "padding": "20px", "fontSize": "18px"},
-                        )
-                    ]
-
-                return images
-
-            except (KeyError, ValueError, TypeError, AttributeError):
-                # Malformed hover payload / unparseable date: show nothing rather
-                # than crashing the callback.
-                logger.exception("Error rendering hover images")
+                point = hover_data["points"][0]
+                date_str = self._hover_date(point)
+                end = int(point["y"])
+            except (KeyError, IndexError, TypeError, ValueError):
                 return []
+            tube = self._lines_tube(selected_tube)
+            if not date_str or tube is None:
+                return []
+            positions = range(end - GROWTH_LINES_INTERVAL + 1, end + 1)
+            images = [
+                self._thumbnail(tube, position, date_str)
+                for position in positions
+                if (tube, position, date_str) in self.available_images
+            ]
+            return images or [
+                html.Div("No images available for this interval", className="viz-empty-hint")
+            ]
+
+        # Thumbnails belong to one tube and interval: clear them when the view or
+        # the tube changes instead of showing the previous tube's images.
+        self.app.clientside_callback(
+            "function(_view, _tube) { return []; }",
+            Output("image-container", "children", allow_duplicate=True),
+            Input("view-selector", "value"),
+            Input("tube-selector", "value"),
+            prevent_initial_call=True,
+        )
+
+    @staticmethod
+    def _hover_date(point: dict) -> str | None:
+        """'YYYY.MM.DD' of a hovered Growth-Lines point (customdata, else its text)."""
+        for source in (point.get("customdata"), point.get("text")):
+            match = _DATE_TOKEN.search(str(source or ""))
+            if match:
+                return match.group(0)
+        return None
 
     def run_server(self):
-        """Run the Dash server.
+        """Run the Dash server (legacy entry point; the app uses DashServerThread).
 
         Errors are logged (with traceback) and re-raised so the caller is not
         left silently without a running server (F-008).
         """
         try:
-            self.app.run(debug=False, port=DASH_LENGTH_PORT, threaded=True)
+            self.app.run(debug=False, host=DASH_HOST, port=DASH_LENGTH_PORT, threaded=True)
         except Exception:
             logger.exception("Dash length-visualization server failed to run")
             raise
