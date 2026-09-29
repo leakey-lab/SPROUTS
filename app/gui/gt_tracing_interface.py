@@ -3,12 +3,12 @@ Ground-truth (GT) tracing editor: the "Trace GT" stage.
 
 Paints hand-traced, multi-class ground truth for training segmentation models
 (see ``docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`` §3).
-It subclasses :class:`MaskTracingInterface` for the canvas, tool rail, dock,
-zoom cluster, brush preview, hotkeys, undo and dirty tracking, and replaces
-the storage:
+It shares :class:`RasterEditorBase` with the mask editor (canvas, tool rail,
+dock, zoom cluster, brush preview, hotkeys, patch undo and dirty tracking) as
+a sibling, not a subclass, so it has no mask storage at all:
 
-- the canvas is still one ARGB pixmap, but each pixel is opaque in its class
-  colour (or transparent = background). Strokes are non-antialiased with
+- the document is a class-id plane; the canvas shows each pixel opaque in its
+  class colour (or transparent = background). Strokes are non-antialiased with
   ``CompositionMode_Source``, so colours stay exact and map back to class ids;
 - load/save go through ``app.gt`` (``gt/<stem>.png``, class ids in a palette
   PNG, plus ``gt/classes.json``). The GT editor is independent of every ML
@@ -31,13 +31,10 @@ from __future__ import annotations
 
 import logging
 import os
-from collections import deque
 
-import cv2
 import numpy as np
-from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QKeySequence, QPen, QPixmap, QShortcut
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 
 from app.config import GT_BACKGROUND_ID, GT_CLASSES_FILENAME, GT_DIRNAME, GT_UNKNOWN_COLOR
 from app.gt import (
@@ -56,15 +53,17 @@ from app.gt import (
     save_registry,
     write_tracing,
 )
-from app.gui.widgets import tokens
 
+from . import shortcuts
 from .class_panel import ClassPanel
-from .mask_drawing_tools import argb_array_to_pixmap, pixmap_to_argb_array
-from .mask_tracing_interface import MaskTracingInterface
+from .mask_drawing_tools import pixmap_to_argb_array
+from .mask_tracing_interface import RasterEditorBase
+from .patch_history import Patch
 
 logger = logging.getLogger(__name__)
 
 _REGISTRY_NAME = f"{GT_DIRNAME}/{GT_CLASSES_FILENAME}"
+_N_IDS = 256  # class ids are uint8
 
 
 def _bgra(color: str) -> tuple[int, int, int, int]:
@@ -78,23 +77,31 @@ def _packed(bgra) -> int:
     return int(bgra[0]) | (int(bgra[1]) << 8) | (int(bgra[2]) << 16) | (int(bgra[3]) << 24)
 
 
-class GtTracingInterface(MaskTracingInterface):
-    """Multi-class GT editor: one class per pixel, saved to ``gt/<stem>.png``."""
+class GtTracingInterface(RasterEditorBase):
+    """Multi-class GT editor: one class per pixel, saved to ``gt/<stem>.png``.
+
+    Its plane is the class-id image itself (0 = background), so undo patches,
+    saving and class presence all work on ids; the canvas only shows them.
+    """
 
     gt_saved = pyqtSignal(str)  # image path
     navigate_requested = pyqtSignal(int)  # +1 next image, -1 previous
 
     EDITOR_NOUN = "GT"
+    SHORTCUT_SCOPE = shortcuts.TRACE_GT
+    CLEARED_NOTICE = "Tracing cleared. Ctrl+Z to undo."
+    CLEAR_TIP = "Clear the tracing. Undo with Ctrl+Z; Save writes an empty tracing."
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.registry: Registry = default_registry()
         self._registry_error: str | None = None
         self._project_dir: str | None = None
-        # Class ids as loaded; a canvas colour no class owns keeps this id on save.
-        self._ids_on_load: np.ndarray | None = None
+        self._has_saved_mask = False  # a GT file was loaded or saved for this image
         self._reviewed: set[str] = set()  # classes ticked "checked" by hand
         self._present: set[str] = set()  # classes with pixels on the canvas
+        # Pixels per class id, kept up to date from each edit's patch (PE-13).
+        self._counts = np.zeros(_N_IDS, np.int64)
         self._brush_sizes: dict[str, int] = {}
         self._active_key: str | None = None
         # Warnings of a lossy remap on load (unknown classes -> Ignore); cleared on save.
@@ -112,7 +119,7 @@ class GtTracingInterface(MaskTracingInterface):
         # Panel clicks never keep keyboard focus (Space must pan, not tick a box).
         self.class_panel.active_changed.connect(self._focus_canvas)
         self.class_panel.reviewed_changed.connect(self._focus_canvas)
-        self._install_gt_shortcuts()
+        self.overlay_layout.register(side_panel=self.class_panel)
 
         self.set_active_class(self._default_key())
         self._refresh_panel()
@@ -121,69 +128,57 @@ class GtTracingInterface(MaskTracingInterface):
     # ================================================================== UI
     def _retitle_controls(self):
         """Tooltips that name the tracing rather than the mask."""
-        self.save_button.setToolTip("Save GT (Ctrl+S)")
-        self.clear_button.setToolTip(
-            "Clear the tracing. Undo with Ctrl+Z; Save writes an empty tracing."
-        )
         self.clear_icon_button.setToolTip("Clear tracing (undoable)")
-        self.fill_button.setToolTip("Fill a closed outline of the active class (F)")
-        self.mask_visible_button.setToolTip("Show tracing (H)")
+        self.fill_button.setToolTip(self._tip("Fill a closed outline of the active class", "fill"))
+        self.mask_visible_button.setToolTip(self._tip("Show tracing", "toggle_overlay"))
         self.opacity_container.setToolTip("Tracing opacity")
 
-    def _overlays(self):
-        return super()._overlays() + [getattr(self, "class_panel", None)]
-
-    def _install_gt_shortcuts(self):
-        context = Qt.ShortcutContext.WidgetWithChildrenShortcut
-        bindings = [(str(n), lambda n=n: self._select_by_number(n)) for n in range(10)]
-        bindings += [("PgDown", lambda: self._navigate(1)), ("PgUp", lambda: self._navigate(-1))]
-        for key, slot in bindings:
+    def _install_shortcuts(self):
+        """Base keys, 1-9 / 0 for the classes, and PgDn / PgUp (save, then next image)."""
+        super()._install_shortcuts()
+        numbers = (*range(1, 10), 0)
+        installed = shortcuts.install_shortcuts(
+            self,
+            self.SHORTCUT_SCOPE,
+            {"select_class": [lambda n=n: self._select_by_number(n) for n in numbers]},
+        )
+        self._shortcuts += installed["select_class"]
+        # The app-wide paging keys; the GT editor binds them itself so it can save first.
+        for key, delta in (("PgDown", 1), ("PgUp", -1)):
             sc = QShortcut(QKeySequence(key), self)
-            sc.setContext(context)
-            sc.activated.connect(slot)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(lambda d=delta: self._navigate(d))
             self._shortcuts.append(sc)
 
     def _style_brush_preview(self):
-        """Base ring styling, with the inner ring in the active class colour."""
+        """Base ring styling, with the ring in the active class colour."""
         super()._style_brush_preview()
         erasing = hasattr(self, "eraser_button") and self.eraser_button.isChecked()
         if not erasing and getattr(self, "_active_key", None):
-            pen = QPen(QColor(self.brush_color), 1)
-            pen.setCosmetic(True)
-            self._preview_inner.setPen(pen)
+            self.brush_preview.set_style(self.brush_color)
 
-    def _update_status_chip(self):
-        """``name ● Saved · n/m checked`` / ``● Unsaved`` / ``● GT unreadable`` / ``● No GT``.
+    def _status(self) -> tuple[str, str | None, str]:
+        """``● Saved · n/m checked`` / ``● Unsaved`` / ``● GT unreadable`` / ``● No GT``.
 
         ``● Unsaved · remapped`` after a lossy class remap on load, until saved.
         """
         registry = getattr(self, "registry", None)
-        if not hasattr(self, "state_label") or registry is None or not self.current_image_path:
-            if hasattr(self, "state_label"):
-                self.state_label.setToolTip("")
-            super()._update_status_chip()
-            return
-        warnings = getattr(self, "_remap_warnings", [])
-        tooltip = ""
+        if registry is None:
+            return super()._status()
         if self.dirty:
-            text, color = "Unsaved", tokens.WARN
+            warnings = self._remap_warnings
             if warnings:
-                text += " · remapped"
                 tooltip = "Unknown classes were mapped to Ignore:\n" + "\n".join(warnings)
-        elif self._has_saved_mask:
+                return "dirty", "Unsaved · remapped", tooltip
+            return "dirty", None, ""
+        if self._has_saved_mask:
             labelled = {c.key for c in registry.labelled()}
             checked = len(labelled & (self._reviewed | self._present))
-            text, color = f"Saved · {checked}/{len(labelled)} checked", tokens.OK
-        elif getattr(self, "_gt_unreadable", False):
-            text, color = "GT unreadable", tokens.DANGER
+            return "clean", f"Saved · {checked}/{len(labelled)} checked", ""
+        if self._gt_unreadable:
             tooltip = "The GT file could not be used; it is left as is unless you save."
-        else:
-            text, color = "No GT", tokens.TEXT_FAINT
-        self.file_label.setText(os.path.basename(self.current_image_path))
-        self.state_label.setText(f'<span style="color:{color}; font-size:11.5px;">● {text}</span>')
-        self.state_label.setToolTip(tooltip)
-        self.state_label.setVisible(True)
-        self.status_chip.reposition()
+            return "error", "GT unreadable", tooltip
+        return "none", "No GT", ""
 
     # ============================================================= classes
     def _default_key(self) -> str:
@@ -276,54 +271,48 @@ class GtTracingInterface(MaskTracingInterface):
         except OSError as exc:
             self.notice.emit(f"Could not save {_REGISTRY_NAME}: {exc}", "danger")
             return
-        self._recolour(self.registry, new_registry)
         self._set_registry(new_registry)
-        self._refresh_present()
+        self._recolour()
+        self._present_from_counts()
         self._refresh_panel()
         self._update_status_chip()
         self.notice.emit("Classes updated", "success")
 
-    def _recolour(self, old: Registry, new: Registry):
-        """Re-render the canvas and undo history in ``new``'s colours (ids unchanged)."""
-        changed = any(
-            old.by_id(c.id) is not None and old.by_id(c.id).color.lower() != c.color.lower()
-            for c in new.classes
-        )
-        if not changed or self.mask_pixmap is None:
+    def _recolour(self):
+        """Re-render the canvas in the registry's colours.
+
+        The plane and the undo history hold class ids, so neither changes.
+        """
+        if self.edits.plane is None:
             return
-
-        def convert(pixmap: QPixmap) -> QPixmap:
-            return self._ids_to_pixmap(self._pixmap_to_ids(pixmap, old), new)
-
-        self.mask_pixmap = convert(self.mask_pixmap)
-        self.undo_stack = deque(map(convert, self.undo_stack), maxlen=self.max_stack_size)
-        self.redo_stack = deque(map(convert, self.redo_stack), maxlen=self.max_stack_size)
+        self.mask_pixmap = self._plane_to_pixmap()
         self.refresh_mask_display()
 
     # ======================================================= ids <-> canvas
     @staticmethod
     def _lut(registry: Registry) -> np.ndarray:
         """Class id -> BGRA. Background is transparent; ids no class owns are grey."""
-        lut = np.zeros((256, 4), np.uint8)
+        lut = np.zeros((_N_IDS, 4), np.uint8)
         lut[:] = _bgra(GT_UNKNOWN_COLOR)
         for c in registry.classes:  # retired classes keep their own colour
             lut[c.id] = _bgra(c.color)
         lut[GT_BACKGROUND_ID] = 0
         return lut
 
-    def _ids_to_pixmap(self, ids: np.ndarray, registry: Registry | None = None) -> QPixmap:
-        return argb_array_to_pixmap(self._lut(registry or self.registry)[ids])
+    def _plane_lut(self) -> np.ndarray:
+        return self._lut(self.registry)
 
-    def _pixmap_to_ids(self, pixmap: QPixmap | None = None, registry: Registry | None = None):
-        """Canvas -> ``(h, w)`` uint8 class ids by exact colour match.
+    @staticmethod
+    def _ids_from_argb(
+        arr: np.ndarray, registry: Registry, fallback: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Canvas pixels -> ``(h, w)`` uint8 class ids by exact colour match.
 
         Colours are unique across the registry (retired included), so each
         class colour maps back to one id. Transparent is background; a colour
-        no class owns keeps the id it had when the image was loaded.
+        no class owns keeps its ``fallback`` id (the committed plane).
         """
-        pixmap = self.mask_pixmap if pixmap is None else pixmap
-        registry = registry or self.registry
-        arr = pixmap_to_argb_array(pixmap)  # contiguous (h, w, 4) B, G, R, A
+        arr = np.ascontiguousarray(arr)
         # Zero-copy view: one little-endian word per pixel, B | G<<8 | R<<16 | A<<24.
         packed = arr.view("<u4")[:, :, 0]
         ids = np.zeros(packed.shape, np.uint8)
@@ -333,15 +322,51 @@ class GtTracingInterface(MaskTracingInterface):
             ids[hit] = c.id
             known |= hit
         other = ~known
-        if other.any() and self._ids_on_load is not None and self._ids_on_load.shape == ids.shape:
-            ids[other] = self._ids_on_load[other]
+        if fallback is not None and other.any():
+            ids[other] = fallback[other]
         return ids
 
+    def _argb_to_plane(self, argb: np.ndarray, rect) -> np.ndarray:
+        x, y, w, h = rect
+        return self._ids_from_argb(argb, self.registry, self.edits.plane[y : y + h, x : x + w])
+
+    def _pixmap_to_ids(self, pixmap: QPixmap | None = None, registry: Registry | None = None):
+        """The canvas read back as class ids (the committed plane fills unknown colours)."""
+        pixmap = self.mask_pixmap if pixmap is None else pixmap
+        arr = pixmap_to_argb_array(pixmap)
+        plane = self.edits.plane
+        fallback = plane if plane is not None and plane.shape == arr.shape[:2] else None
+        return self._ids_from_argb(arr, registry or self.registry, fallback)
+
+    def _fill_source(self, plane: np.ndarray) -> tuple[np.ndarray, int]:
+        """Outlines of the *active class* only: another class's outline never counts."""
+        class_id = self.registry.by_key(self._active_key).id
+        return (plane == class_id).astype(np.uint8) * 255, class_id
+
+    # ---------------------------------------------------- class presence
     def _refresh_present(self):
-        if self.mask_pixmap is None:
-            self._present = set()
+        """Recount every class from the plane (on load)."""
+        plane = self.edits.plane
+        if plane is None:
+            self._counts = np.zeros(_N_IDS, np.int64)
         else:
-            self._present = present_keys(Tracing(self._pixmap_to_ids()), self.registry)
+            self._counts = np.bincount(plane.ravel(), minlength=_N_IDS).astype(np.int64)
+        self._present_from_counts()
+
+    def _present_from_counts(self):
+        counts = self._counts
+        self._present = {
+            c.key for c in self.registry.classes if not c.is_ignore and counts[c.id] > 0
+        }
+
+    def _on_patch(self, patch: Patch, forward: bool) -> None:
+        """Update the class counts from the edited box only (no full-canvas scan)."""
+        if patch.is_empty:
+            return
+        old, new = (patch.before(), patch.after()) if forward else (patch.after(), patch.before())
+        self._counts -= np.bincount(old.ravel(), minlength=_N_IDS)
+        self._counts += np.bincount(new.ravel(), minlength=_N_IDS)
+        self._present_from_counts()
 
     # ============================================================= editing
     def _registry_problem(self, prefix: str) -> str:
@@ -361,63 +386,10 @@ class GtTracingInterface(MaskTracingInterface):
         self.notice.emit(self._registry_problem("Editing is off"), "danger")
         return True
 
-    def begin_stroke(self, pos):
-        """Brush, eraser and fill all start here; refused while editing is blocked."""
-        if self._edit_blocked():
-            self.drawing = False  # continue_stroke then draws nothing
-            return
-        super().begin_stroke(pos)
-
     def _after_stroke(self):
-        """A stroke/fill changed the canvas: re-derive which classes are present."""
-        self._refresh_present()
+        """An action changed the canvas: show which classes are present now."""
         self._refresh_panel()
         self._update_status_chip()
-
-    def flood_fill(self, pos) -> bool:
-        """Fill the closed outline of the *active class* that contains ``pos``.
-
-        Same algorithm as the base fill, but the contours come from pixels of
-        the active class colour only, so another class's outline never counts.
-        """
-        if not self.mask_pixmap:
-            return False
-        arr = pixmap_to_argb_array(self.mask_pixmap)
-        colour = np.array(_bgra(self.brush_color.name()), np.uint8)
-        binary = np.all(arr == colour, axis=2).astype(np.uint8) * 255
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
-        seed = (float(pos.x()), float(pos.y()))
-        target = next((c for c in contours if cv2.pointPolygonTest(c, seed, False) >= 0), None)
-        if target is None:
-            return False
-
-        region = np.zeros(binary.shape, np.uint8)
-        cv2.drawContours(region, [target], -1, 255, -1)
-        arr[region == 255] = colour
-        # begin_stroke took the undo snapshot already (one fill = one undo).
-        self.mask_pixmap = argb_array_to_pixmap(arr)
-        self.refresh_mask_display()
-        return True
-
-    def undo(self):
-        super().undo()
-        self._after_stroke()
-
-    def redo(self):
-        super().redo()
-        self._after_stroke()
-
-    def clear_mask(self):
-        """Whole tracing to background. Undoable; Save writes the empty tracing."""
-        if not self.mask_pixmap or self._edit_blocked():
-            return
-        self.save_for_undo()
-        self.mask_pixmap.fill(Qt.GlobalColor.transparent)
-        self.refresh_mask_display()
-        self.mark_dirty()
-        self._after_stroke()
-        self.notice.emit("Tracing cleared. Ctrl+Z to undo.", "info")
 
     def _navigate(self, delta: int):
         """PgDn / PgUp: save pending edits, then ask for the next image.
@@ -435,56 +407,24 @@ class GtTracingInterface(MaskTracingInterface):
         self.navigate_requested.emit(delta)
 
     # ========================================================= load / save
-    def maybe_save_changes(self) -> bool:
-        """Offer to save unsaved GT. Returns True when it is safe to move on.
-
-        True = saved, discarded, or nothing to save. When the user chose Save
-        and the save failed (a notice says why), ask again: Discard, or Keep
-        editing, which returns False; the caller must then stay on this image.
-        """
-        if super().maybe_save_changes():
-            return True
-        name = os.path.basename(self.current_image_path)
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("GT not saved")
-        box.setText(f"The GT for {name} could not be saved.")
-        box.setInformativeText("Discard the edits, or keep editing? Discarded edits are lost.")
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
-        )
-        box.button(QMessageBox.StandardButton.Cancel).setText("Keep editing")
-        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        box.setEscapeButton(QMessageBox.StandardButton.Cancel)
-        if box.exec() == QMessageBox.StandardButton.Discard:
-            self._set_clean()
-            return True
-        return False
-
-    def reset(self):
+    def reset(self) -> bool:
         """A new folder was opened: prompt, then drop the image and the registry.
 
         Keeps everything when the user chose to keep editing a tracing that
         could not be saved (``MainWindow.open_path`` cancels the open then).
         """
-        if not self.maybe_save_changes():
-            return
-        super().reset()  # its own prompt is a no-op now: the tracing is clean
-        self.current_image_path = ""
-        self.image_pixmap = None
-        self.mask_pixmap = None
-        self.image_item.setPixmap(QPixmap())
-        self.mask_item.setPixmap(QPixmap())
-        self._ids_on_load = None
+        if not super().reset():
+            return False
         self._reviewed = set()
+        self._counts = np.zeros(_N_IDS, np.int64)
         self._present = set()
         self._has_saved_mask = False
         self._remap_warnings = []
         self._gt_unreadable = False
         self._project_dir = None  # reload gt/classes.json with the next image
-        self._sync_brush_preview()
         self._refresh_panel()
         self._update_status_chip()
+        return True
 
     def _load_registry(self, project_dir: str):
         self._project_dir = project_dir
@@ -529,35 +469,13 @@ class GtTracingInterface(MaskTracingInterface):
             self.notice.emit(f"GT {name}: {warning}", "warn")
         return tracing, warnings, changed, "loaded"
 
-    def load_image(self, image_path: str) -> None:
-        """Open ``image_path`` with its GT tracing (``gt/<stem>.png``), or empty.
-
-        Mirrors the image-loading part of the base ``load_image`` without
-        calling it, because the base opens the ResNet mask from ``mask/``.
-        """
-        if image_path != self.current_image_path:
-            if not self.maybe_save_changes():
-                return  # its save failed and the user kept editing the open image
-        elif self.has_unsaved_changes():
-            return  # the open image was re-selected: keep editing, don't reload
-
-        pixmap = QPixmap(image_path)
-        if pixmap.isNull():
-            self.notice.emit(f"Could not open {os.path.basename(image_path)}", "danger")
-            return
-
+    def _open_document(self, image_path: str, pixmap: QPixmap) -> tuple[np.ndarray, bool]:
+        """The GT tracing (``gt/<stem>.png``) of ``image_path`` as class ids, or empty."""
         project_dir = os.path.dirname(image_path)
         # New folder, or the registry was invalid: (re)read it, so a fixed
         # gt/classes.json takes effect on the next image load.
         if project_dir != self._project_dir or self._registry_error:
             self._load_registry(project_dir)
-
-        self.current_image_path = image_path
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        self.drawing = False
-        self.last_point = None
-        self.image_pixmap = pixmap
 
         tracing, warnings, changed, status = self._read_tracing(
             image_path, pixmap.height(), pixmap.width()
@@ -567,24 +485,13 @@ class GtTracingInterface(MaskTracingInterface):
         dirty_on_load = changed and not self._registry_error
         self._remap_warnings = list(warnings) if dirty_on_load else []
         self._gt_unreadable = status == "unreadable"
-        self._ids_on_load = tracing.ids.copy()
         self._reviewed = set(tracing.reviewed)
-        self._present = present_keys(tracing, self.registry)
         self._has_saved_mask = status == "loaded"
-        self.mask_pixmap = self._ids_to_pixmap(tracing.ids)
+        return np.array(tracing.ids, np.uint8, copy=True), dirty_on_load
 
-        self.update_display()
-        self.graphics_view.set_content_rect(QRectF(self.image_pixmap.rect()))
-        self._fit_pending = True
-        self._fit_if_pending()
+    def _document_opened(self) -> None:
+        self._refresh_present()
         self._refresh_panel()
-        if dirty_on_load:
-            self.mark_dirty()  # ids were remapped onto this project's registry
-        else:
-            self._set_clean()
-        self._update_status_chip()
-        if self.isVisible():
-            self.graphics_view.setFocus()
 
     def save_mask(self, save_path=None) -> bool:
         """Write ``gt/<stem>.png`` (even when empty); ``save_path`` is ignored.
@@ -592,13 +499,14 @@ class GtTracingInterface(MaskTracingInterface):
         ``reviewed`` = classes ticked by hand plus every class with pixels.
         ``gt/classes.json`` is written too if it does not exist yet.
         """
-        if not (self.mask_pixmap and self.current_image_path):
+        if self.edits.plane is None or not self.current_image_path:
             return False
         if self._registry_error:
             self.notice.emit(self._registry_problem("Not saved"), "danger")
             return False
 
-        ids = self._pixmap_to_ids()
+        self._finish_stroke()
+        ids = self.edits.plane.copy()
         reviewed = self._reviewed | present_keys(Tracing(ids), self.registry)
         project_dir = os.path.dirname(self.current_image_path)
         try:
@@ -611,7 +519,6 @@ class GtTracingInterface(MaskTracingInterface):
             self.notice.emit(f"Could not save GT: {exc}", "danger")
             return False
 
-        self._ids_on_load = ids
         self._reviewed = reviewed
         self._has_saved_mask = True
         self._remap_warnings = []

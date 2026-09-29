@@ -116,10 +116,10 @@ def test_paint_classes_and_save_ids(app, project):
     mask_before = mask_file.read_bytes()
 
     iface = _editor(app, image_path)
-    saved, mask_signals = [], []
+    saved = []
     iface.gt_saved.connect(saved.append)
-    iface.mask_saved.connect(mask_signals.append)
-    iface.mask_cleared.connect(mask_signals.append)
+    # The GT editor has no mask storage at all (it is not a MaskTracingInterface).
+    assert not hasattr(iface, "mask_saved") and not hasattr(iface, "mask_cleared")
 
     iface.set_active_class("root")
     _stroke(iface, (10, 30), (70, 30), size=6)
@@ -139,7 +139,6 @@ def test_paint_classes_and_save_ids(app, project):
     assert os.path.exists(registry_path(str(folder)))
 
     assert saved == [image_path]
-    assert mask_signals == []
     assert mask_file.read_bytes() == mask_before
     assert sorted(os.listdir(folder / "mask")) == ["plot_001.png"]
     assert "Saved" in iface.state_label.text() and "2/3 checked" in iface.state_label.text()
