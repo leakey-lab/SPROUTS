@@ -1,7 +1,8 @@
-"""Mask / GT raster editors: canvas item, patch undo, saving, keys, focus, layout.
+"""Mask raster editor: canvas item, patch undo, saving, keys, focus, layout.
 
-Findings PE-04, PE-06, PE-07, PE-13, UI-03, UXE-02/RB-05, RB-11, UXE-03, UXE-07,
-UXE-08/09, AR-11 and AR-13 of the UI/perf audit.
+Findings PE-04, PE-06, PE-07, UI-03, UXE-02/RB-05, RB-11, UXE-03, UXE-07, UXE-08/09 and
+AR-13 of the UI/perf audit. The Trace GT cases (and PE-13, AR-11) live in
+tests/test_raster_editor_behaviour.py, with the GT editor's own base.
 """
 
 import os
@@ -17,12 +18,10 @@ from PyQt6.QtGui import QShortcut  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-from app.gt import Tracing, present_keys  # noqa: E402
 from app.gui import shortcuts  # noqa: E402
 from app.gui.canvas_item import CanvasPixmapItem  # noqa: E402
-from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
 from app.gui.mask_drawing_tools import pixmap_to_argb_array  # noqa: E402
-from app.gui.mask_tracing_interface import MaskTracingInterface, RasterEditorBase  # noqa: E402
+from app.gui.mask_tracing_interface import MaskTracingInterface  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -100,12 +99,10 @@ def test_strokes_paint_in_place_without_deep_copies(app, tmp_path):
 
 
 # ------------------------------------------------------------------ PE-06
-def _random_ops(iface, rng, n, classes=None):
+def _random_ops(iface, rng, n):
     w, h = iface.mask_pixmap.width(), iface.mask_pixmap.height()
     for _ in range(n):
         op = rng.integers(0, 10)
-        if classes:
-            iface.set_active_class(classes[int(rng.integers(0, len(classes)))])
         iface.eraser_button.setChecked(op in (6, 7))
         iface.fill_button.setChecked(op == 8)
         if op == 9:
@@ -116,15 +113,13 @@ def _random_ops(iface, rng, n, classes=None):
     iface.brush_button.setChecked(True)
 
 
-@pytest.mark.parametrize("cls", [MaskTracingInterface, GtTracingInterface])
-def test_undo_redo_matches_full_snapshots(app, tmp_path, cls):
-    iface = _editor(cls, _image(tmp_path, w=300, h=200))
-    classes = ["root", "nodule"] if cls is GtTracingInterface else None
+def test_undo_redo_matches_full_snapshots(app, tmp_path):
+    iface = _editor(MaskTracingInterface, _image(tmp_path, w=300, h=200))
     rng = np.random.default_rng(7)
     states = [pixmap_to_argb_array(iface.mask_pixmap)]
     for _ in range(40):
         before = len(iface.undo_stack)
-        _random_ops(iface, rng, 1, classes)
+        _random_ops(iface, rng, 1)
         if len(iface.undo_stack) > before:  # a fill outside every outline records nothing
             states.append(pixmap_to_argb_array(iface.mask_pixmap))
         else:
@@ -219,19 +214,18 @@ def _shortcut_keys(iface):
     return keys
 
 
-@pytest.mark.parametrize(
-    "cls, scope",
-    [(MaskTracingInterface, shortcuts.CORRECT_MASK), (GtTracingInterface, shortcuts.TRACE_GT)],
-)
-def test_editor_keys_come_from_the_registry_once_each(app, cls, scope):
-    iface = cls()
+def test_editor_keys_come_from_the_registry_once_each(app):
+    iface = MaskTracingInterface()
     keys = _shortcut_keys(iface)
     assert len(keys) == len(set(keys)), keys
     declared = {
-        k for s in shortcuts.specs_for(scope) if s.kind == shortcuts.SHORTCUT for k in s.keys
+        k
+        for s in shortcuts.specs_for(shortcuts.CORRECT_MASK)
+        if s.kind == shortcuts.SHORTCUT
+        for k in s.keys
     }
     assert declared <= set(keys)
-    assert set(keys) - declared <= {"PgDown", "PgUp"}  # GT pages itself (saves first)
+    assert set(keys) - declared <= {"PgDown", "PgUp"}
     assert "Ctrl+Y" in iface.redo_button.toolTip()
 
 
@@ -289,10 +283,9 @@ def _image_rect_in(iface) -> QRect:
     return QRect(view.mapTo(iface, rect.topLeft()), rect.size())
 
 
-@pytest.mark.parametrize("cls", [MaskTracingInterface, GtTracingInterface])
 @pytest.mark.parametrize("size", [(907, 562), (1018, 662), (1658, 942)])
-def test_fit_keeps_the_image_clear_of_the_overlays(app, tmp_path, cls, size):
-    iface = _editor(cls, _image(tmp_path, w=640, h=480), size=size)
+def test_fit_keeps_the_image_clear_of_the_overlays(app, tmp_path, size):
+    iface = _editor(MaskTracingInterface, _image(tmp_path, w=640, h=480), size=size)
     iface.show()
     for _ in range(3):
         QApplication.processEvents()
@@ -313,31 +306,6 @@ def test_fit_keeps_the_image_clear_of_the_overlays(app, tmp_path, cls, size):
     assert iface.zoom_pct_label.text() == f"{round(iface.graphics_view.zoom_factor * 100)}%"
     iface._set_clean()
     iface.close()
-
-
-# ------------------------------------------------------------------ AR-11
-def test_gt_editor_has_no_mask_storage():
-    assert issubclass(GtTracingInterface, RasterEditorBase)
-    assert not issubclass(GtTracingInterface, MaskTracingInterface)
-    for name in ("find_mask_path", "mask_store", "mask_saved", "mask_cleared", "_mask_save_path"):
-        assert not hasattr(GtTracingInterface, name), name
-
-
-# ------------------------------------------------------------------ PE-13
-def test_gt_class_presence_tracks_every_edit(app, tmp_path):
-    iface = _editor(GtTracingInterface, _image(tmp_path, w=120, h=90))
-    rng = np.random.default_rng(3)
-    classes = [c.key for c in iface.registry.active()]
-    for _ in range(60):
-        op = rng.integers(0, 4)
-        if op == 0 and iface.undo_stack:
-            iface.undo()
-        elif op == 1 and iface.redo_stack:
-            iface.redo()
-        else:
-            _random_ops(iface, rng, 1, classes)
-        expected = present_keys(Tracing(iface._pixmap_to_ids()), iface.registry)
-        assert iface._present == expected
 
 
 # ------------------------------------------------------------------ AR-13

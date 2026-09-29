@@ -29,8 +29,8 @@ from app.gt import (  # noqa: E402
     write_tracing,
 )
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
-from app.gui.mask_drawing_tools import pixmap_to_argb_array  # noqa: E402
 from app.gui.mask_tracing_interface import MaskTracingInterface  # noqa: E402
+from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 
 H, W = 60, 80

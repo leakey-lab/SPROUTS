@@ -3,9 +3,9 @@ Ground-truth (GT) tracing editor: the "Trace GT" stage.
 
 Paints hand-traced, multi-class ground truth for training segmentation models
 (see ``docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`` §3).
-It shares :class:`RasterEditorBase` with the mask editor (canvas, tool rail,
-dock, zoom cluster, brush preview, hotkeys, patch undo and dirty tracking) as
-a sibling, not a subclass, so it has no mask storage at all:
+It runs on :class:`app.gui.raster_editor_base.RasterEditorBase` (canvas, tool
+rail, dock, zoom cluster, brush preview, hotkeys, patch undo and dirty
+tracking), which knows nothing about storage, so it has no mask storage at all:
 
 - the document is a class-id plane; the canvas shows each pixel opaque in its
   class colour (or transparent = background). Strokes are non-antialiased with
@@ -33,8 +33,8 @@ import logging
 import os
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QKeySequence, QPixmap, QShortcut
 
 from app.config import GT_BACKGROUND_ID, GT_CLASSES_FILENAME, GT_DIRNAME, GT_UNKNOWN_COLOR
 from app.gt import (
@@ -56,9 +56,9 @@ from app.gt import (
 
 from . import shortcuts
 from .class_panel import ClassPanel
-from .mask_drawing_tools import pixmap_to_argb_array
-from .mask_tracing_interface import RasterEditorBase
+from .paint_canvas import pixmap_to_argb_array
 from .patch_history import Patch
+from .raster_editor_base import RasterEditorBase
 
 logger = logging.getLogger(__name__)
 
@@ -285,8 +285,7 @@ class GtTracingInterface(RasterEditorBase):
         """
         if self.edits.plane is None:
             return
-        self.mask_pixmap = self._plane_to_pixmap()
-        self.refresh_mask_display()
+        self.paint.rebuild()
 
     # ======================================================= ids <-> canvas
     @staticmethod
@@ -330,8 +329,10 @@ class GtTracingInterface(RasterEditorBase):
         x, y, w, h = rect
         return self._ids_from_argb(argb, self.registry, self.edits.plane[y : y + h, x : x + w])
 
-    def _pixmap_to_ids(self, pixmap: QPixmap | None = None, registry: Registry | None = None):
-        """The canvas read back as class ids (the committed plane fills unknown colours)."""
+    def _pixmap_to_ids(
+        self, pixmap: QImage | QPixmap | None = None, registry: Registry | None = None
+    ):
+        """The canvas (or ``pixmap``) read back as class ids (the plane fills unknown colours)."""
         pixmap = self.mask_pixmap if pixmap is None else pixmap
         arr = pixmap_to_argb_array(pixmap)
         plane = self.edits.plane
@@ -473,7 +474,7 @@ class GtTracingInterface(RasterEditorBase):
             self.notice.emit(f"GT {name}: {warning}", "warn")
         return tracing, warnings, changed, "loaded"
 
-    def _open_document(self, image_path: str, pixmap: QPixmap) -> tuple[np.ndarray, bool]:
+    def _open_document(self, image_path: str, size: QSize) -> tuple[np.ndarray, bool]:
         """The GT tracing (``gt/<stem>.png``) of ``image_path`` as class ids, or empty."""
         project_dir = os.path.dirname(image_path)
         # New folder, or the registry was invalid: (re)read it, so a fixed
@@ -482,7 +483,7 @@ class GtTracingInterface(RasterEditorBase):
             self._load_registry(project_dir)
 
         tracing, warnings, changed, status = self._read_tracing(
-            image_path, pixmap.height(), pixmap.width()
+            image_path, size.height(), size.width()
         )
         # Remapped ids are unsaved edits, unless nothing can be saved anyway
         # (invalid registry: the view is read-only and the file stays as is).
