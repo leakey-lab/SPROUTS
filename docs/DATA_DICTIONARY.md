@@ -118,10 +118,10 @@ Both kinds share the folder and the name; Measure treats them alike.
 | Origin | PNG mode | Size | Root | Background |
 |---|---|---|---|---|
 | *Generate* (mask model) | 8-bit grayscale (`L`) | always 640 x 480 | 255 | 0 |
-| *Correct Mask* (hand-traced) | RGBA | the source image's size | opaque white (255, 255, 255, 255) | fully transparent (0, 0, 0, 0) |
+| *Correct* (hand-traced) | RGBA | the source image's size | opaque white (255, 255, 255, 255) | fully transparent (0, 0, 0, 0) |
 
-Saving an empty tracing deletes the file (the image then has no mask). The editor also
-opens `mask/<stem>.jpg`/`.jpeg` masks, but Measure reads only `.png`. The file does not
+Saving an empty mask in *Correct* deletes the file (the image then has no mask). *Correct*
+also opens `mask/<stem>.jpg`/`.jpeg` masks, but Measure reads only `.png`. The file does not
 record its origin; mode `L` versus `RGBA` is the only practical tell.
 
 When masks already exist, *Generate* asks first: **Keep existing masks** (the default;
@@ -136,7 +136,7 @@ shown at the end of the run.
 | File | Format | Meaning |
 |---|---|---|
 | `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
-| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Hand-corrected skeleton, saved at the size of the skeleton it was edited from (341 x 256 by default) |
+| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Skeleton corrected in *Correct*, saved at the size of the skeleton it was edited from (341 x 256 by default); not read by Measure |
 
 An image that cannot be decoded gets no skeleton file; it is listed in
 `skeletons/_sprouts_run.json` (`"failed"`) and in the warning shown at the end of the

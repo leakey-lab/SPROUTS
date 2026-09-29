@@ -10,14 +10,14 @@ Dash/Plotly dashboards, and multi-class ground-truth tracing for training datase
 Two independent branches start from the **original images**:
 
 ```
-image → mask model (ResNet)       → mask/<stem>.png           → Correct Mask → root area (mm²)   → mask/root_areas.csv
-image → skeleton model (Pix2Pix)  → skeletons/<stem>_fake.png                → root length (mm)  → skeletons/root_lengths.csv
+image → mask model (ResNet)       → mask/<stem>.png           → Correct → root area (mm²)   → mask/root_areas.csv
+image → skeleton model (Pix2Pix)  → skeletons/<stem>_fake.png           → root length (mm)  → skeletons/root_lengths.csv
 root_areas.csv + root_lengths.csv → Dash/Plotly dashboards
 ```
 
 The skeleton model reads the original image, not the mask, so correcting a mask changes
 **root area only**. Root length is measured from `skeletons/*_fake.png`; skeletons edited
-in *Correct Skeleton* are saved to `skeleton_corrections/` and are not measured.
+in *Correct* are saved to `skeleton_corrections/` and are not measured.
 The models are described in [`docs/MODELS.md`](docs/MODELS.md), every output file and
 column in [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 
@@ -94,6 +94,19 @@ Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log` (set `SPROUTS_LOG_DIR` to use a
 folder). A native crash writes the stacks of every thread to `fault.log` next to it; an
 unexpected Python error is logged and shown in a dialog instead of closing the app.
 
+## Stages
+
+The top bar walks through the work in six stages, in this order (`F1` lists every key):
+
+| Stage | Key | What it does |
+|---|---|---|
+| **Library** | `Alt+1` | Browse and select minirhizotron images from the tree. |
+| **Trace GT** | `Alt+2` | Paint ground-truth classes for a segmentation dataset (see below). |
+| **Generate** | `Alt+3` | Generate masks and skeletons for all loaded images in one pass. |
+| **Correct** | `Alt+4` | Fix the mask (area) and the skeleton (length) of an image on one canvas. |
+| **Measure** | `Alt+5` | Compute root length (mm) and area (mm²). |
+| **Visualize** | `Alt+6` | Explore length and area trends across the trial. |
+
 ## Outputs
 
 | File | Content |
@@ -102,6 +115,7 @@ unexpected Python error is logged and shown in a dialog instead of closing the a
 | `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error` |
 | `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
 | `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error` |
+| `skeleton_corrections/<stem>_skeleton.png` | skeleton corrected in *Correct* (1-pixel lines, at the size of the skeleton it was opened from, 341 x 256 by default); not measured |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
 | `mask/_sprouts_run.json`, `skeletons/_sprouts_run.json` | the latest generation run into that folder: model SHA-256, device and precision, parameters, failed inputs |
@@ -135,6 +149,74 @@ image/mask resolution, so they are resolution-independent:
 If your imaging system has a different FOV, change it in one place:
 `app/config.py`.
 
+## Correcting masks and skeletons (Correct)
+
+The **Correct** stage fixes both model outputs of an image on one canvas. The mask (root
+area) and the skeleton (root length) are drawn together over the photo and you edit one
+of them at a time, the *active layer*; the other stays visible at half its opacity as a
+reference. The **Layers** panel on the right shows each layer's state (Saved, Unsaved,
+Generated, Not saved …): click a row to edit that layer, click its eye to hide it.
+
+- **Mask** (green): Brush, Eraser and Fill (fills a closed outline). It opens
+  `mask/<stem>.png` and saves it as a white-on-transparent PNG; saving an empty mask
+  deletes the file.
+- **Skeleton** (orange): Select (pick a branch; Delete removes it), Eraser, Polyline
+  (click points, drag them to adjust, Ctrl+click adds a bend, Shift+drag moves the line,
+  Enter or a double-click finishes it, S smooths it) and Connect (drag from an endpoint
+  to another point). It opens the corrected skeleton
+  `skeleton_corrections/<stem>_skeleton.png` if there is one, else the generated
+  `skeletons/<stem>_fake.png`, and saves to `skeleton_corrections/`. **Load skeleton
+  file…** in the dock opens another file. Corrected skeletons are not measured.
+- **Enhance** (the contrast button on the tool rail) changes how the photo is shown, for
+  every image while it is on; it never changes a mask, a skeleton or a measurement.
+
+| Key | Action |
+|---|---|
+| `1` / `2` / `X` | Edit the mask / the skeleton / switch between them |
+| `B` (tap) · hold `B` and scroll | Mask brush · brush size (from either layer) |
+| `F` | Mask fill |
+| `V` · `P` · `C` | Skeleton select · polyline · connect |
+| `E` | Eraser of the active layer |
+| `[` / `]` | Smaller / larger brush or eraser |
+| `H` / `Shift+H` | Show or hide both layers (see the photo) / the other layer |
+| `S` · `Enter` · `Esc` | Smooth · finish · cancel the polyline |
+| `Delete` / `Backspace` | Delete the picked branch |
+| `Space` (hold), middle-drag | Pan |
+| `Ctrl+Z` · `Ctrl+Y` / `Ctrl+Shift+Z` | Undo · redo |
+| `Ctrl+S` | Save |
+| `Ctrl+0` · `Ctrl+1` · `Ctrl+=` / `Ctrl+-` · `Ctrl`+wheel | Fit · 100 % · zoom in / out · zoom about the cursor |
+| `PgDn` / `PgUp` | Save, then open the next / previous image |
+
+A tool key of the other layer switches layers too (`B`, `F` → mask; `V`, `P`, `C` →
+skeleton).
+
+**Undo** is one timeline for both layers: `Ctrl+Z` undoes the last thing you did, on
+either layer, without switching layers (the other layer's row flashes and a message says
+"Undo · mask" or "Undo · skeleton"). While you place a polyline, `Ctrl+Z` first removes
+its last point.
+
+**Saving**
+
+- `Ctrl+S` (or **Save**) saves every layer with unsaved changes, the mask first. With
+  nothing unsaved it saves the active layer: the explicit way to accept a generated
+  skeleton or to mark a model mask as checked. A layer without changes that is not active
+  is never rewritten.
+- `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
+  image. If a save fails, you stay on the image and a message says why.
+- Every other way of leaving an image with unsaved changes (another image, another stage,
+  opening a folder, closing the window) asks once and names the unsaved layers:
+  **Save**, **Discard** (the unsaved layers go back to what is on disk) or **Cancel**
+  (stay).
+  If a save fails, a second question offers **Discard** or **Keep editing**.
+- Coming back to the same image keeps your zoom and position; the layers reload only when
+  their files changed on disk (for example after *Generate*).
+
+**Zoom:** the photo stays smooth at every zoom (no pixel squares when zoomed in, no
+shimmer when zoomed out), the mask shows its exact saved pixels from 100 % up, and the
+skeleton is drawn as a line at every zoom. The zoom buttons and keys step through round
+percentages, the wheel zooms continuously, and a right-click on the zoom readout offers
+presets (Fit, 50 % … 1600 %).
+
 ## Ground-truth tracing (Trace GT)
 
 The **Trace GT** stage paints hand-traced, multi-class ground truth for training
@@ -157,7 +239,7 @@ model in the app: it never starts from the ResNet mask and never reads or writes
 A saved file means the image was annotated, even when nothing is painted
 ("checked, nothing present" is a valid negative example).
 
-**Editor:** the same brush / eraser / fill canvas as Correct Mask, plus a class
+**Editor:** the same brush / eraser / fill canvas as the mask in Correct, plus a class
 panel on the right. The brush paints the active class and replaces whatever was
 under it (one class per pixel). Each class has a ✓ box: it ticks itself when the
 class has pixels, and you tick it by hand for "looked for it, none present".
@@ -167,7 +249,8 @@ class has pixels, and you tick it by hand for "looked for it, none present".
 | `1`–`9` (top row or keypad) | select the n-th class |
 | `0` | select Ignore |
 | `PgDn` / `PgUp` | save and open the next / previous image (asks first if the file's classes had to be remapped on load) |
-| `B` `E` `F`, `[` `]`, Space, `H`, `Ctrl+S`, `Ctrl+Z`/`Ctrl+Y` | as in Correct Mask |
+| `B` `E` `F`, `[` `]`, Space, `Ctrl+S`, `Ctrl+Z`/`Ctrl+Y` | as for the mask in Correct |
+| `H` | show or hide the tracing |
 
 **Export dataset…** writes a training set to an empty folder:
 
@@ -242,6 +325,7 @@ app/
   inference/           # metrics (length/area), skeleton & mask inference
   handlers/            # batch orchestration (QThread)
   gui/                 # PyQt6 widgets, editors, graphics views
+    correct/           # the Correct stage: mask and skeleton layers, session, input routing
   visualization/       # Dash/Plotly apps + data processing
   mask_model/          # ResNet segmentation model
 docs/                  # model card, data dictionary, architecture, known issues

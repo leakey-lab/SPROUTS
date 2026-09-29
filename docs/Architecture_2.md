@@ -5,7 +5,7 @@
 The Root-Mask-and-Skeletons application is a comprehensive PyQt6-based system for automated root analysis in plant science. It combines computer vision, deep learning, and interactive visualization to process root images, generate segmentation masks, extract skeletal structures, and compute morphological metrics.
 
 ### Key Capabilities
-- **🎨 Interactive Mask Editing**: Manual tracing and editing tools for precise segmentation
+- **🎨 Interactive Correction**: one *Correct* stage edits the mask and the skeleton of an image on one canvas; *Trace GT* paints multi-class ground truth
 - **🤖 ML-Powered Processing**: Dual-model architecture using ResNet for masks and Pix2Pix for skeletons
 - **📊 Advanced Analytics**: Automatic root length calculation and morphometric analysis
 - **📈 Rich Visualizations**: Interactive dashboards with Plotly Dash integration
@@ -49,7 +49,7 @@ flowchart TB
     subgraph CORE["🔧 Core Processing Units"]
         direction TB
         VIEW["👁️ View/Overlay/Compare<br/>(Display Controller)<br/>[CPU]"]:::process
-        MT["✏️ Manual Mask Tracing<br/>(Drawing & Editing)<br/>[CPU]"]:::process
+        MT["✏️ Correct<br/>(mask + skeleton,<br/>one canvas)<br/>[CPU]"]:::process
         MG["🎭 Generate Masks<br/>(ML Inference)<br/>[GPU→CPU]"]:::ml
         SG["🦴 Generate Skeletons<br/>(ML via Subprocess)<br/>[GPU→CPU]"]:::ml
         RL["📏 Compute Root Length<br/>(Skeletonization)<br/>[CPU]"]:::process
@@ -112,7 +112,7 @@ flowchart LR
         gui["🖥️ PyQt6 GUI<br/>`main.py`<br/>`main_window.py`"]:::internal
         
         subgraph MODELS["ML Models"]
-            pix2pix["🎨 Pix2Pix GAN<br/>`pix2pix_inference_script.py`<br/>Enhanced ResNet"]:::model
+            pix2pix["🎨 Pix2Pix GAN<br/>`inference/skeleton_inference.py`<br/>Enhanced ResNet"]:::model
             resnet["🔍 Mask Model<br/>`mask_model/model.py`<br/>ResNetSkeleton"]:::model
         end
         
@@ -148,7 +148,8 @@ flowchart TB
     subgraph GUI["🎨 GUI Layer (PyQt6)"]
         MW["📱 MainWindow<br/>`main_window.py`<br/>Application Controller"]:::gui
         DC["🖼️ DisplayController<br/>`display_controller.py`<br/>Image Rendering"]:::gui
-        MTI["✏️ MaskTracingInterface<br/>`mask_tracing_interface.py`<br/>Manual Annotation"]:::gui
+        CE["✏️ CorrectEditor<br/>`correct/editor.py`<br/>Mask + skeleton layers"]:::gui
+        GT["🏷️ GtTracingInterface<br/>`gt_tracing_interface.py`<br/>Ground truth"]:::gui
         IM["📂 ImageManager<br/>`image_manager.py`<br/>File Management"]:::gui
     end
 
@@ -161,12 +162,12 @@ flowchart TB
 
     %% Inference Layer
     subgraph INFERENCE["🤖 Inference Layer"]
-        P2P["🎨 Pix2Pix Engine<br/>`pix2pix_inference_script.py`"]:::inference
+        P2P["🎨 Pix2Pix Engine<br/>`inference/skeleton_inference.py`"]:::inference
         
-        subgraph P2P_DEPS["Pix2Pix Dependencies"]
-            MODELS["📦 models/*<br/>Network Definitions"]:::inference
-            DATA["📊 data/*<br/>Dataset Loaders"]:::inference
-            UTIL["🛠️ util/*<br/>Helper Functions"]:::inference
+        subgraph P2P_DEPS["Pix2Pix Parts"]
+            MODELS["📦 EnhancedResnetGenerator<br/>Network Definition"]:::inference
+            DATA["📊 Image Loading<br/>& Transforms"]:::inference
+            UTIL["🛠️ Batch Engine<br/>`inference/batch_engine.py`"]:::inference
         end
         
         RLC["📏 RootLengthCalculator<br/>`root_length_inference_handler.py`<br/>Morphometry"]:::inference
@@ -183,7 +184,8 @@ flowchart TB
     %% Connections
     MW ==> IM
     MW ==> DC
-    MW ==> MTI
+    MW ==> CE
+    MW ==> GT
     MW ==> SKH
     MW ==> MGH
     SKH ==> GSH
@@ -197,6 +199,64 @@ flowchart TB
     RLV ==> DP
     MW <==> RLV
 ```
+
+### ✏️ The Correct editor (composition)
+
+One stage edits both documents of an image on one canvas. `CorrectEditor`
+(`app/gui/correct/editor.py`) owns no document, tool or history logic: it builds the parts
+below, forwards the `MainWindow` API (`load_image`, `maybe_save_changes`, `reset`,
+`navigate`, …) and turns the session's save reports into signals (`mask_saved`,
+`mask_cleared`, `skeleton_saved`; the last one is not connected, owner decision FR-03).
+
+```mermaid
+flowchart TB
+    classDef gui fill:#e0e7ff,stroke:#6366f1,stroke-width:2px
+    classDef core fill:#dcfce7,stroke:#22c55e,stroke-width:2px
+    classDef item fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+
+    CE["CorrectEditor<br/>`correct/editor.py`"]:::gui
+    VIEW["EditorCanvasView<br/>`editor_canvas.py`"]:::gui
+    ROUTER["ToolRouter<br/>`correct/tool_router.py`"]:::gui
+    CHROME["EditorChrome, CorrectControls, LayerPanel<br/>`editor_chrome.py`, `correct/controls.py`,<br/>`correct/layer_panel.py`"]:::gui
+    SESSION["CorrectSession (Qt-free)<br/>`correct/session.py`"]:::core
+    JOURNAL["EditJournal (stdlib only)<br/>`app/editing/journal.py`"]:::core
+    ML["MaskLayer + tools<br/>`correct/mask_layer.py`, `mask_tools.py`"]:::gui
+    SL["SkeletonLayer<br/>`correct/skeleton_layer.py`"]:::gui
+    MD["MaskDocument (Qt-free)<br/>PatchHistory, MaskStore I/O"]:::core
+    SD["SkeletonDocument (Qt-free)<br/>SkeletonCorrectionModel"]:::core
+    PHOTO["PhotoLayerItem<br/>area pyramid, bilinear"]:::item
+    RASTER["RasterLayerItem<br/>exact pixels, 256 px tiles"]:::item
+    SKEL["SkeletonLayerItem<br/>a line at every zoom"]:::item
+
+    CE --> VIEW
+    CE --> CHROME
+    CE --> SESSION
+    CE --> ROUTER
+    CE --> PHOTO
+    VIEW -->|input| ROUTER
+    ROUTER -->|active layer| ML
+    ROUTER -->|active layer| SL
+    SESSION --> ML
+    SESSION --> SL
+    SESSION --> JOURNAL
+    ML --> MD
+    ML --> RASTER
+    SL --> SD
+    SL --> SKEL
+```
+
+- **Layers** implement one contract, `EditLayer` (`app/gui/correct/layer.py`): open, save
+  and revert, their own undo stack, gestures, tools, visibility and opacity. The session
+  and the router see only this contract, so another layer or raster tool is one more class.
+- **The session** (`CorrectSession`) opens both layers, aggregates the unsaved state,
+  saves (the unsaved layers, mask first; with nothing unsaved, the active layer), asks the
+  one Save / Discard / Cancel question and keeps one undo timeline: `EditJournal` records
+  which layer acted, each layer keeps its own stack.
+- **Trace GT** stays a separate stage on `RasterEditorBase` (`app/gui/raster_editor_base.py`),
+  built from the same canvas parts: `EditorCanvasView`, `EditorChrome`, `PaintCanvas`,
+  `PhotoLayerItem`, `RasterLayerItem` and `editor_prompts`.
+- Every `app/gui/correct/*.py` stays at or under 450 lines (a ratchet test), so no module
+  of the stage becomes a god class.
 
 ---
 
@@ -506,40 +566,56 @@ flowchart TB
 ### Directory Structure
 
 ```
-root-mask-and-skeletons/
+Root-Mask-and-Skeletons/
 │
-├── 📱 GUI Components
-│   ├── main.py                          # Application entry point
+├── main.py                              # Application entry point
+│
+├── 📱 app/gui/                          # PyQt6 interface
 │   ├── main_window.py                   # Main window controller
-│   ├── display_controller.py            # Image display management
-│   ├── mask_tracing_interface.py        # Manual annotation tools
-│   └── image_manager.py                 # File management
+│   ├── display_controller.py            # Library canvas (single, overlay, side by side)
+│   ├── image_manager.py                 # File management
+│   ├── correct/                         # The Correct stage: mask + skeleton on one canvas
+│   │   ├── editor.py                    # CorrectEditor: composes the parts below
+│   │   ├── session.py                   # Open, save, the prompt, one undo timeline (Qt-free)
+│   │   ├── tool_router.py               # Canvas input to the active layer
+│   │   ├── layer.py                     # EditLayer contract (Qt-free)
+│   │   ├── mask_layer.py                # Mask layer (+ mask_tools.py, mask_document.py)
+│   │   ├── skeleton_layer.py            # Skeleton layer (+ skeleton_document.py)
+│   │   └── controls.py, layer_panel.py  # Rail groups, dock, polyline prompt; Layers panel
+│   ├── gt_tracing_interface.py          # Trace GT, on raster_editor_base.py
+│   ├── editor_canvas.py                 # EditorCanvasView (shared by both editors)
+│   ├── editor_chrome.py                 # Rail, dock, Enhance popover, chip, zoom cluster
+│   ├── paint_canvas.py                  # Editable mask / GT canvas over PatchHistory
+│   ├── editor_prompts.py                # Save / Discard / Cancel prompts
+│   └── canvas_layers/                   # Photo, raster and skeleton render items
 │
-├── ⚙️ Handlers
+├── ⚙️ app/handlers/
 │   ├── skeleton_handler.py              # Skeleton operations coordinator
 │   ├── mask_generation_handler.py       # Mask generation coordinator
-│   ├── generate_skeleton_handler.py     # Pix2Pix subprocess manager
-│   └── root_length_inference_handler.py # Morphometry calculator
+│   └── generate_skeleton_handler.py     # Skeleton generation run
 │
-├── 🤖 ML Models
-│   ├── mask_model/
-│   │   └── model.py                     # ResNetSkeleton implementation
-│   ├── models/                          # Pix2Pix network definitions
-│   ├── data/                            # Dataset loaders
-│   └── util/                            # Utility functions
+├── 🤖 app/inference/, app/mask_model/
+│   ├── inference/skeleton_inference.py  # Pix2Pix skeleton inference
+│   ├── inference/mask_inference.py      # Mask inference
+│   ├── inference/metrics.py             # Length and area primitives
+│   ├── inference/root_length_inference_handler.py  # Morphometry calculator
+│   └── mask_model/model.py              # Mask segmentation network
 │
-├── 📊 Visualization
-│   ├── root_length_visulization.py      # Qt-Dash integration
-│   ├── dash_app.py                      # Dash application
-│   └── data_processor.py                # Data processing pipeline
+├── 🧮 app/imaging/pyramid.py            # Image pyramid of smooth zoom (Qt-free)
+├── ↩️ app/editing/                      # Undo history and the cross-layer journal (stdlib)
 │
-└── 📤 Output Artifacts
-    ├── mask/                             # Generated binary masks
-    ├── output/skeletonizer/              # Pix2Pix results
-    │   └── test_latest/
-    │       ├── images/*_fake.png        # Skeleton images
-    │       └── index.html                # Results viewer
-    └── root_lengths.csv                  # Computed metrics
+├── 📊 app/visualization/, app/data_processing/
+│   ├── visualization/root_length_visulization.py  # Qt-Dash integration
+│   ├── visualization/dash_app.py        # Dash application
+│   └── data_processing/data_processor.py  # Data processing pipeline
+│
+└── 📤 <project>/                        # Outputs, next to the images
+    ├── mask/<stem>.png                  # Masks (generated, or corrected in Correct)
+    ├── mask/root_areas.csv              # Root area per mask
+    ├── skeletons/<stem>_fake.png        # Generated skeletons
+    ├── skeletons/root_lengths.csv       # Root length per skeleton
+    ├── skeleton_corrections/<stem>_skeleton.png  # Skeletons corrected in Correct
+    └── gt/                              # Ground truth (Trace GT)
 ```
 
 ### Runtime Artifacts
@@ -547,8 +623,9 @@ root-mask-and-skeletons/
 | Artifact Type | Location | Format | Description |
 |--------------|----------|--------|-------------|
 | **Input Images** | User specified | PNG/JPG | Original root images |
-| **Binary Masks** | `mask/*.png` | 8-bit PNG | Segmentation masks |
+| **Binary Masks** | `mask/*.png` | 8-bit PNG (generated), RGBA PNG (corrected) | Segmentation masks |
 | **Skeleton Images** | `*_fake.png` | RGB PNG | Skeletonized roots |
+| **Corrected Skeletons** | `skeleton_corrections/*_skeleton.png` | 8-bit PNG | Skeletons corrected in *Correct* (not measured) |
 | **Metrics CSV** | `root_lengths.csv` | CSV | Morphometric data |
 | **HTML Reports** | `index.html` | HTML | Visual results browser |
 | **Dash Server** | `localhost:8050` | Web | Interactive dashboard |
@@ -719,6 +796,6 @@ class MaskGenerationHandler(QObject):
 
 ---
 
-*Last Updated: September 2025*
-*Version: 2.0.0*
-*Architecture Document Revision: 3.1*
+*Last Updated: September 2026 (the Correct stage: editor node, composition, file tree)*
+*Version: 3.0.0*
+*Architecture Document Revision: 3.2*

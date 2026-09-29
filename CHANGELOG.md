@@ -11,10 +11,24 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
-Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-28): a
-161-finding audit implemented by per-area packages, then integrated and reviewed.
+Two passes, not yet released:
+
+- **Unified Correct editor** (branch `feat/unified-correct-editor`, 2026-09-29; spec
+  `docs/superpowers/specs/2026-09-29-unified-correct-editor-design.md`): one **Correct**
+  stage replaces *Correct Mask* and *Correct Skeleton*, and the photo stays smooth at every
+  zoom on every canvas. Entries that name *Correct Mask* or *Correct Skeleton* describe
+  those stages before the merge; their fixes carry over to the mask and skeleton layers of
+  *Correct*.
+- **Optimization, UI-error and FAIR pass** (branch `feat/ui-perf-refinement`, 2026-09-28):
+  a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- **Discard reverts the mask**: answering *Discard* puts the mask back to its saved file.
+  The mask editor used to mark the edits as saved but leave them on screen.
+- Undoing back to the saved mask reads as saved again (no unsaved-changes prompt for a
+  mask with no net change).
+- Enhance on a JPEG with an EXIF orientation tag no longer shows the photo rotated against
+  the mask: the photo and Enhance share one decode that ignores the tag, as Qt does.
 - **Generate no longer overwrites hand-corrected masks**: when `mask/` already has
   masks, a dialog offers "Keep existing masks (generate missing only)" (default),
   "Overwrite all" (counts the hand-corrected ones) or Cancel.
@@ -39,6 +53,24 @@ Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-
   metrics bar elides long image names instead of forcing a 1058 px minimum window width.
 
 ### Performance
+- Correct decodes an image once for the photo, Enhance and the zoom pyramid, and switching
+  between the mask and the skeleton reads no file and keeps the view (switching between the
+  two old stages cost 13-20 ms plus a re-fit).
+- Mask strokes on OpenGL cost the same at any image size: a stroke re-uploads only the
+  256 px tiles it touched (stroke frame at 6000 x 4000: 19.5-22.2 ms -> 0.7-1.8 ms).
+- Opening a mask builds its canvas 14-21x faster (640 x 480: 2.8-4.2 ms -> 0.2 ms;
+  2048 x 1536: 29-33 ms -> 1.5 ms).
+- Skeleton edits re-thin only the edited window, bit-identical to re-thinning the whole
+  image (dense 2048 x 1536 stress skeleton: 26.6-27.3 ms -> 0.7 ms per edit).
+- Skeleton endpoint markers are cached and drawn only while the skeleton layer is active
+  (191 markers: 7.8 ms -> 0.13 ms per repaint); a dense skeleton at high zoom extracts its
+  line segments per 256 px tile, at most 4 ms per frame (extracting a whole dense 2048
+  frame took 334 ms).
+- scikit-image is no longer imported at startup (`import app.gui.main_window` about
+  200 ms faster, from 402 ms); a background prewarm loads it once the window shows, so the
+  first Correct open does not wait for it either.
+- Library zoom on OpenGL: 2.8-7.0 ms -> 0.6-0.95 ms per frame (the view no longer
+  re-renders a cached background at every zoom step).
 - Cold start to first window 4.1 s -> 0.6 s: no torch, CUDA, Dash or model load on the
   startup path.
 - 46k-image library: view-mode switch 2.0 s -> 27 ms, entering/leaving Correct Mask
@@ -65,7 +97,7 @@ Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-
 - CI runs the tests on Windows as well as Linux, builds and inspects the wheel, and
   validates `CITATION.cff`.
 - Interface: responsive top bar (compact below the full width), one status line with the
-  real device and task state, task progress with counts, ETA and Cancel, Alt+1..7 stage
+  real device and task state, task progress with counts, ETA and Cancel, Alt+1..6 stage
   keys, a generated F1 shortcut sheet, an About dialog (version, commit, model checksums,
   citation), measured length/area in the metrics bar (read from the Measure CSVs),
   visible focus rings, AA-contrast text tokens, crisp HiDPI icons, collision-free editor
@@ -74,6 +106,47 @@ Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-
   app version, commit, model SHA-256, calibration and runtime precision.
 
 ### Changed
+- **One Correct stage** replaces *Correct Mask* and *Correct Skeleton* (seven stages become
+  six: Library, Trace GT, Generate, Correct, Measure, Visualize; `Alt+1` … `Alt+6`, Correct
+  is `Alt+4`). The mask and the skeleton of an image are drawn together on one canvas and
+  edited one at a time: `1` / `2` / `X` pick the layer (a tool key of the other layer
+  switches too), the other layer stays visible at half its opacity, a Layers panel shows
+  each layer's state and visibility, `H` hides both layers and `Shift+H` the other one.
+  One prompt names every unsaved layer, and one undo timeline covers both (`Ctrl+Z` undoes
+  the last action of either layer without switching layers). Coming back to the same
+  image keeps the zoom and position. File formats and locations do not change.
+- `Ctrl+S` in Correct saves every layer with unsaved changes, the mask first; with nothing
+  unsaved it saves the active layer, as each editor did. A layer without changes that is
+  not active is never rewritten (a model mask keeps its 8-bit greyscale file).
+- `PgDn` / `PgUp` in Correct save the unsaved layers without asking, then open the next /
+  previous image, as in Trace GT; every other way of leaving an image asks once.
+- `[` / `]` change the size of the current tool by 12 % (at least 1 px) for the brush and
+  both erasers; at the skeleton eraser's default 20 px this is still 2 px.
+- Brush and eraser rings use the layer's colour (green mask, orange skeleton); eraser rings
+  are dashed.
+- A key or click that changes the tool, the layer or the visibility in the middle of a drag
+  first ends the drag as a release there would (a mask stroke is committed, a skeleton
+  eraser drag is thinned and recorded, a Connect drag joins there); the rest of that drag
+  is ignored, and undo / redo wait until it ends. `Esc` in the middle of a mask stroke
+  keeps the stroke. (`E` pressed in the middle of a mask stroke used to erase the rest of
+  it.)
+- **Smooth zoom** on every canvas (Correct, Trace GT, Library): the photo is drawn from an
+  area-averaged pyramid with bilinear filtering, so it shows no pixel squares when zoomed
+  in and does not shimmer when zoomed out. Masks and GT tracings show their exact saved
+  pixels when magnified and thin strokes no longer vanish when zoomed out; the skeleton is
+  a line at every zoom. Zoom keys and the − / + buttons step through round percentages
+  (… 80, 100, 125, 150, 200, 300, 400 …, up to 2000 %), a right-click on the zoom readout
+  offers presets, and the wheel stays continuous. OpenGL canvases use 4x multisampling
+  (`ROOT_VIEWER_GL_SAMPLES=0` turns it off, a number sets the sample count).
+- The Library overlay draws the generated skeleton with the same layer item: soft at
+  100 % and above as before, and never broken into dashes when zoomed out.
+- Trace GT runs on the same canvas parts as Correct; its behaviour is unchanged except the
+  zoom, and a class key, `E` / `B` or `[` / `]` pressed in the middle of a GT stroke now
+  applies from the next stroke (the stroke keeps its class, tool and size).
+- Provenance records (`*.provenance.json`) list the packages the run had loaded
+  (`app/provenance.py` is unchanged). scikit-image is no longer imported at startup: a
+  background prewarm loads it once the window shows (and measuring loads it when needed),
+  so records normally still list it; one written before the prewarm finished may not.
 - `gt/classes.json` is parsed strictly: a wrong field type (for example
   `"retired": "false"` or `"id": 1.9`) is reported with the class and field it concerns
   instead of being silently coerced, and `"id": 1e999` no longer aborts the app.
@@ -93,6 +166,16 @@ Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-
   fallback; the mask model used to fail to load.
 
 ### Removed
+- The two editors the Correct stage replaced: `MaskTracingInterface`,
+  `SkeletonCorrectionInterface`, their graphics views, `MaskDrawingMixin`,
+  `CanvasPixmapItem`, `SkeletonOverlayRenderer` (replaced by `SkeletonLayerItem`) and
+  `skeleton_document.ask_unsaved` (replaced by `editor_prompts`); the unused
+  `mask_cursor_utils.py` and `app/handlers/mask_handler.py`; the hidden legacy toggle
+  buttons and `MainWindow.toggle_mask_tracing` / `toggle_skeleton_correction` (now
+  `toggle_correct`). The right-panel pages are renumbered without aliases (`Panel.DISPLAY`
+  0, `CORRECT` 1, `VISUALIZATION` 2, `GT_TRACING` 3): the keys `"mask_tracing"` and
+  `"skeleton_correction"` are rejected. The shortcut scopes "Correct Mask" and "Correct
+  Skeleton" become one scope, "Correct".
 - `MainWindow.mask_handler` and the legacy `MainWindow.loading_progress_bar` progress
   shim (handlers report through `MainWindow.feedback`).
 - `VisualizationInitWorker` / `VisualizationInitWorkerArea` and their `finished` /
@@ -102,6 +185,15 @@ Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **None from the Correct stage and the zoom work.** For the same edits, saved masks
+  (`mask/<stem>.png`, RGBA; a model mask is never rewritten unless you save it) and saved
+  skeleton corrections are pixel-identical to the two editors they replace, and no CSV
+  value changes. This is pinned by pixel goldens captured from the pre-merge editors
+  (`tests/data/correct_goldens.json`, replayed per layer and through the Correct editor);
+  four more cases from the real dataset are a pre-merge gate. Interaction changes that
+  alter what a gesture paints (a tool, layer or visibility key pressed in the middle of a
+  drag; a GT class key in the middle of a stroke) are listed under *Changed*. The
+  skeleton save keeps its known fragmentation (`docs/KNOWN_ISSUES.md` #6, Q1).
 - **Tube / Position** (`app/naming.py`, FR-15) come only from stand-alone `T<n>` /
   `L<n>` tokens of the file name. A leading field such as `PLOT12_` or `EXPT2_` is no
   longer read as the tube, and a name without separators (`T1L2_...`) now gives an
