@@ -31,31 +31,36 @@ from __future__ import annotations
 
 import plotly.graph_objects as go
 import plotly.io as pio
+from plotly.colors import sample_colorscale
+
+from app.design import tokens as _tokens
 
 # ---------------------------------------------------------------------------
-# Design tokens — keep in sync with styles.css :root
+# Design tokens — the shared, Qt-free app.design.tokens (AR-17), so the charts,
+# the desktop shell and styles.css :root read as one product.
 # ---------------------------------------------------------------------------
 
 # Dark surfaces (deep, desaturated)
-BG_0 = "#15161c"  # deepest — app behind / paper
-BG_1 = "#1b1c24"  # chrome
-BG_2 = "#21232e"  # panels / plot area
-BG_3 = "#282a37"  # raised cards / inputs
+BG_0 = _tokens.BG_0  # deepest — app behind / paper
+BG_1 = _tokens.BG_1  # chrome
+BG_2 = _tokens.BG_2  # panels / plot area
+BG_3 = _tokens.BG_3  # raised cards / inputs
 
-BORDER = "#2a2c39"
-BORDER_STRONG = "#373a4c"
+BORDER = _tokens.BORDER
+BORDER_STRONG = _tokens.BORDER_STRONG
 
-TEXT = "#eceef5"
-TEXT_MUTED = "#9498ad"
-TEXT_FAINT = "#686c82"
+TEXT = _tokens.TEXT
+TEXT_MUTED = _tokens.TEXT_MUTED
+TEXT_FAINT = _tokens.TEXT_FAINT  # AA on every surface (was #686c82, 3.0:1 on BG_2)
 
-# Brand accents
+# Brand accents. The dashboards keep the leaf-green primary while the desktop
+# shell moved to purple (tokens.ACCENT); switching is an open design decision.
 ACCENT = "#5fd6a0"  # SPROUTS leaf green (primary)
-SEL = "#b794f6"  # purple — reserved for selection / highlight
-WARN = "#e8b25e"
-INFO = "#79c0e8"
-DANGER = "#ec6a78"
-SKEL = "#f0a868"  # warm — skeleton
+SEL = _tokens.SEL  # purple — reserved for selection / highlight
+WARN = _tokens.WARN
+INFO = _tokens.INFO
+DANGER = _tokens.DANGER
+SKEL = _tokens.SKEL  # warm — skeleton
 
 # Fonts (loaded via assets/, falls back to system)
 FONT_SANS = "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif"
@@ -77,9 +82,22 @@ COLORWAY = [
     "#9aa5ff",  # periwinkle
 ]
 
-# Sequential scale for ordered data (depth profiles). Plasma reads well on dark
-# and is perceptually uniform — keep it as the ordered default.
+# Sequential scale for ordered data (depth profiles). Plasma is perceptually
+# uniform — keep it as the ordered default.
 SEQUENTIAL = "Plasma"
+
+# Plasma's dark half (deep indigo -> purple) falls to 1.0-2.9:1 against BG_2, below
+# the 3:1 WCAG 1.4.11 minimum for data marks. Marks drawn on the dark plot ground
+# therefore sample only this part of the scale (>= 3.3:1, red -> yellow).
+SEQUENTIAL_ON_DARK = (0.5, 1.0)
+# Ten discrete swatches (the faceted depth bars used ten Plasma swatches before).
+_SEQUENTIAL_SWATCHES = sample_colorscale(
+    SEQUENTIAL,
+    [
+        SEQUENTIAL_ON_DARK[0] + (SEQUENTIAL_ON_DARK[1] - SEQUENTIAL_ON_DARK[0]) * i / 9
+        for i in range(10)
+    ],
+)
 
 # Light-variant surface overrides (geometry is shared with the dark template).
 _LIGHT = {
@@ -248,3 +266,38 @@ def hover(title: str, rows: list[tuple[str, str]], *, with_extra: bool = True) -
 def color(index: int) -> str:
     """Categorical colour by series index (wraps the colorway)."""
     return COLORWAY[index % len(COLORWAY)]
+
+
+def sequential_color(fraction: float) -> str:
+    """Ordered colour for ``fraction`` in [0, 1] (e.g. relative depth), legible on dark.
+
+    Picks one of ten swatches from the dark-safe part of :data:`SEQUENTIAL`
+    (see :data:`SEQUENTIAL_ON_DARK`); values outside [0, 1] are clamped.
+    """
+    clamped = min(max(fraction, 0.0), 1.0)
+    return _SEQUENTIAL_SWATCHES[int(clamped * (len(_SEQUENTIAL_SWATCHES) - 1))]
+
+
+def rgba(hex_color: str, alpha: float) -> str:
+    """``#rrggbb`` + alpha -> ``rgba(r,g,b,a)`` for translucent fills built from tokens."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def message_figure(text: str, *, color: str = TEXT_MUTED, size: int = 20) -> go.Figure:
+    """An empty figure that only shows ``text`` centred (empty states, input hints).
+
+    Use ``color=DANGER`` for errors; the default muted tone suits hints.
+    """
+    fig = go.Figure()
+    fig.add_annotation(
+        text=text,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font=dict(size=size, color=color),
+    )
+    return fig

@@ -1,0 +1,162 @@
+"""Faceted depth profile: pure data preparation + one-pass figure assembly (PV-08, AR-15).
+
+Expected values are derived by hand from the fixture in test_viz_data_cache:
+
+    date A: tube 1 bins 10 -> {2, 4}, 20 -> {}, 30 -> {10};  tube 2 bin 20 -> {6, 8}
+            field (all tubes): 10 -> mean 3 (std sqrt 2), 20 -> 7 (sqrt 2), 30 -> 10 (one row)
+    date B: tube 1 bins 10 -> {1}, 20 -> {3};  tube 2 bin 10 -> {5}
+            field: 10 -> {1, 5} mean 3 (std sqrt 8), 20 -> {3} mean 3 (one row)
+
+Largest bar = 10 (tube 1, date A, bin 30) -> x range +-20 (10 * 1.1 rounded up to 10s);
+deepest bin = 30 -> y range [40, 0].
+"""
+
+import math
+
+import pandas as pd
+import pytest
+
+from app.config import LENGTH_CSV_HEADERS
+from app.data_processing.data_processor import DataProcessor
+from app.visualization.dash_data_cache import DataCache
+from app.visualization.faceted_profile import (
+    FacetCell,
+    FacetedProfile,
+    build_faceted_profile,
+    faceted_profile_figure,
+)
+from tests.test_viz_data_cache import write_metric_csv
+
+A = pd.Timestamp("2024-07-18")
+B = pd.Timestamp("2024-08-07")
+
+
+@pytest.fixture(scope="module")
+def cache(tmp_path_factory):
+    path = write_metric_csv(tmp_path_factory.mktemp("faceted") / "l.csv", LENGTH_CSV_HEADERS)
+    return DataCache(DataProcessor(path))
+
+
+def test_profile_cells_hold_measured_bins_and_field_means(cache):
+    profile = build_faceted_profile(cache, [1, 2])
+
+    assert profile.dates == (A, B)
+    assert profile.tubes == (1, 2)
+    tube1_a, tube2_a = profile.cells[0]
+    assert tube1_a.interval_ends == (10, 30)  # the empty L11-20 bin is not drawn
+    assert tube1_a.interval_starts == (1, 21)
+    assert tube1_a.tube_means == pytest.approx((3.0, 10.0))
+    assert tube1_a.tube_counts == (2, 1)
+    assert tube1_a.field_means == pytest.approx((3.0, 10.0))
+    assert tube1_a.field_stds == pytest.approx((math.sqrt(2), 0.0))  # single row -> 0
+    assert tube1_a.depth_fractions == pytest.approx((0.0, 1.0))  # over the L1-L30 span
+    assert tube2_a.interval_ends == (20,)
+    assert tube2_a.depth_fractions == (0.5,)  # a single bin sits mid-scale
+    tube1_b, tube2_b = profile.cells[1]
+    assert tube1_b.field_means == pytest.approx((3.0, 3.0))
+    assert tube2_b.field_stds == pytest.approx((math.sqrt(8),))
+    assert profile.max_value == pytest.approx(10.0)
+    assert profile.max_depth == 30
+
+
+def test_profile_keeps_dates_where_any_selected_tube_has_data(cache):
+    profile = build_faceted_profile(cache, [2, 3], [B, A])
+
+    assert profile.dates == (A, B)  # sorted
+    assert [cell.has_data for cell in profile.cells[0]] == [True, False]  # tube 3 unmeasured
+    assert build_faceted_profile(cache, [3]).dates == ()
+
+
+def test_figure_draws_one_panel_per_cell_with_shared_scales(cache):
+    fig = faceted_profile_figure(build_faceted_profile(cache, [1, 2]), label="Length", unit="mm")
+    layout = fig.layout
+
+    assert len(layout.shapes) == 4  # one background panel per subplot
+    assert {shape.xref for shape in layout.shapes} == {
+        "x domain",
+        "x2 domain",
+        "x3 domain",
+        "x4 domain",
+    }
+    for key in ("xaxis", "xaxis2", "xaxis3", "xaxis4"):
+        axis = layout[key]
+        assert tuple(axis.range) == (-20, 20)
+        assert list(axis.tickvals) == [-20, -10, 0, 10, 20]
+        assert list(axis.ticktext) == ["", "10", "0", "10", ""]
+        assert axis.showticklabels == (key in ("xaxis3", "xaxis4"))  # bottom row only
+    for key in ("yaxis", "yaxis2", "yaxis3", "yaxis4"):
+        assert tuple(layout[key].range) == (40, 0)
+        assert list(layout[key].tickvals) == [0, 20, 40]
+        assert list(layout[key].ticktext) == ["", "20", ""]
+    assert layout.yaxis.title.text == "Vertical Depth (cm)"
+    assert layout.height == 600
+    assert layout.barmode == "overlay"
+    titles = [a.text for a in layout.annotations]
+    assert titles == ["Tube 1", "Tube 2", "2024-07-18", "2024-08-07"]
+
+
+def test_figure_traces_follow_cells_in_row_major_order(cache):
+    fig = faceted_profile_figure(build_faceted_profile(cache, [1, 3]), label="Length", unit="mm")
+
+    kinds = [(t.name or t.mode, t.xaxis) for t in fig.data]
+    assert kinds == [
+        ("Field Avg", "x"),
+        ("Tube", "x"),
+        ("text", "x2"),  # tube 3 has no data on date A
+        ("Field Avg", "x3"),
+        ("Tube", "x3"),
+        ("text", "x4"),
+    ]
+    legend = [(t.name, t.showlegend) for t in fig.data if t.name]
+    assert legend == [("Field Avg", True), ("Tube", True), ("Field Avg", False), ("Tube", False)]
+    no_data = fig.data[2]
+    assert list(no_data.text) == ["No Data"] and no_data.hoverinfo == "skip"
+
+
+def test_figure_hover_carries_interval_and_counts(cache):
+    fig = faceted_profile_figure(build_faceted_profile(cache, [1], [A]), label="Area", unit="mm²")
+
+    field, tube = fig.data
+    assert [list(row) for row in field.customdata] == [
+        [1, 10, pytest.approx(3.0), pytest.approx(math.sqrt(2))],
+        [21, 30, pytest.approx(10.0), 0.0],
+    ]
+    assert [list(row) for row in tube.customdata] == [[1, 10, 2], [21, 30, 1]]
+    assert tube.hovertemplate.startswith("<b>Tube 1 - 2024-07-18</b>")
+    assert "Avg Area: %{x:.2f} mm²" in tube.hovertemplate
+    assert "Count: %{customdata[2]}" in tube.hovertemplate
+
+
+def _single_bar_profile(value: float) -> FacetedProfile:
+    cell = FacetCell(
+        tube=1,
+        date=A,
+        interval_ends=(10,),
+        interval_starts=(1,),
+        tube_means=(value,),
+        tube_counts=(1,),
+        field_means=(value,),
+        field_stds=(0.0,),
+        depth_fractions=(0.5,),
+    )
+    return FacetedProfile(tubes=(1,), dates=(A,), cells=((cell,),), max_value=value, max_depth=10)
+
+
+@pytest.mark.parametrize(
+    "value, tickvals, ticktext",
+    [
+        # 5 * 1.1 -> +-10: a 10-step would label only "0" (outer ticks are hidden)
+        (5.0, [-10, -5, 0, 5, 10], ["", "5", "0", "5", ""]),
+        # 250 * 1.1 -> +-280: a 10-step would crowd 57 ticks into each panel
+        (
+            250.0,
+            list(range(-250, 251, 50)),
+            ["", "200", "150", "100", "50", "0"] + ["50", "100", "150", "200", ""],
+        ),
+    ],
+)
+def test_x_ticks_keep_a_readable_scale(value, tickvals, ticktext):
+    axis = faceted_profile_figure(_single_bar_profile(value)).layout.xaxis
+
+    assert list(axis.tickvals) == tickvals
+    assert list(axis.ticktext) == ticktext
