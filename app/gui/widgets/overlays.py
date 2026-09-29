@@ -199,10 +199,6 @@ class ZoomCluster(CornerPanel):
     ``zoom_changed(float)``, ``zoom_step``, ``fit_to_view`` and ``set_zoom``.
     """
 
-    # Old editors' button steps (zoom_by); kept until they are gone. The cluster steps
-    # along the view's ZOOM_STOPS ladder instead.
-    ZOOM_IN_STEP = 1.25
-    ZOOM_OUT_STEP = 0.8
     PRESETS = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0)  # readout menu, after "Fit"
 
     def __init__(self, parent=None, *, corner: str = "br", margin: int = 14, v_margin: int = 18):

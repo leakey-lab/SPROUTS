@@ -1,14 +1,13 @@
 """PaintCanvas (C9): today's MaskDrawingMixin painting, moved onto a QImage canvas that sits
 over a PatchHistory plane (the Correct mask layer and Trace GT share it).
 
-The identity test replays the contracts scout's golden mask ops through today's live mask
-editor and through a PaintCanvas and compares plane and canvas after every op; it skips once
-the old editor is deleted (P8b), after which the pixel goldens carry the guarantee.
+The op-by-op identity with the deleted mask editor is carried by the pixel goldens
+(``tests/data/correct_goldens.json``, replayed by ``test_correct_mask_goldens.py`` and
+``test_correct_goldens.py``).
 """
 
 import os
 
-import cv2
 import numpy as np
 import pytest
 
@@ -106,117 +105,6 @@ def square_outline(w=120, h=90) -> np.ndarray:
     plane[20:60, 30:80] = 1
     plane[22:58, 32:78] = 0  # a closed 2 px outline around (32..77, 22..57)
     return plane
-
-
-# --------------------------------------------------------------------------- identity
-SYNTH_STEM = "SYNTH_T001_L001_2024.01.01_000000_001_SMM"
-
-# The contracts scout's MASK_OPS (scratch/contracts-tests/goldens/capture_goldens.py): every
-# brush size, the eraser, a closed outline filled inside and clicked outside, clear + undo,
-# undo x2 + redo, a full diagonal and a 1 px eraser line. Plain data.
-MASK_OPS: list[list] = [
-    ["brush", 1], ["stroke", [[40, 40], [90, 60]]],
-    ["brush", 2], ["stroke", [[40, 80], [120, 95], [150, 140]]],
-    ["brush", 3], ["stroke", [[200, 40], [200, 160]]],
-    ["brush", 6], ["stroke", [[260, 60], [330, 60], [330, 130]]],
-    ["brush", 9], ["stroke", [[400, 300]]],
-    ["brush", 14], ["stroke", [[500, 100], [560, 200], [600, 420]]],
-    ["brush", 25], ["stroke", [[100, 380], [180, 430]]],
-    ["eraser", 7], ["stroke", [[30, 70], [160, 120]]],
-    ["eraser", 4], ["stroke", [[200, 100]]],
-    ["brush", 3], ["stroke", [[420, 40], [520, 40], [520, 160], [420, 160], [420, 40]]],
-    ["fill"], ["click", [470, 100]],
-    ["click", [10, 470]],
-    ["brush", 5], ["clear"], ["undo"],
-    ["undo"], ["undo"], ["redo"],
-    ["brush", 11], ["stroke", [[0, 0], [639, 479]]],
-    ["eraser", 1], ["stroke", [[320, 0], [320, 479]]],
-]  # fmt: skip
-
-
-def _synthetic_project(folder, with_model_mask: bool) -> str:
-    """The scout's synthetic 640x480 photo, optionally with a model mask (8-bit grey PNG)."""
-    yy, xx = np.mgrid[0:480, 0:640]
-    photo = np.dstack([xx * 255 // 639, yy * 255 // 479, (xx + yy) * 255 // 1118]).astype(np.uint8)
-    image_path = str(folder / f"{SYNTH_STEM}.png")
-    cv2.imwrite(image_path, photo)
-    if with_model_mask:
-        mask = np.zeros((480, 640), np.uint8)
-        cv2.ellipse(mask, (200, 240), (120, 40), 30, 0, 360, 255, -1)
-        cv2.ellipse(mask, (470, 150), (60, 90), -15, 0, 360, 255, -1)
-        os.makedirs(folder / "mask", exist_ok=True)
-        cv2.imwrite(str(folder / "mask" / f"{SYNTH_STEM}.png"), mask)
-    return image_path
-
-
-def _replay_old(editor, op) -> None:
-    kind = op[0]
-    if kind in ("brush", "eraser"):
-        (editor.brush_button if kind == "brush" else editor.eraser_button).setChecked(True)
-        editor.size_slider.setValue(op[1])
-    elif kind == "fill":
-        editor.fill_button.setChecked(True)
-    elif kind in ("stroke", "click"):
-        points = [QPoint(*p) for p in (op[1] if kind == "stroke" else [op[1]])]
-        editor.begin_stroke(points[0])
-        for p in points[1:]:
-            editor.continue_stroke(p)
-        editor.end_stroke()
-    elif kind == "clear":
-        editor.clear_mask()
-    else:
-        getattr(editor, kind)()  # undo / redo
-
-
-def _replay_new(canvas, tool: dict, op) -> None:
-    kind = op[0]
-    if kind in ("brush", "eraser"):
-        tool.update(name=kind, size=op[1])
-    elif kind == "fill":
-        tool["name"] = "fill"
-    elif kind in ("stroke", "click"):
-        points = [QPoint(*p) for p in (op[1] if kind == "stroke" else [op[1]])]
-        if tool["name"] == "fill":
-            canvas.fill(points[0])
-            return
-        canvas.begin(points[0], MASK, tool["size"], erase=tool["name"] == "eraser")
-        for p in points[1:]:
-            canvas.extend(p)
-        canvas.commit()
-    elif kind == "clear":
-        canvas.clear()
-    else:
-        getattr(canvas, kind)()  # undo / redo
-
-
-@pytest.mark.parametrize("with_model_mask", [False, True], ids=["blank", "model_mask"])
-def test_golden_mask_ops_paint_what_todays_editor_paints_op_by_op(app, tmp_path, with_model_mask):
-    old_module = pytest.importorskip("app.gui.mask_tracing_interface")
-    old = old_module.MaskTracingInterface()
-    old.resize(900, 700)
-    old.load_image(_synthetic_project(tmp_path, with_model_mask))
-    assert old.edits.plane.any() == with_model_mask
-    history = PatchHistory()
-    history.reset(old.edits.plane.copy())
-    canvas = PaintCanvas(
-        history,
-        lut=old._plane_lut,
-        to_plane=old._argb_to_plane,
-        fill_source=old._fill_source,
-        on_region=lambda rect: None,
-        on_replaced=lambda: None,
-    )
-    canvas.rebuild()
-    assert np.array_equal(shown(canvas), pixmap_to_argb_array(old.mask_pixmap))
-    tool = {"name": "brush", "size": old.DEFAULT_BRUSH}
-    for i, op in enumerate(MASK_OPS):
-        _replay_old(old, op)
-        _replay_new(canvas, tool, op)
-        assert np.array_equal(history.plane, old.edits.plane), (i, op)
-        assert np.array_equal(shown(canvas), pixmap_to_argb_array(old.mask_pixmap)), (i, op)
-        assert len(history.undo_stack) == len(old.edits.undo_stack), (i, op)
-        assert len(history.redo_stack) == len(old.edits.redo_stack), (i, op)
-    old._set_clean()
 
 
 # --------------------------------------------------------------------------- rebuild

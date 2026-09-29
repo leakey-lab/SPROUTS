@@ -45,7 +45,7 @@ import logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-from PyQt6.QtCore import QCoreApplication, Qt  # noqa: E402
+from PyQt6.QtCore import QCoreApplication, QEvent, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QIcon, QPalette  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -75,9 +75,9 @@ except Exception:
 
 __all__ = ["MainWindow", "apply_stylesheet", "main", "resource_path"]
 
-# The running QApplication and main window, held at module level so they live
-# until interpreter exit (as when they were ``__main__`` globals): the shutdown
-# order of Qt / WebEngine objects stays what it has always been.
+# The running QApplication and main window, held at module level. Once the event
+# loop returns, main() deletes the window itself (see _release_window); the
+# QApplication lives until interpreter exit.
 _session: tuple[QApplication, MainWindow] | None = None
 
 
@@ -133,6 +133,19 @@ def _apply_window_icon(app: QApplication) -> None:
         logger.warning("App icon not found: %s", icon_path)
 
 
+def _release_window(window: MainWindow) -> None:
+    """Delete ``window`` and its pages now, while the QApplication still exists.
+
+    Left to the garbage collector, the window (its editor pages are in reference
+    cycles) could be destroyed after the QApplication at interpreter exit, which
+    sometimes crashed the process on its way out (access violation). By the time
+    the event loop returns, the window's closeEvent has already asked about unsaved
+    edits and stopped any running job.
+    """
+    window.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Start the SPROUTS GUI and run the event loop.
 
@@ -175,7 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     window.show()
     _session = (app, window)
     logger.info("Entering Qt event loop")
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        _release_window(window)
 
 
 if __name__ == "__main__":

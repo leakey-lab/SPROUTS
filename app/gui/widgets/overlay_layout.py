@@ -105,8 +105,13 @@ class OverlayLayout(QObject):
 
     # ------------------------------------------------------------ Qt events
     def eventFilter(self, obj, event):  # noqa: N802 - Qt override
+        host = getattr(self, "_host", None)
+        if host is None:
+            # Python's collector broke a page cycle and cleared this wrapper's attributes
+            # (sip tp_clear) while the C++ filter, owned by the host, still gets events.
+            return False
         kind = event.type()
-        if obj is self._host:
+        if obj is host:
             if kind == QEvent.Type.Resize:
                 self.relayout()
         elif kind in (QEvent.Type.Show, QEvent.Type.Hide):
@@ -123,7 +128,7 @@ class OverlayLayout(QObject):
         QTimer.singleShot(0, self._run_pending)
 
     def _run_pending(self) -> None:
-        if self._pending:
+        if getattr(self, "_pending", False):  # False too once collected (see eventFilter)
             self.relayout()
 
     # ------------------------------------------------------------ measuring
