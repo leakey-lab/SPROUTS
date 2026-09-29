@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHECKPOINTS_DIR = os.path.join(PROJECT_ROOT, "checkpoints")
 MASK_WEIGHTS_PATH = os.path.join(CHECKPOINTS_DIR, "mask_weights", "best_mask_model_V5.pth")
 SKELETONIZER_DIR = os.path.join(CHECKPOINTS_DIR, "skeletonizer")
+SKELETON_WEIGHTS_PATH = os.path.join(SKELETONIZER_DIR, "latest_net_G.pth")  # "<EPOCH>_net_G.pth"
 
 
 @dataclass(frozen=True)
@@ -59,14 +61,16 @@ class Calibration:
 CALIBRATION = Calibration()
 
 # --- Visualization servers --------------------------------------------------
+DASH_HOST = "127.0.0.1"  # loopback only: the dashboards are never exposed to the network
 DASH_LENGTH_PORT = 8050
 DASH_AREA_PORT = 8051
 
 # --- Inference / batching ---------------------------------------------------
-# Per-sample VRAM for the skeletonizer at 256x256 RGB, measured: ~5 GB / 64 ≈
-# 80 MB/sample (activations + workspace, fp16/bf16 autocast). Used to auto-size
-# the skeleton batch to the GPU instead of hardcoding 64 (which left a 16 GB
-# card at ~5 GB used).
+# Per-sample VRAM budget for the skeletonizer at 256x256 RGB. Originally
+# measured as ~5 GB / 64 = 80 MB/sample under fp16/bf16 autocast; the fp32 path
+# measures ~53 MiB/sample (audit PI-07), so 80 MB is a conservative estimate.
+# Used to auto-size the skeleton batch to the GPU instead of hardcoding 64
+# (which left a 16 GB card at ~5 GB used).
 _SKELETON_BYTES_PER_SAMPLE = 80 * 1024 * 1024
 _SKELETON_BATCH_DEFAULT = 64
 
@@ -79,6 +83,9 @@ def _auto_skeleton_batch(default: int = _SKELETON_BATCH_DEFAULT) -> int:
     pinned host transfers), rounds down to a multiple of 8, and never goes below
     ``default``. BatchNorm runs in eval() (running stats), so the skeleton output
     is invariant to batch size -- only throughput changes.
+
+    Imports torch and may create the CUDA context, so it only runs on demand
+    (see :func:`get_skeleton_batch_size`), never at import.
     """
     try:
         import torch
@@ -91,20 +98,80 @@ def _auto_skeleton_batch(default: int = _SKELETON_BATCH_DEFAULT) -> int:
         result = max(default, (est // 8) * 8)
         logger.info("Auto skeleton batch: %.1f GB free VRAM → batch=%d", free / 1024**3, result)
         return result
-    except Exception as exc:  # noqa: BLE001 -- batch sizing must never break startup
+    except Exception as exc:  # noqa: BLE001 -- batch sizing must never break a run
         logger.warning("CUDA mem query failed, using default batch=%d: %s", default, exc)
         return default
 
 
+_skeleton_batch: int | None = None
+_skeleton_batch_lock = threading.Lock()
+
+
+def get_skeleton_batch_size(refresh: bool = False) -> int:
+    """Return the auto-sized skeleton batch, computing it on first use.
+
+    The value is cached for the process. Pass ``refresh=True`` at the start of
+    an inference job to re-measure free VRAM (e.g. after the mask model has
+    been loaded), which also updates ``SKELETON_BATCH_SIZE``.
+    """
+    global _skeleton_batch
+    with _skeleton_batch_lock:
+        if refresh or _skeleton_batch is None:
+            _skeleton_batch = _auto_skeleton_batch()
+        return _skeleton_batch
+
+
+# Lazily computed module attributes (PEP 562). ``SKELETON_BATCH_SIZE`` used to be
+# computed at import, which imported torch and created a CUDA context for every
+# importer of this module (including the Qt-free GT core). It stays importable
+# (``from app.config import SKELETON_BATCH_SIZE``) but is resolved on access.
+_LAZY_ATTRIBUTES = {"SKELETON_BATCH_SIZE": get_skeleton_batch_size}
+
+
+def __getattr__(name: str) -> int:
+    try:
+        factory = _LAZY_ATTRIBUTES[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    return factory()
+
+
+def __dir__() -> list[str]:
+    return sorted([*globals(), *_LAZY_ATTRIBUTES])
+
+
 MASK_BATCH_SIZE = 16
-SKELETON_BATCH_SIZE = _auto_skeleton_batch()
 MASK_THRESHOLD = 0.5  # sigmoid threshold for binarizing the mask model output
+
+# Size (width, height) of the skeletonizer's saved output: the CROP_SIZE (256)
+# square network output stretched by 1/ASPECT_RATIO (4/3) horizontally in
+# skeleton_inference.save_image. Corrected skeletons default to the same size.
+SKELETON_OUTPUT_SIZE = (341, 256)
+
+# --- Project folder layout --------------------------------------------------
+# Folders created next to the images (see app/project_layout.py, the one place
+# that turns these into paths).
+MASK_DIRNAME = "mask"  # masks: generated and traced, <stem>.png
+SKELETONS_DIRNAME = "skeletons"  # generated skeletons, <stem>_fake.png
+SKELETON_CORRECTIONS_DIRNAME = "skeleton_corrections"  # edited, <stem>_skeleton.png
+
+# Image files the library lists and the mask generator reads (lower case;
+# compare with ``name.lower()``).
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
+
+
+def is_image_file(name: str) -> bool:
+    """True if ``name`` has one of :data:`IMAGE_EXTENSIONS` (case-insensitive)."""
+    return name.lower().endswith(IMAGE_EXTENSIONS)
+
 
 # --- Output filenames / CSV schema -----------------------------------------
 ROOT_LENGTHS_CSV = "root_lengths.csv"
 ROOT_AREAS_CSV = "root_areas.csv"
-LENGTH_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", "Length (mm)", "Error"]
-AREA_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", "Area (mm²)", "Error"]
+LENGTH_VALUE_COLUMN = "Length (mm)"
+AREA_VALUE_COLUMN = "Area (mm²)"
+LENGTH_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", LENGTH_VALUE_COLUMN, "Error"]
+AREA_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", AREA_VALUE_COLUMN, "Error"]
 
 # --- Ground-truth (GT) tracing ---------------------------------------------
 # Hand-traced multi-class ground truth, independent of every ML model in the
