@@ -130,7 +130,7 @@ matter for large images.
 
 - **Rail:** mask group (Brush B, Eraser E, Fill F) | skeleton group (Select V, Eraser E,
   Polyline P, Connect C) | Pan | Enhance. Each group's "on" colour is its layer colour; the group
-  of the inactive layer is drawn in `tokens.TEXT_FAINT` and stays clickable (clicking a tool of the
+  of the inactive layer is drawn in `tokens.TEXT_DISABLED` and stays clickable (clicking a tool of the
   other group switches layer). Smooth moves from the rail into the polyline prompt.
 - **Dock:** size of the current tool (brush size for the mask brush and eraser, eraser diameter
   for the skeleton eraser, hidden for Fill, Select, Polyline and Connect), opacity of the active
