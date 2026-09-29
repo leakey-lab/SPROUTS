@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, replace
@@ -44,6 +45,13 @@ class RegistryError(ValueError):
 
 @dataclass(frozen=True)
 class ClassDef:
+    """One GT class: its pixel ``id`` in ``gt/<stem>.png``, a stable ``key``,
+    a display ``name`` and a ``#rrggbb`` colour.
+
+    ``id`` is 1-254 for ordinary classes and 255 for Ignore (0 is background and
+    never a class). ``retired`` classes keep their id and colour reserved.
+    """
+
     id: int
     key: str
     name: str
@@ -52,11 +60,18 @@ class ClassDef:
 
     @property
     def is_ignore(self) -> bool:
+        """True for the Ignore class (key ``"ignore"``, id 255)."""
         return self.key == "ignore"
 
 
 @dataclass(frozen=True)
 class Registry:
+    """Immutable, validated list of GT classes (the content of ``gt/classes.json``).
+
+    Mutators (``add``/``update``/``retire``) return a new registry and re-check
+    every invariant; an invalid result raises ``RegistryError``.
+    """
+
     classes: tuple[ClassDef, ...]  # display order, Ignore last, retired included
 
     def active(self) -> tuple[ClassDef, ...]:
@@ -68,12 +83,14 @@ class Registry:
         return tuple(c for c in self.active() if not c.is_ignore)
 
     def by_id(self, id: int) -> ClassDef | None:
+        """The class with pixel id ``id`` (retired included), or ``None``."""
         for c in self.classes:
             if c.id == id:
                 return c
         return None
 
     def by_key(self, key: str) -> ClassDef:
+        """The class with ``key`` (retired included). Raises ``KeyError`` if absent."""
         for c in self.classes:
             if c.key == key:
                 return c
@@ -119,6 +136,7 @@ class Registry:
         return self._with_classes(classes)
 
     def to_dict(self) -> dict:
+        """The ``gt/classes.json`` document (schema version 1), classes in display order."""
         return {
             "version": 1,
             "classes": [
@@ -137,36 +155,22 @@ class Registry:
     def from_dict(cls, data: dict) -> Registry:
         """Parse and validate the JSON of spec §2. Ignore is moved last if needed.
 
-        Any malformed input (wrong JSON shape included) raises ``RegistryError``.
+        Any malformed input (wrong JSON shape or field type included) raises
+        ``RegistryError``; values are never coerced (``"retired": "false"`` is an
+        error, not a retired class).
         """
         if not isinstance(data, dict):
             raise RegistryError(f"Registry must be a JSON object, got {type(data).__name__}")
-        if data.get("version") != 1:
-            raise RegistryError(f"Unsupported registry version: {data.get('version')!r}")
+        version = data.get("version")
+        if isinstance(version, bool) or version != 1:
+            raise RegistryError(f"Unsupported registry version: {version!r}")
         try:
             raw_classes = data["classes"]
         except KeyError as exc:
             raise RegistryError("Registry data missing 'classes'") from exc
         if not isinstance(raw_classes, list):
             raise RegistryError(f"'classes' must be a list, got {type(raw_classes).__name__}")
-        for item in raw_classes:
-            if not isinstance(item, dict):
-                raise RegistryError(
-                    f"Each class entry must be a JSON object, got {type(item).__name__}"
-                )
-        try:
-            parsed = tuple(
-                ClassDef(
-                    id=int(item["id"]),
-                    key=str(item["key"]),
-                    name=str(item["name"]),
-                    color=str(item["color"]),
-                    retired=bool(item.get("retired", False)),
-                )
-                for item in raw_classes
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RegistryError(f"Malformed class entry: {exc}") from exc
+        parsed = tuple(_parse_class(index, item) for index, item in enumerate(raw_classes))
 
         non_ignore = tuple(c for c in parsed if not c.is_ignore)
         ignore = tuple(c for c in parsed if c.is_ignore)
@@ -177,6 +181,51 @@ class Registry:
     def _with_classes(self, classes: tuple[ClassDef, ...]) -> Registry:
         _validate_classes(classes)
         return Registry(classes=classes)
+
+
+_REQUIRED_FIELDS = ("id", "key", "name", "color")
+
+
+def _parse_class(index: int, item: object) -> ClassDef:
+    """Build one ``ClassDef`` from ``classes[index]`` with strict JSON types.
+
+    Raises ``RegistryError`` naming the entry and field (``classes[2].id``).
+    """
+    where = f"classes[{index}]"
+    if not isinstance(item, dict):
+        raise RegistryError(f"{where} must be a JSON object, got {type(item).__name__}")
+    missing = [name for name in _REQUIRED_FIELDS if name not in item]
+    if missing:
+        raise RegistryError(f"{where} is missing {', '.join(repr(name) for name in missing)}")
+    return ClassDef(
+        id=_json_int(item["id"], f"{where}.id"),
+        key=_json_str(item["key"], f"{where}.key"),
+        name=_json_str(item["name"], f"{where}.name"),
+        color=_json_str(item["color"], f"{where}.color"),
+        retired=_json_bool(item.get("retired", False), f"{where}.retired"),
+    )
+
+
+def _json_int(value: object, where: str) -> int:
+    """A JSON integer. An integral float (``1.0``) is accepted; a bool, a
+    fractional or non-finite number, or any other type is not."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    raise RegistryError(f"{where} must be an integer, got {value!r}")
+
+
+def _json_str(value: object, where: str) -> str:
+    if not isinstance(value, str):
+        raise RegistryError(f"{where} must be a string, got {value!r}")
+    return value
+
+
+def _json_bool(value: object, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise RegistryError(f"{where} must be true or false, got {value!r}")
+    return value
 
 
 def _validate_classes(classes: tuple[ClassDef, ...]) -> None:
@@ -248,6 +297,7 @@ def default_registry() -> Registry:
 
 
 def registry_path(project_dir: str) -> str:
+    """``<project_dir>/gt/classes.json`` (the file may not exist yet)."""
     return os.path.join(project_dir, GT_DIRNAME, GT_CLASSES_FILENAME)
 
 

@@ -9,6 +9,8 @@ Covers the default registry, the ``to_dict``/``from_dict`` round trip, every
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.gt.registry import (
@@ -268,6 +270,83 @@ def test_load_registry_non_utf8_raises_registry_error(tmp_path):
     (tmp_path / "gt" / "classes.json").write_bytes(b"\xff\xfe\x00\x81 not utf-8")
     with pytest.raises(RegistryError):
         load_registry(str(tmp_path))
+
+
+# --- strict field types (RB-09): a hand-edited classes.json is never coerced ---
+_IGNORE_ENTRY = (
+    '{"id": 255, "key": "ignore", "name": "Ignore", "color": "#8a8f98", "retired": false}'
+)
+
+
+def _registry_text(version: str = "1", **raw_fields: str) -> str:
+    """classes.json text for Root + Ignore, with raw JSON values replacing Root's fields."""
+    fields = {"id": "1", "key": '"root"', "name": '"Root"', "color": '"#5fd6a0"'}
+    fields.update(raw_fields)
+    root = ", ".join(f'"{name}": {value}' for name, value in fields.items())
+    return f'{{"version": {version}, "classes": [{{{root}}}, {_IGNORE_ENTRY}]}}'
+
+
+def _load_text(tmp_path, text: str):
+    (tmp_path / "gt").mkdir()
+    (tmp_path / "gt" / "classes.json").write_text(text, encoding="utf-8")
+    return load_registry(str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "field,raw",
+    [
+        ("id", "1e999"),  # json -> float('inf'): int() raised OverflowError
+        ("id", "Infinity"),
+        ("id", "-Infinity"),
+        ("id", "NaN"),
+        ("id", "1.9"),  # was silently truncated to 1
+        ("id", "true"),  # was accepted as id 1
+        ("id", '"1"'),
+        ("id", "null"),
+        ("key", "null"),
+        ("key", "7"),
+        ("name", "null"),  # was accepted as the name 'None'
+        ("name", "7"),
+        ("color", "null"),
+        ("color", "16777215"),
+        ("retired", '"false"'),  # was accepted as retired=True
+        ("retired", "0"),
+        ("retired", "1"),
+        ("retired", "null"),
+    ],
+)
+def test_load_registry_rejects_wrong_field_type_naming_the_field(tmp_path, field, raw):
+    with pytest.raises(RegistryError, match=re.escape(f"classes[0].{field}")):
+        _load_text(tmp_path, _registry_text(**{field: raw}))
+
+
+def test_load_registry_names_the_missing_field_and_its_class(tmp_path):
+    text = _registry_text().replace('"id": 1, ', "")
+    with pytest.raises(RegistryError, match=r"classes\[0\].*'id'"):
+        _load_text(tmp_path, text)
+
+
+@pytest.mark.parametrize("version", ["true", '"1"', "1.5", "null"])
+def test_load_registry_rejects_a_version_that_is_not_the_integer_1(tmp_path, version):
+    with pytest.raises(RegistryError, match="version"):
+        _load_text(tmp_path, _registry_text(version=version))
+
+
+def test_load_registry_accepts_integral_float_id_as_int(tmp_path):
+    reg = _load_text(tmp_path, _registry_text(id="1.0"))
+    root = reg.by_key("root")
+    assert root.id == 1 and type(root.id) is int
+
+
+def test_load_registry_defaults_missing_retired_to_false(tmp_path):
+    reg = _load_text(tmp_path, _registry_text())  # Root has no "retired" field
+    assert reg.by_key("root").retired is False
+
+
+def test_load_registry_keeps_an_explicit_retired_true(tmp_path):
+    reg = _load_text(tmp_path, _registry_text(retired="true"))
+    assert reg.by_key("root").retired is True
+    assert "root" not in [c.key for c in reg.active()]
 
 
 def test_save_registry_failure_leaves_no_tmp_file(tmp_path, monkeypatch):

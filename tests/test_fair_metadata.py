@@ -1,0 +1,91 @@
+"""Citation and release metadata stay in step with the code (FAIR4RS F1.2, F4, R1.1; FR-10, FR-01).
+
+``CITATION.cff`` (GitHub "Cite this repository", Zenodo), ``codemeta.json`` and
+``pyproject.toml`` describe the same software; ``CHANGELOG.md`` records every
+release. Each copy of a fact is checked against its single source so a version
+bump, a new author or a license decision cannot leave one file behind.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+import app
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+yaml = pytest.importorskip("yaml")
+
+ROOT = Path(__file__).resolve().parents[1]
+_LICENSE_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
+
+
+@pytest.fixture(scope="module")
+def cff() -> dict:
+    return yaml.safe_load((ROOT / "CITATION.cff").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def codemeta() -> dict:
+    return json.loads((ROOT / "codemeta.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def project() -> dict:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+
+def test_citation_cff_has_the_fields_github_needs_to_cite_it(cff):
+    assert cff["cff-version"] == "1.2.0"
+    assert cff["type"] == "software"
+    assert cff["message"].strip() and cff["title"].strip()
+    assert cff["authors"], "at least one author"
+    for author in cff["authors"]:
+        assert author.get("family-names") or author.get("name"), author
+
+
+def test_version_is_the_package_version_everywhere(cff, codemeta):
+    assert cff["version"] == codemeta["version"] == app.__version__
+
+
+def test_repository_and_name_agree_across_metadata_files(cff, codemeta, project):
+    repository = project["urls"]["Repository"]
+    assert cff["repository-code"] == codemeta["codeRepository"] == repository
+    assert codemeta["name"] == cff["title"]
+    assert codemeta["issueTracker"] == project["urls"]["Issues"]
+
+
+def test_authors_and_keywords_agree_across_metadata_files(cff, codemeta, project):
+    cff_names = [f"{a['given-names']} {a['family-names']}" for a in cff["authors"]]
+    codemeta_names = [f"{a['givenName']} {a['familyName']}" for a in codemeta["author"]]
+    assert cff_names == codemeta_names == [a["name"] for a in project["authors"]]
+    assert cff["keywords"] == codemeta["keywords"] == project["keywords"]
+
+
+def test_license_is_declared_everywhere_or_nowhere(cff, codemeta, project):
+    """The license is pending (README "License"). When a LICENSE file lands, every
+    metadata file must carry the same SPDX id; until then none may claim one."""
+    has_license_file = any((ROOT / name).is_file() for name in _LICENSE_FILES)
+    declared = {
+        "CITATION.cff": cff.get("license"),
+        "codemeta.json": codemeta.get("license", "").rsplit("/", 1)[-1] or None,
+        "pyproject.toml": project.get("license"),
+    }
+    if has_license_file:
+        assert len(set(declared.values())) == 1 and None not in declared.values(), declared
+    else:
+        assert set(declared.values()) == {None}, declared
+
+
+def test_changelog_top_release_is_the_package_version():
+    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    sections = re.findall(r"^## \[([^\]]+)\]", text, flags=re.MULTILINE)
+    assert sections[:2] == ["Unreleased", app.__version__]

@@ -1,0 +1,37 @@
+{
+  "@context": "https://w3id.org/codemeta/3.0",
+  "@type": "SoftwareSourceCode",
+  "name": "SPROUTS (Root-Mask-and-Skeletons)",
+  "alternateName": "root-mask-and-skeletons",
+  "description": "Desktop application (PyQt6 and PyTorch) for plant-root phenotyping from minirhizotron images: model-predicted root masks and skeletons with hand-correction editors, calibrated root area (mm²) and root length (mm) exported as CSV, interactive dashboards, and a multi-class ground-truth tracing tool that exports segmentation training datasets.",
+  "version": "3.0.0",
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Kinjalk",
+      "familyName": "Parth"
+    }
+  ],
+  "codeRepository": "https://github.com/leakey-lab/Root-Mask-and-Skeletons",
+  "issueTracker": "https://github.com/leakey-lab/Root-Mask-and-Skeletons/issues",
+  "readme": "https://github.com/leakey-lab/Root-Mask-and-Skeletons/blob/main/README.md",
+  "releaseNotes": "https://github.com/leakey-lab/Root-Mask-and-Skeletons/blob/main/CHANGELOG.md",
+  "programmingLanguage": {
+    "@type": "ComputerLanguage",
+    "name": "Python",
+    "version": "3.10"
+  },
+  "runtimePlatform": "Python 3.10",
+  "operatingSystem": "Microsoft Windows",
+  "applicationCategory": "Plant phenotyping / image analysis",
+  "keywords": [
+    "plant phenotyping",
+    "minirhizotron",
+    "root segmentation",
+    "skeletonization",
+    "root length",
+    "root area",
+    "deep learning",
+    "ground truth annotation"
+  ]
+}

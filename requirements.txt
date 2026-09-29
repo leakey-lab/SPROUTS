@@ -7,12 +7,13 @@
 # Dev/test tooling lives in requirements-dev.txt.
 #
 # ---------------------------------------------------------------------------
-# PyTorch (GPU): NOT pinned here on purpose. The working environment uses a
-# CUDA 12.8 build:
-#     torch==2.8.0.dev20250325+cu128
-#     torchvision==0.22.0.dev20250326+cu128
-# Install it from the matching CUDA index BEFORE the packages below, e.g.:
-#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# PyTorch: NOT pinned here on purpose. Install the build that matches your GPU
+# driver (or the CPU build) BEFORE the packages below -- see README
+# "Installation". Recommended (stable, verified on the index 2026-09-28):
+#     pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+#     (CPU only: same versions, --index-url https://download.pytorch.org/whl/cpu)
+# The results to date were produced with the nightly torch 2.8.0.dev20250325+cu128 /
+# torchvision 0.22.0.dev20250326+cu128, which is no longer downloadable.
 # Pinning torch in this file would let pip pull a CPU wheel and silently disable
 # GPU inference. Keep it managed separately.
 # ---------------------------------------------------------------------------

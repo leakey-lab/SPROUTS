@@ -38,6 +38,14 @@ class GtFileError(ValueError):
 
 @dataclass
 class Tracing:
+    """One image's GT: per-pixel class ids plus the annotator's review state.
+
+    ``ids`` is an ``(h, w)`` uint8 array (0 background, 1-254 class ids, 255
+    Ignore) at the source image's resolution. ``reviewed`` holds the keys of
+    classes checked on this image ("looked for it"), and ``file_classes`` the
+    id -> key map the file was written with.
+    """
+
     ids: np.ndarray  # (h, w) uint8
     reviewed: frozenset[str] = frozenset()
     file_classes: dict[int, str] = field(default_factory=dict)  # id -> key from the file
@@ -48,6 +56,7 @@ def _hex_to_rgb(color: str) -> list[int]:
 
 
 def gt_dir(project_dir: str) -> str:
+    """``<project_dir>/gt``: the folder holding the tracings and ``classes.json``."""
     return os.path.join(project_dir, GT_DIRNAME)
 
 
@@ -59,10 +68,19 @@ def gt_path(image_path: str) -> str:
 
 
 def empty_tracing(height: int, width: int) -> Tracing:
+    """An all-background (id 0) tracing of ``height`` x ``width`` pixels, nothing reviewed."""
     return Tracing(ids=np.zeros((height, width), dtype=np.uint8))
 
 
 def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
+    """Atomically write ``tracing`` as an 8-bit palette PNG at ``path``.
+
+    Pixel value = class id; the palette holds each registry class colour (ids
+    painted but unknown to ``registry`` get ``GT_UNKNOWN_COLOR``); background
+    (0) is the transparent entry. The ``GT_META_CHUNK`` text chunk records the
+    id -> key map and the reviewed keys. Raises ``GtFileError`` for non 2-D ids
+    and ``OSError`` if the file cannot be written (any old file is kept).
+    """
     ids = np.ascontiguousarray(tracing.ids, dtype=np.uint8)
     if ids.ndim != 2:
         raise GtFileError(f"GT ids must be 2-D, got shape {ids.shape}")

@@ -1,0 +1,87 @@
+# Model card: SPROUTS checkpoints
+
+SPROUTS runs two neural networks. Both take the **original image** as input; they are
+independent of each other (correcting a mask never changes a skeleton, see
+[Pipeline](../README.md#pipeline)). This card records what each checkpoint is, how to
+check you have the right file, and how its output is produced.
+
+## Identity and verification
+
+The registry of known weights is `app/models.py` (`MODELS`, `verify()`); the app compares
+each file with its SHA-256, logs a warning on a mismatch and keeps running (labs may use
+retrained weights). Provenance records store the digest of the weights that were used.
+
+| Key | File (under the app folder) | Size (bytes) | SHA-256 |
+|---|---|---|---|
+| `mask` | `checkpoints/mask_weights/best_mask_model_V5.pth` | 338,502,139 | `ca1f92d21609f9905bd407bd0562f8456cfff3987d1493c701a5585ee3a3a43f` |
+| `skeleton` | `checkpoints/skeletonizer/latest_net_G.pth` | 51,749,020 | `a312586ce086aa913b6823f1c99c064f9189d71f77bd575a6529ee9f6a0d2daa` |
+
+Check a file yourself:
+
+```powershell
+Get-FileHash checkpoints\mask_weights\best_mask_model_V5.pth -Algorithm SHA256   # PowerShell
+certutil -hashfile checkpoints\skeletonizer\latest_net_G.pth SHA256              # cmd
+```
+
+```bash
+sha256sum checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skeletonizer/latest_net_G.pth
+```
+
+### Where to get them
+
+- **Neither checkpoint is published** with a URL, DOI or license yet (`url`/`doi` are
+  `None` in `app/models.py`). TODO(owner): publish both as a versioned, licensed release
+  (for example Zenodo or a Hugging Face model repository), then fill in `url`/`doi`
+  there and here.
+- **Skeleton model:** the git repository tracks `checkpoints.zip` (47,935,331 bytes,
+  SHA-256 `6db9555891102e2eff148d22216b141589a28558ed8a6eb85248e4040510e037`, added
+  2024-10-18). It holds `checkpoints/skeletonizer/latest_net_G.pth` (the digest above)
+  and a stale `checkpoints/experiment_name/test_opt.txt`. Extract it at the repository
+  root to get the skeleton weights.
+- **Mask model:** not distributed anywhere; ask the maintainers. Without it, *Generate*
+  cannot produce masks and root area cannot be measured from model masks (hand-traced
+  masks still work).
+
+## Mask model (root segmentation)
+
+| | |
+|---|---|
+| Code | `app/mask_model/model.py`, class `ResNetSkeleton` (despite its name, the *mask* network); run by `app/handlers/mask_generation_handler.py` |
+| Architecture | ResNet-18 encoder (torchvision layout, no fully connected head). The stage-2, -3 and -4 features each go through three parallel dilated 3x3 convolutions (dilation 2, 4, 8) and a DualAttention block (position attention plus channel attention, fused by a 1x1 convolution). A decoder of 2x2 transposed convolutions concatenates the stage-3 and stage-2 attention features, applies dilated refinement at 1/4 and 1/2 resolution, and ends in two 1x1 convolutions and a sigmoid. |
+| Parameters | 84,558,217. The checkpoint stores the shared encoder twice (as `resnet18.*` and `layer0-4.*`), hence 338 MB. ImageNet weights are not used at inference (`pretrained=False`); every weight comes from the checkpoint. |
+| Input | The original image as RGB, resized to 480 x 640 (height x width, bilinear, antialiased), scaled to [0, 1], normalised per channel with mean (0.5514, 0.4094, 0.3140) and std (0.1299, 0.1085, 0.0914) (R, G, B; constants in `mask_generation_handler.py`). |
+| Output | One 480 x 640 probability map. Pixels with probability `> MASK_THRESHOLD` (0.5, `app/config.py`) are root. Saved as `mask/<stem>.png`, 8-bit grayscale, values 0/255, always 640 x 480 whatever the input size (see `docs/DATA_DICTIONARY.md`). |
+| Precision | fp32, no autocast. On CUDA the runtime (`app/inference/runtime.py`) may enable cuDNN autotuning, TF32 and the channels-last memory format; outputs can then differ by a few pixels between runs and from CPU (see Known limits). |
+| Training data | TODO(owner): not documented in the repository. |
+
+## Skeleton model (skeletonizer)
+
+| | |
+|---|---|
+| Code | `app/inference/skeleton_inference.py`, class `EnhancedResnetGenerator`, loaded by `SkeletonModel` |
+| Architecture | Pix2Pix-style ResNet generator: 7x7 convolution (64 channels), two stride-2 dilated convolution blocks (dilation 1, 2, 4, with residual shortcuts) to 256 channels, nine residual blocks (reflection padding, BatchNorm, dropout layers inactive at inference) with one squeeze-and-excitation layer after the fifth, two 3x3 transposed convolutions back to 64 channels, and a 7x7 convolution to 3 channels with tanh. |
+| Parameters | 12,909,443 (`norm="batch"`, `use_dropout=True`, `n_blocks=9`: the checkpoint loads with every key matched). |
+| Input | The original image (not the mask) as RGB, resized to 256 x 256 (bicubic), normalised to [-1, 1] (mean 0.5, std 0.5 per channel). |
+| Output | A 3 x 256 x 256 image in [-1, 1], mapped to 0-255 and resized (bicubic) to 341 x 256 (width x height, aspect ratio 3/4 as in the validated pipeline). Saved as `skeletons/<stem>_fake.png` (RGB). |
+| Measurement | Not part of the model: `app/inference/metrics.py` reads the PNG as grayscale, applies an Otsu threshold (inverted if the foreground is the majority) and `skimage.morphology.skeletonize`, then measures the 1-pixel skeleton's arc length. |
+| Precision | fp32, no autocast (mixed precision visibly changes the generator's output). Same CUDA runtime caveats as the mask model. |
+| Training data | TODO(owner): not documented in the repository. |
+
+`checkpoints/experiment_name/test_opt.txt` is left over from the original pix2pix test
+run (dataroot `D:/2024 EF image data`). It says `netG: resnet_9blocks`,
+`norm: instance` and `aspect_ratio: 1.0`; the code, which is authoritative, uses the
+enhanced generator with batch normalisation and aspect ratio 3/4.
+
+## Known limits
+
+- **Fixed geometry.** Masks are always 640 x 480 and skeletons 341 x 256. Length and
+  area are calibrated from the camera field of view (18 x 13 mm, `app/config.py`)
+  mapped onto the actual output resolution, so they are valid for images of that field
+  of view; a camera with a different field of view needs `Calibration` changed.
+- **Domain.** Behaviour on other cameras, soils, crops or lighting is untested.
+- **GPU reproducibility.** Depending on the runtime settings (cuDNN autotuning, TF32),
+  repeated GPU runs are not bit-identical. In a 2026-09-28 audit of 12 images, 18 of 24
+  output files differed between two identical runs and one image's CSV values moved
+  (length 60.75 vs 60.77 mm, area 126.62 vs 126.63 mm²); strict fp32 on CUDA matched CPU.
+- **Two independent predictions.** Skeletons are not derived from masks, so the two can
+  disagree for the same image; hand corrections apply to one output only.

@@ -1,0 +1,249 @@
+# Data dictionary
+
+Every file SPROUTS writes, what each column or pixel means, its unit and type, how
+failures are encoded, and how to open it. Headers and formats below are contracts:
+`LENGTH_CSV_HEADERS` / `AREA_CSV_HEADERS` in `app/config.py` are pinned by the test suite.
+For the models that produce masks and skeletons see [`docs/MODELS.md`](MODELS.md).
+
+## Project folder
+
+SPROUTS works on one folder of images (the *project*) and writes next to it:
+
+```
+<project>/
+  <stem>.jpg | .jpeg | .png               original images (never modified)
+  mask/<stem>.png                         root masks: model-generated or hand-traced
+  mask/root_areas.csv                     root area per mask
+  skeletons/<stem>_fake.png               model-predicted skeletons
+  skeletons/root_lengths.csv              root length per skeleton
+  skeleton_corrections/<stem>_skeleton.png   hand-corrected skeletons
+  gt/<stem>.png, gt/classes.json          multi-class ground truth (Trace GT)
+```
+
+`<stem>` is the image file name without its extension. Older projects may have skeletons
+in `output/skeletonizer/test_latest/images/` or masks in `output/mask/`; Measure still
+finds them there.
+
+## File-name convention
+
+Minirhizotron captures are named
+
+```
+<field>[camN]_T<tube>_L<position>_<YYYY.MM.DD>_<HHMMSS>_<anything>
+e.g. 24EFCAM1_T001_L045_2024.07.18_111618_001_SMM
+```
+
+| Part | Meaning | Parsed as |
+|---|---|---|
+| `<field>` | project/field prefix (a trailing `camN` camera tag is dropped) | text |
+| `T<tube>` | minirhizotron tube number | integer (`T001` -> 1) |
+| `L<position>` | imaging position (location) along the tube | integer (`L045` -> 45) |
+| `YYYY.MM.DD` | capture date (camera clock) | text, dots kept |
+| `HHMMSS` | capture time (camera clock, local, no time zone) | text `HH:MM:SS` |
+
+The parser is `app/naming.py`. Tube and position are read only from stand-alone tokens
+(delimited by the start or end of the name or by a character that is not a letter or
+digit), so a prefix such as `PLOT12_` is not taken for tube 12. A part that is missing
+is left empty. Rows whose name has no tube, position or date cannot be placed on the
+dashboards.
+
+## Metric CSVs
+
+| File | One row per | Written by |
+|---|---|---|
+| `skeletons/root_lengths.csv` | `skeletons/*_fake.png` file | Measure > Root length |
+| `mask/root_areas.csv` | `mask/*.png` file (model or hand-traced) | Measure > Root area |
+
+Each run rewrites the whole file. Rows are sorted by `Tube`, then `Date`, `Time` and
+`Position`; rows without a tube come last.
+
+### Columns
+
+| Column | Type | Unit | Meaning |
+|---|---|---|---|
+| `Image` | text | | Image stem: the skeleton file name without `_fake.png`, or the mask file name without `.png` |
+| `Tube` | integer | | Tube number from the file name; empty if absent or if the row failed |
+| `Position` | integer | | Position along the tube; empty if absent or if the row failed |
+| `Date` | text `YYYY.MM.DD` | | Capture date from the file name (dots, not ISO 8601 dashes); empty if absent or failed |
+| `Time` | text `HH:MM:SS` | | Capture time from the file name, local camera time without time zone; empty if absent or failed |
+| `Length (mm)` | decimal, 2 places | mm | Total root length in the image (`root_lengths.csv` only) |
+| `Area (mm²)` | decimal, 2 places | mm² | Total root area in the image (`root_areas.csv` only) |
+| `Error` | text | | Empty on success; otherwise the reason the image could not be measured |
+
+### Zero versus failure
+
+A failed image is written with value `0` **and** a non-empty `Error`; its `Tube`,
+`Position`, `Date` and `Time` are empty. A successful measurement of an image without
+roots is `0.0` with an empty `Error`. Zero is common (most images of young or sparse
+root systems contain no root), so always filter on `Error` before analysing values:
+
+```python
+import pandas as pd
+df = pd.read_csv("skeletons/root_lengths.csv", encoding="utf-8")
+measured = df[df["Error"].isna()]      # pandas reads an empty Error as NaN
+```
+
+### How values are computed (`app/inference/metrics.py`)
+
+Calibration: the camera field of view is 18 mm x 13 mm (`app/config.py::Calibration`),
+mapped onto the actual resolution of the file being measured: `mm_per_px_x = 18 / width`,
+`mm_per_px_y = 13 / height`.
+
+- **Length.** The skeleton PNG is read as grayscale, binarised with Otsu's threshold
+  (inverted if the foreground covers more than half the image) and thinned with
+  `skimage.morphology.skeletonize`. Length is the arc length of the 1-pixel skeleton over
+  its 8-connected neighbour pairs: horizontal steps cost `mm_per_px_x`, vertical steps
+  `mm_per_px_y`, diagonal steps the diagonal `sqrt(mm_per_px_x² + mm_per_px_y²)`.
+  Model skeletons are 341 x 256, i.e. 0.0528 x 0.0508 mm per pixel.
+- **Area.** The mask PNG is read as grayscale; pixels above 127 are root. Area is the
+  root-pixel count times `mm_per_px_x * mm_per_px_y`; a full 640 x 480 mask is 234 mm².
+- Values are rounded to 2 decimal places.
+
+Skeletons are predicted from the original images, not from the masks: correcting a mask
+changes `Area (mm²)` only. Corrected skeletons (`skeleton_corrections/`) are not read by
+Measure.
+
+### Encoding
+
+UTF-8 without byte-order mark, comma-separated, header row, `\r\n` line endings, minimal
+quoting (a field is quoted only if it contains a comma, quote or line break). The `²` in
+`Area (mm²)` is two bytes in UTF-8; opening the file by double-click in Excel on Windows
+shows `Area (mmÂ²)`. Import it instead: *Data > From Text/CSV*, *File origin: 65001:
+Unicode (UTF-8)*. In R: `read.csv(path, fileEncoding = "UTF-8", check.names = FALSE)`.
+
+## Masks (`mask/<stem>.png`)
+
+Both kinds share the folder and the name; Measure treats them alike.
+
+| Origin | PNG mode | Size | Root | Background |
+|---|---|---|---|---|
+| *Generate* (mask model) | 8-bit grayscale (`L`) | always 640 x 480 | 255 | 0 |
+| *Correct Mask* (hand-traced) | RGBA | the source image's size | opaque white (255, 255, 255, 255) | fully transparent (0, 0, 0, 0) |
+
+Saving an empty tracing deletes the file (the image then has no mask). The editor also
+opens `mask/<stem>.jpg`/`.jpeg` masks, but Measure reads only `.png`. The file does not
+record its origin; mode `L` versus `RGBA` is the only practical tell. *Generate* writes
+every image's mask and replaces a hand-traced mask of the same name. An image that
+cannot be decoded gets an all-background mask, so its area reads `0.0` with an empty
+`Error`; only the log records the skipped image.
+
+## Skeletons
+
+| File | Format | Meaning |
+|---|---|---|
+| `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
+| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Hand-corrected skeleton, saved at the size of the skeleton it was edited from (341 x 256 by default) |
+
+## Ground truth (`gt/`)
+
+Hand-traced, multi-class ground truth for training segmentation models. It never reads
+or writes `mask/` or `skeletons/` and is never produced or measured by a model.
+
+### `gt/<stem>.png`
+
+8-bit palette PNG at the source image's resolution. Pixel value = class id: `0`
+background (transparent in the palette), `1`-`254` classes from `gt/classes.json`, `255`
+Ignore (excluded from training loss). The palette shows each class in its colour. A text
+chunk `sprouts_gt` holds JSON: `{"v": 1, "classes": {"<id>": "<key>", ...}, "reviewed":
+["<key>", ...]}`, the id-to-key map the file was written with and the classes the
+annotator checked on this image ("looked for it"). A saved file with nothing painted is a
+valid negative example.
+
+### `gt/classes.json`
+
+```json
+{"version": 1, "classes": [
+  {"id": 1, "key": "root", "name": "Root", "color": "#5fd6a0", "retired": false},
+  {"id": 255, "key": "ignore", "name": "Ignore", "color": "#8a8f98", "retired": false}]}
+```
+
+| Field | Type | Rule |
+|---|---|---|
+| `version` | integer | `1` |
+| `id` | integer | 1-254, unique, never reused (retired classes keep theirs); Ignore is 255 |
+| `key` | text | `^[a-z][a-z0-9_]{0,31}$`, unique, not `background` |
+| `name` | text | 1-40 characters |
+| `color` | text `#rrggbb` | unique ignoring case, retired classes included |
+| `retired` | `true`/`false` | optional, default `false`; a retired class is exported as Ignore |
+
+Exactly one class has key `ignore` and id 255; it is listed last and cannot be retired.
+Values are type-checked strictly: `"id": 1.9`, `"id": true` or `"retired": "false"` make
+the file invalid (the app then reports which class and field is wrong and turns GT saving
+off until it is fixed).
+
+## GT dataset export
+
+*Export dataset...* writes to an empty folder:
+
+| Path | Content |
+|---|---|
+| `images/<stem>.<ext>` | byte-for-byte copies of the original images |
+| `masks/<stem>.png` | 8-bit grayscale class-index mask at image resolution: `0` background, `1`..`N` the active classes in display order, `255` Ignore (also retired classes and ids unknown to the registry) |
+| `classes.json` | `{"version": 1, "ignore_index": 255, "classes": [{"id": 0, "key": "background", "name": "Background"}, {"id": 1, "key": ..., "name": ..., "color": ...}, ...]}`: the exported ids, which differ from the project's ids when classes were retired or reordered |
+| `splits/train.txt`, `splits/val.txt` | one stem per line, sorted |
+| `manifest.csv` | one row per exported image (below) |
+| `manifest.csv.provenance.json` | how the dataset was made (see [Provenance](#provenance-records)) |
+| `errors.txt` | only if some images failed: `<stem><TAB><message>` per line |
+
+`manifest.csv` columns (UTF-8, comma-separated):
+
+| Column | Meaning |
+|---|---|
+| `stem` | image stem |
+| `source_image` | absolute path of the original image when it was exported |
+| `split` | `train` or `val` |
+| `tube`, `position`, `date` | parsed from the file name as above (`date` is `YYYY.MM.DD`); empty if absent |
+| `classes_present` | `;`-separated keys of the active classes with at least one pixel |
+
+By default only images on which every active class was checked are exported. The split
+is reproducible: stems are grouped by tube (so one tube never spans train and val), the
+groups are shuffled with the recorded `seed`, and whole groups go to val until it holds
+at least `val_fraction` of the images; the last group always stays in train.
+
+## Provenance records
+
+`<output>.provenance.json` next to an output describes what produced it
+(`app/provenance.py`, schema `sprouts-provenance/1`). The GT export writes
+`manifest.csv.provenance.json`.
+
+| Key | Content |
+|---|---|
+| `schema` | `sprouts-provenance/1` |
+| `kind` | what was done, e.g. `gt_export` |
+| `created_utc` | ISO 8601 UTC time, e.g. `2026-09-28T22:42:02Z` |
+| `app` | `name`, `full_name`, `version` |
+| `git_commit` | commit of the code that ran (from `.git`, or `build_info.json` in the Windows app); `null` if unknown |
+| `calibration` | `fov_width_mm`, `fov_height_mm` |
+| `runtime` | Python version and implementation, OS, versions of the libraries that were loaded, and (when PyTorch was used) its CUDA/cuDNN versions and precision flags |
+| `models` | per model: `path` (relative to the app folder), `sha256`, `size` in bytes; empty for the GT export |
+| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors` |
+
+Paths in records are relative to the app or project folder so a shared record does not
+reveal user or drive names. Loaders ignore these files.
+
+## Windows app build information
+
+The Windows app (`dist/SPROUTS`) contains `_internal/build_info.json`: `name`, `version`,
+`git_commit`, `git_dirty`, `built_at` (ISO 8601 with UTC offset), `python`, `platform`
+and `packages` (torch, torchvision, PyQt6, PyInstaller versions; the torch version names
+its CUDA build, e.g. `2.8.0+cu128`).
+
+## Logs
+
+`app.log` (UTF-8, rotating) in the per-user log folder (`app/user_paths.py`; on Windows
+`%LOCALAPPDATA%\SPROUTS\Logs`). The first line of each session gives the SPROUTS version,
+Python and OS.
+
+## Open questions for the owner
+
+Listed, not implemented (each would change a published format):
+
+- an ISO 8601 `DateTime` column in the metric CSVs (today `Date` uses dots and `Time` has
+  no time zone);
+- writing a UTF-8 byte-order mark so Excel opens the CSVs correctly by double-click
+  (other tools would then see a stray character before `Image`);
+- exporting skeletons as RSML, the root-architecture exchange format (Lobet et al.
+  2015, *Plant Physiology* 167:617);
+- MIAPPE-aligned study metadata (Papoutsoglou et al. 2020, *New Phytologist* 227:260);
+- storing `source_image` in the GT manifest relative to the project folder instead of as
+  an absolute path.

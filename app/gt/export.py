@@ -3,7 +3,9 @@ Dataset export for ground-truth (GT) tracings (spec §4 / §5.4).
 
 Turns the per-image ``gt/<stem>.png`` tracings into a flat training-ready
 dataset: copied source images, remapped-id class masks, a train/val split, a
-``classes.json`` documenting the id remap, and a ``manifest.csv``. No Qt
+``classes.json`` documenting the id remap, a ``manifest.csv`` and its
+provenance record ``manifest.csv.provenance.json`` (export options including
+the split seed, counts, the source class registry; ``app.provenance``). No Qt
 dependency — the GUI progress dialog (``app/gui/export_dataset_dialog.py``)
 drives this from a ``QThread`` via ``progress_cb``.
 
@@ -21,7 +23,7 @@ import os
 import random
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 from PIL import Image
@@ -36,12 +38,15 @@ from app.gt.store import (
     present_keys,
     read_tracing,
 )
-from app.inference.metrics import parse_image_name
+from app.naming import parse_image_name
+from app.provenance import build_record, portable_path, write_sidecar
 
 logger = logging.getLogger(__name__)
 
+_MANIFEST_FILENAME = "manifest.csv"
 _MANIFEST_FIELDS = ["stem", "source_image", "split", "tube", "position", "date", "classes_present"]
 _ERRORS_FILENAME = "errors.txt"
+_PROVENANCE_KIND = "gt_export"
 # Project folders the export must never write into (the ML pipeline's outputs
 # and the GT tracings themselves). Only their names are used here: nothing in
 # them is read.
@@ -54,6 +59,15 @@ class ExportError(ValueError):
 
 @dataclass(frozen=True)
 class ExportOptions:
+    """What to export and how to split it.
+
+    ``out_dir`` must be empty or absent. ``val_fraction`` (0-1) is the target
+    share of exported images in the validation split; ``group_by_tube`` keeps
+    every image of one tube in the same split; ``only_complete`` exports only
+    images whose every active class was reviewed; ``seed`` makes the split
+    reproducible.
+    """
+
     out_dir: str
     val_fraction: float = 0.2
     group_by_tube: bool = True
@@ -63,6 +77,8 @@ class ExportOptions:
 
 @dataclass
 class ExportResult:
+    """Counts from one export; ``errors`` lists ``(stem, message)`` for skipped stems."""
+
     out_dir: str
     exported: int
     train: int
@@ -90,7 +106,7 @@ def assign_splits(
 ) -> dict[str, str]:
     """Deterministically assign each stem to "train" or "val".
 
-    Groups stems by tube number (from ``parse_image_name``) when
+    Groups stems by tube number (the ``_T<n>_`` token, ``app.naming``) when
     ``group_by_tube`` is true and the tube parses, else by stem, so a tube
     never spans both splits. Groups are sorted (for a stable starting order)
     then shuffled with ``random.Random(seed)``; groups are added to val,
@@ -99,7 +115,7 @@ def assign_splits(
     """
     groups: dict[str, list[str]] = {}
     for stem in stems:
-        tube = parse_image_name(stem).get("tube_number") if group_by_tube else None
+        tube = parse_image_name(stem).tube if group_by_tube else None
         key = f"tube:{tube}" if tube is not None else f"stem:{stem}"
         groups.setdefault(key, []).append(stem)
     order = sorted(groups)
@@ -142,6 +158,44 @@ def _write_split_file(path: str, stems: list[str]) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         for stem in stems:
             fh.write(stem + "\n")
+
+
+def _write_provenance(
+    manifest_path: str,
+    project_dir: str,
+    n_images: int,
+    registry: Registry,
+    options: ExportOptions,
+    result: ExportResult,
+) -> None:
+    """Record how the dataset was made next to its manifest (best effort).
+
+    Holds everything needed to audit or re-derive the split: the options (seed
+    included, ``out_dir`` left out), the counts, and the registry with its
+    pre-remap ids. Paths are portable (no user or drive names). ``models`` stays
+    empty: ground truth never comes from a model. A write failure is logged and
+    never fails an export that is otherwise complete.
+    """
+    record = build_record(
+        _PROVENANCE_KIND,
+        inputs={
+            "project": portable_path(project_dir),
+            "images": n_images,
+            "registry": registry.to_dict(),
+        },
+        parameters={k: v for k, v in asdict(options).items() if k != "out_dir"},
+        outputs={
+            "exported": result.exported,
+            "train": result.train,
+            "val": result.val,
+            "skipped_incomplete": result.skipped_incomplete,
+            "errors": len(result.errors),
+        },
+    )
+    try:
+        write_sidecar(manifest_path, record)
+    except OSError as exc:
+        logger.warning("Could not write the provenance record for %s: %s", manifest_path, exc)
 
 
 def export_dataset(
@@ -223,9 +277,9 @@ def export_dataset(
                         manifest_rows[stem] = {
                             "stem": stem,
                             "source_image": image_path,
-                            "tube": _or_blank(parsed.get("tube_number")),
-                            "position": _or_blank(parsed.get("length_position")),
-                            "date": _or_blank(parsed.get("date")),
+                            "tube": _or_blank(parsed.tube),
+                            "position": _or_blank(parsed.position),
+                            "date": _or_blank(parsed.date),
                             "classes_present": classes_present,
                         }
                         exported_stems.append(stem)
@@ -258,7 +312,8 @@ def export_dataset(
     with open(os.path.join(out_dir, "classes.json"), "w", encoding="utf-8") as fh:
         json.dump(_classes_json(registry), fh, indent=2)
 
-    with open(os.path.join(out_dir, "manifest.csv"), "w", newline="", encoding="utf-8") as fh:
+    manifest_path = os.path.join(out_dir, _MANIFEST_FILENAME)
+    with open(manifest_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=_MANIFEST_FIELDS)
         writer.writeheader()
         for stem in exported_stems:
@@ -272,9 +327,7 @@ def export_dataset(
                 # One line per error, whatever the message contains.
                 fh.write(stem + "\t" + " ".join(message.split()) + "\n")
 
-    _emit_progress(progress_cb, n, n)
-
-    return ExportResult(
+    result = ExportResult(
         out_dir=out_dir,
         exported=len(exported_stems),
         train=len(train_stems),
@@ -282,6 +335,9 @@ def export_dataset(
         skipped_incomplete=skipped_incomplete,
         errors=errors,
     )
+    _write_provenance(manifest_path, project_dir, n, registry, options, result)
+    _emit_progress(progress_cb, n, n)
+    return result
 
 
 def _or_blank(value):

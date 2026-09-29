@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import app
 from app.config import GT_IGNORE_ID
 from app.gt.export import ExportError, ExportOptions, assign_splits, export_dataset, remap_ids
 from app.gt.registry import default_registry
@@ -138,6 +139,13 @@ def test_assign_splits_zero_val_fraction_is_all_train():
     assert set(splits.values()) == {"train"}
 
 
+def test_assign_splits_groups_by_the_tube_token_not_a_project_prefix():
+    """``PLOT12_T001`` is tube 1, not 12: two tubes sharing a prefix are two groups."""
+    stems = ["PLOT12_T001_L001_2024.07.18_111618", "PLOT12_T002_L001_2024.07.18_111618"]
+    splits = assign_splits(stems, 0.5, True, seed=0)
+    assert sorted(splits.values()) == ["train", "val"]
+
+
 # --------------------------- export_dataset ----------------------------------
 
 
@@ -219,6 +227,86 @@ def test_export_output_layout(tmp_path):
     assert {row["stem"] for row in rows} == exported_stems
     for row in rows:
         assert row["split"] in ("train", "val")
+
+
+def test_export_manifest_reads_tube_and_position_tokens(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    stem = "CAL1_T014_L011_2024.07.18_111618_001_SMM"  # "CAL1" is not position 1
+    image = project / f"{stem}.png"
+    Image.new("RGB", (8, 8)).save(image)
+    registry = default_registry()
+    reviewed = frozenset(c.key for c in registry.labelled())
+    write_tracing(
+        gt_path(image), Tracing(ids=np.zeros((8, 8), np.uint8), reviewed=reviewed), registry
+    )
+
+    export_dataset(str(project), {stem: str(image)}, registry, ExportOptions(str(tmp_path / "out")))
+
+    with open(tmp_path / "out" / "manifest.csv", encoding="utf-8", newline="") as fh:
+        (row,) = list(csv.DictReader(fh))
+    assert (row["tube"], row["position"], row["date"]) == ("14", "11", "2024.07.18")
+
+
+# --------------------------- provenance sidecar --------------------------------
+
+
+def _strings(value):
+    """Every string inside a parsed JSON value."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def test_export_records_its_options_counts_and_registry_next_to_the_manifest(tmp_path):
+    project_dir, images, _write_reg, export_registry = _build_project(
+        tmp_path, incomplete_stem=_STEMS[0]
+    )
+    out_dir = tmp_path / "out"
+    options = ExportOptions(out_dir=str(out_dir), val_fraction=0.34, seed=7)
+
+    result = export_dataset(project_dir, images, export_registry, options)
+
+    sidecar = out_dir / "manifest.csv.provenance.json"
+    record = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert record["kind"] == "gt_export"
+    assert record["app"]["version"] == app.__version__
+    assert record["parameters"] == {
+        "val_fraction": 0.34,
+        "group_by_tube": True,
+        "only_complete": True,
+        "seed": 7,
+    }
+    assert record["outputs"] == {
+        "exported": 5,
+        "train": result.train,
+        "val": result.val,
+        "skipped_incomplete": 1,
+        "errors": 0,
+    }
+    assert record["inputs"]["images"] == 6
+    assert record["inputs"]["registry"] == export_registry.to_dict()  # ids before the remap
+    assert record["models"] == {}  # ground truth never comes from a model
+    assert not [s for s in _strings(record) if str(tmp_path) in s], "local paths leaked"
+
+
+def test_export_still_succeeds_when_the_provenance_file_cannot_be_written(tmp_path, monkeypatch):
+    project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
+
+    def _disk_full(output_path, record):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("app.gt.export.write_sidecar", _disk_full)
+    result = export_dataset(
+        project_dir, images, export_registry, ExportOptions(out_dir=str(tmp_path / "out"))
+    )
+    assert result.exported == 6
+    assert (tmp_path / "out" / "manifest.csv").exists()
 
 
 def test_export_non_empty_out_dir_raises(tmp_path):
