@@ -91,7 +91,14 @@ class _EyeButton(IconButton):
         )
 
     def _retip(self, shown: bool) -> None:
-        self.setToolTip(f"{'Hide' if shown else 'Show'} the {self._noun}")
+        keys = [
+            " / ".join(shortcuts.keys_for(action, shortcuts.CORRECT))
+            for action in ("toggle_layers", "toggle_reference")
+        ]
+        self.setToolTip(
+            f"{'Hide' if shown else 'Show'} the {self._noun} "
+            f"({keys[0]}: both layers, {keys[1]}: the other one)"
+        )
 
 
 def _label(text: str, css: str) -> QLabel:

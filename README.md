@@ -173,7 +173,7 @@ Generated, Not saved …): click a row to edit that layer, click its eye to hide
 | Key | Action |
 |---|---|
 | `1` / `2` / `X` | Edit the mask / the skeleton / switch between them |
-| `B` (tap) · hold `B` and scroll | Mask brush · brush size (from either layer) |
+| `B` (tap) · hold `B` and scroll | Mask brush · brush size (from either layer; it switches to the brush) |
 | `F` | Mask fill |
 | `V` · `P` · `C` | Skeleton select · polyline · connect |
 | `E` | Eraser of the active layer |
@@ -202,7 +202,9 @@ its last point.
   skeleton or to mark a model mask as checked. A layer without changes that is not active
   is never rewritten.
 - `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
-  image. If a save fails, you stay on the image and a message says why.
+  image. If a save fails, you stay on the image and a message says why. An unfinished
+  polyline is never saved: with two or more points `PgDn` / `PgUp` stay until you finish
+  it (Enter) or cancel it (Esc).
 - Every other way of leaving an image with unsaved changes (another image, another stage,
   opening a folder, closing the window) asks once and names the unsaved layers:
   **Save**, **Discard** (the unsaved layers go back to what is on disk) or **Cancel**

@@ -1,10 +1,10 @@
 """Canvas input of the Correct workspace: ``ToolRouter``, the canvas view's input sink.
 
 Pointer events go to the active layer (a hidden active layer is shown before it is
-edited). B is a hold key: hold B and scroll to resize the mask brush from either layer,
-tap B to ask for the mask brush. Esc cancels the active layer's transient state (the
-mask commits its stroke); every other key goes to the active layer (its tool's gesture
-keys: S, Enter, Delete, Backspace). Space is never consumed, so the view keeps its
+edited). B is a hold key: hold B and scroll to resize the mask brush from either layer
+(the scroll asks for the brush, so its slider shows the size), tap B to ask for it. Esc
+cancels the active layer's transient state (the mask commits its stroke); every other key
+goes to the active layer (its tool's gesture keys: S, Enter, Delete, Backspace). Space is never consumed, so the view keeps its
 hold-to-pan. A layer switch first finishes a drag in progress (the mid-gesture rule of
 ``app.gui.correct.layer``). Uses Qt only for key and modifier values.
 """
@@ -115,12 +115,17 @@ class ToolRouter:
         self._active.double_click(pos)
 
     def canvas_wheel(self, event: QWheelEvent) -> bool:
-        """While B is held the wheel sizes the mask brush (consumed); else the view scrolls."""
+        """While B is held the wheel sizes the mask brush (consumed); else the view scrolls.
+        The first notch asks for the mask brush unless the mask's sized tool is edited, so
+        the dock's slider and the ring show the size being set."""
         if not self._b_held:
             return False
         dy = event.angleDelta().y()
         if dy:
-            self._layers[MASK].step_size(1 if dy > 0 else -1)
+            mask = self._layers[MASK]
+            if not self._b_wheel_used and (self._active is not mask or mask.size_spec() is None):
+                self._on_tool_request(MASK, "brush")
+            mask.step_size(1 if dy > 0 else -1)
             self._b_wheel_used = True
         return True
 

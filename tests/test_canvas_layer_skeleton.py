@@ -523,7 +523,7 @@ def test_the_list_fallback_for_other_qreal_layouts_draws_the_same_pixels(app, mo
 
     mask = _three_curves()
     mask[5, 5] = 255  # a dot
-    item = _in_scene(SkeletonLayerItem())
+    item = _unbudgeted(_in_scene(SkeletonLayerItem()))  # a busy CPU must not split the tiles
     item.set_mask(mask)
     fast = _render(item, 4.0, (1600, 1200), hints=VIEW_HINTS)
     monkeypatch.setattr(module, "_SHARES_NUMPY_LAYOUT", {QLineF: False, QPointF: False})

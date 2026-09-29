@@ -475,10 +475,10 @@ def test_the_page_names_the_parts_mainwindow_and_the_shell_use(make_editor):
 
 RAIL_TIPS = {
     (MASK, "brush"): "Brush (B) · hold B + scroll to resize",
-    (MASK, "eraser"): "Eraser (E) · [ and ] resize",
+    (MASK, "eraser"): "Mask eraser (E) · [ and ] resize",
     (MASK, "fill"): "Fill a closed outline (F)",
     (SKELETON, "select"): "Select (V) · pick a branch, Delete removes it",
-    (SKELETON, "eraser"): "Eraser (E) · [ and ] resize",
+    (SKELETON, "eraser"): "Skeleton eraser (E) · [ and ] resize",
     (SKELETON, "polyline"): "Polyline (P) · Enter finish · Esc cancel",
     (SKELETON, "connect"): "Connect endpoints (C)",
 }
@@ -906,9 +906,9 @@ def test_the_rail_fades_the_tools_of_the_other_layer(make_editor, project):
     buttons = editor.controls.tool_buttons
 
     assert drawn_in(buttons[(MASK, "eraser")], tokens.TEXT_MUTED)
-    assert drawn_in(buttons[(SKELETON, "eraser")], tokens.TEXT_FAINT)
+    assert drawn_in(buttons[(SKELETON, "eraser")], tokens.TEXT_DISABLED)
     editor.set_active_layer(SKELETON)
-    assert drawn_in(buttons[(MASK, "eraser")], tokens.TEXT_FAINT)
+    assert drawn_in(buttons[(MASK, "eraser")], tokens.TEXT_DISABLED)
     assert drawn_in(buttons[(SKELETON, "eraser")], tokens.TEXT_MUTED)
     assert all(button.isEnabled() for button in buttons.values())
 
@@ -967,11 +967,27 @@ def test_load_skeleton_file_is_offered_only_while_the_skeleton_is_edited(make_ed
     editor = make_editor(project.a, project.folder)
     load = editor.controls.load_button
 
-    assert load.isHidden()
+    assert not load.isEnabled()
     editor.set_active_layer(SKELETON)
-    assert not load.isHidden()
+    assert load.isEnabled()
     editor.set_active_layer(MASK)
-    assert load.isHidden()
+    assert not load.isEnabled() and not load.isHidden()
+
+
+def test_the_dock_keeps_its_place_across_tools_and_layers(make_editor, project):
+    editor = make_editor(project.a, project.folder, size=(1280, 800))
+    save = editor.controls.save_button
+    places = set()
+    for key in editor.controls.tool_buttons:
+        editor.controls.tool_buttons[key].click()
+        settle(editor)
+        places.add((editor.dock.geometry().getRect(), save.mapTo(editor, QPoint(0, 0)).x()))
+    editor.controls.tool_buttons[(SKELETON, "eraser")].click()
+    editor.controls.size_sliders[SkeletonLayer.ERASER_SIZE].slider.setValue(80)  # a wider value
+    settle(editor)
+    places.add((editor.dock.geometry().getRect(), save.mapTo(editor, QPoint(0, 0)).x()))
+
+    assert len(places) == 1, places
 
 
 def test_load_skeleton_file_asks_about_the_skeleton_only_then_opens_the_file(
@@ -1008,6 +1024,25 @@ def test_a_loaded_skeleton_file_leaves_no_skeleton_step_to_undo(make_editor, pro
     editor.controls.load_button.click()  # nothing unsaved: no prompt
 
     assert raster(editor)[20].any() and editor.session.journal.undo_entries == ()
+
+
+def test_an_unreadable_skeleton_file_keeps_the_skeleton_timeline(make_editor, project, monkeypatch):
+    bad = os.path.join(project.folder, "elsewhere", "broken.png")
+    os.makedirs(os.path.dirname(bad), exist_ok=True)
+    with open(bad, "wb") as fh:
+        fh.write(b"not an image")
+    editor = make_editor(project.a, project.folder)
+    draw_line(editor)
+    assert editor.save()  # clean again, its action still in the timeline
+    notices = record(editor.notice)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (bad, ""))
+
+    editor.controls.load_button.click()
+
+    assert notices == [("Could not read skeleton broken.png", "danger")]
+    assert editor.session.journal.undo_entries == (SKELETON,)
+    editor.undo()
+    assert not raster(editor)[130].any()  # the line's undo still works
     assert not editor.undo_button.isEnabled()
 
 
@@ -1413,6 +1448,33 @@ def test_a_failed_save_reports_nothing_and_paging_stays(make_editor, project, mo
     assert editor.save() is False
 
     assert masks == [] and moved == [] and editor.has_unsaved_changes()
+
+
+def test_paging_with_a_polyline_draft_stays_and_says_how_to_end_it(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    paint(editor, (20, 100), (80, 110))
+    editor.controls.tool_buttons[(SKELETON, "polyline")].click()
+    click(editor, (40, 125))
+    click(editor, (100, 130))
+    moved, notices = record(editor.navigate_requested), record(editor.notice)
+
+    editor.navigate(1)
+
+    assert moved == [] and notices == [(editor.FINISH_LINE_FIRST, "warn")]
+    assert editor.layers[SKELETON].draft_state().points == 2
+    assert editor.has_unsaved_changes()  # nothing was saved either
+
+
+def test_opening_another_image_announces_a_dropped_polyline_draft(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    editor.controls.tool_buttons[(SKELETON, "polyline")].click()
+    click(editor, (40, 125))
+    notices = record(editor.notice)
+
+    editor.load_image(project.b, project.folder)
+
+    assert (SkeletonLayer.DRAFT_DISCARDED_NOTICE, "info") in notices
+    assert editor.layers[SKELETON].draft_state().points == 0
 
 
 def test_paging_without_edits_only_asks_for_the_image(make_editor, project):

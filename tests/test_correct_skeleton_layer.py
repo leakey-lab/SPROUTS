@@ -436,7 +436,7 @@ def test_load_file_replaces_the_skeleton_and_forgets_its_history(layer, project)
     mask = layer.document.model.mask
     assert mask[400, 30:90].all() and not mask[240].any()
     assert not layer.can_undo() and not layer.is_dirty()
-    assert layer.document.source == "loaded"
+    assert layer.document.source == "loaded" and layer.document.last_load_ok is True
 
 
 def test_an_unreadable_file_to_load_changes_nothing(layer, project):
@@ -447,6 +447,42 @@ def test_an_unreadable_file_to_load_changes_nothing(layer, project):
 
     assert layer.load_file(bad) == [Notice("Could not read skeleton broken.png", "danger")]
     assert np.array_equal(layer.document.model.mask, before)
+    assert layer.document.last_load_ok is False
+
+
+@pytest.mark.parametrize("step", ["close", "revert", "reopen", "load"])
+def test_a_polyline_draft_dropped_by_a_reload_is_announced_once(layer, host, project, step):
+    root, image = project
+    other = _write_raster(root, "elsewhere/x.png", [(30, 90, 400)])
+    actions = {
+        "close": layer.close,
+        "revert": layer.revert,
+        "reopen": lambda: layer.open(image, (W, H), root),
+        "load": lambda: layer.load_file(other),
+    }
+    layer.set_tool("polyline")
+    _click(layer, 60, 300)
+    host.calls.clear()
+
+    actions[step]()
+    actions[step]()  # nothing left to drop: no second notice
+
+    assert host.calls.count(("notify", SkeletonLayer.DRAFT_DISCARDED_NOTICE, "info")) == 1
+    assert layer.draft.points == []
+
+
+def test_an_unreadable_file_to_load_keeps_the_history_and_the_draft(layer, project):
+    root, _image = project
+    bad = os.path.join(root, "broken.png")
+    Path(bad).write_bytes(b"not an image")
+    _commit(layer, (50, 50), (200, 100))
+    _click(layer, 60, 300)
+    _click(layer, 160, 300)
+
+    layer.load_file(bad)
+
+    assert layer.can_undo() and len(layer.draft.points) == 2
+    assert layer.current_tool == "polyline"
 
 
 def test_dialog_start_is_the_generated_file(layer, host, scene, project):

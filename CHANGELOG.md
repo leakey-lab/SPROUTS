@@ -23,6 +23,10 @@ Two passes, not yet released:
   a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- Correct: a skeleton file that *Load* cannot read changes nothing; it used to forget the
+  skeleton's undo steps and drop its polyline draft.
+- The arrow keys in the Library tree keep stepping images while Correct or Trace GT is
+  open (the canvas took the keyboard focus after the first step).
 - **Discard reverts the mask**: answering *Discard* puts the mask back to its saved file.
   The mask editor used to mark the edits as saved but leave them on screen.
 - Undoing back to the saved mask reads as saved again (no unsaved-changes prompt for a
@@ -119,7 +123,21 @@ Two passes, not yet released:
   unsaved it saves the active layer, as each editor did. A layer without changes that is
   not active is never rewritten (a model mask keeps its 8-bit greyscale file).
 - `PgDn` / `PgUp` in Correct save the unsaved layers without asking, then open the next /
-  previous image, as in Trace GT; every other way of leaving an image asks once.
+  previous image, as in Trace GT; every other way of leaving an image asks once. A polyline
+  draft that could be finished (two or more points) is never saved: `PgDn` / `PgUp` then
+  stay and say "Finish the line (Enter) or cancel it (Esc) first". A draft dropped by
+  opening another image, *Discard*, *Load* or a new folder is announced ("Polyline draft
+  discarded").
+- Holding `B` and scrolling from the skeleton (or from Fill) switches to the mask brush on
+  the first notch, so the dock's slider and the ring show the size being set.
+- The rail dims the tools of the layer that is not edited more clearly, and the two erasers'
+  tooltips name their layer ("Mask eraser", "Skeleton eraser"). The dock keeps its width
+  and place across tools and layers: a tool without a size shows a disabled placeholder,
+  *Load skeleton file* is disabled (not hidden) while the mask is edited, and the size
+  readout has a fixed width.
+- Skeleton endpoint markers, the highlighted endpoint and polyline handles stop growing at
+  100 % zoom (at 1600 % a marker was a 128 px disc hiding the end of its line); below
+  100 % they shrink with the image as before. Grab distances are unchanged (image px).
 - `[` / `]` change the size of the current tool by 12 % (at least 1 px) for the brush and
   both erasers; at the skeleton eraser's default 20 px this is still 2 px.
 - Brush and eraser rings use the layer's colour (green mask, orange skeleton); eraser rings

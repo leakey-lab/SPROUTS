@@ -1062,7 +1062,10 @@ class MainWindow(QMainWindow):
         item = self.file_list.currentItem()
         name = item.data(0, USER_ROLE) if item is not None else None
         if name and name != self._shown_leaf_name:
+            browsing = self.file_list.hasFocus()  # the arrow keys keep stepping the tree
             self.on_image_selected(item)
+            if browsing:
+                self.file_list.setFocus()
 
     def _install_image_paging_shortcuts(self) -> None:
         """PgDn / PgUp (registry: Global next/previous image) open the next / previous

@@ -146,7 +146,7 @@ def test_a_b_tap_asks_for_the_mask_brush_from_either_layer():
     assert rig.requests == [(MASK, "brush")]
 
 
-def test_hold_b_and_scroll_sizes_the_mask_brush_without_a_tap():
+def test_hold_b_and_scroll_sizes_the_mask_brush_and_asks_for_it_once():
     rig = _Rig(active=SKELETON)
     rig.router.canvas_key_press(_key(Qt.Key.Key_B))
 
@@ -156,7 +156,20 @@ def test_hold_b_and_scroll_sizes_the_mask_brush_without_a_tap():
 
     assert rig.mask.calls == [("step_size", 1), ("step_size", -1)]
     assert rig.skeleton.calls == []
-    assert rig.requests == []
+    assert rig.requests == [(MASK, "brush")]  # the first notch: its slider shows the size
+
+
+@pytest.mark.parametrize(("tool", "requests"), [("brush", []), ("fill", [(MASK, "brush")])])
+def test_hold_b_and_scroll_on_the_mask_asks_for_the_brush_only_from_a_sizeless_tool(tool, requests):
+    rig = _Rig()
+    rig.mask.current_tool = tool
+    rig.router.canvas_key_press(_key(Qt.Key.Key_B))
+
+    rig.router.canvas_wheel(_wheel(120))
+    rig.router.canvas_key_release(_key(Qt.Key.Key_B, release=True))
+
+    assert rig.requests == requests
+    assert rig.mask.calls == [("step_size", 1)]
 
 
 def test_a_sideways_scroll_while_holding_b_neither_resizes_nor_cancels_the_tap():

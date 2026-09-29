@@ -438,6 +438,20 @@ def test_arrow_keys_open_the_image_they_come_to_rest_on(make_window, tmp_path):
     assert wait(lambda: same_path(editor.current_image_path, project.image(1)), 2.0)
 
 
+@pytest.mark.parametrize("stage", ["Correct", "Trace GT"])
+def test_arrow_keys_keep_browsing_the_tree_in_the_editors(make_window, tmp_path, stage):
+    window, project = in_correct(make_window, tmp_path, 0)
+    enter(window, stage)
+    editor = window._editors()[window.right_panel.currentIndex()]
+    activate(window)
+    window.file_list.setFocus()
+
+    for i in (1, 2):
+        QTest.keyClick(QApplication.focusWidget(), Qt.Key.Key_Down)
+        assert wait(lambda i=i: same_path(editor.current_image_path, project.image(i)), 2.0)
+        assert window.file_list.hasFocus()  # the canvas did not take the arrow keys
+
+
 def test_pgdn_and_pgup_on_the_canvas_save_then_open_the_next_and_previous_image(
     make_window, tmp_path
 ):

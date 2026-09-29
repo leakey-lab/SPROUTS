@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtGui import QKeyEvent
-from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene
+from PyQt6.QtWidgets import QGraphicsScene
 
 from app.gui.brush_preview import BrushPreview
 from app.gui.canvas_layers.skeleton import SkeletonLayerItem
@@ -91,8 +91,7 @@ class SkeletonLayer:
         self.item = SkeletonLayerItem()
         self.item.setZValue(self.Z)
         scene.addItem(self.item)
-        self.decorations = SkeletonDecorations(scene)
-        self.decorations.endpoints_item.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+        self.decorations = SkeletonDecorations(scene)  # markers device-cached (a blit a frame)
         self.eraser_ring = BrushPreview(scene)
         self.eraser_ring.set_style(tokens.SKEL, dashed=True)
         self.draft = PolylineDraft()
@@ -111,8 +110,7 @@ class SkeletonLayer:
         self._changed(tell=False)
 
     def _changed(self, *, tell: bool = True) -> None:
-        # Tell the host when anything it reads of this layer changed (status, dirty, history,
-        # tool, hint, draft, size): once per change, never for repeats or hover refreshes.
+        # Tell the host once per change of what it reads, never for repeats or hover frames.
         model, doc, draft = self.model, self.document, self.draft
         seen = (model.revision, model.can_undo, model.can_redo, doc.source, doc.save_error)
         seen += (self.is_dirty(), self.current_tool, self.draft_state(), self._eraser)
@@ -189,15 +187,26 @@ class SkeletonLayer:
         return self._reload(self.document.reopen)
 
     def load_file(self, path: str) -> list[Notice]:
-        """Open another skeleton file; its own history is forgotten (unreadable: no change)."""
-        return self._reload(self.document.load_file, path)
+        """Open another skeleton file (its history forgotten); unreadable: nothing changes."""
+        self.finish_gesture()
+        notices = self.document.load_file(path)
+        if self.document.last_load_ok:
+            self._drop_transient()
+            self.render_skeleton()
+        return notices
 
     def _reload(self, load: Callable, *args):
         self.finish_gesture()
-        self.cancel_transient()
+        self._drop_transient()
         notices = load(*args)
         self.render_skeleton()
         return notices
+
+    def _drop_transient(self) -> None:  # the document is replaced: a lost draft is told
+        dropped = bool(self.draft.points)
+        self.cancel_transient()
+        if dropped:
+            self.notify(self.DRAFT_DISCARDED_NOTICE, "info")
 
     def save(self) -> SaveOutcome:
         """Write the correction (a drag is finished first; a polyline draft is kept)."""
@@ -435,7 +444,7 @@ class SkeletonLayer:
         deco = self.decorations
         for item in (deco.polyline_item, deco.handles_item, deco.highlight_item):
             item.setVisible(shown)
-        deco.endpoints_item.setVisible(shown)
+        deco.set_endpoints_visible(shown)
         if not shown:
             deco.clear_connect()
             self.eraser_ring.set_visible(False)

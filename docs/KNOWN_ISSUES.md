@@ -105,6 +105,11 @@ Owner questions (science or product scope; nothing here blocks use):
 - **Q4 EXIF orientation in generation.** Generated masks come from OpenCV (EXIF applied)
   while the editors use Qt's geometry (EXIF ignored): an EXIF-rotated image would get a
   "mask size does not match" warning. None of the 40 harness images carries the tag.
+- **Q5 First frame at a new zoom on a dense 2048 px skeleton (OpenGL).** The first frame
+  after a zoom change to 200 % and the first hover frame after a polyline draft starts
+  take about 16-19 ms (spec: at most 16 ms, first frames included); steady frames take
+  about 0.7 ms. Accept the one-off frame, or profile it (level / tile texture uploads
+  versus the endpoint-marker cache) and warm those after the zoom settles.
 
 Follow-ups (not in this build):
 
@@ -125,6 +130,22 @@ Follow-ups (not in this build):
 - Keep layer opacity and visibility across app restarts (QSettings; they persist for the
   session only).
 - "Image 12 / 40" in the status chip; an optional pixel grid at 800 % and above.
+- The status chip elides a long file name in the middle, which can drop the L-number and
+  date while the polyline prompt shares its row (1280 x 800); elide the date / time part
+  first, show the tree's short label, or move the prompt off that row.
+- Grab and snap distances of the skeleton tools are image px (as before), so at 1600 %
+  an endpoint grabs from about 160 screen px while its marker is 4 px; they could scale
+  with the zoom like the markers.
+- Optionally count a polyline draft of two or more points as unsaved, so the prompt also
+  covers a tree click or a stage switch (today they drop the draft with a notice).
+- On the raster (non-OpenGL) canvas each full frame also repaints the five floating
+  panels with their drop shadows (about 1.3 ms of shadows and 1.1 ms of widgets at
+  400 %; the frame stays well inside 16 ms); a cached 9-slice shadow would save the
+  shadows' share. The OpenGL canvas, used on the owner's machine, is not affected.
+- Scripts that build an editor page and leave it and the `QApplication` to interpreter
+  shutdown can end with an access violation (about 1 in 30 runs); tear pages down first
+  (`close()`, `deleteLater()`, `sendPostedEvents(DeferredDelete)`) as the tests do. The
+  app path (`main.main`) deletes its window itself.
 - Trace GT as a one-layer client of the Correct workspace; a Trace GT Discard that
   reverts (today it marks the tracing saved and keeps it on screen, as the old mask
   editor did).

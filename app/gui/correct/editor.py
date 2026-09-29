@@ -71,6 +71,7 @@ class CorrectEditor(QWidget):
     active_layer_changed = pyqtSignal(str)
 
     EDITOR_NOUN = "mask and skeleton"
+    FINISH_LINE_FIRST = "Finish the line (Enter) or cancel it (Esc) first"
     SHORTCUT_SCOPE = shortcuts.CORRECT
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -259,8 +260,11 @@ class CorrectEditor(QWidget):
         return True
 
     def navigate(self, delta: int) -> None:
-        """PgDn / PgUp: save the unsaved layers (no prompt), then ask for the next image."""
+        """PgDn / PgUp: save the unsaved layers (no prompt), then ask for the next image. A
+        polyline draft that could be finished is never saved: the page stays and says so."""
         self._end_drag()
+        if self._skeleton.draft_state().points >= 2:
+            return self.notice.emit(self.FINISH_LINE_FIRST, "warn")
         if self.session.save_dirty().ok:  # a failed save stays (its toast says why)
             self.navigate_requested.emit(delta)
 
@@ -359,7 +363,8 @@ class CorrectEditor(QWidget):
             return
         for notice in skeleton.load_file(path):
             self.notice.emit(notice.message, notice.kind)
-        self.session.forget(SKELETON)  # its own history is gone too
+        if skeleton.document.last_load_ok:  # unreadable: nothing changed, the timeline stays
+            self.session.forget(SKELETON)  # its own history is gone too
 
     # ------------------------------------------------------------------ LayerHost
     def notify(self, message: str, kind: str = "info") -> None:

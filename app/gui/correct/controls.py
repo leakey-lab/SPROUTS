@@ -7,12 +7,15 @@ layer. What it puts on the chrome (spec sections 3.2 and 4):
 * the rail: one group of checkable tool buttons per layer, built from the layer's ``tools``
   (the mask's Brush, Eraser, Fill, then the skeleton's Select, Eraser, Polyline, Connect),
   then Pan and Enhance. One exclusive group spans both, each group checks in its layer's
-  colour, and the group of the layer that is not shown is faint yet clickable (a click asks
-  for that tool; the editor switches the layer);
+  colour, and the group of the layer that is not shown is dimmed yet clickable (a click asks
+  for that tool; the editor switches the layer); a label both layers use names its layer in
+  the tooltip ("Mask eraser", "Skeleton eraser");
 * the dock: the size of the current tool (one slider per distinct ``SizeSpec``, made the
   first time a layer shows it, in a slot at the dock's start, so the mask's brush and eraser
-  share one and the skeleton's eraser has its own), the opacity of the shown layer, Load
-  skeleton file (skeleton only), Undo, Redo, Clear and Save;
+  share one and the skeleton's eraser has its own; a disabled placeholder for a tool without
+  a size), the opacity of the shown layer, Load skeleton file (enabled for the skeleton
+  only), Undo, Redo, Clear and Save. Nothing is hidden, so the dock keeps its width and
+  place across tools and layers;
 * the polyline prompt (top centre): Finish line, Cancel and Smooth, shown while the
   skeleton is the shown layer and its Polyline draft has points;
 * the topbar's ghost button "Clear mask" / "Clear skeleton" (the shell places it).
@@ -45,10 +48,13 @@ __all__ = ["CorrectControls"]
 
 _OPACITY_FMT = "{}%"
 _LOAD_TIP = "Load skeleton file…"
+_LOAD_OFF_TIP = f"{_LOAD_TIP} (edit the skeleton to load one)"
+_NO_SIZE_TIP = "No size for this tool"
+_WIDEST_SIZE = "000 px"  # every size readout is this wide, so a new value moves nothing
 _SMOOTH_TIP = "needs 3+ points"
 # The topbar clear button for the shown layer: (text, tooltip).
 _CLEAR_TEXTS = {
-    MASK: ("Clear mask", "Clear the canvas. Undo with Ctrl+Z; Save removes the file."),
+    MASK: ("Clear mask", "Clear the mask. Undo with Ctrl+Z; Save removes the file."),
     SKELETON: ("Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
 }
 # The Smooth toggle shows its word beside the icon (the prompt reads "... Cancel (Esc) Smooth").
@@ -58,11 +64,13 @@ QToolButton#iconBtn:checked {{ color: {tokens.TEXT}; }}
 """
 
 
-def _tool_tooltip(spec: ToolSpec) -> str:
+def _tool_tooltip(spec: ToolSpec, noun: str = "") -> str:
     """``"Label (Key) · tip"``, as today's rails: a one-word label ("Brush", "Select") gets
     its tip; a label that already says what the tool does ("Fill a closed outline",
-    "Connect endpoints") stands alone."""
-    head = f"{spec.label} ({spec.key})"
+    "Connect endpoints") stands alone. ``noun`` names the layer of a label both layers use
+    ("Mask eraser (E) · ...")."""
+    label = f"{noun[:1].upper()}{noun[1:]} {spec.label.lower()}" if noun else spec.label
+    head = f"{label} ({spec.key})"
     return f"{head} · {spec.tip}" if spec.tip and " " not in spec.label else head
 
 
@@ -82,6 +90,17 @@ def _set_quietly(control: DockSlider, value: int, fmt: str) -> None:
     finally:
         slider.blockSignals(blocked)
     control.value_label.setText(fmt.format(slider.value()))
+
+
+def _steady(slider: DockSlider) -> DockSlider:
+    """``slider`` with a readout as wide as ``_WIDEST_SIZE`` whatever it shows."""
+    label = slider.value_label
+    label.ensurePolished()
+    text = label.text()
+    label.setText(_WIDEST_SIZE)
+    label.setFixedWidth(max(label.sizeHint().width(), label.minimumWidth()))
+    label.setText(text)
+    return slider
 
 
 def _smooth_toggle() -> IconButton:
@@ -150,11 +169,13 @@ class CorrectControls(QObject):
         self._tool_keys: list[tuple[str, str]] = []
         self._groups: dict[str, tuple[IconButton, ...]] = {}
         self._group_colours: dict[str, str] = {}
+        labels = [spec.label for layer in self._layers.values() for spec in layer.tools]
         for layer_id, layer in self._layers.items():
             group = []
             for spec in layer.tools:
+                noun = layer.noun if labels.count(spec.label) > 1 else ""
                 button = IconButton(
-                    spec.icon, _tool_tooltip(spec), checkable=True, on_color=layer.color
+                    spec.icon, _tool_tooltip(spec, noun), checkable=True, on_color=layer.color
                 )
                 button.setAccessibleName(f"{spec.label} ({layer.noun})")  # two Erasers
                 self._tool_group.addButton(button, len(self._tool_keys))
@@ -177,6 +198,9 @@ class CorrectControls(QObject):
         self._slot_row = QHBoxLayout(self._slot)
         self._slot_row.setContentsMargins(0, 0, 0, 0)
         self._slot_row.setSpacing(0)
+        self.no_size_slider = _steady(DockSlider("ruler", _NO_SIZE_TIP, 0, 1, 0, fmt="–"))
+        self.no_size_slider.setEnabled(False)
+        self._slot_row.addWidget(self.no_size_slider)
         dock.add_widget(self._slot)
         self.opacity_slider = DockSlider("overlay", "", 0, 100, 100, fmt=_OPACITY_FMT)
         self.opacity_slider.slider.valueChanged.connect(self._opacity_moved)
@@ -227,16 +251,17 @@ class CorrectControls(QObject):
     # ---------------------------------------------------------------------- state
     def show_layer(self, layer_id: str) -> None:
         """Show ``layer_id`` as the edited layer: its tool group in full colour and the
-        others faint (still clickable), Load for the skeleton only, the clear buttons and the
-        opacity slider named for it, and the polyline prompt only for the skeleton."""
+        others dimmed (still clickable), Load enabled for the skeleton only, the clear
+        buttons and the opacity slider named for it, the polyline prompt for the skeleton."""
         layer = self._layers[layer_id]
         for group_id, buttons in self._groups.items():
-            colour = tokens.TEXT_MUTED if group_id == layer_id else tokens.TEXT_FAINT
+            colour = tokens.TEXT_MUTED if group_id == layer_id else tokens.TEXT_DISABLED
             if self._group_colours[group_id] != colour:  # recolour only on a real switch
                 self._group_colours[group_id] = colour
                 for button in buttons:
                     button.set_colors(color=colour)
-        self.load_button.setVisible(layer_id == SKELETON)
+        self.load_button.setEnabled(layer_id == SKELETON)
+        _retip(self.load_button, _LOAD_TIP if layer_id == SKELETON else _LOAD_OFF_TIP)
         noun = layer.noun
         text, tip = _CLEAR_TEXTS.get(
             layer_id, (f"Clear {noun}", f"Clear the {noun} (Ctrl+Z undoes)")
@@ -251,8 +276,8 @@ class CorrectControls(QObject):
 
     def sync(self, layer: EditLayer) -> None:
         """Show ``layer``'s state (the shown layer's): its current tool checked, the size
-        slider of its tool's ``SizeSpec`` at ``layer.size()`` (made on first sight; none for
-        a tool without a size) and its opacity in percent. The sliders' signals are blocked
+        slider of its tool's ``SizeSpec`` at ``layer.size()`` (made on first sight; the
+        disabled placeholder for a tool without a size) and its opacity in percent. The sliders' signals are blocked
         meanwhile: it emits nothing."""
         button = self.tool_buttons.get((layer.layer_id, layer.current_tool))
         if button is not None and not button.isChecked():
@@ -263,7 +288,7 @@ class CorrectControls(QObject):
             _set_quietly(shown, layer.size(), spec.fmt)
         for slider in self.size_sliders.values():
             slider.setVisible(slider is shown)
-        self._slot.setVisible(shown is not None)
+        self.no_size_slider.setVisible(shown is None)
         _set_quietly(self.opacity_slider, round(layer.opacity() * 100), _OPACITY_FMT)
 
     def set_history(self, can_undo: bool, can_redo: bool) -> None:
@@ -299,6 +324,7 @@ class CorrectControls(QObject):
             )
             slider.slider.valueChanged.connect(self.size_changed)
             slider.set_compact(self._dock.is_compact())
+            _steady(slider)
             self._slot_row.addWidget(slider)
             keep_canvas_focus(slider)
             self.size_sliders[spec] = slider

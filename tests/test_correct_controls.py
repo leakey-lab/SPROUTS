@@ -60,10 +60,10 @@ UNDER_TEST = (
 )
 RAIL_TOOLS = [
     ((MASK, "brush"), "Brush (B) · hold B + scroll to resize"),
-    ((MASK, "eraser"), "Eraser (E) · [ and ] resize"),
+    ((MASK, "eraser"), "Mask eraser (E) · [ and ] resize"),
     ((MASK, "fill"), "Fill a closed outline (F)"),
     ((SKELETON, "select"), "Select (V) · pick a branch, Delete removes it"),
-    ((SKELETON, "eraser"), "Eraser (E) · [ and ] resize"),
+    ((SKELETON, "eraser"), "Skeleton eraser (E) · [ and ] resize"),
     ((SKELETON, "polyline"), "Polyline (P) · Enter finish · Esc cancel"),
     ((SKELETON, "connect"), "Connect endpoints (C)"),
 ]
@@ -314,7 +314,7 @@ def test_show_layer_fades_the_other_group_and_keeps_every_tool_clickable(make_pa
         for (layer_id, _tool), button in controls.tool_buttons.items():
             assert button.isEnabled()
             if not button.isChecked():
-                colour = tokens.TEXT_FAINT if layer_id == faded else tokens.TEXT_MUTED
+                colour = tokens.TEXT_DISABLED if layer_id == faded else tokens.TEXT_MUTED
                 assert drawn_in(button, colour), (layer_id, _tool, icon_colours(button))
 
 
@@ -353,15 +353,16 @@ def test_load_is_offered_only_while_the_skeleton_is_shown(make_page):
     controls, dock = page.controls, page.chrome.dock
 
     controls.show_layer(SKELETON)
-    assert controls.load_button.isVisibleTo(dock)
+    assert controls.load_button.isVisibleTo(dock) and controls.load_button.isEnabled()
     controls.show_layer(MASK)
-    assert not controls.load_button.isVisibleTo(dock)
+    assert controls.load_button.isVisibleTo(dock)  # kept in place: the dock does not shift
+    assert not controls.load_button.isEnabled()
 
 
 @pytest.mark.parametrize(
     "layer_id, text, tip",
     [
-        (MASK, "Clear mask", "Clear the canvas. Undo with Ctrl+Z; Save removes the file."),
+        (MASK, "Clear mask", "Clear the mask. Undo with Ctrl+Z; Save removes the file."),
         (SKELETON, "Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
     ],
 )
@@ -437,7 +438,10 @@ def test_no_size_slider_shows_for_a_tool_without_a_size(make_page, layer_id, too
     layout = dock.layout()
     shown = [layout.itemAt(i).widget() for i in range(layout.count())]
     shown = [widget for widget in shown if widget.isVisibleTo(dock)]
-    assert shown[0] is controls.opacity_slider  # no empty slot (or its gap) before it
+    placeholder = controls.no_size_slider  # holds the slot, so the dock keeps its width
+    assert shown[0].isAncestorOf(placeholder) and shown[1] is controls.opacity_slider
+    assert placeholder.isVisibleTo(dock) and not placeholder.isEnabled()
+    assert placeholder.toolTip() == "No size for this tool"
 
 
 @pytest.mark.parametrize(
@@ -623,8 +627,8 @@ def test_a_new_page_shows_the_first_layer_with_nothing_to_undo(make_page):
     assert checked == [(MASK, "brush")]
     brush = controls.size_sliders[page.layers[MASK].size_spec()]
     assert visible_size_slider(controls, dock) is brush
-    assert drawn_in(controls.tool_buttons[(SKELETON, "select")], tokens.TEXT_FAINT)
-    assert not controls.load_button.isVisibleTo(dock)
+    assert drawn_in(controls.tool_buttons[(SKELETON, "select")], tokens.TEXT_DISABLED)
+    assert controls.load_button.isVisibleTo(dock) and not controls.load_button.isEnabled()
     assert controls.clear_button.text() == "Clear mask"
     assert not controls.undo_button.isEnabled() and not controls.redo_button.isEnabled()
     assert not controls.prompt.isVisibleTo(page)
@@ -889,6 +893,7 @@ def test_set_visible_state_changes_only_the_eye_and_emits_nothing(app, make_page
 
     assert hidden_eye != shown_eye and eye_image() == shown_eye
     assert "Hide" in shown_tip and "Show" in hidden_tip and "mask" in hidden_tip
+    assert all("H: both layers" in tip and "Shift+H" in tip for tip in (shown_tip, hidden_tip))
     assert toggles == [] and activations == []
     assert row.is_active() and row.state_label.text() == "Unsaved"
 

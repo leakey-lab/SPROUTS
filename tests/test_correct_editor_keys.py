@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.gui import shortcuts  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
 from app.gui.correct.skeleton_layer import DraftState  # noqa: E402
 from tests.correct_goldens_support import png_colour_type  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
@@ -239,7 +240,10 @@ def test_holding_b_and_scrolling_sizes_the_mask_brush_from_the_skeleton(page):
     QTest.keyRelease(page.graphics_view, Key.Key_B)
 
     assert page.layers[MASK].size() == 9 and page.graphics_view.zoom_factor == zoom
-    assert page.active_layer_id == SKELETON and page.layers[SKELETON].current_tool == "select"
+    # the scroll asked for the mask brush, so its dock slider shows the new size
+    assert page.active_layer_id == MASK and page.layers[MASK].current_tool == "brush"
+    slider = page.controls.size_sliders[MaskLayer.SIZE_SPEC]
+    assert slider.isVisibleTo(page.dock) and slider.slider.value() == 9
     assert held == [True, False]
 
 

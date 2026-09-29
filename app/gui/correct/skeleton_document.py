@@ -74,6 +74,7 @@ class SkeletonDocument:
         self.save_size: tuple[int, int] | None = None
         self.save_error = ""
         self.error_revision = -1
+        self.last_load_ok = False  # the last load_file read its file
         self._resolver = resolver
         self._size = (0, 0)  # (w, h) of the image: the model's size
 
@@ -121,12 +122,15 @@ class SkeletonDocument:
         """Open another skeleton file for this image (the Load button); history cleared.
 
         ``source`` becomes ``CORRECTED`` or ``GENERATED`` when ``path`` is one of those
-        files, else ``LOADED``. An unreadable file changes nothing.
+        files, else ``LOADED``. An unreadable file changes nothing; ``last_load_ok`` says
+        which of the two happened.
         """
+        self.last_load_ok = False
         if not self.image_path:
             return [Notice("Open an image first", "warn")]
         notices: list[Notice] = []
-        if self._read(path, notices):
+        self.last_load_ok = self._read(path, notices)
+        if self.last_load_ok:
             files = self.files()
             generated = files.generated_path()
             if _same_file(path, files.correction_path):
