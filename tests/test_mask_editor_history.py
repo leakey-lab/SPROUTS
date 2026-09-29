@@ -113,3 +113,36 @@ def test_on_change_fires_for_history_changes():
     h.redo()
     assert len(calls) == 3
     assert h.can_undo and not h.can_redo
+
+
+def test_drop_redo_forgets_only_the_redo_branch():
+    """Another layer's new action ends this branch: redo goes, undo and the plane stay."""
+    calls = []
+    h = PatchHistory(on_change=lambda: calls.append(1))
+    h.reset(np.zeros((4, 4), np.uint8))
+    first = h.commit((0, 0, 2, 2), np.ones((2, 2), np.uint8))
+    h.commit((2, 2, 2, 2), np.ones((2, 2), np.uint8))
+    h.undo()
+    calls.clear()
+
+    h.drop_redo()
+
+    assert calls == [1]
+    assert not h.can_redo and h.redo() is None
+    assert list(h.undo_stack) == [first]
+    assert h.plane.sum() == 4 and h.plane[:2, :2].all()  # the undone action stays undone
+    assert h.undo() is first and not h.plane.any()  # the kept entry still undoes
+
+
+def test_drop_redo_is_a_no_op_without_a_redo_branch():
+    calls = []
+    h = PatchHistory(on_change=lambda: calls.append(1))
+    h.drop_redo()  # no plane yet
+    h.reset(np.zeros((4, 4), np.uint8))
+    h.commit((0, 0, 2, 2), np.ones((2, 2), np.uint8))
+    calls.clear()
+
+    h.drop_redo()
+
+    assert calls == []
+    assert len(h.undo_stack) == 1 and h.plane.sum() == 4

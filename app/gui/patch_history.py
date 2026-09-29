@@ -12,6 +12,9 @@ of full ARGB snapshots was 300 MiB at 2048x1536).
 Large patches (a clear, a big fill) are stored zlib-compressed. The stacks
 are bounded by entry count and by a byte budget (see
 :class:`app.editing.history.SnapshotHistory`, which does the bookkeeping).
+When several documents share one undo timeline (the Correct workspace's
+:class:`app.editing.journal.EditJournal`), ``drop_redo()`` ends this
+history's redo branch after another document's new action.
 """
 
 from __future__ import annotations
@@ -216,6 +219,15 @@ class PatchHistory:
         self._history.redo(patch)
         self._write(patch, patch.after())
         return patch
+
+    def drop_redo(self) -> None:
+        """Forget the redo branch; the undo stack and the plane stay as they are.
+
+        For an editor whose actions share one timeline with other documents (the
+        Correct workspace): a new action on another layer ends this branch, as a
+        ``commit`` here would. ``on_change`` fires only when something was dropped.
+        """
+        self._history.drop_redo()
 
     def _write(self, patch: Patch, values: np.ndarray) -> None:
         if self.plane is not None and not patch.is_empty:
