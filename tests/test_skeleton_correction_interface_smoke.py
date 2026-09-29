@@ -119,8 +119,8 @@ def test_hint_lives_outside_dock_and_clears_polyline_prompt(app):
     iface.model.set_empty((640, 480))
     iface.polyline_button.setChecked(True)
     iface._on_tool_changed(iface.polyline_button)
-    iface._polyline_smooth = True
-    iface._polyline_points[:] = [QPoint(10, 10), QPoint(50, 60)]
+    iface.draft.smooth = True
+    iface.draft.points[:] = [QPoint(10, 10), QPoint(50, 60)]
     iface._update_polyline_buttons_enabled()
     iface._reposition_overlays()
 
