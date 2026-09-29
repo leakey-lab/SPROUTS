@@ -29,7 +29,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
-from skimage.morphology import skeletonize
 
 from app.config import AREA_VALUE_COLUMN, CALIBRATION, LENGTH_VALUE_COLUMN
 from app.io_utils import atomic_open, imread_unicode
@@ -42,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 def preprocess_image(image_path: str) -> np.ndarray:
     """Read an image and return its 1px skeleton (uint8 0/255)."""
+    # Imported here: scikit-image (and scipy behind it) stays out of the app's start-up.
+    from skimage.morphology import skeletonize
+
     img = imread_unicode(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")

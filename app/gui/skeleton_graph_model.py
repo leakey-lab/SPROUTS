@@ -1,5 +1,5 @@
 """
-Skeleton correction model utilities.
+Skeleton correction model utilities (Qt-free: numpy and cv2).
 
 This module intentionally lives in the *correction stream* and does NOT affect the
 existing skeleton generation / overlay / measurement logic.
@@ -11,24 +11,62 @@ The editor keeps an internal binary skeleton mask (uint8 0/255) and provides:
   connect/snap UX
 - Undo/redo, unsaved-change tracking and cached topology for the editor
 - Saving corrected skeletons as `<base>_skeleton.png`
+- Hooks for the Correct workspace: ``on_action`` (a new undoable action),
+  ``drop_redo`` (one undo timeline across layers) and ``take_changed_box`` (the
+  region a display must refresh)
+
+scikit-image (about 0.2 s to import, most of it scipy) is imported on the first
+skeletonize, or ahead of time by :func:`prewarm_skeletonize`, which ``MainWindow``
+runs in the thread pool once the window shows; importing this module stays cheap.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from skimage.morphology import skeletonize
 
 from app.editing.history import SnapshotHistory
 
 logger = logging.getLogger(__name__)
 
 Point = tuple[int, int]  # (x, y)
+Box = tuple[int, int, int, int]  # (x, y, width, height) in mask pixels
+
+_NO_CHANGE = (0, 0, 0, 0)  # an empty (x0, y0, x1, y1) box
+
+# Window skeletonize (SkeletonCorrectionModel._thin_window): thin the changed box +
+# _ROI_PAD px, write back the changed box + _ROI_CORE px, provided the _ROI_BAND px band
+# just outside that core lost no pixel.
+_ROI_PAD = 16
+_ROI_CORE = 8
+_ROI_BAND = 2
+
+# scikit-image's skeletonize, imported on first use (see prewarm_skeletonize).
+_skimage_skeletonize: Callable[[np.ndarray], np.ndarray] | None = None
+
+
+def _skeletonize_fn() -> Callable[[np.ndarray], np.ndarray]:
+    """scikit-image's ``skeletonize``, imported (once) on first use."""
+    global _skimage_skeletonize
+    if _skimage_skeletonize is None:
+        from skimage.morphology import skeletonize
+
+        _skimage_skeletonize = skeletonize
+    return _skimage_skeletonize
+
+
+def prewarm_skeletonize() -> None:
+    """Import scikit-image's skeletonize now, so the first skeleton edit does not wait.
+
+    Idempotent: later calls return at once. Safe from a worker thread (Python's import
+    lock makes a skeletonize on another thread wait for the import to finish).
+    """
+    _skeletonize_fn()
 
 
 @dataclass(frozen=True)
@@ -65,8 +103,22 @@ def _ensure_uint8_binary(mask: np.ndarray) -> np.ndarray:
 def _skeletonize_uint8(mask: np.ndarray) -> np.ndarray:
     """Skeletonize a uint8 0/255 foreground mask to 1px (uint8 0/255)."""
     mask = _ensure_uint8_binary(mask)
-    skel_bool = skeletonize(mask > 0)
+    skel_bool = _skeletonize_fn()(mask > 0)
     return skel_bool.astype(np.uint8) * 255
+
+
+def _union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tuple[int, ...]:
+    """Union of two ``(x0, y0, x1, y1)`` boxes; an empty box adds nothing."""
+    if a[2] <= a[0] or a[3] <= a[1]:
+        return b
+    if b[2] <= b[0] or b[3] <= b[1]:
+        return a
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def _plain_uint8(a: np.ndarray) -> bool:
+    """A 2D, C-contiguous uint8 array (what cv2 reads without a copy)."""
+    return a.dtype == np.uint8 and a.ndim == 2 and a.flags.c_contiguous
 
 
 # 3x3 kernel that sums all 8 neighbors (center weight = 0) -- used by
@@ -239,7 +291,12 @@ class SkeletonCorrectionModel:
     undoes as one step. Every mutation moves `revision`, which keys the cached
     `topology()` / `endpoints()` and the unsaved-change check, so change the mask
     through these methods. Code that still writes `mask` in place must do it right
-    after `push_undo()` (which moves the revision too) and before any query.
+    after `push_undo()` (which moves the revision too) and before any query, or assign
+    the array back through the `mask` setter; `take_changed_box()` sees only the edit
+    methods and the setter.
+
+    `on_action` (default None) is called at the end of every `push_undo()` that pushed
+    a snapshot: the Correct workspace records the action in its undo journal there.
     """
 
     def __init__(self, max_stack_size: int = 25) -> None:
@@ -254,6 +311,15 @@ class SkeletonCorrectionModel:
         self._topologies: dict[float, SkeletonTopology] = {}
         self._endpoints: list[Point] | None = None
         self._unsaved: bool | None = None
+        # Pixels that may have changed since take_changed_box() (x0, y0, x1, y1);
+        # None: unknown (the whole mask may have changed).
+        self._changed: tuple[int, ...] | None = None
+        self.on_action: Callable[[], None] | None = None
+        # Window skeletonize (_thin_window) needs a known fixed point of skeletonize:
+        # whether the mask is one, and whether every snapshot in the history is one.
+        self._fixed_point = False
+        self._snapshots_fixed = True
+        self._diff: np.ndarray | None = None  # scratch: pixels changed since the snapshot
 
     # -------------------- state --------------------
     @property
@@ -265,6 +331,8 @@ class SkeletonCorrectionModel:
     def mask(self, value: np.ndarray | None) -> None:
         # Replacing the array is an edit (push_undo() first to make it undoable).
         self._mask = value
+        self._changed = None
+        self._fixed_point = False
         self._touch()
 
     @property
@@ -326,23 +394,57 @@ class SkeletonCorrectionModel:
         self._endpoints = None
         self._unsaved = None
 
+    def _note_change(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Pixels in ``[x0, x1) x [y0, y1)`` may have changed (clipped to the mask)."""
+        if self._changed is None or self._mask is None:
+            return
+        h, w = self._mask.shape[:2]
+        box = (max(0, int(x0)), max(0, int(y0)), min(w, int(x1)), min(h, int(y1)))
+        self._changed = _union(self._changed, box)
+
+    def take_changed_box(self) -> Box | None:
+        """The ``(x, y, w, h)`` union of the pixels that may have changed since the last call.
+
+        ``(0, 0, 0, 0)`` when nothing changed; ``None`` when unknown: after a load,
+        ``set_empty``, undo, redo, the ``mask`` setter or a full-frame skeletonize. Each
+        call starts a new interval. Its only caller is the Correct skeleton layer's item
+        update: a second caller would take boxes the item then never sees.
+        """
+        box, self._changed = self._changed, _NO_CHANGE
+        if box is None:
+            return None
+        x0, y0, x1, y1 = box
+        if x1 <= x0 or y1 <= y0:
+            return (0, 0, 0, 0)
+        return (x0, y0, x1 - x0, y1 - y0)
+
     # -------------------- undo/redo --------------------
     def push_undo(self) -> None:
         """Snapshot the mask before a user action (one undo step per action).
 
-        It also moves the revision, because the caller is about to edit.
+        It also moves the revision, because the caller is about to edit, and then calls
+        ``on_action`` (nothing happens without a mask).
         """
         if self._mask is None:
             return
+        self._snapshots_fixed = self._snapshots_fixed and self._fixed_point
         self._history.push(self._mask.copy())
+        # The caller may now write the mask in place: it is thin again only once thinned.
+        self._fixed_point = False
         self._touch()
+        if self.on_action is not None:
+            self.on_action()
 
     def undo(self) -> bool:
         """Restore the state before the last action; False when there is none."""
         if self._mask is None or not self._history.can_undo:
             return False
+        restored_fixed = self._snapshots_fixed
+        self._snapshots_fixed = restored_fixed and self._fixed_point  # the mask is parked
         # Park a copy, so no outside reference to the live mask can alter the redo state.
         self._mask = self._history.undo(self._mask.copy())
+        self._fixed_point = restored_fixed
+        self._changed = None
         self._touch()
         return True
 
@@ -350,15 +452,26 @@ class SkeletonCorrectionModel:
         """Re-apply the last undone action; False when there is none."""
         if self._mask is None or not self._history.can_redo:
             return False
+        restored_fixed = self._snapshots_fixed
+        self._snapshots_fixed = restored_fixed and self._fixed_point
         self._mask = self._history.redo(self._mask.copy())
+        self._fixed_point = restored_fixed
+        self._changed = None
         self._touch()
         return True
 
+    def drop_redo(self) -> None:
+        """Forget the redo branch (a newer action elsewhere ended it); the mask stays."""
+        self._history.drop_redo()
+
     def clear_history(self) -> None:
+        """Forget every undo and redo step (the mask stays as it is)."""
         self._history.clear()
+        self._snapshots_fixed = True
 
     # -------------------- load / transform --------------------
     def set_empty(self, size: tuple[int, int]) -> None:
+        """Start a new, empty document of ``size`` ``(w, h)``: no skeleton, no history."""
         w, h = size
         self._start_document(np.zeros((h, w), dtype=np.uint8))
 
@@ -390,18 +503,24 @@ class SkeletonCorrectionModel:
         self._start_document(_skeletonize_uint8(binary))
 
     def _start_document(self, mask: np.ndarray) -> None:
-        """Adopt a freshly loaded mask: empty history, nothing unsaved."""
+        """Adopt a freshly loaded, thinned (or empty) mask: empty history, nothing unsaved."""
         self._mask = mask
         self._history.clear()
+        self._fixed_point = True
+        self._snapshots_fixed = True
+        self._changed = None
         self._touch()
         self.mark_saved()
 
     # -------------------- edits --------------------
     def erase_circle(self, center: Point, radius: int) -> None:
+        """Erase the filled disc of ``radius`` px around ``center`` ``(x, y)``."""
         if self._mask is None:
             return
-        x, y = center
-        cv2.circle(self._mask, (int(x), int(y)), int(radius), 0, thickness=-1)
+        x, y, r = int(center[0]), int(center[1]), int(radius)
+        cv2.circle(self._mask, (x, y), r, 0, thickness=-1)
+        self._note_change(x - r - 1, y - r - 1, x + r + 2, y + r + 2)
+        self._fixed_point = False
         self._touch()
 
     def erase_segment(self, p0: Point, p1: Point, radius: int) -> None:
@@ -422,9 +541,14 @@ class SkeletonCorrectionModel:
             t = i / n if n else 0.0
             center = (x0 + round((x1 - x0) * t), y0 + round((y1 - y0) * t))
             cv2.circle(self._mask, center, r, 0, thickness=-1)
+        self._note_change(
+            min(x0, x1) - r - 1, min(y0, y1) - r - 1, max(x0, x1) + r + 2, max(y0, y1) + r + 2
+        )
+        self._fixed_point = False
         self._touch()
 
     def draw_polyline(self, points: Sequence[Point], thickness: int = 3) -> None:
+        """Draw an open polyline through ``points`` ``(x, y)``, ``thickness`` px wide."""
         self._stroke_polyline(points, thickness, 255)
 
     def erase_polyline(self, points: Sequence[Point], thickness: int) -> None:
@@ -436,20 +560,118 @@ class SkeletonCorrectionModel:
             return
         pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
         cv2.polylines(self._mask, [pts], isClosed=False, color=value, thickness=int(thickness))
+        # A thick cv2 line reaches thickness / 2 (+1 for its round caps) past its points.
+        pad = int(thickness) // 2 + 2
+        lo, hi = pts.min(axis=(0, 1)), pts.max(axis=(0, 1))
+        self._note_change(lo[0] - pad, lo[1] - pad, hi[0] + pad + 1, hi[1] + pad + 1)
+        self._fixed_point = False
         self._touch()
 
     def clear(self) -> None:
         """Erase every skeleton pixel (call push_undo() first to make it undoable)."""
         if self._mask is None:
             return
+        self._note_change(*self._foreground_bounds())
         self._mask.fill(0)
+        self._fixed_point = True  # nothing left to thin
         self._touch()
 
+    def _foreground_bounds(self) -> tuple[int, int, int, int]:
+        """``(x0, y0, x1, y1)`` around every set pixel (the whole mask if it cannot tell)."""
+        mask = self._mask
+        h, w = mask.shape[:2]
+        if not _plain_uint8(mask):
+            return (0, 0, w, h)
+        x, y, bw, bh = cv2.boundingRect(mask)
+        return (x, y, x + bw, y + bh)
+
     def skeletonize(self) -> None:
+        """Thin the mask to a 1 px skeleton (scikit-image's Zhang-Suen thinning).
+
+        The result is always the whole frame's thinning, bit for bit. When the mask was
+        edited from a snapshot known to be thin already (every tool action starts with
+        ``push_undo()``), only a window around the changed pixels is thinned, in place
+        (:meth:`_thin_window`): about 0.1 ms instead of 1-2 ms at 640x480, and under
+        1 ms instead of 20-30 ms on a dense 2048x1536 skeleton.
+        """
         if self._mask is None:
             return
-        self._mask = _skeletonize_uint8(self._mask)
+        box = self._thin_window()
+        if box is None:
+            self._mask = _skeletonize_uint8(self._mask)
+            self._changed = None
+        else:
+            self._note_change(*box)
+        self._fixed_point = True
         self._touch()
+
+    def _fixed_snapshot(self) -> np.ndarray | None:
+        """The newest snapshot when it is a known skeletonize fixed point like the mask."""
+        mask = self._mask
+        if not (self._snapshots_fixed and self._history.can_undo and _plain_uint8(mask)):
+            return None
+        base = self._history.undo_stack[-1]
+        return base if base.shape == mask.shape and _plain_uint8(base) else None
+
+    def _thin_window(self) -> tuple[int, ...] | None:
+        """Thin only around the pixels changed since a known fixed point, in place.
+
+        Returns the ``(x0, y0, x1, y1)`` box of the pixels it changed (empty when none),
+        or None when the whole frame must be thinned instead: no snapshot is known to
+        be thin, or the window run deleted a pixel of the quiet band.
+
+        Why this equals thinning the whole frame. The snapshot S is a fixed point
+        (thinning it deletes nothing) and the mask differs from S only inside the box B
+        (found by comparing the two, so writes made in place are seen too).
+        scikit-image's Zhang-Suen thinning only deletes pixels, decides each one from
+        its 3x3 neighbourhood as the sub-iteration began, and treats pixels outside the
+        array as background. The window W = B + 16 px is thinned on its own; the core
+        C = B + 8 px is written back only if the 2 px band Q just outside C lost no
+        pixel. By induction over sub-iterations: pixels of C see only C and the inner
+        ring of Q, the same in both runs, so they get the same decisions; the inner
+        ring of Q gets the same decisions (none); the outer ring and everything beyond
+        see only pixels of S, a fixed-point neighbourhood, so nothing outside C changes
+        in the full run either; and the window's zero border can reach C only through
+        Q, which the check rules out.
+        """
+        base = self._fixed_snapshot()
+        if base is None:
+            return None
+        mask = self._mask
+        diff = self._diff
+        if diff is None or diff.shape != mask.shape:
+            diff = self._diff = np.empty(mask.shape, np.uint8)
+        cv2.compare(base, mask, cv2.CMP_NE, dst=diff)
+        x, y, w, h = cv2.boundingRect(diff)
+        if w == 0 or h == 0:
+            return _NO_CHANGE  # nothing changed since the fixed point: already thin
+        rows, cols = mask.shape
+        # Window W, core C and the outer edge of the band Q, in image pixels.
+        wx0, wy0 = max(0, x - _ROI_PAD), max(0, y - _ROI_PAD)
+        wx1, wy1 = min(cols, x + w + _ROI_PAD), min(rows, y + h + _ROI_PAD)
+        cx0, cy0 = max(0, x - _ROI_CORE), max(0, y - _ROI_CORE)
+        cx1, cy1 = min(cols, x + w + _ROI_CORE), min(rows, y + h + _ROI_CORE)
+        qx0, qy0 = max(0, cx0 - _ROI_BAND), max(0, cy0 - _ROI_BAND)
+        qx1, qy1 = min(cols, cx1 + _ROI_BAND), min(rows, cy1 + _ROI_BAND)
+        before = mask[wy0:wy1, wx0:wx1]
+        after = _skeletonize_uint8(before)
+        # Q as four strips around C: top, bottom, left, right (rows, then columns).
+        for r0, r1, c0, c1 in (
+            (qy0, cy0, qx0, qx1),
+            (cy1, qy1, qx0, qx1),
+            (cy0, cy1, qx0, cx0),
+            (cy0, cy1, cx1, qx1),
+        ):
+            if r1 > r0 and c1 > c0:
+                rows_w, cols_w = slice(r0 - wy0, r1 - wy0), slice(c0 - wx0, c1 - wx0)
+                if np.any((before[rows_w, cols_w] != 0) & (after[rows_w, cols_w] == 0)):
+                    return None
+        core = (slice(cy0 - wy0, cy1 - wy0), slice(cx0 - wx0, cx1 - wx0))
+        dx, dy, dw, dh = cv2.boundingRect(cv2.compare(before[core], after[core], cv2.CMP_NE))
+        before[core] = after[core]  # `before` is a view: this writes the mask
+        if dw == 0 or dh == 0:
+            return _NO_CHANGE
+        return (cx0 + dx, cy0 + dy, cx0 + dx + dw, cy0 + dy + dh)
 
     # -------------------- derived data --------------------
     def topology(self, *, simplify_epsilon: float = 1.5) -> SkeletonTopology:

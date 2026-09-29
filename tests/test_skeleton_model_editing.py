@@ -1,14 +1,21 @@
-"""SkeletonCorrectionModel editing contract used by the Correct Skeleton editor.
+"""SkeletonCorrectionModel editing contract used by the skeleton editors.
 
 Covers dirty tracking (PE-01 / AR-02 / RB-05), the revision counter and cached
-topology/endpoints (PE-03), the eraser drag (PE-02), clear/erase_polyline (AR-12)
-and the undo flags backed by SnapshotHistory (AR-11).
+topology/endpoints (PE-03), the eraser drag (PE-02), clear/erase_polyline (AR-12),
+the undo flags backed by SnapshotHistory (AR-11) and the hooks the Correct workspace
+uses (plan contract C4): ``on_action``, ``drop_redo``, ``take_changed_box`` and the
+lazy scikit-image import with its ``prewarm_skeletonize`` hook.
 """
 
 from __future__ import annotations
 
 import math
+import os
+import subprocess
+import sys
+import textwrap
 from itertools import pairwise
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -16,6 +23,8 @@ import pytest
 
 import app.gui.skeleton_graph_model as sgm
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel, vectorize_skeleton
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _model_with_line(size=(60, 40)) -> SkeletonCorrectionModel:
@@ -389,3 +398,220 @@ def test_queries_on_an_empty_model_return_empty_results():
     model = SkeletonCorrectionModel()
     assert model.endpoints() == []
     assert model.topology().polylines == []
+
+
+# --------------------------------------------------------------------------------------
+# Hooks for the Correct workspace (C4): on_action, drop_redo, take_changed_box
+# --------------------------------------------------------------------------------------
+
+
+def test_on_action_fires_once_per_pushed_snapshot_after_the_push():
+    model = _model_with_line()
+    seen = []
+    model.on_action = lambda: seen.append(len(model._undo_stack))
+    model.push_undo()
+    model.erase_circle((20, 20), 3)
+    model.skeletonize()
+    model.undo()
+    model.redo()
+    model.push_undo()
+    assert seen == [1, 2]  # once per push, called after the snapshot is on the stack
+
+
+def test_on_action_is_not_called_without_a_mask():
+    model = SkeletonCorrectionModel()
+    seen = []
+    model.on_action = lambda: seen.append(True)
+    model.push_undo()
+    assert seen == []
+
+
+def test_drop_redo_forgets_the_redo_branch_and_keeps_undo_and_the_mask():
+    model = _model_with_line()
+    model.push_undo()
+    model.erase_circle((20, 20), 3)
+    model.push_undo()
+    model.erase_circle((40, 20), 3)
+    assert model.undo() is True
+    shown = model.mask.copy()
+    rev = model.revision
+    model.drop_redo()
+    assert (model.can_undo, model.can_redo) == (True, False)
+    assert model.redo() is False
+    assert np.array_equal(model.mask, shown) and model.revision == rev
+    assert model.undo() is True  # the undo stack is intact
+    assert np.array_equal(model.mask, _model_with_line().mask)
+
+
+def _drained(model: SkeletonCorrectionModel) -> SkeletonCorrectionModel:
+    model.take_changed_box()
+    return model
+
+
+def _filled_model(size=(60, 40)) -> SkeletonCorrectionModel:
+    """A model whose every pixel is set, so each eraser pixel is a real change."""
+    model = SkeletonCorrectionModel()
+    model.set_empty(size)
+    model.mask = np.full((size[1], size[0]), 255, np.uint8)
+    return model
+
+
+def _changed_bounds(before: np.ndarray, after: np.ndarray) -> tuple[int, int, int, int]:
+    ys, xs = np.nonzero(before != after)
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+EDITS = {
+    "erase_circle": (True, lambda m: m.erase_circle((30, 20), 4)),
+    "erase_segment": (True, lambda m: m.erase_segment((10, 12), (45, 30), 3)),
+    "erase_polyline": (True, lambda m: m.erase_polyline([(8, 8), (30, 25), (50, 12)], 9)),
+    "draw_polyline_1px": (False, lambda m: m.draw_polyline([(4, 30), (55, 6)], thickness=1)),
+    "draw_polyline_3px": (False, lambda m: m.draw_polyline([(8, 8), (30, 25)], thickness=3)),
+    "draw_polyline_9px": (False, lambda m: m.draw_polyline([(20, 5), (21, 33)], thickness=9)),
+    "clear": (False, lambda m: m.clear()),
+}
+
+
+@pytest.mark.parametrize("name", sorted(EDITS))
+def test_take_changed_box_covers_each_changed_pixel_and_stays_local(name):
+    erases, edit = EDITS[name]
+    if erases:
+        model = _drained(_filled_model())
+    else:
+        model = _drained(_model_with_line())
+        model.push_undo()  # a snapshot changes no pixel
+    before = model.mask.copy()
+    edit(model)
+    x, y, w, h = model.take_changed_box()
+    x0, y0, x1, y1 = _changed_bounds(before, model.mask)
+    assert x <= x0 and y <= y0 and x + w >= x1 and y + h >= y1  # nothing changed outside
+    assert x >= x0 - 3 and y >= y0 - 3 and x + w <= x1 + 3 and y + h <= y1 + 3  # local
+    assert model.take_changed_box() == (0, 0, 0, 0)  # reset by the call
+
+
+def test_take_changed_box_is_the_union_of_the_edits_since_the_last_call():
+    model = _drained(_filled_model((200, 100)))
+    model.erase_circle((20, 20), 2)
+    model.erase_circle((150, 70), 2)
+    x, y, w, h = model.take_changed_box()
+    assert x <= 18 and y <= 18 and x + w >= 153 and y + h >= 73
+    assert x >= 15 and y >= 15 and x + w <= 156 and y + h <= 76
+    model.erase_circle((100, 50), 1)
+    x, y, w, h = model.take_changed_box()
+    assert x <= 99 and y <= 49 and x + w >= 102 and y + h >= 52
+    assert x >= 96 and y >= 46 and x + w <= 105 and y + h <= 55
+
+
+def test_take_changed_box_is_clipped_to_the_image():
+    model = _drained(_filled_model((60, 40)))
+    model.erase_circle((0, 0), 6)
+    model.erase_segment((58, 38), (59, 39), 6)
+    x, y, w, h = model.take_changed_box()
+    assert (x, y) == (0, 0) and (x + w, y + h) == (60, 40)
+
+
+def test_take_changed_box_is_empty_when_no_pixel_changed():
+    model = _drained(_model_with_line())
+    model.push_undo()
+    model.topology()
+    model.endpoints()
+    model.has_unsaved_changes()
+    model.render_to_size((30, 20))
+    assert model.take_changed_box() == (0, 0, 0, 0)
+
+
+UNKNOWN_AFTER = {
+    "set_empty": lambda m: m.set_empty((60, 40)),
+    "load_from_raster": lambda m: m.load_from_raster(
+        np.eye(40, 60, dtype=np.uint8) * 255, target_size=(60, 40)
+    ),
+    "mask_setter": lambda m: setattr(m, "mask", np.zeros((40, 60), np.uint8)),
+    "undo": lambda m: m.undo(),
+    "redo": lambda m: (m.undo(), m.take_changed_box(), m.redo()),
+    "full_frame_skeletonize": lambda m: m.skeletonize(),  # no snapshot to start from
+}
+
+
+@pytest.mark.parametrize("name", sorted(UNKNOWN_AFTER))
+def test_take_changed_box_is_unknown_after_whole_mask_changes(name):
+    model = SkeletonCorrectionModel()
+    model.set_empty((60, 40))
+    model.draw_polyline([(5, 20), (50, 20)], thickness=3)  # not thin yet
+    if name in ("undo", "redo"):
+        model.skeletonize()
+        model.push_undo()
+        model.erase_circle((20, 20), 3)
+    _drained(model)
+    UNKNOWN_AFTER[name](model)
+    assert model.take_changed_box() is None
+    assert model.take_changed_box() == (0, 0, 0, 0)  # known again after the call
+
+
+def test_a_new_model_reports_an_unknown_box():
+    assert SkeletonCorrectionModel().take_changed_box() is None
+
+
+# --------------------------------------------------------------------------------------
+# Lazy scikit-image (C4): the import waits for the first skeletonize or the prewarm
+# --------------------------------------------------------------------------------------
+
+
+def _run_python(code: str) -> subprocess.CompletedProcess:
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    return subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+
+def test_scikit_image_loads_on_the_first_skeletonize_not_at_import():
+    result = _run_python(
+        """
+        import sys
+        import app.gui.skeleton_graph_model as sgm
+        print("import", "skimage" in sys.modules)
+        model = sgm.SkeletonCorrectionModel()
+        model.set_empty((40, 30))
+        model.draw_polyline([(5, 5), (30, 20)], thickness=3)
+        print("edit", "skimage" in sys.modules)
+        model.skeletonize()
+        print("skeletonize", "skimage.morphology" in sys.modules)
+        """
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["import", "False", "edit", "False", "skeletonize", "True"]
+
+
+def test_prewarm_loads_scikit_image_once_from_a_worker_thread():
+    result = _run_python(
+        """
+        import builtins
+        import sys
+        import threading
+        import app.gui.skeleton_graph_model as sgm
+        worker = threading.Thread(target=sgm.prewarm_skeletonize)
+        worker.start()
+        worker.join(120)
+        print("prewarmed", "skimage.morphology" in sys.modules)
+        imported = []
+        real_import = builtins.__import__
+        def spy(name, *args, **kwargs):
+            imported.append(name)
+            return real_import(name, *args, **kwargs)
+        builtins.__import__ = spy
+        sgm.prewarm_skeletonize()
+        builtins.__import__ = real_import
+        print("again", sum(name.startswith("skimage") for name in imported))
+        model = sgm.SkeletonCorrectionModel()
+        model.set_empty((40, 30))
+        model.draw_polyline([(5, 5), (30, 20)], thickness=3)
+        model.skeletonize()
+        print("thin", int(model.mask.max()), int((model.mask > 0).sum()) < 40)
+        """
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["prewarmed", "True", "again", "0", "thin", "255", "True"]
