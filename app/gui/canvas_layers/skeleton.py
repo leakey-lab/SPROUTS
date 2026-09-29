@@ -1,0 +1,681 @@
+"""The skeleton layer item: a 1 px skeleton raster drawn as a line at every zoom.
+
+:class:`SkeletonLayerItem` (spec section 10.3) draws a skeleton mask (uint8 0/255, kept by
+reference, never modified) in the tier the painter's device scale ``s`` asks for
+(:func:`app.gui.canvas_layers.device_scale`: view zoom times devicePixelRatio times the
+item's own ``scale``):
+
+* ``s < 1``, "raster-lod": ``skeleton_overlay.overlay_indices`` (the line plus a dark
+  one-pixel halo) through a max-pool pyramid, drawn nearest from the finest level that is
+  not minified, so a 1 px line never breaks into dashes.
+* ``1 <= s < 2``, "raster": that overlay at level 0 in 256 px tiles, drawn nearest.
+* ``s >= 2``, "vector": m-adjacency links between pixel centres, a 2 px cosmetic line over
+  a 4 px halo, antialiased; "vector-thin" (1 px) or back to "raster" when the visible
+  segments exceed the paint engine's budget.
+* ``vectors=False`` (the Library's generated file, lines about 2 px wide): "raster-lod"
+  below 1, else "raster-smooth", the overlay drawn bilinear (soft edges, no pixel blocks).
+
+The vector extraction (:func:`skeleton_links`, :func:`tile_segments`) is Qt-free numpy.
+Colours come from :mod:`app.gui.widgets.tokens`.
+"""
+
+from __future__ import annotations
+
+import math
+import time
+
+import numpy as np
+from PyQt6 import sip
+from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPaintEngine, QPainter, QPen, QTransform
+from PyQt6.QtWidgets import QGraphicsItem, QStyleOptionGraphicsItem, QWidget
+
+from app.gui.canvas_layers import device_scale
+from app.gui.skeleton_overlay import HALO_ALPHA, HALO_INDEX, LINE_INDEX, overlay_indices
+from app.gui.widgets import tokens
+from app.imaging.pyramid import ImagePyramid, max_half
+
+Box = tuple[int, int, int, int]  # (x, y, width, height) in skeleton pixels
+Edges = tuple[float, float, float, float]  # (left, top, right, bottom) in skeleton pixels
+TileKey = tuple[int, int]  # (tx, ty)
+
+# Forward link directions (dx, dy): each undirected 8-neighbour pair once, from the pixel
+# met first in row-major order (E, S, SE, SW).
+_FORWARD = ((1, 0), (0, 1), (1, 1), (-1, 1))
+_NO_LINKS = np.zeros((0, 4), np.int32)
+_GL_ENGINES = (QPaintEngine.Type.OpenGL, QPaintEngine.Type.OpenGL2)
+_LOD_EPS = 1e-6  # absorbs float noise at exact powers of two (0.5, 0.25, ...)
+_PEN_REACH = 3.0  # device px a vector pen reaches beyond a segment (halo half-width + AA)
+
+
+# ---------------------------------------------------------------- vector extraction (Qt-free)
+def skeleton_links(mask: np.ndarray, box: Box | None = None) -> np.ndarray:
+    """Unit m-adjacency links of the 1 px skeleton ``mask`` whose first pixel is in ``box``.
+
+    Rows are ``(x0, y0, x1, y1)`` int32 pixel coordinates. A link joins two 8-neighbours
+    that are set; a diagonal one only when neither pixel of its 2x2 corner is set
+    (m-adjacency: no corner triangles). Its first pixel is the one met first in row-major
+    order, so a mask split into boxes yields every link exactly once. An isolated pixel
+    is a dot ``(x, y, x, y)``. ``box`` is ``(x, y, width, height)``; None = the whole
+    mask. ``mask`` is only read.
+    """
+    x0, y0, x1, y1 = _clip_box(box, mask.shape)
+    if x1 <= x0 or y1 <= y0 or not mask[y0:y1, x0:x1].any():
+        return _NO_LINKS.copy()
+    *links, lone = _link_planes(mask, x0, y0, x1, y1)
+    parts = []
+    for (dx, dy), plane in zip(_FORWARD, links, strict=True):
+        xs, ys = _coords(plane)
+        parts.append(np.stack([xs, ys, xs + dx, ys + dy], axis=1))
+    xs, ys = _coords(lone)
+    parts.append(np.stack([xs, ys, xs, ys], axis=1))
+    return _offset(np.concatenate(parts), x0, y0)
+
+
+def tile_segments(mask: np.ndarray, box: Box) -> np.ndarray:
+    """The links of ``box`` (see :func:`skeleton_links`) with collinear runs merged.
+
+    Chained links of one direction become one ``(x0, y0, x1, y1)`` int32 run from the
+    first pixel of its first link to the last pixel of its last link; runs never leave
+    the box (a line crossing its edge is split there, the two runs sharing the pixel).
+    Dots stay dots. Vectorised: no Python loop over pixels.
+    """
+    x0, y0, x1, y1 = _clip_box(box, mask.shape)
+    if x1 <= x0 or y1 <= y0 or not mask[y0:y1, x0:x1].any():
+        return _NO_LINKS.copy()
+    east, south, south_east, south_west, lone = _link_planes(mask, x0, y0, x1, y1)
+    xs, ys = _coords(lone)
+    parts = [
+        _east_runs(east),
+        _south_runs(south),
+        _diagonal_runs(south_east, 1),
+        _diagonal_runs(south_west, -1),
+        np.stack([xs, ys, xs, ys], axis=1),
+    ]
+    return _offset(np.concatenate(parts), x0, y0)
+
+
+def _clip_box(box: Box | None, shape: tuple[int, ...]) -> tuple[int, int, int, int]:
+    """``(x0, y0, x1, y1)`` of ``box`` clipped to a mask of ``shape`` (end exclusive)."""
+    h, w = shape[0], shape[1]
+    if box is None:
+        return 0, 0, w, h
+    x, y, bw, bh = (int(v) for v in box)
+    return max(0, x), max(0, y), min(w, x + bw), min(h, y + bh)
+
+
+def _offset(links: np.ndarray, x0: int, y0: int) -> np.ndarray:
+    out = links.astype(np.int32, copy=False)
+    out[:, 0::2] += x0
+    out[:, 1::2] += y0
+    return out
+
+
+def _link_planes(mask: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> tuple[np.ndarray, ...]:
+    """Boolean planes over the box: the E, S, SE and SW links starting at each pixel, and
+    the isolated pixels. Reads the box plus a one-pixel margin (outside the mask is 0)."""
+    h, w = y1 - y0, x1 - x0
+    mh, mw = mask.shape[0], mask.shape[1]
+    win = np.zeros((h + 2, w + 2), bool)
+    sx0, sy0, sx1, sy1 = max(x0 - 1, 0), max(y0 - 1, 0), min(x1 + 1, mw), min(y1 + 1, mh)
+    np.greater(
+        mask[sy0:sy1, sx0:sx1],
+        0,
+        out=win[sy0 - y0 + 1 : sy1 - y0 + 1, sx0 - x0 + 1 : sx1 - x0 + 1],
+    )
+
+    def near(dx: int, dy: int) -> np.ndarray:
+        return win[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
+
+    own, east, west, south, north = near(0, 0), near(1, 0), near(-1, 0), near(0, 1), near(0, -1)
+    south_east, south_west = near(1, 1), near(-1, 1)
+    four = east | west | south | north
+    return (
+        own & east,
+        own & south,
+        own & south_east & ~(east | south),
+        own & south_west & ~(west | south),
+        own & ~(four | south_east | south_west | near(1, -1) | near(-1, -1)),
+    )
+
+
+def _coords(plane: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``(xs, ys)`` of the set pixels of ``plane``, row-major (flat indices: ~10x faster
+    than a 2-D ``np.nonzero``)."""
+    ys, xs = np.divmod(np.flatnonzero(plane), plane.shape[1])
+    return xs, ys
+
+
+def _east_runs(links: np.ndarray) -> np.ndarray:
+    """Merged runs of E links: pair the k-th run start with the k-th run end, row-major."""
+    starts = links.copy()
+    starts[:, 1:] &= ~links[:, :-1]
+    ends = links.copy()
+    ends[:, :-1] &= ~links[:, 1:]
+    xs, ys = _coords(starts)
+    xe, _ = _coords(ends)
+    return np.stack([xs, ys, xe + 1, ys], axis=1)
+
+
+def _south_runs(links: np.ndarray) -> np.ndarray:
+    """Merged runs of S links, paired column by column (the transposed planes)."""
+    starts = links.copy()
+    starts[1:, :] &= ~links[:-1, :]
+    ends = links.copy()
+    ends[:-1, :] &= ~links[1:, :]
+    ys, xs = _coords(starts.T)  # column-major: (row of the transpose = x, column = y)
+    ye, _ = _coords(ends.T)
+    return np.stack([xs, ys, xs, ye + 1], axis=1)
+
+
+def _diagonal_runs(links: np.ndarray, dx: int) -> np.ndarray:
+    """Merged runs of SE (``dx`` 1) or SW (``dx`` -1) links, paired along each diagonal."""
+    starts = links.copy()
+    ends = links.copy()
+    if dx > 0:  # the previous link of a run starts at (x - 1, y - 1), the next at (x + 1, y + 1)
+        starts[1:, 1:] &= ~links[:-1, :-1]
+        ends[:-1, :-1] &= ~links[1:, 1:]
+    else:  # previous at (x + 1, y - 1), next at (x - 1, y + 1)
+        starts[1:, :-1] &= ~links[:-1, 1:]
+        ends[:-1, 1:] &= ~links[1:, :-1]
+    xs, ys = _coords(starts)
+    xe, ye = _coords(ends)
+    first = np.lexsort((ys, xs - dx * ys))  # by diagonal, then down it
+    last = np.lexsort((ye, xe - dx * ye))
+    xs, ys, xe, ye = xs[first], ys[first], xe[last], ye[last]
+    return np.stack([xs, ys, xe + dx, ye + 1], axis=1)
+
+
+# ------------------------------------------------------------------------------ the item
+class _TileVectors:
+    """The merged links of one tile in pixel-centre coordinates: lines ``(n, 4)`` with
+    their bounds, and dots ``(m, 2)`` (a zero-length line would draw nothing)."""
+
+    __slots__ = ("revision", "lines", "lo", "hi", "dots", "reach")
+
+    def __init__(self, revision: int, links: np.ndarray, reach: tuple[float, ...]) -> None:
+        self.revision = revision
+        centres = links.astype(np.float64) + 0.5
+        dot = (links[:, 0] == links[:, 2]) & (links[:, 1] == links[:, 3])
+        self.lines = centres[~dot]
+        self.dots = centres[dot, :2]
+        self.lo = np.minimum(self.lines[:, :2], self.lines[:, 2:])
+        self.hi = np.maximum(self.lines[:, :2], self.lines[:, 2:])
+        self.reach = reach  # (x0, y0, x1, y1) holding every line and dot of the tile
+
+    def visible(self, rect: tuple[float, ...]) -> tuple[np.ndarray, np.ndarray]:
+        """The lines and dots whose bounds meet ``rect`` (left, top, right, bottom)."""
+        picked = self._pick(rect)
+        if picked is None:
+            return self.lines, self.dots
+        return self.lines[picked[0]], self.dots[picked[1]]
+
+    def count_in(self, rect: tuple[float, ...]) -> int:
+        """How many lines and dots :meth:`visible` returns for ``rect``."""
+        picked = self._pick(rect)
+        if picked is None:
+            return len(self.lines) + len(self.dots)
+        return int(np.count_nonzero(picked[0])) + int(np.count_nonzero(picked[1]))
+
+    def _pick(self, rect: tuple[float, ...]) -> tuple[np.ndarray, np.ndarray] | None:
+        """Line and dot masks of ``rect``; None when it holds every line and dot."""
+        left, top, right, bottom = rect
+        x0, y0, x1, y1 = self.reach
+        if left <= x0 and top <= y0 and right >= x1 and bottom >= y1:
+            return None
+        lo, hi, dots = self.lo, self.hi, self.dots
+        lines = (hi[:, 0] >= left) & (lo[:, 0] <= right) & (hi[:, 1] >= top) & (lo[:, 1] <= bottom)
+        near = (dots[:, 0] >= left) & (dots[:, 0] <= right)
+        near &= (dots[:, 1] >= top) & (dots[:, 1] <= bottom)
+        return lines, near
+
+
+class SkeletonLayerItem(QGraphicsItem):
+    """A 1 px skeleton raster drawn as a line at every zoom (spec section 10.3).
+
+    ``color`` is the line colour (a token), ``halo`` adds the dark halo, and
+    ``vectors=False`` never draws pixels or vectors magnified: the overlay is drawn
+    bilinear from device scale 1 (the Library). Opacity and visibility use the standard
+    item API; the mask is only read.
+    """
+
+    VECTOR_MIN_SCALE = 2.0
+    TILE = 256  # vector extraction tile, image px
+    EXTRACT_BUDGET_MS = 4.0  # vector extraction per paint
+    GL_SEGMENT_BUDGET = 6000
+    RASTER_HALO_BUDGET = 400
+    RASTER_THIN_BUDGET = 2500
+
+    def __init__(
+        self,
+        parent: QGraphicsItem | None = None,
+        *,
+        color: str = tokens.SKEL,
+        halo: bool = True,
+        vectors: bool = True,
+    ) -> None:
+        """An empty item; :meth:`set_mask` gives it a skeleton."""
+        super().__init__(parent)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
+        self._vectors = vectors
+        line = QColor(color)
+        dark = QColor(tokens.BG_0)
+        dark.setAlpha(HALO_ALPHA)
+        self._table = _color_table(line, dark if halo else None)
+        self._line_pen = _cosmetic_pen(line, 2.0)
+        self._thin_pen = _cosmetic_pen(line, 1.0)
+        self._halo_pen = _cosmetic_pen(dark, 4.0) if halo else None
+        self._mask: np.ndarray | None = None
+        self._indices: np.ndarray | None = None  # overlay_indices of the mask
+        self._width = self._height = 0
+        self._scale = (1.0, 1.0)
+        self._revision = 0
+        self._mode = ""
+        self._base_revision = 0  # every tile's revision after the last full change
+        self._tile_revisions: dict[TileKey, int] = {}
+        self._tile_vectors: dict[TileKey, _TileVectors] = {}
+        self._tile_images: dict[TileKey, QImage] = {}
+        self._full_image: QImage | None = None  # vectors=False: one image, bilinear
+        self._pyramid: ImagePyramid | None = None  # max-pool pyramid of the mask
+        self._level_images: dict[int, QImage] = {}
+
+    # ------------------------------------------------------------------ public API
+    def set_mask(
+        self,
+        mask: np.ndarray | None,
+        *,
+        changed: Box | None = None,
+        scale: tuple[float, float] = (1.0, 1.0),
+    ) -> None:
+        """Show ``mask`` (uint8 0/255, kept by reference and only read).
+
+        ``changed`` is the ``(x, y, w, h)`` box of the pixels that may differ from the
+        previous mask (None: everything changed). ``scale`` is the item transform, e.g.
+        image size / skeleton size for a skeleton raster smaller than the photo. Never
+        extracts vectors: the next paint does, lazily.
+        """
+        self._revision += 1
+        self._set_scale(scale)
+        previous, self._mask = self._mask, mask
+        if mask is None:
+            self._indices = None
+            self._resize(0, 0)
+        elif (
+            changed is None
+            or self._indices is None
+            or (mask.shape[1], mask.shape[0]) != (self._width, self._height)
+        ):
+            self._resize(mask.shape[1], mask.shape[0])
+            self._indices = np.ascontiguousarray(overlay_indices(mask))
+        else:
+            if mask is not previous:
+                self._pyramid = None  # it reads its level 0 by reference
+            self._update_box(changed)
+            return
+        self._drop_caches()
+        self.update()
+
+    def revision(self) -> int:
+        """Number of ``set_mask`` calls so far (test hook)."""
+        return self._revision
+
+    def mode_painted(self) -> str:
+        """The tier the last paint used: "raster-lod", "raster", "raster-smooth", "vector",
+        "vector-thin", or "" before any paint and without a mask (test hook)."""
+        return self._mode
+
+    def vector_tiles(self) -> dict[TileKey, int]:
+        """``(tx, ty) -> tile revision`` of the cached vector segments (test hook)."""
+        return {key: tile.revision for key, tile in self._tile_vectors.items()}
+
+    # ------------------------------------------------------------------ QGraphicsItem
+    def boundingRect(self) -> QRectF:
+        """The skeleton raster in its own pixels: ``(0, 0, w, h)``."""
+        return QRectF(0.0, 0.0, float(self._width), float(self._height))
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionGraphicsItem,
+        widget: QWidget | None = None,
+    ) -> None:
+        """Draw ``option.exposedRect`` in the tier of the painter's device scale."""
+        if self._indices is None or not self._width or not self._height:
+            self._mode = ""
+            return
+        exposed = option.exposedRect.intersected(self.boundingRect())
+        if painter.hasClipping():  # QGraphicsScene.render exposes the whole item: clip it
+            exposed = exposed.intersected(painter.clipBoundingRect())
+        if exposed.isEmpty():
+            return
+        scale = device_scale(painter)
+        painter.save()  # the Library view sets DontSavePainterState
+        try:
+            # Hints off before the clip: an antialiased clip would blend its edges.
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+            painter.setClipRect(exposed, Qt.ClipOperation.IntersectClip)
+            if scale < 1.0:
+                self._mode = "raster-lod"
+                self._paint_lod(painter, scale)
+            elif not self._vectors:
+                self._mode = "raster-smooth"
+                self._paint_smooth(painter)
+            elif scale < self.VECTOR_MIN_SCALE:
+                self._mode = "raster"
+                self._paint_tiles(painter, self._tiles_in(_edges(exposed), reach=0.0))
+            else:
+                seen = self._on_screen(painter, widget, exposed)
+                self._mode = self._paint_vectors(painter, exposed, seen, scale)
+        finally:
+            painter.restore()
+
+    # ------------------------------------------------------------------ tiers
+    def _paint_lod(self, painter: QPainter, scale: float) -> None:
+        """Max-pool level with at least one device px per level px, drawn nearest.
+
+        The pyramid pools the skeleton (lines stay connected) and each level gets its own
+        overlay, so the halo is one level pixel on both sides at every zoom.
+        """
+        if self._pyramid is None:  # down to 1 px: small skeletons need levels too (lazy)
+            self._pyramid = ImagePyramid(self._mask, reducer=max_half, min_side=1)
+        k = _lod_level(scale, self._pyramid.count)
+        image = self._level_images.get(k)
+        if image is None:
+            level = self._pyramid.level(k)
+            indices = self._indices if k == 0 else overlay_indices(level)
+            image = self._level_images[k] = _argb(indices, self._table)
+        f = float(1 << k)
+        w, h = float(self._width), float(self._height)
+        painter.drawImage(QRectF(0.0, 0.0, w, h), image, QRectF(0.0, 0.0, w / f, h / f))
+
+    def _paint_smooth(self, painter: QPainter) -> None:
+        """The whole level-0 overlay, bilinear (one image: tiles would seam)."""
+        if self._full_image is None:
+            self._full_image = _argb(self._indices, self._table)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawImage(self.boundingRect(), self._full_image)
+
+    def _paint_tiles(self, painter: QPainter, keys: list[TileKey]) -> None:
+        """Level-0 overlay tiles, nearest, with edges on device pixels (no seams)."""
+        transform = painter.deviceTransform()
+        for key in keys:
+            x0, y0, x1, y1 = self._tile_bounds(key)
+            painter.drawImage(_snapped(transform, x0, y0, x1, y1), self._tile_image(key))
+
+    def _paint_vectors(self, painter: QPainter, exposed: QRectF, seen: QRectF, scale: float) -> str:
+        """Vector links within the paint engine's budget; returns the tier painted.
+
+        The tier is decided by the segments of the whole on-screen part (``seen``), so a
+        small repaint (a hover on the raster viewport) draws the tier of the full frame;
+        only ``exposed`` is drawn. A tile not extracted yet (extraction stops after
+        EXTRACT_BUDGET_MS per paint) draws the pixel overlay, and the item asks for another
+        paint until every tile on screen is done.
+        """
+        gl = _is_gl(painter)
+        limit = self.GL_SEGMENT_BUDGET if gl else self.RASTER_THIN_BUDGET
+        reach = _PEN_REACH / scale
+        count, pending = self._count_on_screen(_edges(seen, reach), limit)
+        pixels = self._tiles_in(_edges(exposed), reach=0.0)
+        if count > limit:
+            self._paint_tiles(painter, pixels)
+            return "raster"
+        waiting = [key for key in pixels if key not in self._tile_vectors]
+        if waiting:
+            self._paint_tiles(painter, waiting)
+        if pending:
+            self.update(seen)  # extract the rest in the next frames
+        drawn = _edges(exposed, reach)
+        line_parts, dot_parts = [], []
+        for key in self._tiles_in(drawn):
+            tile = self._tile_vectors.get(key)
+            if tile is not None:
+                lines, dots = tile.visible(drawn)
+                line_parts.append(lines)
+                dot_parts.append(dots)
+        thin = not gl and count > self.RASTER_HALO_BUDGET
+        if line_parts:
+            pens = [self._thin_pen] if thin else [self._halo_pen, self._line_pen]
+            self._stroke(painter, pens, line_parts, dot_parts)
+        return "vector-thin" if thin else "vector"
+
+    def _count_on_screen(self, rect: Edges, limit: int) -> tuple[int, bool]:
+        """Segments meeting ``rect`` and whether on-screen tiles are still pending.
+
+        Missing tiles are extracted centre first, within EXTRACT_BUDGET_MS (at least one
+        tile per call, so a zero budget still progresses); counting stops past ``limit``,
+        where the answer is the pixel overlay whatever the pending tiles hold.
+        """
+        keys = self._tiles_in(rect)
+        cx, cy = (rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0
+        half = self.TILE / 2.0
+        keys.sort(
+            key=lambda k: (k[0] * self.TILE + half - cx) ** 2 + (k[1] * self.TILE + half - cy) ** 2
+        )
+        budget = self.EXTRACT_BUDGET_MS / 1000.0
+        start = time.perf_counter()
+        count, extracted, pending = 0, 0, False
+        for key in keys:
+            tile = self._tile_vectors.get(key)
+            if tile is None:
+                if extracted and time.perf_counter() - start >= budget:
+                    pending = True
+                    continue
+                tile = self._extract(key)
+                extracted += 1
+            count += tile.count_in(rect)
+            if count > limit:
+                return count, False
+        return count, pending
+
+    def _on_screen(self, painter: QPainter, widget: QWidget | None, exposed: QRectF) -> QRectF:
+        """The item part inside ``widget`` (the view's viewport), in item px; just
+        ``exposed`` without a widget (``QGraphicsScene.render``)."""
+        if widget is None:
+            return exposed
+        inverse, invertible = painter.transform().inverted()
+        if not invertible:
+            return exposed
+        seen = inverse.mapRect(QRectF(widget.rect())).intersected(self.boundingRect())
+        return seen.united(exposed)
+
+    @staticmethod
+    def _stroke(
+        painter: QPainter,
+        pens: list[QPen | None],
+        line_parts: list[np.ndarray],
+        dot_parts: list[np.ndarray],
+    ) -> None:
+        """Every line and dot with each pen in turn (None: skipped), antialiased."""
+        lines = _qt_array(QLineF, np.concatenate(line_parts), 4)
+        dots = _qt_array(QPointF, np.concatenate(dot_parts), 2)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        for pen in pens:
+            if pen is None:
+                continue
+            painter.setPen(pen)
+            if len(lines):
+                painter.drawLines(lines)
+            if len(dots):
+                painter.drawPoints(dots)
+
+    # ------------------------------------------------------------------ caches
+    def _extract(self, key: TileKey) -> _TileVectors:
+        """Extract and cache the vectors of tile ``key`` with its current revision."""
+        x0, y0, x1, y1 = self._tile_bounds(key)
+        links = tile_segments(self._mask, (x0, y0, x1 - x0, y1 - y0))
+        revision = self._tile_revisions.get(key, self._base_revision)
+        tile = _TileVectors(revision, links, (x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0))
+        self._tile_vectors[key] = tile
+        return tile
+
+    def _tile_image(self, key: TileKey) -> QImage:
+        image = self._tile_images.get(key)
+        if image is None:
+            x0, y0, x1, y1 = self._tile_bounds(key)
+            image = self._tile_images[key] = _argb(self._indices[y0:y1, x0:x1], self._table)
+        return image
+
+    def _tile_bounds(self, key: TileKey) -> tuple[int, int, int, int]:
+        t = self.TILE
+        x0, y0 = key[0] * t, key[1] * t
+        return x0, y0, min(self._width, x0 + t), min(self._height, y0 + t)
+
+    def _tiles_in(self, rect: Edges, reach: float = 1.0) -> list[TileKey]:
+        """The tiles meeting ``rect`` (item px) grown by ``reach``, row-major (a tile's
+        links reach one pixel beyond it)."""
+        left, top = max(0.0, rect[0] - reach), max(0.0, rect[1] - reach)
+        right = min(float(self._width), rect[2] + reach)
+        bottom = min(float(self._height), rect[3] + reach)
+        if right <= left or bottom <= top:
+            return []
+        t = self.TILE
+        tx0, ty0 = int(left) // t, int(top) // t
+        tx1, ty1 = (math.ceil(right) - 1) // t, (math.ceil(bottom) - 1) // t
+        return [(tx, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]
+
+    def _update_box(self, changed: Box) -> None:
+        """The mask changed inside ``changed`` only: O(box) overlay patch and invalidation.
+
+        The overlay (line + 3x3 halo) changes on the box padded by 1 px and is recomputed
+        there from the box padded by 2 px; tiles meeting the padded box lose their vectors
+        (a link reads a one-pixel margin) and overlay images. Nothing is extracted.
+        """
+        w, h = self._width, self._height
+        x0, y0, x1, y1 = _clip_box(changed, (h, w))
+        if x1 <= x0 or y1 <= y0:
+            return
+        ox0, oy0, ox1, oy1 = max(x0 - 1, 0), max(y0 - 1, 0), min(x1 + 1, w), min(y1 + 1, h)
+        ix0, iy0, ix1, iy1 = max(x0 - 2, 0), max(y0 - 2, 0), min(x1 + 2, w), min(y1 + 2, h)
+        fresh = overlay_indices(self._mask[iy0:iy1, ix0:ix1])
+        self._indices[oy0:oy1, ox0:ox1] = fresh[oy0 - iy0 : oy1 - iy0, ox0 - ix0 : ox1 - ix0]
+        t = self.TILE
+        for ty in range(oy0 // t, (oy1 - 1) // t + 1):
+            for tx in range(ox0 // t, (ox1 - 1) // t + 1):
+                self._tile_revisions[(tx, ty)] = self._revision
+                self._tile_vectors.pop((tx, ty), None)
+                self._tile_images.pop((tx, ty), None)
+        self._full_image = None
+        if self._pyramid is not None:
+            self._pyramid.invalidate((x0, y0, x1 - x0, y1 - y0))
+        self._level_images.clear()
+        self.update(QRectF(ox0, oy0, ox1 - ox0, oy1 - oy0))
+
+    def _drop_caches(self) -> None:
+        self._base_revision = self._revision
+        self._tile_revisions.clear()
+        self._tile_vectors.clear()
+        self._tile_images.clear()
+        self._full_image = None
+        self._pyramid = None
+        self._level_images.clear()
+
+    def _resize(self, width: int, height: int) -> None:
+        if (width, height) != (self._width, self._height):
+            self.prepareGeometryChange()
+            self._width, self._height = width, height
+
+    def _set_scale(self, scale: tuple[float, float]) -> None:
+        sx, sy = float(scale[0]), float(scale[1])
+        if (sx, sy) != self._scale:
+            self._scale = (sx, sy)
+            self.setTransform(QTransform.fromScale(sx, sy))
+
+
+# ------------------------------------------------------------------------------ helpers
+def _edges(rect: QRectF, grow: float = 0.0) -> Edges:
+    """``(left, top, right, bottom)`` of ``rect`` grown by ``grow`` on every side."""
+    return (rect.left() - grow, rect.top() - grow, rect.right() + grow, rect.bottom() + grow)
+
+
+def _lod_level(scale: float, count: int) -> int:
+    """The finest max-pool level with at least one device px per level px:
+    ``ceil(-log2 s)`` (a nearest draw that minifies would drop rows)."""
+    if count <= 1 or scale >= 1.0:
+        return 0
+    if scale <= 0.0:
+        return count - 1
+    return max(0, min(math.ceil(-math.log2(scale) - _LOD_EPS), count - 1))
+
+
+def _snapped(transform: QTransform, x0: float, y0: float, x1: float, y1: float) -> QRectF:
+    """The item rect ``[x0, x1) x [y0, y1)`` with its edges moved onto device-pixel edges.
+
+    Adjacent tiles then share an exact device edge: the raster engine rounds a scaled
+    image's device x and width separately, which would leave 1 px gaps or overlaps.
+    """
+    if transform.type().value > QTransform.TransformationType.TxScale.value:
+        return QRectF(x0, y0, x1 - x0, y1 - y0)
+    sx, sy, dx, dy = transform.m11(), transform.m22(), transform.dx(), transform.dy()
+    left, right = round(sx * x0 + dx), round(sx * x1 + dx)
+    top, bottom = round(sy * y0 + dy), round(sy * y1 + dy)
+    return QRectF((left - dx) / sx, (top - dy) / sy, (right - left) / sx, (bottom - top) / sy)
+
+
+def _is_gl(painter: QPainter) -> bool:
+    engine = painter.paintEngine()
+    return engine is not None and engine.type() in _GL_ENGINES
+
+
+def _argb(indices: np.ndarray, table: list[int]) -> QImage:
+    """An owning ARGB32 premultiplied image of the palette ``indices``."""
+    data = np.ascontiguousarray(indices)
+    h, w = data.shape
+    image = QImage(data.data, w, h, w, QImage.Format.Format_Indexed8)
+    image.setColorTable(table)
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+
+
+def _color_table(line: QColor, halo: QColor | None) -> list[int]:
+    """Indexed8 colour table: ``line`` on LINE_INDEX, ``halo`` on HALO_INDEX (transparent
+    without one), transparent elsewhere."""
+    table = [0] * 256
+    table[LINE_INDEX] = line.rgba()
+    if halo is not None:
+        table[HALO_INDEX] = halo.rgba()
+    return table
+
+
+def _cosmetic_pen(color: QColor, width: float) -> QPen:
+    pen = QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pen.setCosmetic(True)
+    return pen
+
+
+_SHARES_NUMPY_LAYOUT: dict[type, bool] = {}
+
+
+def _qt_array(cls: type, values: np.ndarray, width: int) -> sip.array | list:
+    """Rows of ``values`` (n, ``width`` doubles) as ``cls`` (QLineF / QPointF) for
+    ``drawLines`` / ``drawPoints``: a ``sip.array`` filled straight from numpy (0.01 ms
+    for 6000 lines, against 3 ms for a list of QLineF), or a list where qreal is not
+    double."""
+    shares = _SHARES_NUMPY_LAYOUT.get(cls)
+    if shares is None:
+        shares = _SHARES_NUMPY_LAYOUT[cls] = _probe_layout(cls, width)
+    if not shares:
+        return [cls(*row) for row in values.tolist()]
+    array = sip.array(cls, len(values))
+    if len(values):
+        np.frombuffer(memoryview(array), np.float64).reshape(-1, width)[:] = values
+    return array
+
+
+def _probe_layout(cls: type, width: int) -> bool:
+    """Whether a ``sip.array`` of ``cls`` is ``width`` contiguous doubles per element."""
+    try:
+        probe = sip.array(cls, 1)
+        view = np.frombuffer(memoryview(probe), np.float64)
+        if view.size != width:
+            return False
+        view[:] = np.arange(1.0, width + 1.0)
+        return np.array_equal(_values(probe[0]), view)
+    except (TypeError, ValueError, BufferError):
+        return False
+
+
+def _values(element: QLineF | QPointF) -> list[float]:
+    if isinstance(element, QLineF):
+        return [element.x1(), element.y1(), element.x2(), element.y2()]
+    return [element.x(), element.y()]
