@@ -5,7 +5,10 @@ The math, settings validation, decoded-source cache and saved-defaults store liv
 Qt-free :mod:`app.enhancement`; this module is the thin Qt adapter the editors use:
 
 * ``controls.enhancement_changed`` - re-render the image (debounced while sliders move);
-* ``controls.is_active()`` / ``controls.apply_to(bgr)`` / ``controls.display_pixmap(path)``;
+* ``controls.is_active()`` / ``controls.apply_to(bgr)``;
+* ``controls.source_image(path)`` - the one cached, read-only decode of the photo;
+  ``controls.display_image(path)`` - that decode as shown (enhanced when active);
+  ``controls.display_pixmap(path)`` - the same as a ``QPixmap``;
 * ``controls.settings()`` / ``controls.set_settings(settings)``.
 
 Enhancement is display-only: it never changes masks, skeletons or measurements.
@@ -155,13 +158,30 @@ class NormalizationControls(QWidget):
         """``image`` enhanced when active, else ``image`` itself (never modified)."""
         return enhance(image, self.settings()) if self.is_active() else image
 
+    def source_image(self, path: str) -> np.ndarray | None:
+        """The decoded BGR image at ``path`` (None if unreadable): the editor's one decode.
+
+        Cached and read-only: repeat calls return the same array until the file changes. The
+        geometry is Qt's (EXIF orientation ignored, :data:`app.enhancement.DECODE_FLAGS`).
+        """
+        return self._sources.get(path)
+
+    def display_image(self, path: str) -> np.ndarray | None:
+        """What the editor should show for ``path`` as a BGR array (None if unreadable).
+
+        The cached :meth:`source_image` itself while the enhancement is off, else a new
+        enhanced array; the source is never modified.
+        """
+        source = self.source_image(path)
+        return None if source is None else self.apply_to(source)
+
     def display_pixmap(self, path: str) -> QPixmap | None:
         """What the editor should show for the image at ``path`` (None if unreadable).
 
         The decoded file is cached, so live previews never re-read it.
         """
-        source = self._sources.get(path)
-        return None if source is None else bgr_to_qpixmap(self.apply_to(source))
+        image = self.display_image(path)
+        return None if image is None else bgr_to_qpixmap(image)
 
     def set_image(self, image):
         """Remember the current image; Apply is enabled only when there is one."""
@@ -190,6 +210,7 @@ class NormalizationControls(QWidget):
 
     # ------------------------------------------------------------------ layout
     def init_ui(self):
+        """Build the controls (method, sliders, Apply / Reset, Show original, Save as default)."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -300,9 +321,11 @@ class NormalizationControls(QWidget):
         self.contrast_group.setVisible(method == METHOD_STRETCH)
 
     def on_clip_changed(self, value):
+        """Show the CLAHE clip limit of slider ``value`` (tenths)."""
         self.clip_label.setText(f"Clip limit: {value / 10.0:.1f}")
 
     def on_tile_changed(self, value):
+        """Show the CLAHE tile grid of slider ``value``."""
         self.tile_label.setText(f"Tile size: {value}×{value}")
 
     def on_percentile_changed(self, *_):

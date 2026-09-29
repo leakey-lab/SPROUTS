@@ -14,6 +14,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtGui import QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QPushButton, QWidget  # noqa: E402
 
@@ -195,6 +196,36 @@ def test_display_pixmap_raw_then_enhanced_and_none_for_missing(app, tmp_path):
     controls.original_check.setChecked(True)
     assert controls.display_pixmap(str(path)).toImage() == raw.toImage()
     assert controls.display_pixmap(str(tmp_path / "missing.png")) is None
+
+
+def test_source_image_is_one_cached_decode_in_qt_geometry(app, tmp_path):
+    """C12: the editors decode once; the array has the size QImage gives the same file."""
+    from tests.test_enhance_core import exif_rotated_jpeg
+
+    path = exif_rotated_jpeg(tmp_path / "rotated.jpg")
+    controls = NormalizationControls(store=_store(tmp_path))
+    first = controls.source_image(path)
+    assert controls.source_image(path) is first
+    qt = QImage(path)
+    assert first.shape == (qt.height(), qt.width(), 3) == (40, 80, 3)
+    assert controls.source_image(str(tmp_path / "missing.png")) is None
+
+
+def test_display_image_is_the_source_until_enhanced(app, tmp_path):
+    path = tmp_path / "img.png"
+    cv2.imencode(".png", _image())[1].tofile(str(path))
+    controls = NormalizationControls(store=_store(tmp_path))
+    source = controls.source_image(str(path))
+    assert controls.display_image(str(path)) is source  # no copy while enhancement is off
+    controls.method_combo.setCurrentText(METHOD_STRETCH)
+    controls.apply_button.click()
+    shown = controls.display_image(str(path))
+    assert shown is not source
+    assert np.array_equal(shown, enhance(source, controls.settings()))
+    assert not np.array_equal(shown, source)
+    controls.original_check.setChecked(True)
+    assert controls.display_image(str(path)) is source
+    assert controls.display_image(str(tmp_path / "missing.png")) is None
 
 
 def test_legacy_public_surface_is_kept(app, tmp_path):

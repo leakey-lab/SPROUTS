@@ -207,6 +207,36 @@ def test_default_store_lives_in_the_user_config_dir(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- cache
+def exif_rotated_jpeg(path, width=80, height=40, orientation=6) -> str:
+    """A JPEG stored ``width`` x ``height`` whose EXIF orientation says "rotate on display"."""
+    from PIL import Image
+
+    picture = Image.fromarray(np.full((height, width, 3), 128, np.uint8))
+    exif = Image.Exif()
+    exif[0x0112] = orientation  # 6 = rotate 90 degrees clockwise to display
+    picture.save(str(path), exif=exif.tobytes())
+    return str(path)
+
+
+def test_source_cache_keeps_the_stored_geometry_of_an_exif_rotated_jpeg(tmp_path):
+    """Qt ignores EXIF orientation (every canvas and saved mask use the stored size), so the
+    one decode must too; otherwise the photo would be transposed against the plane (C12)."""
+    path = exif_rotated_jpeg(tmp_path / "rotated.jpg")
+    rotated = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR)
+    assert rotated.shape == (80, 40, 3)  # the tag is real: a plain decode rotates it
+    assert SourceImageCache().get(path).shape == (40, 80, 3)
+
+
+def test_source_cache_hands_out_a_read_only_array(tmp_path):
+    """The decode is shared by the photo, Enhance and the pyramid: nobody may edit it."""
+    path = tmp_path / "img.png"
+    cv2.imencode(".png", np.zeros((4, 5, 3), np.uint8))[1].tofile(str(path))
+    image = SourceImageCache().get(str(path))
+    assert not image.flags.writeable
+    with pytest.raises(ValueError):
+        image[0, 0, 0] = 1
+
+
 def test_source_cache_decodes_once_and_invalidates_on_change(tmp_path, monkeypatch):
     path = tmp_path / "img.png"
     img = np.zeros((4, 5, 3), np.uint8)

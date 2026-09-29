@@ -6,8 +6,9 @@
   bit-exact with the former float64 ``np.percentile`` implementation but takes the percentiles
   from a 256-bin histogram and applies a ``cv2.LUT`` for uint8 images (~10x faster, audit PE-08);
   a flat channel (upper percentile == lower) is returned unchanged instead of turning black.
-* :class:`SourceImageCache` - keeps the last decoded source image so live previews do not
-  re-read the file on every change.
+* :class:`SourceImageCache` - keeps the last decoded source image (read-only, decoded with
+  :data:`DECODE_FLAGS`: EXIF orientation ignored, as Qt does) so the photo, the live
+  previews and the photo pyramid share one decode.
 * :class:`EnhanceDefaultsStore` - the user's saved defaults, stored per user in
   ``user_config_dir()/normalization_defaults.json`` (atomic write). The shipped
   ``config/normalization_defaults.json`` is read-only factory defaults and seeds the user file
@@ -33,6 +34,7 @@ from app.io_utils import atomic_write_text, imread_unicode
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DECODE_FLAGS",
     "DEFAULT_SETTINGS",
     "DEFAULTS_FILE_NAME",
     "METHODS",
@@ -217,10 +219,17 @@ def enhance(img: np.ndarray, settings: EnhanceSettings) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- source cache
+#: How every editor decodes its photo: 3-channel BGR in the file's *stored* geometry. Qt
+#: ignores EXIF orientation (``QImageReader.autoTransform`` is off), and so do the canvases
+#: and every saved mask; OpenCV would apply it, which transposes a rotated JPEG against them.
+DECODE_FLAGS = cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+
+
 class SourceImageCache:
     """The most recently decoded source image, re-read only when the file changes.
 
-    The returned array is shared: callers must treat it as read-only.
+    One decode feeds the photo, the Enhance render and the photo pyramid, so the returned
+    array is shared and marked read-only (``flags.writeable`` is False).
     """
 
     def __init__(self) -> None:
@@ -228,7 +237,7 @@ class SourceImageCache:
         self._image: np.ndarray | None = None
 
     def get(self, path: str | os.PathLike[str]) -> np.ndarray | None:
-        """Decoded BGR image at ``path`` (None when it cannot be read)."""
+        """Decoded BGR image at ``path`` in Qt's geometry (None when it cannot be read)."""
         full = os.path.abspath(os.fspath(path))
         try:
             st = os.stat(full)
@@ -236,11 +245,14 @@ class SourceImageCache:
             return None
         key = (full, st.st_mtime_ns, st.st_size)
         if key != self._key:
-            self._image = imread_unicode(full, cv2.IMREAD_COLOR)
+            self._image = imread_unicode(full, DECODE_FLAGS)
+            if self._image is not None:
+                self._image.flags.writeable = False
             self._key = key if self._image is not None else None
         return self._image
 
     def clear(self) -> None:
+        """Forget the cached image (the next :meth:`get` decodes again)."""
         self._key = None
         self._image = None
 
