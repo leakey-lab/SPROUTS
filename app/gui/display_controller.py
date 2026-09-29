@@ -1,91 +1,54 @@
+"""Library display: the selected image as Single, Overlay or Side by side.
+
+``MagnifyingGraphicsView`` is the canvas. It shares the zoom / fit / pan model of
+every canvas (:class:`CanvasViewMixin`) and, having no tools, pans on a left
+drag. ``DisplayController`` decides what the canvas shows for the selection:
+
+* Single: the image.
+* Overlay: the image with its ML skeleton (``skeletons/<stem>_fake.png``) on top,
+  in the SPROUTS skeleton colour.
+* Side by side: the image and its skeleton, the skeleton scaled to the image's
+  height.
+
+Every new image is fitted to the canvas (and stays fitted on resize until the
+user zooms or pans). A message replaces the canvas when nothing is selected or
+the image cannot be decoded, so the canvas is never blank or stale.
+"""
+
+import html
 import logging
 import os
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap, QWheelEvent
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
     QVBoxLayout,
-    QWidget,
 )
 
+from app.gui.widgets import tokens
+from app.io_utils import imread_unicode
+
 from .canvas_background import configure_canvas_background
+from .canvas_view import CanvasViewMixin
 
 logger = logging.getLogger(__name__)
 
 
-def _env_bool(name: str, *, default: bool) -> bool:
-    v = os.environ.get(name, None)
-    if v is None:
-        return bool(default)
-    return v.strip().lower() in ("1", "true", "yes", "on")
+class MagnifyingGraphicsView(CanvasViewMixin, QGraphicsView):
+    """Library display canvas. It has no tools, so a left drag pans."""
 
+    FIT_MARGIN = 2  # nothing floats over this canvas; keep the image edge to edge
 
-# OpenGL viewports are enabled by default for smooth/fast QGraphicsView rendering.
-# NOTE (Qt6): QtWebEngine (QWebEngineView) uses a QQuickWidget internally and cannot
-# share a top-level window with any QOpenGLWidget. We temporarily disable these
-# viewports when opening the embedded visualizations.
-DEFAULT_OPENGL_VIEWPORT_ENABLED = _env_bool("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", default=True)
-
-try:
-    from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-
-    HAS_OPENGL = True
-except ImportError:
-    HAS_OPENGL = False
-
-
-class MagnifyingGraphicsView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-
-        # Set up high-quality rendering
-        self.setup_high_quality_rendering()
-
-        self._opengl_viewport_enabled = False
-        self.set_opengl_viewport_enabled(DEFAULT_OPENGL_VIEWPORT_ENABLED)
+        self._init_canvas(pan_mode=True)
         configure_canvas_background(self)
-
-        # Zoom control
-        self.zoom = 1.0
-        self.min_zoom = 0.1
-        self.max_zoom = 10.0
-
-        # Set transformation anchor for better zoom quality
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-
-    def set_opengl_viewport_enabled(self, enabled: bool) -> None:
-        """Enable/disable QOpenGLWidget viewport at runtime.
-
-        This is used to temporarily disable OpenGL while QtWebEngine visualizations
-        are shown (Qt6 limitation: QQuickWidget + QOpenGLWidget in same window).
-        """
-        enabled = bool(enabled)
-
-        if enabled and self._opengl_viewport_enabled:
-            return
-        if (not enabled) and (not self._opengl_viewport_enabled):
-            return
-
-        if enabled and HAS_OPENGL:
-            try:
-                self.setViewport(QOpenGLWidget())
-                self._opengl_viewport_enabled = True
-                return
-            except (RuntimeError, OSError) as e:
-                # OpenGL context creation can fail on headless / driverless
-                # systems; fall through to a standard software viewport.
-                logger.warning("Failed to set OpenGL viewport: %s", e)
-
-        # Replace with a standard QWidget viewport (removes any existing QOpenGLWidget).
-        self.setViewport(QWidget())
-        self._opengl_viewport_enabled = False
+        self.setup_high_quality_rendering()
 
     def setup_high_quality_rendering(self):
         """Configure high-quality rendering settings to reduce noise during zoom"""
@@ -100,355 +63,207 @@ class MagnifyingGraphicsView(QGraphicsView):
         # Enable caching for better performance
         self.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
 
-        # Optimize for interactive use
-        self.setOptimizationFlags(
-            QGraphicsView.OptimizationFlag.DontSavePainterState
-            | QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing
-        )
+        # Optimize for interactive use. Not DontAdjustForAntialiasing: with the
+        # Antialiasing hint, items paint up to a pixel past their bounds, and
+        # partial viewport updates would leave those edges behind.
+        self.setOptimizationFlags(QGraphicsView.OptimizationFlag.DontSavePainterState)
 
-    def wheelEvent(self, event: QWheelEvent):
-        """Enhanced wheel event with high-quality zooming"""
-        # Check for Ctrl modifier for zoom
-        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            zoom_in = event.angleDelta().y() > 0
-
-            if zoom_in and self.zoom < self.max_zoom:
-                factor = 1.25
-                self.zoom *= factor
-            elif not zoom_in and self.zoom > self.min_zoom:
-                factor = 0.8
-                self.zoom *= factor
-            else:
-                event.ignore()
-                return
-
-            # Apply high-quality scaling
-            self.scale_with_quality(factor)
-            event.accept()
-        else:
-            # Allow normal scrolling when Ctrl is not pressed
-            super().wheelEvent(event)
-
-    def scale_with_quality(self, factor):
-        """Apply scaling with high quality settings to reduce noise"""
-        # Ensure smooth transformation for all items before scaling
-        if self.scene():
-            for item in self.scene().items():
-                if isinstance(item, QGraphicsPixmapItem):
-                    item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-                    item.setCacheMode(QGraphicsPixmapItem.CacheMode.DeviceCoordinateCache)
-
-        # Apply the scaling
-        self.scale(factor, factor)
-
-        # Force a high-quality update
-        self.viewport().update()
-
-    def reset_zoom(self):
-        """Reset zoom to fit the scene"""
+    def show_message(self, text: str, hint: str = "") -> None:
+        """Replace the scene with a centred message, at 100 % zoom."""
+        scene = QGraphicsScene()
+        item = scene.addText("")
+        body = f'<div style="color:{tokens.TEXT_MUTED}; font-size:14px;">{html.escape(text)}</div>'
+        if hint:
+            body += (
+                f'<div style="color:{tokens.TEXT_FAINT}; font-size:12px;">{html.escape(hint)}</div>'
+            )
+        item.setHtml(body)
+        document = item.document()
+        option = document.defaultTextOption()
+        option.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        document.setDefaultTextOption(option)
+        item.setTextWidth(document.idealWidth())  # centring needs a text width
+        self.setScene(scene)
+        self.clear_content_rect()  # Ctrl+0 and resizes leave the message alone
+        self.setSceneRect(item.sceneBoundingRect())  # smaller than the view: centred
         self.resetTransform()
-        self.zoom = 1.0
-        if self.scene():
-            self.fitInView(self.scene().sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def keyPressEvent(self, event):
-        """Handle keyboard shortcuts for zoom control"""
-        if event.key() == Qt.Key.Key_0 and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            # Ctrl+0 to reset zoom
-            self.reset_zoom()
-            event.accept()
-        elif (
-            event.key() == Qt.Key.Key_Plus
-            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
-        ):
-            # Ctrl++ to zoom in
-            if self.zoom < self.max_zoom:
-                factor = 1.25
-                self.zoom *= factor
-                self.scale_with_quality(factor)
-            event.accept()
-        elif (
-            event.key() == Qt.Key.Key_Minus
-            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
-        ):
-            # Ctrl+- to zoom out
-            if self.zoom > self.min_zoom:
-                factor = 0.8
-                self.zoom *= factor
-                self.scale_with_quality(factor)
-            event.accept()
-        else:
-            super().keyPressEvent(event)
+
+def _overlay_color_table(alpha: int) -> list[int]:
+    """Indexed8 colour table: 0 transparent, every foreground value in the skeleton colour.
+
+    F-017: the overlay is Otsu-binarized, so it holds only 0 and 255; colouring
+    1..255 keeps it correct should a soft mask ever produce values in between.
+    """
+    color = QColor(tokens.SKEL)
+    color.setAlpha(alpha)
+    return [0] + [color.rgba()] * 255
 
 
 class DisplayController:
+    """What the Library canvas shows for the selected image (see the module docstring)."""
+
+    SINGLE, OVERLAY, SIDE_BY_SIDE = "Single Image", "Overlay", "Side by Side"
+    OVERLAY_ALPHA = 204  # 80 %: the skeleton reads clearly, the root under it stays visible
+    SIDE_BY_SIDE_GAP = 12  # image pixels between the image and its skeleton
+    EMPTY_MESSAGE = "Select an image in the library"
+    EMPTY_HINT = "Ctrl+wheel to zoom  ·  Ctrl+0 to fit  ·  drag to pan"
+
     def __init__(self, main_window):
         self.main_window = main_window
-        self.magnifying_view = None
-        self.current_image = None
-        self.current_fake_image = None
+        self.magnifying_view: MagnifyingGraphicsView | None = None
+        self.current_name: str | None = None
+        self.current_image: str | None = None
+        self.current_fake_image: str | None = None
+        self._overlay_colors = _overlay_color_table(self.OVERLAY_ALPHA)
 
-    def setup_display_area(self, parent):
+    def setup_display_area(self, parent) -> MagnifyingGraphicsView:
+        """Put the canvas into ``parent``, showing the placeholder, and return it."""
         layout = QVBoxLayout(parent)
-
         self.magnifying_view = MagnifyingGraphicsView()
         layout.addWidget(self.magnifying_view)
+        self.clear_magnifying_view()
+        return self.magnifying_view
 
-        # Show helpful message about zoom controls
-        if self.main_window and hasattr(self.main_window, "status_bar"):
-            self.main_window.status_bar.showMessage(
-                "Tip: Use Ctrl+Mouse Wheel to zoom, Ctrl+0 to reset, Ctrl+/- for keyboard zoom",
-                10000,
-            )
+    def reset(self) -> None:
+        """Forget the selection (e.g. another folder was opened) and show the placeholder."""
+        self.current_name = self.current_image = self.current_fake_image = None
+        self.clear_magnifying_view()
 
-    def display_selected_image(self, item):
-        """Handle image selection with lazy loading (for backward compatibility)"""
-        name = item.text()
-        self.display_selected_image_by_name(name)
-
+    # ------------------------------------------------------------- selection
     def display_selected_image_by_name(self, name):
-        """Handle image selection by name with lazy loading"""
+        """Show the library image ``name`` in the current view mode."""
+        self.current_name = name
         self.current_image = self.main_window.image_manager.get_image_path(name)
-
-        view_mode = self.main_window.view_mode_combo.currentText()
-        if view_mode in ["Overlay", "Side by Side"]:
-            # Lazy load the processed image when needed
-            self.current_fake_image = self.main_window.image_manager.get_fake_image_path(name)
-
-            if not self.current_fake_image:
-                self.main_window.status_bar.showMessage(
-                    f"No processed image found for {name}", 3000
-                )
-
+        # The skeleton belongs to this image: look it up again, never reuse the
+        # previous image's (PG-02).
+        self.current_fake_image = None
         self.update_display()
 
     def update_display_mode(self):
-        """Handle view mode changes"""
-        view_mode = self.main_window.view_mode_combo.currentText()
-
-        # Reload images based on the new view mode
-        self.main_window.image_manager.reload_for_view_mode(view_mode)
-
-        # Refresh the file list in the main window
-        self.main_window.populate_file_list()
-
-        # Update the display
+        """Show the current image in the newly chosen mode (the library tree is untouched)."""
+        self.main_window.image_manager.reload_for_view_mode(self._view_mode())
         self.update_display()
 
     def update_display(self):
-        view_mode = self.main_window.view_mode_combo.currentText()
-
-        if self.current_image:
-            self.magnifying_view.show()
-            if view_mode == "Single Image":
-                self.display_single_image()
-            elif view_mode == "Overlay":
-                self.display_overlay_image()
-            elif view_mode == "Side by Side":
-                self.display_side_by_side_images()
-        else:
+        if not self.current_image:
             self.clear_magnifying_view()
+            return
+        mode = self._view_mode()
+        if mode == self.OVERLAY:
+            self.display_overlay_image()
+        elif mode == self.SIDE_BY_SIDE:
+            self.display_side_by_side_images()
+        else:
+            self.display_single_image()
 
+    def _view_mode(self) -> str:
+        return self.main_window.view_mode_combo.currentText()
+
+    # ----------------------------------------------------------------- modes
     def display_single_image(self):
-        if self.current_image:
-            pixmap = QPixmap(self.current_image)
-            self.set_magnifying_view_image(pixmap)
-        else:
-            self.clear_magnifying_view()
+        image = self._load_current_image()
+        if image is not None:
+            self.update_scene_items([QGraphicsPixmapItem(image)])
 
     def display_overlay_image(self):
-        """Display overlay with lazy-loaded processed image using layered items"""
-        if not self.current_image:
+        """The image with its skeleton drawn on top in the skeleton colour."""
+        image = self._load_current_image()
+        if image is None:
             return
-
-        # Load processed image if needed
-        if not self.current_fake_image:
-            base_name = os.path.splitext(os.path.basename(self.current_image))[0]
-            self.current_fake_image = self.main_window.image_manager.get_fake_image_path(base_name)
-
-        # 1. Base Image
-        real_pixmap = QPixmap(self.current_image)
-        if real_pixmap.isNull():
-            return
-
-        real_item = QGraphicsPixmapItem(real_pixmap)
-        real_item.setZValue(0)
-
-        items = [real_item]
-
-        # 2. Overlay Image (if available)
-        if self.current_fake_image:
-            fake_image_gray = cv2.imread(self.current_fake_image, cv2.IMREAD_GRAYSCALE)
-            if fake_image_gray is not None:
-                # Binarize
-                _, binary_mask = cv2.threshold(
-                    fake_image_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-                )
-
-                # Resize if needed
-                if (real_pixmap.width(), real_pixmap.height()) != (
-                    binary_mask.shape[1],
-                    binary_mask.shape[0],
-                ):
-                    binary_mask = cv2.resize(
-                        binary_mask,
-                        (real_pixmap.width(), real_pixmap.height()),
-                        interpolation=cv2.INTER_NEAREST,
-                    )
-
-                # Ensure mask is contiguous for QImage
-                if not binary_mask.flags["C_CONTIGUOUS"]:
-                    binary_mask = np.ascontiguousarray(binary_mask)
-
-                height, width = binary_mask.shape
-
-                # F-018: QImage wraps the numpy buffer without copying it, so
-                # the backing array MUST stay alive for as long as the QImage
-                # references it. Hold a reference on the controller; QPixmap
-                # .fromImage() below deep-copies the pixels, after which the
-                # array is free to be replaced.
-                self._overlay_backing_array = binary_mask
-
-                # Create QImage pointing directly to the numpy buffer
-                # Format_Indexed8: 1 byte per pixel
-                overlay_image = QImage(
-                    binary_mask.data,
-                    width,
-                    height,
-                    width,
-                    QImage.Format.Format_Indexed8,
-                )
-
-                # Define color table.
-                # F-017: the mask is Otsu-binarized above, so it contains ONLY
-                # 0 (background) and 255 (foreground) — there is no value in the
-                # 1..254 range. The table therefore makes index 0 fully
-                # transparent and colors everything from the first foreground
-                # value (1) upward, so it stays correct even if a future soft
-                # mask produces intermediate values rather than silently
-                # dropping foreground pixels below an arbitrary cutoff.
-                color_table = [0] * 256
-
-                # Fill the foreground range with the color.
-                neon_green = QColor(20, 255, 57, 128).rgba()
-                for i in range(1, 256):
-                    color_table[i] = neon_green
-
-                overlay_image.setColorTable(color_table)
-
-                overlay_pixmap = QPixmap.fromImage(overlay_image)
-                overlay_item = QGraphicsPixmapItem(overlay_pixmap)
-                overlay_item.setZValue(1)
-                items.append(overlay_item)
-            else:
-                logger.warning(
-                    "Failed to load fake image data for %s",
-                    os.path.basename(self.current_image),
-                )
-        else:
-            logger.info(
-                "No fake image found for %s - showing single image view",
-                os.path.basename(self.current_image),
-            )
-
+        items = [QGraphicsPixmapItem(image)]
+        overlay = self._skeleton_overlay(image.width(), image.height())
+        if overlay is not None:
+            overlay_item = QGraphicsPixmapItem(overlay)
+            overlay_item.setZValue(1)
+            items.append(overlay_item)
         self.update_scene_items(items)
 
     def display_side_by_side_images(self):
-        """Display original and processed images side by side using positioned items."""
-        if not self.current_image:
+        """The image, and beside it the skeleton scaled to the same height."""
+        image = self._load_current_image()
+        if image is None:
             return
-
-        # Load the original image
-        real_pixmap = QPixmap(self.current_image)
-        if real_pixmap.isNull():
-            return
-
-        real_item = QGraphicsPixmapItem(real_pixmap)
-        real_item.setZValue(0)
-
-        items = [real_item]
-
-        # Try to lazy load the processed image if needed
-        if not self.current_fake_image:
-            base_name = os.path.splitext(os.path.basename(self.current_image))[0]
-            self.current_fake_image = self.main_window.image_manager.get_fake_image_path(base_name)
-
-        # Processed Image
-        if self.current_fake_image:
-            # Convert _fake.png to _real.png for the processed image
-            real_processed_path = self.current_fake_image.replace("_fake.png", "_real.png")
-
-            # Note: The original code loaded 'real_processed_path' as 'real_pixmap' for the right side?
-            # Re-reading original logic: "painter.drawPixmap(0, 0, real_pixmap); painter.drawPixmap(width, 0, fake_pixmap)"
-            # Wait, the original code loaded `real_pixmap = QPixmap(real_processed_path)` which overrode the variable.
-            # So left image = processed_real, right image = processed_fake.
-
-            # Let's verify exactly what "Side by Side" usually means in this context.
-            # Usually it's Real vs Fake.
-            # The previous code did:
-            # real_pixmap = QPixmap(real_processed_path)  <-- This is the "real" input to the model
-            # fake_pixmap = QPixmap(self.current_fake_image) <-- This is the output
-
-            right_pixmap = QPixmap(self.current_fake_image)
-            left_pixmap = QPixmap(real_processed_path)
-
-            if not left_pixmap.isNull():
-                left_item = QGraphicsPixmapItem(left_pixmap)
-                left_item.setPos(0, 0)
-                items = [
-                    left_item
-                ]  # Replace the original real_item since we are showing the specific pair
-
-            if not right_pixmap.isNull():
-                right_item = QGraphicsPixmapItem(right_pixmap)
-                # Position it to the right of the first image
-                width = left_pixmap.width() if not left_pixmap.isNull() else real_pixmap.width()
-                right_item.setPos(width, 0)
-                items.append(right_item)
-
-        else:
-            self.main_window.status_bar.showMessage("Processed image not available", 3000)
-
+        items = [QGraphicsPixmapItem(image)]
+        path = self._current_skeleton_path()
+        skeleton = QPixmap(path) if path else QPixmap()
+        if not skeleton.isNull():
+            skeleton_item = QGraphicsPixmapItem(skeleton)
+            skeleton_item.setScale(image.height() / skeleton.height())
+            skeleton_item.setPos(image.width() + self.SIDE_BY_SIDE_GAP, 0)
+            items.append(skeleton_item)
+        elif path:
+            logger.warning("Failed to load skeleton %s", path)
         self.update_scene_items(items)
 
-    def set_magnifying_view_image(self, pixmap):
-        """Legacy wrapper for single image display"""
-        item = QGraphicsPixmapItem(pixmap)
-        self.update_scene_items([item])
+    # --------------------------------------------------------------- helpers
+    def _load_current_image(self) -> QPixmap | None:
+        """Decode the selected image; if that fails, say so on the canvas and in a toast."""
+        pixmap = QPixmap(self.current_image)
+        if not pixmap.isNull():
+            return pixmap
+        message = f"Could not open {os.path.basename(self.current_image)}"
+        logger.warning("%s (%s)", message, self.current_image)
+        self.clear_magnifying_view(message)
+        self._notify(message, "danger")
+        return None
+
+    def _current_skeleton_path(self) -> str | None:
+        """Path of the current image's ML skeleton, looked up for this image only."""
+        if self.current_fake_image is None:
+            name = self.current_name or os.path.splitext(os.path.basename(self.current_image))[0]
+            self.current_fake_image = self.main_window.image_manager.get_fake_image_path(name)
+            if self.current_fake_image is None:
+                self._status(f"No skeleton found for {name}")
+        return self.current_fake_image
+
+    def _skeleton_overlay(self, width: int, height: int) -> QPixmap | None:
+        """The skeleton as a translucent ``width`` x ``height`` overlay, or None."""
+        path = self._current_skeleton_path()
+        if not path:
+            return None
+        gray = imread_unicode(path, cv2.IMREAD_GRAYSCALE)  # Unicode-safe (RB-06)
+        if gray is None:
+            logger.warning("Failed to load skeleton %s", path)
+            return None
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if binary.shape != (height, width):
+            binary = cv2.resize(binary, (width, height), interpolation=cv2.INTER_NEAREST)
+        binary = np.ascontiguousarray(binary)
+        # F-018: the QImage only wraps ``binary``'s buffer; fromImage() copies the
+        # pixels while ``binary`` is still alive.
+        image = QImage(binary.data, width, height, width, QImage.Format.Format_Indexed8)
+        image.setColorTable(self._overlay_colors)
+        return QPixmap.fromImage(image)
 
     def update_scene_items(self, items):
-        """Update the scene with a list of graphics items"""
+        """Show ``items`` in a fresh scene, fitted to the canvas."""
         scene = QGraphicsScene()
-
-        # Calculate bounding rect for all items to fit view
-        total_rect = None
-
+        bounds = QRectF()
         for item in items:
-            # Set high-quality transformation mode
             if isinstance(item, QGraphicsPixmapItem):
                 item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
                 item.setCacheMode(QGraphicsPixmapItem.CacheMode.DeviceCoordinateCache)
-
             scene.addItem(item)
+            bounds = bounds.united(item.sceneBoundingRect())
+        view = self.magnifying_view
+        view.setScene(scene)
+        view.set_content_rect(bounds)
+        view.fit_to_view()
 
-            # Expand bounding rect
-            item_rect = item.sceneBoundingRect()
-            if total_rect is None:
-                total_rect = item_rect
-            else:
-                total_rect = total_rect.united(item_rect)
+    def clear_magnifying_view(self, message: str | None = None):
+        """Show ``message`` instead of an image (default: ask for a selection)."""
+        if message is None:
+            self.magnifying_view.show_message(self.EMPTY_MESSAGE, self.EMPTY_HINT)
+        else:
+            self.magnifying_view.show_message(message)
 
-        self.magnifying_view.setScene(scene)
+    def _status(self, message: str, timeout_ms: int = 3000) -> None:
+        bar = getattr(self.main_window, "status_bar", None)
+        if bar is not None:
+            bar.showMessage(message, timeout_ms)
 
-        # Fit view while maintaining aspect ratio
-        if total_rect:
-            self.magnifying_view.fitInView(total_rect, Qt.AspectRatioMode.KeepAspectRatio)
-
-        # Reset zoom level when setting new image
-        self.magnifying_view.zoom = 1.0
-
-    def clear_magnifying_view(self):
-        scene = QGraphicsScene()
-        scene.addText("Select an image to display")
-        self.magnifying_view.setScene(scene)
-        self.magnifying_view.show()
+    def _notify(self, message: str, kind: str) -> None:
+        notify = getattr(self.main_window, "notify", None)
+        if notify is not None:
+            notify(message, kind)

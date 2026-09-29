@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QGraphicsView,
 )
 
+from app.gui.brush_preview import BrushPreview  # noqa: E402
 from app.gui.display_controller import MagnifyingGraphicsView  # noqa: E402
 from app.gui.mask_graphics_view import MaskTracingGraphicsView  # noqa: E402
 from app.gui.skeleton_correction_graphics_view import (  # noqa: E402
@@ -131,6 +132,47 @@ def test_zoomed_out_view_paints_canvas_colour_outside_scene(app, view_cls):
         ), f"pixel {p.x()},{p.y()} outside the scene is {c.name(QColor.NameFormat.HexArgb)}"
 
     view.close()
+
+
+def _frame_after_interaction(app, view_cls, mode=None):
+    """The window's backing store (what is on screen) after zooming out and then
+    sweeping the brush ring across the zoomed-out image."""
+    view = view_cls(None)
+    if mode is not None:
+        view.setViewportUpdateMode(mode)
+    scene = _image_scene(800, 600)
+    view.setScene(scene)
+    view.resize(400, 300)
+    view.show()
+    app.processEvents()
+    view.set_zoom(3.0)
+    app.processEvents()
+    for _ in range(12):
+        view.zoom_by(0.8)
+        app.processEvents()
+    ring = BrushPreview(scene)
+    ring.set_diameter(40)
+    ring.set_visible(True)
+    for i in range(30):
+        ring.move_to_pixel(QPoint(100 + 19 * i, 150 + 7 * i))
+        app.processEvents()
+    frame = app.primaryScreen().grabWindow(view.winId()).toImage()
+    view.close()
+    return frame
+
+
+@pytest.mark.parametrize("view_cls", VIEW_CLASSES, ids=lambda c: c.__name__)
+def test_partial_raster_updates_leave_no_stale_pixels(app, monkeypatch, view_cls):
+    """PE-05: the raster viewport repaints only dirty regions. That must put the
+    same pixels on screen as full-viewport updates: no stale copies around the
+    zoomed-out image and no trails behind the moving brush ring."""
+    monkeypatch.setenv("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+    partial = _frame_after_interaction(app, view_cls)
+    full = _frame_after_interaction(
+        app, view_cls, QGraphicsView.ViewportUpdateMode.FullViewportUpdate
+    )
+    assert not partial.isNull()
+    assert partial == full
 
 
 def test_every_graphics_view_subclass_is_covered():
