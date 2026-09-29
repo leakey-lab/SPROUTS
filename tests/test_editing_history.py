@@ -116,6 +116,40 @@ def test_on_change_fires_only_when_the_history_changes():
     assert len(calls) == 4
 
 
+def test_drop_redo_forgets_the_redo_branch_and_keeps_the_undo_stack():
+    history = SnapshotHistory()
+    history.push("a")
+    history.push("b")
+    assert history.undo("c") == "b"  # undo: [a], redo: [c]
+
+    history.drop_redo()  # another layer's new action ended this branch
+
+    assert list(history.undo_stack) == ["a"]
+    assert list(history.redo_stack) == []
+    assert history.redo("b") is None
+    assert history.undo("b") == "a"  # the undo side still works
+
+
+def test_drop_redo_reports_a_change_once_and_is_silent_when_empty():
+    calls = []
+    history = SnapshotHistory(on_change=lambda: calls.append(1))
+    history.push("a")
+    history.undo("b")
+    calls.clear()
+
+    history.drop_redo()
+    assert calls == [1]
+    history.drop_redo()  # nothing left to drop
+    assert calls == [1]
+
+    fresh = SnapshotHistory(on_change=lambda: calls.append(2))
+    fresh.push("x")  # undo only, no redo
+    calls.clear()
+    fresh.drop_redo()
+    assert calls == []
+    assert list(fresh.undo_stack) == ["x"]
+
+
 def test_on_change_can_be_attached_after_construction():
     history = SnapshotHistory()
     calls = []

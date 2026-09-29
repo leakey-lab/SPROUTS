@@ -8,7 +8,9 @@ owner keeps the *current* state; the history only stores the states around it:
   the redo branch;
 - ``undo(current)`` parks ``current`` on the redo stack and returns the state
   to restore (``None`` when there is nothing to undo);
-- ``redo(current)`` does the reverse.
+- ``redo(current)`` does the reverse;
+- ``drop_redo()`` forgets the redo branch when an action elsewhere on a shared
+  timeline ends it (the Correct workspace's per-layer histories).
 
 Snapshots must not be mutated once handed over: push copies, not live buffers.
 The history is bounded by entry count (``maxlen``) and optionally by memory
@@ -89,10 +91,12 @@ class SnapshotHistory(Generic[T]):
 
     @property
     def can_undo(self) -> bool:
+        """True when there is a state to undo to."""
         return bool(self._undo)
 
     @property
     def can_redo(self) -> bool:
+        """True when there is a state to redo to."""
         return bool(self._redo)
 
     @property
@@ -127,6 +131,18 @@ class SnapshotHistory(Generic[T]):
         self._enforce_budget()
         self._changed()
         return following
+
+    def drop_redo(self) -> None:
+        """Forget the redo branch and keep the undo stack.
+
+        For a history that shares one timeline with other histories: a new action
+        elsewhere ends this branch, as ``push`` would. ``on_change`` fires only when
+        something was dropped.
+        """
+        if not self._redo:
+            return
+        self._redo.clear()
+        self._changed()
 
     def clear(self) -> None:
         """Forget every snapshot (e.g. when a new document is loaded)."""
