@@ -1,265 +1,345 @@
+"""Enhance popover content (:class:`NormalizationControls`) and the legacy
+:class:`ImageNormalization` facade.
+
+The math, settings validation, decoded-source cache and saved-defaults store live in the
+Qt-free :mod:`app.enhancement`; this module is the thin Qt adapter the editors use:
+
+* ``controls.enhancement_changed`` - re-render the image (debounced while sliders move);
+* ``controls.is_active()`` / ``controls.apply_to(bgr)`` / ``controls.display_pixmap(path)``;
+* ``controls.settings()`` / ``controls.set_settings(settings)``.
+
+Enhancement is display-only: it never changes masks, skeletons or measurements.
+"""
+
+from __future__ import annotations
+
 import logging
 
-import cv2
 import numpy as np
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSlider,
     QVBoxLayout,
+    QWidget,
 )
 
-from resources.resource_utils import get_resource_path
+from app.enhancement import (
+    METHOD_CLAHE,
+    METHOD_STRETCH,
+    METHODS,
+    EnhanceDefaultsStore,
+    EnhanceSettings,
+    SourceImageCache,
+    clahe,
+    contrast_stretch,
+    enhance,
+)
+
+from .widgets.buttons import ghost_button, primary_button
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["ImageNormalization", "NormalizationControls", "bgr_to_qpixmap"]
+
+PREVIEW_DELAY_MS = 80
+_SAVED_FEEDBACK_MS = 1500
+
 
 class ImageNormalization:
-    """Handles image normalization techniques"""
+    """Static facade kept for existing callers; see :mod:`app.enhancement`."""
 
     @staticmethod
     def apply_clahe(img, clip_limit=2.0, tile_size=(8, 8)):
-        """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)"""
-        if len(img.shape) == 3:
-            # Convert to LAB color space
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-
-            # Apply CLAHE to L channel
-            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
-            cl = clahe.apply(l)
-
-            # Merge channels and convert back to BGR
-            enhanced_lab = cv2.merge((cl, a, b))
-            return cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
-        else:
-            # Grayscale image
-            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
-            return clahe.apply(img)
+        """CLAHE (Contrast Limited Adaptive Histogram Equalization) on the L channel."""
+        return clahe(img, clip_limit, tile_size)
 
     @staticmethod
     def apply_contrast_stretching(img, lower_percentile=2, upper_percentile=98):
-        """Apply contrast stretching using percentile-based normalization"""
-        if len(img.shape) == 3:
-            channels = cv2.split(img)
-            normalized_channels = []
+        """Per-channel percentile contrast stretch (flat channels are left unchanged)."""
+        return contrast_stretch(img, lower_percentile, upper_percentile)
 
-            for channel in channels:
-                lower = np.percentile(channel, lower_percentile)
-                upper = np.percentile(channel, upper_percentile)
-                normalized = np.clip((channel - lower) * 255.0 / (upper - lower), 0, 255)
-                normalized_channels.append(normalized.astype(np.uint8))
-
-            return cv2.merge(normalized_channels)
-        else:
-            lower = np.percentile(img, lower_percentile)
-            upper = np.percentile(img, upper_percentile)
-            normalized = np.clip((img - lower) * 255.0 / (upper - lower), 0, 255)
-            return normalized.astype(np.uint8)
+    @staticmethod
+    def apply(img: np.ndarray, settings: EnhanceSettings) -> np.ndarray:
+        """``img`` enhanced with ``settings``."""
+        return enhance(img, settings)
 
 
-class NormalizationControls(QGroupBox):
-    def __init__(self, parent=None):
-        super().__init__("Image Enhancement Controls", parent)
+def bgr_to_qpixmap(img: np.ndarray) -> QPixmap:
+    """A QPixmap (owning its pixels) from a BGR or grayscale uint8 array."""
+    img = np.ascontiguousarray(img)
+    h, w = img.shape[:2]
+    fmt = QImage.Format.Format_Grayscale8 if img.ndim == 2 else QImage.Format.Format_BGR888
+    return QPixmap.fromImage(QImage(img.data, w, h, img.strides[0], fmt).copy())
 
-        # Default values that can be saved
-        self.default_values = {
-            "clahe_clip": 20,  # 2.0 after division by 10
-            "clahe_tile": 8,
-            "contrast_lower": 2,
-            "contrast_upper": 98,
-            "last_method": "CLAHE",  # Remember last used method
-        }
 
-        # Try to load saved defaults
-        self.load_defaults()
+def _slider(lo: int, hi: int, tooltip: str) -> QSlider:
+    slider = QSlider(Qt.Orientation.Horizontal)
+    slider.setRange(lo, hi)
+    slider.setToolTip(tooltip)
+    return slider
+
+
+class NormalizationControls(QWidget):
+    """Enhance settings laid out for the 264 px Enhance popover.
+
+    Moving any control turns the enhancement on and emits :attr:`enhancement_changed`
+    once the controls have been still for ``preview_delay_ms`` (live preview). "Apply"
+    turns it on at once; "Show original" shows the untouched image while checked. The
+    on/off state stays across image switches, so editors re-render on every image load.
+    """
+
+    #: The displayed image should be re-rendered (``display_pixmap`` / ``apply_to``).
+    enhancement_changed = pyqtSignal()
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        store: EnhanceDefaultsStore | None = None,
+        preview_delay_ms: int = PREVIEW_DELAY_MS,
+    ):
+        super().__init__(parent)
+        self._store = store if store is not None else EnhanceDefaultsStore()
+        self._sources = SourceImageCache()
+        self._enabled = False
+        self._updating = False
+        self.current_image = None
+
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(preview_delay_ms)
+        self._preview_timer.timeout.connect(self.enhancement_changed)
+
+        self.default_values: dict = {}
+        initial = self.load_defaults()
         self.init_ui()
+        self.set_settings(initial)
 
-    def save_current_as_defaults(self):
-        """Save current settings as defaults"""
-        self.default_values.update(
-            {
-                "clahe_clip": self.clip_slider.value(),
-                "clahe_tile": self.tile_slider.value(),
-                "contrast_lower": self.lower_slider.value(),
-                "contrast_upper": self.upper_slider.value(),
-                "last_method": self.method_combo.currentText(),
-            }
+    # ------------------------------------------------------------------ editor API
+    def settings(self) -> EnhanceSettings:
+        """The settings the controls currently show."""
+        return EnhanceSettings(
+            method=self.method_combo.currentText(),
+            clip=self.clip_slider.value(),
+            tile=self.tile_slider.value(),
+            lower=self.lower_slider.value(),
+            upper=self.upper_slider.value(),
         )
 
-        # Save to file
-        import json
-
-        save_path = get_resource_path("config/normalization_defaults.json")
+    def set_settings(self, settings: EnhanceSettings) -> None:
+        """Show ``settings`` (re-renders when the enhancement is on)."""
+        self._updating = True
         try:
-            with open(save_path, "w") as f:
-                json.dump(self.default_values, f)
-        except OSError as e:
-            logger.warning("Failed to save normalization defaults to %s: %s", save_path, e)
+            self.method_combo.setCurrentText(settings.method)
+            self.clip_slider.setValue(settings.clip)
+            self.tile_slider.setValue(settings.tile)
+            self.lower_slider.setValue(settings.lower)
+            self.upper_slider.setValue(settings.upper)
+        finally:
+            self._updating = False
+        self.on_method_changed(settings.method)
+        if self._enabled:
+            self._preview_timer.start()
 
-    def load_defaults(self):
-        """Load saved defaults if they exist"""
-        import json
-        import os
+    def is_active(self) -> bool:
+        """True when the displayed image should be enhanced."""
+        return self._enabled and not self.original_check.isChecked()
 
-        save_path = get_resource_path("config/normalization_defaults.json")
-        try:
-            if os.path.exists(save_path):
-                with open(save_path) as f:
-                    loaded_defaults = json.load(f)
-                    self.default_values.update(loaded_defaults)
-        except (OSError, ValueError) as e:
-            # ValueError covers json.JSONDecodeError (corrupt config file).
-            logger.warning("Failed to load normalization defaults from %s: %s", save_path, e)
+    def apply_to(self, image: np.ndarray) -> np.ndarray:
+        """``image`` enhanced when active, else ``image`` itself (never modified)."""
+        return enhance(image, self.settings()) if self.is_active() else image
 
+    def display_pixmap(self, path: str) -> QPixmap | None:
+        """What the editor should show for the image at ``path`` (None if unreadable).
+
+        The decoded file is cached, so live previews never re-read it.
+        """
+        source = self._sources.get(path)
+        return None if source is None else bgr_to_qpixmap(self.apply_to(source))
+
+    def set_image(self, image):
+        """Remember the current image; Apply is enabled only when there is one."""
+        self.current_image = image
+        self.apply_button.setEnabled(image is not None)
+
+    # ------------------------------------------------------------------ saved defaults
+    def load_defaults(self) -> EnhanceSettings:
+        """Read the user's saved defaults (validated; never raises)."""
+        settings = self._store.load()
+        self.default_values = settings.to_dict()
+        return settings
+
+    def save_current_as_defaults(self) -> bool:
+        """Save the current settings as the user's defaults (per-user config file)."""
+        settings = self.settings()
+        ok = self._store.save(settings)
+        if ok:
+            self.default_values = settings.to_dict()
+        self._flash_save_result(ok)
+        return ok
+
+    def reset_to_defaults(self):
+        """Put the controls back to the user's saved defaults."""
+        self.set_settings(self.load_defaults())
+
+    # ------------------------------------------------------------------ layout
     def init_ui(self):
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
-        # Method selector
-        method_layout = QHBoxLayout()
-        self.method_label = QLabel("Method:")
+        self.method_label = QLabel("Method")
         self.method_combo = QComboBox()
-        self.method_combo.addItems(["CLAHE", "Contrast Stretching"])
-        # Set last used method
-        self.method_combo.setCurrentText(self.default_values["last_method"])
-        method_layout.addWidget(self.method_label)
-        method_layout.addWidget(self.method_combo)
-        layout.addLayout(method_layout)
-
-        # CLAHE controls
-        self.clahe_group = QGroupBox("CLAHE Parameters")
-        clahe_layout = QVBoxLayout()
-
-        # Clip limit slider
-        clip_layout = QHBoxLayout()
-        self.clip_label = QLabel(f"Clip Limit: {self.default_values['clahe_clip'] / 10.0:.1f}")
-        self.clip_slider = QSlider(Qt.Orientation.Horizontal)
-        self.clip_slider.setRange(1, 50)
-        self.clip_slider.setValue(self.default_values["clahe_clip"])
-        clip_layout.addWidget(self.clip_label)
-        clip_layout.addWidget(self.clip_slider)
-        clahe_layout.addLayout(clip_layout)
-
-        # Tile size slider
-        tile_layout = QHBoxLayout()
-        self.tile_label = QLabel(
-            f"Tile Size: {self.default_values['clahe_tile']}x{self.default_values['clahe_tile']}"
+        self.method_combo.addItems(list(METHODS))
+        # Size from a short minimum, not the longest item: the popover is only 264 px wide.
+        self.method_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        self.tile_slider = QSlider(Qt.Orientation.Horizontal)
-        self.tile_slider.setRange(2, 16)
-        self.tile_slider.setValue(self.default_values["clahe_tile"])
-        tile_layout.addWidget(self.tile_label)
-        tile_layout.addWidget(self.tile_slider)
-        clahe_layout.addLayout(tile_layout)
+        self.method_combo.setMinimumContentsLength(8)
+        self.method_combo.setToolTip(
+            "CLAHE: local contrast (adaptive histogram equalization).\n"
+            "Contrast Stretching: map the chosen percentiles to black and white."
+        )
+        method_block = QVBoxLayout()
+        method_block.setSpacing(2)
+        method_block.addWidget(self.method_label)
+        method_block.addWidget(self.method_combo)
+        layout.addLayout(method_block)
 
-        self.clahe_group.setLayout(clahe_layout)
+        self.clip_label = QLabel()
+        self.clip_slider = _slider(
+            *EnhanceSettings.RANGES["clip"], "CLAHE clip limit: higher = stronger contrast"
+        )
+        self.tile_label = QLabel()
+        self.tile_slider = _slider(
+            *EnhanceSettings.RANGES["tile"], "CLAHE tile grid: smaller = more local contrast"
+        )
+        self.clahe_group = self._group(
+            (self.clip_label, self.clip_slider), (self.tile_label, self.tile_slider)
+        )
         layout.addWidget(self.clahe_group)
 
-        # Contrast stretching controls
-        self.contrast_group = QGroupBox("Contrast Stretching Parameters")
-        contrast_layout = QVBoxLayout()
-
-        # Percentile sliders
-        lower_layout = QHBoxLayout()
-        self.lower_label = QLabel(f"Lower Percentile: {self.default_values['contrast_lower']}%")
-        self.lower_slider = QSlider(Qt.Orientation.Horizontal)
-        self.lower_slider.setRange(0, 49)
-        self.lower_slider.setValue(self.default_values["contrast_lower"])
-        lower_layout.addWidget(self.lower_label)
-        lower_layout.addWidget(self.lower_slider)
-        contrast_layout.addLayout(lower_layout)
-
-        upper_layout = QHBoxLayout()
-        self.upper_label = QLabel(f"Upper Percentile: {self.default_values['contrast_upper']}%")
-        self.upper_slider = QSlider(Qt.Orientation.Horizontal)
-        self.upper_slider.setRange(51, 100)
-        self.upper_slider.setValue(self.default_values["contrast_upper"])
-        upper_layout.addWidget(self.upper_label)
-        upper_layout.addWidget(self.upper_slider)
-        contrast_layout.addLayout(upper_layout)
-
-        self.contrast_group.setLayout(contrast_layout)
+        self.lower_label = QLabel()
+        self.lower_slider = _slider(
+            *EnhanceSettings.RANGES["lower"], "Percentile of each channel mapped to black"
+        )
+        self.upper_label = QLabel()
+        self.upper_slider = _slider(
+            *EnhanceSettings.RANGES["upper"], "Percentile of each channel mapped to white"
+        )
+        self.contrast_group = self._group(
+            (self.lower_label, self.lower_slider), (self.upper_label, self.upper_slider)
+        )
         layout.addWidget(self.contrast_group)
 
-        # Buttons
-        button_layout = QHBoxLayout()
+        buttons = QHBoxLayout()
+        self.apply_button = primary_button(
+            "Apply", tooltip="Enhance the image now (sliders also preview live)"
+        )
+        self.restore_defaults_button = QPushButton("Reset")
+        self.restore_defaults_button.setToolTip("Reset the sliders to your saved defaults")
+        buttons.addWidget(self.apply_button, 1)
+        buttons.addWidget(self.restore_defaults_button, 1)
+        layout.addLayout(buttons)
 
-        self.apply_button = QPushButton("Apply Enhancement")
-        button_layout.addWidget(self.apply_button)
+        self.original_check = QCheckBox("Show original")
+        self.original_check.setToolTip("Show the image without enhancement (the settings are kept)")
+        layout.addWidget(self.original_check)
 
-        self.save_defaults_button = QPushButton("Save as Defaults")
-        self.save_defaults_button.clicked.connect(self.save_current_as_defaults)
-        button_layout.addWidget(self.save_defaults_button)
+        self.save_defaults_button = ghost_button(
+            "Save as default", tooltip="Use these settings by default from now on"
+        )
+        layout.addWidget(self.save_defaults_button)
 
-        # Restore defaults button
-        self.restore_defaults_button = QPushButton("Restore Defaults")
-        self.restore_defaults_button.clicked.connect(self.reset_to_defaults)
-        button_layout.addWidget(self.restore_defaults_button)
-
-        layout.addLayout(button_layout)
-
-        self.setLayout(layout)
-
-        # Connect signals
         self.method_combo.currentTextChanged.connect(self.on_method_changed)
         self.clip_slider.valueChanged.connect(self.on_clip_changed)
         self.tile_slider.valueChanged.connect(self.on_tile_changed)
         self.lower_slider.valueChanged.connect(self.on_percentile_changed)
         self.upper_slider.valueChanged.connect(self.on_percentile_changed)
+        for signal in (
+            self.method_combo.currentTextChanged,
+            self.clip_slider.valueChanged,
+            self.tile_slider.valueChanged,
+            self.lower_slider.valueChanged,
+            self.upper_slider.valueChanged,
+        ):
+            signal.connect(self._on_control_changed)
+        self.apply_button.clicked.connect(self._on_apply)
+        self.original_check.toggled.connect(self._on_original_toggled)
+        self.save_defaults_button.clicked.connect(self.save_current_as_defaults)
+        self._save_feedback_timer = QTimer(self)
+        self._save_feedback_timer.setSingleShot(True)
+        self._save_feedback_timer.setInterval(_SAVED_FEEDBACK_MS)
+        self._save_feedback_timer.timeout.connect(
+            lambda: self.save_defaults_button.setText("Save as default")
+        )
+        self.restore_defaults_button.clicked.connect(self.reset_to_defaults)
 
-        # Initial state
-        self.on_method_changed(self.method_combo.currentText())
+    @staticmethod
+    def _group(*rows: tuple[QLabel, QSlider]) -> QWidget:
+        """A frameless column of 'label over full-width slider' rows."""
+        group = QWidget()
+        column = QVBoxLayout(group)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+        for label, slider in rows:
+            column.addWidget(label)
+            column.addWidget(slider)
+        return group
 
-    def set_image(self, image):
-        """Set the current image for enhancement"""
-        self.current_image = image
-        self.apply_button.setEnabled(image is not None)
-
-    def reset_to_defaults(self):
-        """Reset all controls to their original default values"""
-        # Reset method
-        self.method_combo.setCurrentText("CLAHE")
-
-        # Reset CLAHE parameters
-        self.clip_slider.setValue(20)  # 2.0 after division by 10
-        self.tile_slider.setValue(8)
-
-        # Reset Contrast Stretching parameters
-        self.lower_slider.setValue(2)
-        self.upper_slider.setValue(98)
-
-        # Update labels
-        self.on_clip_changed(20)
-        self.on_tile_changed(8)
-        self.on_percentile_changed()
-
+    # ------------------------------------------------------------------ slots
     def on_method_changed(self, method):
-        """Handle visibility of parameter groups based on selected method"""
-        self.clahe_group.setVisible(method == "CLAHE")
-        self.contrast_group.setVisible(method == "Contrast Stretching")
+        """Show only the selected method's sliders."""
+        self.clahe_group.setVisible(method == METHOD_CLAHE)
+        self.contrast_group.setVisible(method == METHOD_STRETCH)
 
     def on_clip_changed(self, value):
-        """Update clip limit label"""
-        self.clip_label.setText(f"Clip Limit: {value / 10.0:.1f}")
+        self.clip_label.setText(f"Clip limit: {value / 10.0:.1f}")
 
     def on_tile_changed(self, value):
-        """Update tile size label"""
-        self.tile_label.setText(f"Tile Size: {value}x{value}")
+        self.tile_label.setText(f"Tile size: {value}×{value}")
 
-    def on_percentile_changed(self):
-        """Handle percentile slider changes and ensure valid range"""
+    def on_percentile_changed(self, *_):
+        """Keep lower < upper and refresh the percentile labels."""
         lower = self.lower_slider.value()
         upper = self.upper_slider.value()
-
         if lower >= upper:
-            if self.sender() == self.lower_slider:
+            if self.sender() is self.lower_slider:
                 self.lower_slider.setValue(upper - 1)
             else:
                 self.upper_slider.setValue(lower + 1)
+        self.lower_label.setText(f"Black point: {self.lower_slider.value()}%")
+        self.upper_label.setText(f"White point: {self.upper_slider.value()}%")
 
-        self.lower_label.setText(f"Lower Percentile: {self.lower_slider.value()}%")
-        self.upper_label.setText(f"Upper Percentile: {self.upper_slider.value()}%")
+    def _show_enhanced(self) -> None:
+        """Turn the enhancement on and leave "Show original" without a second re-render."""
+        self._enabled = True
+        if self.original_check.isChecked():
+            self.original_check.blockSignals(True)
+            self.original_check.setChecked(False)
+            self.original_check.blockSignals(False)
+
+    def _on_control_changed(self, *_):
+        if self._updating:
+            return
+        self._show_enhanced()
+        self._preview_timer.start()  # restarts: one render once the slider rests
+
+    def _on_apply(self):
+        self._preview_timer.stop()
+        self._show_enhanced()
+        self.enhancement_changed.emit()
+
+    def _on_original_toggled(self, _checked: bool):
+        self._preview_timer.stop()
+        self.enhancement_changed.emit()
+
+    def _flash_save_result(self, ok: bool) -> None:
+        self.save_defaults_button.setText("Saved" if ok else "Could not save")
+        self._save_feedback_timer.start()
