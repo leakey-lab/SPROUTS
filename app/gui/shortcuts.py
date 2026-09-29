@@ -44,6 +44,7 @@ __all__ = [
     "TRACE_GT",
     "CORRECT_MASK",
     "CORRECT_SKELETON",
+    "CORRECT",
     "SCOPES",
     "STAGE_KEYS",
     "ShortcutSpec",
@@ -63,7 +64,15 @@ LIBRARY = "Library"
 TRACE_GT = "Trace GT"
 CORRECT_MASK = "Correct Mask"
 CORRECT_SKELETON = "Correct Skeleton"
-SCOPES: tuple[str, ...] = (GLOBAL, LIBRARY, TRACE_GT, CORRECT_MASK, CORRECT_SKELETON)
+CORRECT = "Correct"
+SCOPES: tuple[str, ...] = (
+    GLOBAL,
+    LIBRARY,
+    TRACE_GT,
+    CORRECT_MASK,
+    CORRECT_SKELETON,
+    CORRECT,
+)
 
 Kind = Literal["shortcut", "key", "gesture"]
 SHORTCUT: Kind = "shortcut"
@@ -134,6 +143,40 @@ def _paint_editor_rows() -> list[tuple]:
     ]
 
 
+def _correct_rows() -> list[tuple]:
+    """The unified Correct stage: both layers, one scope (spec section 6)."""
+    return [
+        *_history_rows(),
+        ("save", ("Ctrl+S",), "Save the unsaved layers (nothing unsaved: the active layer)"),
+        ("mask_layer", ("1",), "Edit the mask (root area)"),
+        ("skeleton_layer", ("2",), "Edit the skeleton (root length)"),
+        ("swap_layer", ("X",), "Switch between the mask and the skeleton"),
+        ("brush", ("B",), "Mask brush (tap); hold B and scroll to resize the brush", KEY),
+        ("fill", ("F",), "Mask fill: fill a closed outline"),
+        ("select_tool", ("V",), "Skeleton select: pick a branch"),
+        ("polyline", ("P",), "Skeleton polyline"),
+        ("connect", ("C",), "Skeleton connect: drag from an endpoint to another point"),
+        ("eraser", ("E",), "Eraser of the active layer"),
+        ("size_smaller", ("[",), "Smaller brush or eraser"),
+        ("size_larger", ("]",), "Larger brush or eraser"),
+        ("toggle_layers", ("H",), "Show or hide both layers (see the photo)"),
+        ("toggle_reference", ("Shift+H",), "Show or hide the other layer"),
+        ("smooth", ("S",), "Smooth the polyline (Polyline tool)", KEY),
+        *_canvas_rows(SHORTCUT),
+        ("finish_line", ("Enter",), "Finish the polyline", KEY),
+        ("cancel", ("Esc",), "Cancel the current line or selection", KEY),
+        (
+            "delete_branch",
+            ("Delete", "Backspace"),
+            "Delete the picked branch (Select, then Delete); clears a Connect selection",
+            KEY,
+        ),
+        ("add_bend", ("Ctrl+click",), "Add a bend to a polyline segment", GESTURE),
+        ("move_line", ("Shift+drag",), "Move the whole polyline", GESTURE),
+        ("finish_line_click", ("Double-click",), "Finish the polyline", GESTURE),
+    ]
+
+
 REGISTRY: tuple[ShortcutSpec, ...] = (
     *_rows(
         GLOBAL,
@@ -198,6 +241,7 @@ REGISTRY: tuple[ShortcutSpec, ...] = (
             ("finish_line_click", ("Double-click",), "Finish the polyline", GESTURE),
         ],
     ),
+    *_rows(CORRECT, _correct_rows()),
 )
 
 

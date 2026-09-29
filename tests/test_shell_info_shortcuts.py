@@ -48,6 +48,7 @@ def test_every_scope_has_rows_and_scopes_are_ordered():
         sc.TRACE_GT,
         sc.CORRECT_MASK,
         sc.CORRECT_SKELETON,
+        sc.CORRECT,
     )
     for scope in sc.SCOPES:
         assert sc.specs_for(scope), scope
