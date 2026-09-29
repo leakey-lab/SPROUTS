@@ -5,23 +5,35 @@ This script contains all necessary components for running skeleton inference:
 - EnhancedResnetGenerator network architecture
 - Image loading and preprocessing
 - Model weight loading
-- Inference execution and image saving
+- Batch inference through the shared engine (app.inference.batch_engine) and saving
 
 All constants are hardcoded for the skeletonizer model.
+
+Numerics: fp32 tensors and weights, no autocast (the pix2pix generator drifts
+visibly under fp16/bf16). On CUDA with an Ampere+ GPU, cuDNN convolutions use TF32
+tensor-core math (``runtime.RuntimeConfig.precision`` records which one ran).
 """
 
+from __future__ import annotations
+
 import functools
+import io
 import logging
 import os
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
 
-from app.config import SKELETON_BATCH_SIZE, SKELETONIZER_DIR
+from app import config
+from app.config import SKELETONIZER_DIR
+from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
+from app.inference.run_record import write_run_manifest
+from app.io_utils import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +41,19 @@ logger = logging.getLogger(__name__)
 # CONSTANTS - Hardcoded configuration for skeletonizer model
 # =============================================================================
 
-# CHECKPOINTS_DIR / SKELETONIZER_DIR are now resolved from app.config (F-005):
-# absolute path relative to the project root, so CWD no longer matters.
-MODEL_NAME = "skeletonizer"
+# SKELETONIZER_DIR is resolved from app.config (F-005): absolute path relative to
+# the project root, so CWD no longer matters.
+RUN_KIND = "skeleton_generation"
 NORM = "batch"
 INPUT_NC = 3
 OUTPUT_NC = 3
 NGF = 64
 LOAD_SIZE = 256
-CROP_SIZE = 256
+CROP_SIZE = 256  # square generator output; with ASPECT_RATIO -> config.SKELETON_OUTPUT_SIZE
 ASPECT_RATIO = 3 / 4
 USE_DROPOUT = True  # no_dropout is False by default
-PREPROCESS = "resize_and_crop"
 EPOCH = "latest"
+SKELETON_SUFFIX = "_fake.png"
 
 IMG_EXTENSIONS = [
     ".jpg",
@@ -73,7 +85,7 @@ def is_image_file(filename):
 
 
 def make_dataset(directory):
-    """Find all image files in a directory."""
+    """Find all image files in a directory (sorted)."""
     images = []
     if not os.path.isdir(directory):
         raise ValueError(f"{directory} is not a valid directory")
@@ -84,58 +96,19 @@ def make_dataset(directory):
     return images
 
 
-class ImageDataset(Dataset):
+def skeleton_to_uint8(output_batch: torch.Tensor) -> np.ndarray:
+    """Generator output in [-1, 1] (N, C, H, W) -> uint8 images (N, H, W, C).
+
+    The same fp32 arithmetic the former per-image ``tensor2im`` did in numpy
+    (``(x + 1) / 2 * 255`` truncated to uint8), done on the device for the whole
+    batch so there is one device-to-host copy per batch.
     """
-    Dataset class for batch loading images during inference.
-
-    Args:
-        image_paths: List of image file paths
-        transform: Transform to apply to each image
-        grayscale: Whether to convert images to grayscale
-    """
-
-    def __init__(self, image_paths, transform, grayscale=False):
-        self.image_paths = image_paths
-        self.transform = transform
-        self.grayscale = grayscale
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        try:
-            img = Image.open(img_path).convert("RGB")
-        except OSError as exc:
-            raise RuntimeError(f"Cannot open image {img_path!r}: {exc}") from exc
-
-        if self.transform:
-            img_tensor = self.transform(img)
-        else:
-            img_tensor = img
-
-        # Return tensor and path for saving later
-        return img_tensor, img_path
-
-
-def tensor2im(input_image, imtype=np.uint8):
-    """Convert a Tensor array into a numpy image array."""
-    if not isinstance(input_image, np.ndarray):
-        if isinstance(input_image, torch.Tensor):
-            image_tensor = input_image.data
-        else:
-            return input_image
-        image_numpy = image_tensor[0].cpu().float().numpy()
-        if image_numpy.shape[0] == 1:  # grayscale to RGB
-            image_numpy = np.tile(image_numpy, (3, 1, 1))
-        image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
-    else:
-        image_numpy = input_image
-    return image_numpy.astype(imtype)
+    images = (output_batch.float() + 1) / 2.0 * 255.0
+    return images.to(torch.uint8).permute(0, 2, 3, 1).contiguous().cpu().numpy()
 
 
 def save_image(image_numpy, image_path, aspect_ratio=1.0):
-    """Save a numpy image to disk.
+    """Save a numpy image to disk (atomically: never a half-written file).
 
     Resize uses the exact axis order from the validated V2 pipeline -- the
     skeletonizer weights and all downstream length/area metrics were calibrated
@@ -149,7 +122,11 @@ def save_image(image_numpy, image_path, aspect_ratio=1.0):
         image_pil = image_pil.resize((h, int(w * aspect_ratio)), Image.BICUBIC)
     if aspect_ratio < 1.0:
         image_pil = image_pil.resize((int(h / aspect_ratio), w), Image.BICUBIC)
-    image_pil.save(image_path)
+    ext = os.path.splitext(image_path)[1].lower()
+    buf = io.BytesIO()
+    image_pil.save(buf, Image.registered_extensions().get(ext, "PNG"))
+    # Regenerable bulk output: atomic but not fsync'ed.
+    atomic_write_bytes(image_path, buf.getvalue(), durable=False)
 
 
 def get_transform(grayscale=False):
@@ -192,18 +169,20 @@ def get_norm_layer(norm_type="instance"):
 
         def norm_layer(x):
             return Identity()
+
     else:
         raise NotImplementedError(f"normalization layer [{norm_type}] is not found")
     return norm_layer
 
 
-def move_net_to_device(net, gpu_ids=[]):
+def move_net_to_device(net, gpu_ids=None):
     """Move network to GPU without initializing weights (for loading from checkpoint).
 
     DataParallel is only used for genuine multi-GPU runs; on a single GPU it is
     pure scatter/gather overhead (and forces ``.module`` unwrap branches), so we
     do a plain ``net.to(device)`` instead.
     """
+    gpu_ids = gpu_ids or []
     if len(gpu_ids) > 0:
         assert torch.cuda.is_available()
         net.to(gpu_ids[0])
@@ -361,7 +340,7 @@ class EnhancedResnetGenerator(nn.Module):
         use_attention=True,
     ):
         super().__init__()
-        if type(norm_layer) == functools.partial:
+        if isinstance(norm_layer, functools.partial):
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
@@ -435,7 +414,8 @@ class EnhancedResnetGenerator(nn.Module):
 class SkeletonModel:
     """Skeleton inference model wrapper."""
 
-    def __init__(self, gpu_ids=[]):
+    def __init__(self, gpu_ids=None):
+        gpu_ids = gpu_ids or []
         self.gpu_ids = gpu_ids
         self.device = torch.device(f"cuda:{gpu_ids[0]}") if gpu_ids else torch.device("cpu")
 
@@ -508,12 +488,11 @@ class SkeletonModel:
     def run(self, input_tensor):
         """Run inference on input tensor.
 
-        Runs in full fp32 (NO autocast), matching the validated V2 pipeline. The
-        pix2pix EnhancedResnetGenerator (BatchNorm + Tanh) drifts visibly under
-        fp16/bf16 mixed precision, so the skeletonizer must stay fp32.
+        fp32 tensors, NO autocast (see the module docstring on TF32): the pix2pix
+        EnhancedResnetGenerator (BatchNorm + Tanh) drifts visibly under fp16/bf16.
         """
-        # non_blocking pairs with the DataLoader's pinned host memory to overlap
-        # the H2D copy with compute (forward provides the sync point).
+        # non_blocking pairs with the engine's pinned host batches to overlap the
+        # H2D copy with compute (forward provides the sync point).
         input_tensor = input_tensor.to(self.device, non_blocking=True)
         with torch.inference_mode():
             output = self.netG(input_tensor)
@@ -529,10 +508,9 @@ class SkeletonModel:
         Returns:
             Batch of output tensors
         """
-        # non_blocking pairs with the DataLoader's pinned host memory to overlap
-        # the H2D copy with compute (forward provides the sync point).
-        # Full fp32 (NO autocast) to match the validated V2 skeletonizer pipeline;
-        # fp16/bf16 mixed precision drifts the pix2pix generator output.
+        # non_blocking pairs with the engine's pinned host batches to overlap the
+        # H2D copy with compute. fp32 tensors, NO autocast (fp16/bf16 drifts the
+        # pix2pix generator output); TF32 math on Ampere+ CUDA.
         input_batch = input_batch.to(self.device, non_blocking=True)
         with torch.inference_mode():
             output_batch = self.netG(input_batch)
@@ -540,113 +518,121 @@ class SkeletonModel:
 
 
 # =============================================================================
-# MAIN INFERENCE FUNCTION
+# MAIN INFERENCE FUNCTIONS
 # =============================================================================
+
+
+def skeleton_output_path(output_dir: str, input_path: str) -> str:
+    """``<output_dir>/<stem>_fake.png`` for one input image."""
+    stem = os.path.splitext(os.path.basename(input_path))[0]
+    return os.path.join(output_dir, f"{stem}{SKELETON_SUFFIX}")
+
+
+def make_skeleton_spec(model: Any, output_dir: str) -> BatchSpec:
+    """BatchSpec: decode + transform -> generator forward -> uint8 -> resized PNG."""
+    transform = get_transform(grayscale=(INPUT_NC == 1))
+
+    def load(path: str) -> torch.Tensor:
+        with Image.open(path) as image:
+            return transform(image.convert("RGB"))
+
+    def step(x: torch.Tensor) -> np.ndarray:
+        return skeleton_to_uint8(model.run_batch(x))
+
+    def save(image_numpy: np.ndarray, input_path: str) -> None:
+        save_image(image_numpy, skeleton_output_path(output_dir, input_path), ASPECT_RATIO)
+
+    return BatchSpec(load=load, step=step, save=save)
+
+
+def run_skeleton_generation(
+    input_dir: str,
+    output_dir: str,
+    *,
+    batch_size: int | None = None,
+    model: Any = None,
+    progress: ProgressCallback | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> BatchReport:
+    """Generate ``<output_dir>/<stem>_fake.png`` for every image in ``input_dir``.
+
+    Unreadable images are recorded in ``report.failed`` (the run continues);
+    out-of-memory batches are split and retried; ``should_stop`` cancels at the
+    next batch boundary. Writes the run manifest and releases the CUDA cache once.
+
+    Args:
+        batch_size: default: auto-sized from free VRAM once the model is loaded.
+        model: a ready SkeletonModel-like object with ``run_batch`` (tests);
+            default: the cached ``runtime.get_skeleton_model()``.
+    """
+    from app.inference import runtime
+
+    os.makedirs(output_dir, exist_ok=True)
+    image_paths = make_dataset(input_dir)
+    try:
+        rt = runtime.get_runtime()
+        if model is None and image_paths:
+            model = runtime.get_skeleton_model(rt.device)
+        if batch_size is None:
+            batch_size = config.get_skeleton_batch_size(refresh=True)
+        logger.info(
+            "Skeleton generation: input=%s output=%s images=%d batch_size=%d",
+            input_dir,
+            output_dir,
+            len(image_paths),
+            batch_size,
+        )
+        if image_paths:
+            report = run_batches(
+                image_paths,
+                make_skeleton_spec(model, output_dir),
+                batch_size=batch_size,
+                io_threads=rt.io_threads,
+                pin_memory=rt.pin_memory,
+                progress=progress,
+                should_stop=should_stop,
+            )
+        else:
+            logger.warning("No images found in input directory: %s", input_dir)
+            report = BatchReport(batch_size=batch_size, effective_batch_size=batch_size)
+    finally:
+        runtime.release_cuda_cache()
+    write_run_manifest(
+        RUN_KIND,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        input_names=[os.path.basename(p) for p in image_paths],
+        report=report,
+        models={"skeleton": runtime.skeleton_weights_path()},
+        parameters={
+            "batch_size": batch_size,
+            "load_size": LOAD_SIZE,
+            "aspect_ratio": ASPECT_RATIO,
+            "output_size_wh": list(config.SKELETON_OUTPUT_SIZE),
+        },
+    )
+    if report.failed:
+        logger.warning(
+            "Skeleton generation: %d input(s) failed: %s", len(report.failed), report.failed
+        )
+    return report
 
 
 def run_inference(input_dir: str, output_dir: str, progress_callback=None, batch_size=None):
     """
-    Run skeleton inference on all images in input_dir using batch processing.
+    Run skeleton inference on all images in input_dir (legacy entry point).
 
     Args:
         input_dir: Directory containing input images
         output_dir: Directory to save output images
         progress_callback: Optional callback function(current, total) for progress updates
-        batch_size: Number of images to process in each batch (default: SKELETON_BATCH_SIZE
-                    from app.config)
+        batch_size: Images per batch (default: auto-sized, see run_skeleton_generation)
 
     Returns:
-        Path to the results directory
+        Path to the results directory. Use ``run_skeleton_generation`` for the
+        per-image failures and the cancel flag.
     """
-    if batch_size is None:
-        batch_size = SKELETON_BATCH_SIZE
-
-    logger.info(
-        "run_inference: input=%s output=%s batch_size=%d", input_dir, output_dir, batch_size
+    run_skeleton_generation(
+        input_dir, output_dir, batch_size=batch_size, progress=progress_callback
     )
-
-    # Create output directory structure - save directly to skeletons folder
-    images_dir = output_dir
-    os.makedirs(images_dir, exist_ok=True)
-
-    # Load model -- cached singleton (build + checkpoint load happen once per
-    # process via runtime.get_skeleton_model). get_runtime() also enables
-    # cudnn.benchmark, and warmup() amortizes cuDNN autotune + first-kernel JIT
-    # for the fixed 256x256 input off the user's first batch.
-    from app.inference import runtime
-
-    rt = runtime.get_runtime()
-    model = runtime.get_skeleton_model(rt.device)
-    runtime.warmup(model)
-
-    # Get image paths
-    image_paths = make_dataset(input_dir)
-    total_images = len(image_paths)
-    logger.debug("Found %d images in %s", total_images, input_dir)
-
-    if total_images == 0:
-        logger.warning("No images found in input directory: %s", input_dir)
-        return images_dir
-
-    # Create transform
-    transform = get_transform(grayscale=(INPUT_NC == 1))
-
-    # Create dataset (no pre-loading of all images into RAM -- streaming via DataLoader)
-    dataset = ImageDataset(image_paths, transform, grayscale=(INPUT_NC == 1))
-
-    # num_workers=0 avoids deadlocks on Windows inside QThread (F-022).
-    # DataLoader streams batches on demand; images are not all loaded into RAM at once.
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=torch.cuda.is_available(),
-    )
-
-    # Process batches -- CUDA tensors are freed after each batch (no accumulation)
-    processed_count = 0
-    for batch_idx, (input_batch, img_paths) in enumerate(dataloader):
-        current_batch_size = input_batch.size(0)
-        # Run inference on batch; tensors move to device inside run_batch
-        try:
-            output_batch = model.run_batch(input_batch)
-        except torch.cuda.OutOfMemoryError:
-            logger.error(
-                "CUDA OOM on batch %d (size %d) — skipping; try a smaller batch_size",
-                batch_idx,
-                current_batch_size,
-            )
-            torch.cuda.empty_cache()
-            if progress_callback:
-                progress_callback(processed_count + current_batch_size, total_images)
-            processed_count += current_batch_size
-            continue
-
-        # Process each image in the batch
-        for i in range(current_batch_size):
-            output_tensor = output_batch[i : i + 1]
-            img_path = img_paths[i]
-
-            # Convert to numpy and save
-            output_numpy = tensor2im(output_tensor)
-
-            # Get output filename
-            img_name = os.path.splitext(os.path.basename(img_path))[0]
-            output_path = os.path.join(images_dir, f"{img_name}_fake.png")
-
-            save_image(output_numpy, output_path, aspect_ratio=ASPECT_RATIO)
-
-            processed_count += 1
-
-            # Progress update after each image for smoother UI updates
-            if progress_callback:
-                progress_callback(processed_count, total_images)
-
-        # Drop the reference so the caching allocator can reuse the buffer for
-        # the next (fixed-size) batch. No per-batch empty_cache(): forcing
-        # cudaFree/cudaMalloc every batch defeats the caching allocator and adds
-        # a GPU stall with no output change.
-        del output_batch
-
-    return images_dir
+    return output_dir

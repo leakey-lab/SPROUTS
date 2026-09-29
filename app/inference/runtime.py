@@ -2,75 +2,81 @@
 Shared inference runtime auto-tuner.
 
 Single source of truth for *how* both inference paths (skeleton_inference.py and
-mask_generation_handler.py) talk to the hardware: which device, which autocast
-dtype, whether to use channels_last memory format, whether to pin host memory,
-how many DataLoader workers, and whether torch.compile is safe to attempt.
+mask_inference.py) talk to the hardware: which device, which numeric precision,
+whether to use channels_last memory format and pinned host memory, and how many
+I/O threads feed the GPU.
 
 Design rules (all enforced here so the two paths can never drift):
   * Detect the runtime environment at first call -- never hardcode a GPU index.
     Always fall back to CPU when CUDA is unavailable.
-  * amp_dtype: bfloat16 when CUDA supports it, else float16 on CUDA, else None
-    (CPU runs full fp32 -- autocast is intentionally disabled there).
+  * Precision: tensors and weights are fp32 everywhere. On CUDA, cuDNN
+    convolutions (``cudnn.allow_tf32``, PyTorch's default) and float32 matmuls
+    (``set_float32_matmul_precision("high")``) use TF32 tensor-core math on
+    Ampere and newer GPUs (10 explicit mantissa bits). Older GPUs and the CPU run
+    strict fp32. The effective mode is reported as ``RuntimeConfig.precision``
+    and recorded in every run manifest, because it changes low bits of outputs.
+  * Reproducibility: ``cudnn.benchmark`` is OFF and ``cudnn.deterministic`` ON by
+    default. Autotuning cost 40-70 s before the first batch, added no measurable
+    throughput and picked different algorithms per session (masks differed by up
+    to 5 px between sessions). Set ``SPROUTS_CUDNN_BENCHMARK=1`` to opt in for a
+    GPU/model where autotuning measurably helps; the choice is recorded.
   * channels_last and pin_memory are CUDA-only.
-  * num_workers defaults to 0: a Windows/QThread-safe policy made explicit so
-    DataLoader never deadlocks or pays spawn cost inside a Qt worker thread.
-  * should_compile is gated behind torch>=2 *and* an importable triton (often
-    missing on Windows). torch.compile usage must always degrade gracefully.
+  * torch is imported lazily: importing this module (e.g. for the status line's
+    ``describe_runtime()``) never loads torch or creates a CUDA context.
 
 Public API:
-  get_runtime() -> RuntimeConfig          (cached, lru_cache(maxsize=1))
-  get_skeleton_model(device) -> SkeletonModel  (cached singleton, maxsize=1)
-  warmup(model=None) -> None              (optional latency pre-pay)
+  get_runtime() -> RuntimeConfig          (cached, resolves the device)
+  peek_runtime() -> RuntimeConfig | None  (never resolves)
+  describe_runtime(resolve=False) -> RuntimeSummary  (status line; never loads models)
+  get_skeleton_model(device) -> SkeletonModel  (cached singleton)
+  get_mask_model(device) -> torch.nn.Module     (cached singleton)
+  release_cuda_cache() -> None            (call once when a batch job ends)
 """
 
 from __future__ import annotations
 
 import functools
-import importlib.util
+import gc
 import logging
+import os
+import sys
+import threading
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-import torch
+from app.inference.batch_pipeline import default_io_threads
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; torch is imported lazily
+    import torch
 
 logger = logging.getLogger(__name__)
 
+CUDNN_BENCHMARK_ENV = "SPROUTS_CUDNN_BENCHMARK"
 
-# ---------------------------------------------------------------------------
-# Internal probes
-# ---------------------------------------------------------------------------
-def _torch_major_ge_2() -> bool:
-    """True when the installed torch is version 2 or newer."""
-    try:
-        major = int(torch.__version__.split(".", 1)[0])
-    except (ValueError, IndexError):
-        # Dev / nightly strings should still parse; if not, be conservative.
-        return hasattr(torch, "compile")
-    return major >= 2
+# TF32 tensor cores exist from compute capability 8.0 (Ampere) on.
+_TF32_MIN_CAPABILITY = (8, 0)
 
 
-def _triton_available() -> bool:
-    """True when triton is importable (required backend for torch.compile)."""
-    try:
-        return importlib.util.find_spec("triton") is not None
-    except (ImportError, ValueError):
-        return False
+class ModelUnavailableError(RuntimeError):
+    """A model checkpoint is missing or cannot be loaded (user-facing message)."""
 
 
-def _detect_amp_dtype(is_cuda: bool) -> torch.dtype | None:
-    """Choose the autocast dtype for the detected device.
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
-    bfloat16 on CUDA when supported (better numerical range, no loss scaling),
-    float16 on CUDA otherwise, and None on CPU (full fp32, autocast disabled).
-    """
-    if not is_cuda:
-        return None
-    try:
-        if torch.cuda.is_bf16_supported():
-            return torch.bfloat16
-    except (RuntimeError, AssertionError):
-        # Some stacks raise if queried without a usable device; fall back to fp16.
-        pass
-    return torch.float16
+
+def mask_weights_path() -> str:
+    """Checkpoint path of the mask model (read at call time; a test seam)."""
+    from app import config
+
+    return config.MASK_WEIGHTS_PATH
+
+
+def skeleton_weights_path() -> str:
+    """Checkpoint path of the skeleton model (read at call time; a test seam)."""
+    from app import config
+
+    return config.SKELETON_WEIGHTS_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -81,44 +87,34 @@ class RuntimeConfig:
     """Resolved, immutable per-machine inference runtime configuration.
 
     Attributes:
-        device:            torch.device to run inference on (cuda or cpu).
-        amp_dtype:         autocast dtype (bfloat16/float16) or None on CPU.
-        use_channels_last: apply channels_last memory format (CUDA only).
-        pin_memory:        pin DataLoader host memory (CUDA only).
-        num_workers:       DataLoader workers (0 = Windows/QThread-safe policy).
-        should_compile:    torch.compile is safe to attempt (torch>=2 + triton).
-        device_name:       human-readable accelerator name for logging.
-        bf16_supported:    whether the CUDA device advertises bf16 support.
-        compute_capability:(major, minor) CUDA capability, or None on CPU.
+        device:              torch.device to run inference on (cuda or cpu).
+        use_channels_last:   apply channels_last memory format (CUDA only).
+        pin_memory:          pin host batches before the H2D copy (CUDA only).
+        io_threads:          decode/save threads that overlap the GPU forward.
+        cudnn_benchmark:     cuDNN autotuning (off unless SPROUTS_CUDNN_BENCHMARK=1).
+        cudnn_deterministic: cuDNN deterministic algorithm selection.
+        precision:           effective float math: "tf32" (CUDA, Ampere+) or "fp32".
+        device_name:         human-readable accelerator name for logging.
+        bf16_supported:      whether the CUDA device advertises bf16 support.
+        compute_capability:  (major, minor) CUDA capability, or None on CPU.
+        cuda_version:        torch's CUDA runtime version, or None on CPU.
     """
 
     device: torch.device
-    amp_dtype: torch.dtype | None
     use_channels_last: bool
     pin_memory: bool
-    num_workers: int
-    should_compile: bool
+    io_threads: int
+    cudnn_benchmark: bool
+    cudnn_deterministic: bool
+    precision: str
     device_name: str = "cpu"
     bf16_supported: bool = False
     compute_capability: tuple[int, int] | None = None
+    cuda_version: str | None = None
 
     @property
     def is_cuda(self) -> bool:
         return self.device.type == "cuda"
-
-    def autocast(self):
-        """Return an autocast context manager appropriate for this runtime.
-
-        On CUDA this enables mixed precision with the chosen amp_dtype; on CPU
-        it is a no-op (enabled=False) so call sites can wrap inference
-        unconditionally:  with rt.autocast(): out = model(x)
-        """
-        enabled = self.amp_dtype is not None
-        return torch.autocast(
-            device_type=self.device.type,
-            dtype=self.amp_dtype if enabled else None,
-            enabled=enabled,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -128,12 +124,19 @@ class RuntimeConfig:
 def get_runtime() -> RuntimeConfig:
     """Detect and cache the inference runtime for this machine.
 
-    Called once per process (lru_cache(maxsize=1)). Auto-detects CUDA vs CPU,
-    selects the autocast dtype, and applies global CUDA performance switches.
-    Never hardcodes a GPU index and always falls back to CPU.
+    Auto-detects CUDA vs CPU and applies the global cuDNN/TF32 policy described
+    in the module docstring. Never hardcodes a GPU index; always falls back to CPU.
     """
-    is_cuda = torch.cuda.is_available()
+    import torch
 
+    benchmark = _env_flag(CUDNN_BENCHMARK_ENV)
+    torch.backends.cudnn.benchmark = benchmark
+    torch.backends.cudnn.deterministic = not benchmark
+
+    is_cuda = torch.cuda.is_available()
+    compute_capability: tuple[int, int] | None = None
+    bf16_supported = False
+    precision = "fp32"
     if is_cuda:
         device = torch.device("cuda")
         try:
@@ -142,135 +145,231 @@ def get_runtime() -> RuntimeConfig:
             device_name = "cuda"
         try:
             cc = torch.cuda.get_device_capability(device)
-            compute_capability: tuple[int, int] | None = (int(cc[0]), int(cc[1]))
+            compute_capability = (int(cc[0]), int(cc[1]))
         except (RuntimeError, AssertionError):
             compute_capability = None
-
-        # Global perf switches -- safe to set once, only meaningful on CUDA.
-        torch.backends.cudnn.benchmark = True
+        try:
+            bf16_supported = bool(torch.cuda.is_bf16_supported())
+        except (RuntimeError, AssertionError):
+            bf16_supported = False
+        # TF32 for float32 matmuls (the mask model's DualAttention bmm); cuDNN
+        # convolutions already default to allow_tf32=True. Only Ampere+ has TF32.
         torch.set_float32_matmul_precision("high")
+        if (
+            compute_capability is not None
+            and compute_capability >= _TF32_MIN_CAPABILITY
+            and torch.backends.cudnn.allow_tf32
+        ):
+            precision = "tf32"
     else:
         device = torch.device("cpu")
         device_name = "cpu"
-        compute_capability = None
-
-    amp_dtype = _detect_amp_dtype(is_cuda)
-    bf16_supported = amp_dtype is torch.bfloat16
-
-    should_compile = bool(_torch_major_ge_2() and _triton_available())
 
     config = RuntimeConfig(
         device=device,
-        amp_dtype=amp_dtype,
         use_channels_last=is_cuda,
         pin_memory=is_cuda,
-        # 0 workers: explicit Windows/QThread-safe policy (avoids spawn deadlocks).
-        num_workers=0,
-        should_compile=should_compile,
+        io_threads=default_io_threads(),
+        cudnn_benchmark=benchmark,
+        cudnn_deterministic=not benchmark,
+        precision=precision,
         device_name=device_name,
         bf16_supported=bf16_supported,
         compute_capability=compute_capability,
+        cuda_version=torch.version.cuda if is_cuda else None,
     )
-
     logger.info(
-        "Inference runtime resolved: device=%s (%s) amp_dtype=%s channels_last=%s "
-        "pin_memory=%s num_workers=%d should_compile=%s cc=%s",
+        "Inference runtime resolved: device=%s (%s) precision=%s cudnn_benchmark=%s "
+        "cudnn_deterministic=%s channels_last=%s io_threads=%d cc=%s",
         config.device,
         config.device_name,
-        config.amp_dtype,
+        config.precision,
+        config.cudnn_benchmark,
+        config.cudnn_deterministic,
         config.use_channels_last,
-        config.pin_memory,
-        config.num_workers,
-        config.should_compile,
+        config.io_threads,
         config.compute_capability,
     )
     return config
 
 
-def maybe_compile(model: torch.nn.Module) -> torch.nn.Module:
-    """torch.compile the model when supported, else return it unchanged.
+def peek_runtime() -> RuntimeConfig | None:
+    """The resolved runtime if ``get_runtime()`` already ran, else None (never resolves)."""
+    if get_runtime.cache_info().currsize:
+        return get_runtime()
+    return None
 
-    Guarded by both the runtime's should_compile gate and a try/except so a
-    missing triton backend (common on Windows) degrades gracefully.
+
+# ---------------------------------------------------------------------------
+# Status-line summary (UXS-06)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class RuntimeSummary:
+    """Short device / precision / model-availability summary for the status line."""
+
+    device: str  # "GPU", "CPU" or "unknown" (runtime not resolved yet)
+    device_name: str | None
+    cuda_version: str | None
+    precision: str | None
+    mask_weights: bool
+    skeleton_weights: bool
+    mask_loaded: bool
+    skeleton_loaded: bool
+
+    @property
+    def models_ok(self) -> bool:
+        return self.mask_weights and self.skeleton_weights
+
+    @property
+    def text(self) -> str:
+        """e.g. ``"GPU · NVIDIA RTX 4080 · CUDA 12.8 · TF32"`` or ``"CPU · FP32"``."""
+        if self.device == "unknown":
+            parts = ["Device not detected yet"]
+        else:
+            parts = [self.device]
+            if self.device == "GPU" and self.device_name:
+                parts.append(self.device_name)
+            if self.cuda_version:
+                parts.append(f"CUDA {self.cuda_version}")
+            if self.precision:
+                parts.append(self.precision.upper())
+        if not self.mask_weights:
+            parts.append("mask model missing")
+        if not self.skeleton_weights:
+            parts.append("skeleton model missing")
+        return " · ".join(parts)
+
+
+def describe_runtime(resolve: bool = False) -> RuntimeSummary:
+    """Summarise the inference runtime without loading any model.
+
+    With ``resolve=False`` (default) this never imports torch or creates a CUDA
+    context: the device reads "unknown" until a job (or a caller passing
+    ``resolve=True``, preferably off the GUI thread) has resolved the runtime.
     """
-    rt = get_runtime()
-    if not rt.should_compile:
-        return model
-    try:
-        compiled = torch.compile(model)
-        logger.info("torch.compile applied to %s", type(model).__name__)
-        return compiled
-    except Exception as exc:  # noqa: BLE001 -- compile must never break inference
-        logger.warning("torch.compile unavailable/failed (%s); using eager model", exc)
-        return model
+    rt = get_runtime() if resolve else peek_runtime()
+    return RuntimeSummary(
+        device="unknown" if rt is None else ("GPU" if rt.is_cuda else "CPU"),
+        device_name=None if rt is None else rt.device_name,
+        cuda_version=None if rt is None else rt.cuda_version,
+        precision=None if rt is None else rt.precision,
+        mask_weights=os.path.isfile(mask_weights_path()),
+        skeleton_weights=os.path.isfile(skeleton_weights_path()),
+        mask_loaded=_is_loaded(get_mask_model),
+        skeleton_loaded=_is_loaded(get_skeleton_model),
+    )
+
+
+def _is_loaded(factory: Any) -> bool:
+    """True when a cached model factory has already built its model."""
+    cache_info = getattr(factory, "cache_info", None)
+    return bool(cache_info is not None and cache_info().currsize)
 
 
 # ---------------------------------------------------------------------------
-# Skeleton model singleton factory
+# Model singletons (loaded lazily, on the worker thread that first needs them)
 # ---------------------------------------------------------------------------
+_model_lock = threading.Lock()
+
+
 @functools.lru_cache(maxsize=1)
 def get_skeleton_model(device: torch.device | None = None):
     """Return a cached singleton SkeletonModel for skeleton inference.
 
-    The heavy generator network and its checkpoint are loaded exactly once per
-    process. ``device`` is accepted for explicitness/testability; when omitted
-    the auto-detected runtime device is used. The model is placed on the
-    runtime device, set to eval, and (on CUDA) converted to channels_last.
-
-    Imported lazily to avoid a circular import with skeleton_inference, which
-    imports this module.
+    The generator network and its checkpoint are loaded exactly once per
+    process, on the runtime device, in eval mode and (on CUDA) channels_last.
+    Imported lazily to avoid a circular import with skeleton_inference.
     """
+    import torch
+
     from app.inference.skeleton_inference import SkeletonModel  # local import
 
     rt = get_runtime()
     target = device if device is not None else rt.device
-
-    gpu_ids = [target.index or 0] if target.type == "cuda" else []
-    model = SkeletonModel(gpu_ids=gpu_ids)
-
-    # Move the underlying network to the resolved device and apply layout policy.
-    net = model.netG
-    if rt.use_channels_last and target.type == "cuda":
-        try:
-            net.to(memory_format=torch.channels_last)
-        except (RuntimeError, ValueError) as exc:
-            logger.debug("channels_last not applied to skeleton model: %s", exc)
-
-    net.eval()
+    with _model_lock:
+        gpu_ids = [target.index or 0] if target.type == "cuda" else []
+        model = SkeletonModel(gpu_ids=gpu_ids)
+        net = model.netG
+        if rt.use_channels_last and target.type == "cuda":
+            try:
+                net.to(memory_format=torch.channels_last)
+            except (RuntimeError, ValueError) as exc:
+                logger.debug("channels_last not applied to skeleton model: %s", exc)
+        net.eval()
     logger.info("Skeleton model singleton created on %s", target)
     return model
 
 
-def warmup(model=None) -> None:
-    """Pre-pay one-time CUDA/cuDNN/compile latency with a dummy forward pass.
+@functools.lru_cache(maxsize=1)
+def get_mask_model(device: torch.device | None = None):
+    """Return the cached ResNet mask model, built on first use (PG-04 / PI-11).
 
-    No-op on CPU. Safe to call multiple times. Any failure is swallowed -- a
-    warmup is an optimization, never a correctness requirement.
+    The network is constructed on the ``meta`` device (no random init) and the
+    checkpoint is loaded straight onto the target device with ``assign=True``,
+    so the weights are copied once. Raises ``ModelUnavailableError`` when the
+    checkpoint is missing or does not load.
     """
-    rt = get_runtime()
-    if not rt.is_cuda:
-        return
+    import torch
 
-    try:
-        if model is None:
-            model = get_skeleton_model(rt.device)
-        net = model.netG
-        # LOAD_SIZE/INPUT_NC mirror skeleton_inference's preprocessing (256, RGB).
-        dummy = torch.zeros(1, 3, 256, 256, device=rt.device)
-        if rt.use_channels_last:
-            dummy = dummy.to(memory_format=torch.channels_last)
-        with torch.inference_mode(), rt.autocast():
-            net(dummy)
-        torch.cuda.synchronize()
-        logger.info("Skeleton model warmup complete on %s", rt.device)
-    except Exception as exc:  # noqa: BLE001 -- warmup is best-effort only
-        logger.debug("Warmup skipped/failed: %s", exc)
+    from app.mask_model.model import ResNetSkeleton
+
+    rt = get_runtime()
+    target = device if device is not None else rt.device
+    weights_path = mask_weights_path()
+    if not os.path.isfile(weights_path):
+        raise ModelUnavailableError(f"Mask model weights not found: {weights_path}")
+    with _model_lock:
+        try:
+            # weights_only=True prevents arbitrary code execution via pickle (F-023).
+            state_dict = torch.load(weights_path, map_location=target, weights_only=True)
+            with torch.device("meta"):
+                model = ResNetSkeleton(num_classes=1, pretrained=False)
+            model.load_state_dict(state_dict, assign=True)
+        except (RuntimeError, OSError, ValueError) as exc:
+            raise ModelUnavailableError(
+                f"Could not load mask model weights from {weights_path}: {exc}"
+            ) from exc
+        leftover = [n for n, t in _named_tensors(model) if t.is_meta]
+        if leftover:  # a buffer the checkpoint does not carry: fall back to a real init
+            logger.warning("Mask model has non-checkpoint tensors %s; full init", leftover)
+            model = ResNetSkeleton(num_classes=1, pretrained=False)
+            model.load_state_dict(state_dict)
+        model = model.to(target).eval()
+        if rt.use_channels_last and target.type == "cuda":
+            model = model.to(memory_format=torch.channels_last)
+    logger.info("Mask model loaded from %s on %s", weights_path, target)
+    return model
+
+
+def _named_tensors(module: Any):
+    yield from module.named_parameters()
+    yield from module.named_buffers()
+
+
+def release_cuda_cache() -> None:
+    """Return PyTorch's cached GPU memory to the driver once a batch job ends (PI-13).
+
+    No-op when torch is not loaded or CUDA was never initialised. Never call it
+    per batch: that defeats the caching allocator.
+    """
+    torch = sys.modules.get("torch")
+    if torch is None or not torch.cuda.is_initialized():
+        return
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 __all__ = [
+    "CUDNN_BENCHMARK_ENV",
+    "ModelUnavailableError",
     "RuntimeConfig",
+    "RuntimeSummary",
+    "describe_runtime",
+    "get_mask_model",
     "get_runtime",
-    "maybe_compile",
     "get_skeleton_model",
-    "warmup",
+    "mask_weights_path",
+    "peek_runtime",
+    "release_cuda_cache",
+    "skeleton_weights_path",
 ]

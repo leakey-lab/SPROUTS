@@ -1,301 +1,267 @@
+"""Generate masks for the loaded image folder (thin Qt layer over mask_inference).
+
+* RB-01 / PI-04 / FR-04 / UXS-01: before starting, ``mask/`` is scanned once and
+  existing masks are classified (hand-corrected = RGBA PNG, model = greyscale).
+  If any exist the user chooses "Keep existing masks (generate missing only)"
+  (default), "Overwrite all (N hand-corrected)" or Cancel. Cancel starts no
+  thread, so ``main_window.generate_all`` chains no skeleton pass.
+* PG-04 / PI-11: importing or constructing the handler loads neither torch nor
+  the model; the worker loads the cached model on first use ("Loading mask model").
+* PI-12 / UXS-02 / AR-07: progress, completion and failures go through
+  ``UiFeedback`` (named operations, done/total counts, Cancel); a successful run
+  ends with a toast, not a modal box, so an unattended Generate never stalls.
+* PI-03 / PI-07 / PI-08 / PI-09 / PI-13: see ``app.inference.mask_inference``.
+"""
+
+from __future__ import annotations
+
 import logging
 import os
+from collections.abc import Callable
+from functools import partial
+from typing import Any
 
-import numpy as np
-import torch
-import torch.utils.data as data
-import torchvision.transforms as transforms
-from PIL import Image, UnidentifiedImageError
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QMessageBox, QWidget
 
-from app.config import MASK_BATCH_SIZE, MASK_THRESHOLD, MASK_WEIGHTS_PATH
+from app.gui.feedback import UiFeedback
+from app.handlers.generation_base import GenerationHandlerBase, show_failure_report
+from app.handlers.job_registry import JobRegistry
+from app.handlers.worker_base import GuardedThread, JobCancelled
 from app.inference import runtime
-from app.mask_model.model import ResNetSkeleton
+from app.inference.batch_pipeline import progress_percent
+from app.inference.mask_origin import ExistingMasks, OverwritePolicy, scan_existing_masks
+from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
 
-
-class ImageDataset(data.Dataset):
-    """Custom Dataset for loading images efficiently"""
-
-    def __init__(self, image_dir, transform=None):
-        self.image_dir = image_dir
-        self.transform = transform
-        self.image_files = [
-            f for f in os.listdir(image_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))
-        ]
-
-    def __len__(self):
-        return len(self.image_files)
-
-    def __getitem__(self, idx):
-        filename = self.image_files[idx]
-        image_path = os.path.join(self.image_dir, filename)
-        try:
-            image = Image.open(image_path).convert("RGB")
-        except (FileNotFoundError, UnidentifiedImageError, OSError) as exc:
-            logger.warning("Skipping unreadable image %s: %s", image_path, exc)
-            # Return a blank RGB image so the DataLoader batch dimension stays consistent.
-            image = Image.new("RGB", (640, 480), color=0)
-
-        if self.transform:
-            image = self.transform(image)
-
-        return image, filename
+ConfirmOverwrite = Callable[[ExistingMasks, int], "OverwritePolicy | None"]
 
 
-class MaskGenerationThread(QThread):
+class MaskGenerationThread(GuardedThread):
+    """Runs ``mask_inference.generate_masks`` off the GUI thread.
+
+    Signals (``progress``, ``finished`` and ``error`` keep their legacy payloads):
+        progress(int): percent done.
+        progress_counts(int, int): (done, total) inputs.
+        stage(str): "Loading mask model" / "Generating masks".
+        finished(str, list): output folder and the names of failed inputs
+            (emitted only when the run completed; not after Cancel or an error).
+        error(str): user-facing message when the run failed (mirrors ``failed``).
+    ``report`` holds the ``BatchReport`` once the run ended (completed or cancelled);
+    ``completed`` turns True only when the run finished without cancel or error.
+    """
+
     progress = pyqtSignal(int)
+    progress_counts = pyqtSignal(int, int)
+    stage = pyqtSignal(str)
     finished = pyqtSignal(str, list)
     error = pyqtSignal(str)
 
-    def __init__(self, input_dir, output_dir, model, device):
+    def __init__(
+        self,
+        input_dir: str,
+        output_dir: str,
+        model: Any = None,
+        *,
+        skip_stems: frozenset[str] = frozenset(),
+        policy: str | None = None,
+    ) -> None:
         super().__init__()
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.model = model
-        self.device = device
-        self.rt = runtime.get_runtime()
+        self.skip_stems = frozenset(skip_stems)
+        self.policy = policy
+        self.report = None
+        self.completed = False
+        self.failed.connect(self.error)
 
-    def run(self):
-        try:
-            # Set up image transforms
-            transform = transforms.Compose(
-                [
-                    transforms.Resize((480, 640)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(
-                        mean=[0.5514, 0.4094, 0.3140], std=[0.1299, 0.1085, 0.0914]
-                    ),
-                ]
-            )
+    def work(self) -> None:
+        from app.inference import mask_inference  # torch/torchvision load here, off the GUI
 
-            # Create dataset and dataloader.
-            # num_workers > 0 deadlocks inside a QThread on Windows (F-022); use 0.
-            dataset = ImageDataset(self.input_dir, transform=transform)
-            total_images = len(dataset)
+        self.report = mask_inference.generate_masks(
+            self.input_dir,
+            self.output_dir,
+            skip_stems=self.skip_stems,
+            model=self.model,
+            policy=self.policy,
+            progress=self._report_progress,
+            should_stop=self.is_cancelled,
+            on_stage=self.stage.emit,
+        )
+        if self.report.cancelled:
+            raise JobCancelled
+        self.completed = True
+        self.finished.emit(self.output_dir, self.report.failed_names)
 
-            dataloader = data.DataLoader(
-                dataset,
-                batch_size=MASK_BATCH_SIZE,
-                shuffle=False,
-                num_workers=0,
-                pin_memory=(self.device.type == "cuda"),
-            )
-
-            failed_images: list[str] = []
-            processed_count = 0
-            last_emitted_pct = -1
-
-            # Ensure the model is in eval mode for inference (F-022 / ML correctness).
-            self.model.eval()
-
-            # Use inference_mode for performance — no grad tape overhead (F-022).
-            # Run in full fp32 (NO autocast): the ResNetSkeleton DualAttention
-            # blocks do large bmm + softmax over the spatial dims, which lose
-            # precision under fp16/bf16 mixed precision and degrade the mask.
-            # The weights were validated in fp32 (V2), so match that exactly.
-            with torch.inference_mode():
-                for batch_images, batch_filenames in dataloader:
-                    try:
-                        # Move batch to device
-                        batch_images = batch_images.to(self.device)
-                        if self.rt.use_channels_last and self.device.type == "cuda":
-                            batch_images = batch_images.contiguous(
-                                memory_format=torch.channels_last
-                            )
-
-                        # Generate masks for entire batch
-                        batch_masks = self.model(batch_images)
-
-                        # Process each mask in the batch
-                        for mask, filename in zip(batch_masks, batch_filenames):
-                            # Convert to numpy and threshold using config constant (F-005 / config).
-                            mask_np = mask.squeeze().float().cpu().numpy()
-                            binary_mask = (mask_np > MASK_THRESHOLD).astype(np.uint8) * 255
-
-                            # Convert to PIL Image and save
-                            mask_pil = Image.fromarray(binary_mask, mode="L")
-                            output_path = os.path.join(
-                                self.output_dir, os.path.splitext(filename)[0] + ".png"
-                            )
-                            try:
-                                mask_pil.save(output_path, "PNG")
-                            except OSError as save_exc:
-                                logger.error("Failed to save mask for %s: %s", filename, save_exc)
-                                failed_images.append(filename)
-                                continue
-
-                            processed_count += 1
-                            progress = int((processed_count / total_images) * 100)
-                            # Emit only when the integer percent changes to avoid flooding
-                            # the Qt event loop with duplicate cross-thread signals (perf).
-                            if progress != last_emitted_pct:
-                                last_emitted_pct = progress
-                                self.progress.emit(progress)
-
-                    except (RuntimeError, torch.cuda.OutOfMemoryError) as batch_exc:
-                        # Narrow per-batch except: log the failure, collect names, continue
-                        # with the remaining batches rather than silently swallowing (F-021).
-                        names = list(batch_filenames)
-                        logger.error("Batch processing failed for images %s: %s", names, batch_exc)
-                        failed_images.extend(names)
-                        # Free GPU memory before next batch when on CUDA (F-022).
-                        if self.device.type == "cuda":
-                            torch.cuda.empty_cache()
-                        continue
-
-            if failed_images:
-                logger.warning(
-                    "Mask generation completed with %d failed image(s): %s",
-                    len(failed_images),
-                    failed_images,
-                )
-            # Emit the failure list as a structured payload so filenames containing
-            # commas or special tokens cannot corrupt the decode (correctness).
-            self.finished.emit(self.output_dir, failed_images)
-
-        except Exception as exc:  # noqa: BLE001 — thread boundary; must not propagate
-            logger.exception("Mask generation thread encountered an unexpected error")
-            self.error.emit(str(exc))
+    def _report_progress(self, done: int, total: int) -> None:
+        self.progress.emit(progress_percent(done, total))
+        self.progress_counts.emit(done, total)
 
 
-class MaskGenerationHandler:
-    def __init__(self, main_window):
-        self.main_window = main_window
-        self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.generation_thread = None
+def ask_overwrite_policy(
+    parent: QWidget | None, existing: ExistingMasks, total: int
+) -> OverwritePolicy | None:
+    """Ask what to do with existing masks; None means Cancel (the default is Keep)."""
+    manual = len(existing.manual)
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Masks already exist")
+    box.setText(f"{existing.count:,} of {total:,} images already have a mask.")
+    detail = (
+        f"{manual:,} of them were corrected by hand. "
+        if manual
+        else "None of them look hand-corrected. "
+    )
+    box.setInformativeText(
+        detail + "Keep them and generate only the missing masks, or replace every mask "
+        "with a new model prediction. Replaced masks cannot be restored."
+    )
+    keep = box.addButton(
+        "Keep existing masks (generate missing only)", QMessageBox.ButtonRole.AcceptRole
+    )
+    box.addButton(
+        f"Overwrite all ({manual:,} hand-corrected)", QMessageBox.ButtonRole.DestructiveRole
+    )
+    cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(keep)
+    box.setEscapeButton(cancel)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is keep:
+        return OverwritePolicy.KEEP_EXISTING
+    if clicked is None or clicked is cancel:
+        return None
+    return OverwritePolicy.OVERWRITE_ALL
 
-        # Initialize the model
-        self._initialize_model()
 
-    def _initialize_model(self):
-        # Use the centralised config path — no CWD dependency (F-005 / config adoption).
-        weights_path = MASK_WEIGHTS_PATH
+class MaskGenerationHandler(GenerationHandlerBase):
+    """Starts mask generation for ``main_window``'s loaded folder.
 
-        if not os.path.exists(weights_path):
-            logger.warning(
-                "Mask weights not found at %s; mask generation will be unavailable.",
-                weights_path,
-            )
-            self.model = None
-            return
+    Args:
+        main_window: provides ``image_manager`` and, optionally, ``feedback``
+            (``UiFeedback``), ``jobs`` (``JobRegistry``) and ``on_outputs_changed()``.
+        feedback / jobs: explicit dependencies (tests, tools).
+        confirm_overwrite: ``(existing, total) -> OverwritePolicy | None``; default
+            is the :func:`ask_overwrite_policy` dialog.
+    """
 
-        try:
-            self.model = ResNetSkeleton(num_classes=1, pretrained=False)
-            # weights_only=True prevents arbitrary code execution via pickle (F-023 / SS-01).
-            state_dict = torch.load(weights_path, map_location=self.device, weights_only=True)
-            self.model.load_state_dict(state_dict)
-            # Move the model to its device once at load time; never reload per call (F-022).
-            self.model = self.model.to(self.device)
-            self.model.eval()
-            rt = runtime.get_runtime()
-            if rt.use_channels_last and self.device.type == "cuda":
-                self.model = self.model.to(memory_format=torch.channels_last)
-            logger.info("Mask model loaded from %s on device %s", weights_path, self.device)
-        except (RuntimeError, OSError, ValueError) as exc:
-            # Log the specific exception so the init failure is visible (F-102).
-            logger.exception("Failed to load mask model weights from %s: %s", weights_path, exc)
-            self.model = None
+    job_label = "Generating masks"
 
-    def generate_masks(self):
-        """Generate masks using the ResNet model"""
-        if self.model is None:
+    def __init__(
+        self,
+        main_window: Any,
+        *,
+        feedback: UiFeedback | None = None,
+        jobs: JobRegistry | None = None,
+        confirm_overwrite: ConfirmOverwrite | None = None,
+    ) -> None:
+        super().__init__(main_window, feedback=feedback, jobs=jobs)
+        self._confirm = confirm_overwrite or partial(ask_overwrite_policy, self.parent_widget())
+        self._started: MaskGenerationThread | None = None
+
+    @property
+    def generation_thread(self) -> MaskGenerationThread | None:
+        """The worker started by the latest ``generate_masks()`` call, else None.
+
+        ``main_window.generate_all`` chains the skeleton pass on its ``finished``.
+        """
+        return self._started
+
+    @property
+    def model_available(self) -> bool:
+        """True when the mask checkpoint exists (the model itself loads on first use)."""
+        return os.path.isfile(runtime.mask_weights_path())
+
+    def generate_masks(self, on_success: Callable[[], None] | None = None) -> bool:
+        """Ask about existing masks, then start generation. True if a run started.
+
+        ``on_success`` (e.g. the skeleton pass of Generate) runs after a completed
+        run once the job registry is free; never after Cancel or a failure.
+        """
+        self._started = None
+        parent = self.parent_widget()
+        if not self.model_available:
             QMessageBox.warning(
-                self.main_window,
-                "Warning",
-                "Mask generation model not initialized. Please ensure model weights are present.",
+                parent,
+                "Mask model missing",
+                "Mask generation is unavailable: the model weights were not found at\n"
+                f"{runtime.mask_weights_path()}",
             )
-            return
+            return False
+        input_dir = self.project_folder()
+        if input_dir is None:
+            QMessageBox.warning(parent, "No images", "Load an image folder first.")
+            return False
+        if self.is_busy():
+            self.feedback.notify(f"{self.job_label} is already running", "warn")
+            return False
 
-        if not self.main_window.image_manager.images:
-            QMessageBox.warning(
-                self.main_window,
-                "Warning",
-                "No images loaded. Please load images first.",
-            )
-            return
-
-        # Guard against re-entry: a second click would orphan the running QThread and
-        # interleave writes to the same mask dir (bug).
-        if self.generation_thread is not None and self.generation_thread.isRunning():
-            self.main_window.status_bar.showMessage("Mask generation already in progress...", 5000)
-            return
-
+        layout = ProjectLayout(input_dir)
         try:
-            # Prefer image_manager.original_folder over inferring from the first image path
-            # (mitigates F-068: mask input dir should not depend on iteration order).
-            if getattr(self.main_window.image_manager, "original_folder", None):
-                input_dir = self.main_window.image_manager.original_folder
-            else:
-                first_image_path = next(iter(self.main_window.image_manager.images.values()))
-                input_dir = os.path.dirname(first_image_path)
+            stems = set(layout.scan_images())
+            existing = scan_existing_masks(layout, stems)
+        except OSError as exc:
+            logger.exception("Could not scan %s", input_dir)
+            QMessageBox.critical(parent, "Mask generation", f"Could not read the folder:\n{exc}")
+            return False
+        policy = OverwritePolicy.KEEP_EXISTING
+        if existing:
+            chosen = self._confirm(existing, len(stems))
+            if chosen is None:
+                return False
+            policy = chosen
 
-            output_dir = os.path.join(input_dir, "mask")
-            os.makedirs(output_dir, exist_ok=True)
+        thread = MaskGenerationThread(
+            input_dir,
+            layout.mask_dir,
+            skip_stems=policy.skip_stems(existing),
+            policy=policy.value,
+        )
+        thread.stage.connect(partial(self._on_stage, thread))
+        thread.progress_counts.connect(self.feedback.task_progress)
+        thread.finished.connect(partial(self._on_finished, thread))
+        thread.failed.connect(partial(self._on_failed, thread))
+        thread.cancelled.connect(partial(self._on_cancelled, thread))
+        self._started = thread
+        if not self._start(thread, on_success):
+            self._started = None
+            return False
+        return True
 
-            # Use the existing loading progress bar instead of creating a new one
-            self.main_window.loading_progress_bar.setValue(0)
-            self.main_window.loading_progress_bar.show()
-            self.main_window.loading_progress_bar.setTextVisible(True)
-            self.main_window.loading_progress_bar.setFormat("Generating masks: %p%")
+    # ------------------------------------------------------------------ outcomes
+    def _on_stage(self, thread: MaskGenerationThread, label: str) -> None:
+        self.begin_task(label, thread)
 
-            # Create and start generation thread
-            self.generation_thread = MaskGenerationThread(
-                input_dir, output_dir, self.model, self.device
-            )
-            self.generation_thread.progress.connect(self.update_progress)
-            self.generation_thread.finished.connect(self.on_generation_finished)
-            self.generation_thread.error.connect(self.on_generation_error)
-            self.generation_thread.start()
-
-            # Show status message
-            self.main_window.status_bar.showMessage("Generating masks...")
-
-        except (OSError, StopIteration) as exc:
-            logger.exception("Error starting mask generation")
-            QMessageBox.critical(
-                self.main_window, "Error", f"Error starting mask generation: {exc}"
-            )
-
-    def update_progress(self, value):
-        """Update the progress bar value"""
-        self.main_window.loading_progress_bar.setValue(value)
-        self.main_window.status_bar.showMessage(f"Generating masks... {value}%")
-
-    def on_generation_finished(self, output_dir, failed):
-        """Handle completion of mask generation"""
-        self.main_window.loading_progress_bar.hide()
-
-        # The thread now delivers the failure list as a structured argument (F-021).
-        if failed:
-            self.main_window.status_bar.showMessage(
-                f"Mask generation completed with {len(failed)} failure(s)", 5000
-            )
-            QMessageBox.warning(
-                self.main_window,
-                "Partial Success",
-                f"Masks saved to:\n{output_dir}\n\n"
-                f"{len(failed)} image(s) could not be processed:\n"
-                + "\n".join(failed[:20])
-                + ("\n…" if len(failed) > 20 else ""),
+    def _on_finished(self, thread: MaskGenerationThread, output_dir: str, _failed: list) -> None:
+        report = thread.report
+        written, kept = len(report.written), len(report.skipped)
+        message = f"Generated {written:,} masks"
+        if kept:
+            message += f", kept {kept:,} existing"
+        self.feedback.task_finished(message)
+        if report.failed:
+            self.feedback.notify(f"{len(report.failed):,} images could not be processed", "warn")
+            self._report_box = show_failure_report(
+                self.parent_widget(), "Mask generation", output_dir, report.failed
             )
         else:
-            self.main_window.status_bar.showMessage("Mask generation completed", 5000)
-            QMessageBox.information(
-                self.main_window,
-                "Success",
-                f"Masks generated successfully and saved to:\n{output_dir}",
-            )
+            self.feedback.notify(f"{message}. Saved to {output_dir}", "success")
+        self.outputs_changed()
 
-    def on_generation_error(self, error_message):
-        """Handle error during mask generation"""
-        self.main_window.loading_progress_bar.hide()
+    def _on_failed(self, thread: MaskGenerationThread, message: str) -> None:
+        logger.error("Mask generation failed: %s", message)
+        self.feedback.task_failed("Mask generation failed")
+        QMessageBox.critical(self.parent_widget(), "Mask generation failed", message)
+        self.outputs_changed()
 
-        logger.error("Mask generation error: %s", error_message)
-        self.main_window.status_bar.showMessage("Error during mask generation", 5000)
-        QMessageBox.critical(
-            self.main_window, "Error", f"Error during mask generation: {error_message}"
-        )
+    def _on_cancelled(self, thread: MaskGenerationThread) -> None:
+        report = thread.report
+        done = f" after {report.done:,} of {report.total:,} images" if report else ""
+        self.feedback.task_finished(f"Mask generation cancelled{done}")
+        self.feedback.notify(f"Mask generation cancelled{done}; finished masks were kept", "info")
+        self.outputs_changed()
+
+
+__all__ = ["MaskGenerationHandler", "MaskGenerationThread", "ask_overwrite_policy"]
