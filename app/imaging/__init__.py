@@ -1,0 +1,9 @@
+"""Qt-free image processing helpers shared by the canvases (numpy + cv2 only).
+
+Modules:
+
+* :mod:`app.imaging.pyramid` - half-scale image pyramids (area average and max-pool)
+  with lazy levels and dirty-rect patching, used for level-of-detail rendering.
+
+This package module imports nothing; import the submodules directly.
+"""

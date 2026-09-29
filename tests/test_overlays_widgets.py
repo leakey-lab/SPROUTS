@@ -184,6 +184,9 @@ class _View(QObject):
     def zoom_by(self, step):
         self.calls.append(("zoom_by", step))
 
+    def zoom_step(self, direction):
+        self.calls.append(("zoom_step", direction))
+
     def fit_to_view(self):
         self.calls.append(("fit_to_view",))
 
@@ -200,7 +203,7 @@ def test_zoom_cluster_buttons_drive_the_bound_view(host):
     cluster.zoom_in_button.click()
     cluster.zoom_out_button.click()
     cluster.fit_button.click()
-    assert view.calls == [("zoom_by", 1.25), ("zoom_by", 0.8), ("fit_to_view",)]
+    assert view.calls == [("zoom_step", 1), ("zoom_step", -1), ("fit_to_view",)]
 
 
 def test_zoom_cluster_readout_follows_the_view(host):
@@ -237,7 +240,7 @@ def test_rebinding_the_zoom_cluster_releases_the_previous_view(host):
     first.zoom_changed.emit(5.0)
     cluster.zoom_in_button.click()
     assert cluster.zoom_pct_label.text() == "200%"
-    assert first.calls == [] and second.calls == [("zoom_by", 1.25)]
+    assert first.calls == [] and second.calls == [("zoom_step", 1)]
 
 
 def test_zoom_cluster_fit_can_be_overridden_for_insets(host):
@@ -352,3 +355,73 @@ def test_status_chip_hint_line_wraps_and_belongs_to_the_chip(host):
     assert chip.hint_label.wordWrap() and chip.hint_label.width() <= 300
     chip.set_hint("")
     assert chip.hint_label.isHidden()
+
+
+def test_status_chip_hint_dot_shows_the_layer_colour_before_the_text(host):
+    from PyQt6.QtCore import Qt
+
+    from app.gui.widgets import StatusChip, tokens
+
+    chip = StatusChip(host)
+    chip.set_hint("Mask · Brush", "Paint the mask", dot=tokens.MASK)
+    chip.show()
+    QApplication.processEvents()
+    assert not chip.hint_dot.isHidden()
+    assert chip.hint_dot.text() == "●"
+    assert tokens.MASK in chip.hint_dot.styleSheet()
+    assert chip.hint_dot.parent() is chip
+    assert chip.hint_dot.geometry().right() < chip.hint_label.geometry().left()  # before it
+    assert chip.hint_label.text() == "Mask · Brush"
+    assert chip.hint_label.toolTip() == "Paint the mask"
+    assert chip.hint_label.textFormat() == Qt.TextFormat.PlainText
+
+    chip.set_hint("Skeleton · Polyline", dot=tokens.SKEL)
+    assert tokens.SKEL in chip.hint_dot.styleSheet()
+    assert tokens.MASK not in chip.hint_dot.styleSheet()
+    chip.set_hint("Skeleton · Polyline", dot=None)
+    assert chip.hint_dot.isHidden()
+
+
+def test_status_chip_hint_without_a_dot_behaves_as_before(host):
+    from PyQt6.QtCore import Qt
+
+    from app.gui.widgets import StatusChip, tokens
+
+    chip = StatusChip(host)
+    chip.set_hint("<b>Brush</b> & more", "tip")
+    assert chip.hint_dot.isHidden()
+    assert chip.hint_label.text() == "<b>Brush</b> & more"  # plain text, never markup
+    assert chip.hint_label.textFormat() == Qt.TextFormat.PlainText
+    assert chip.hint_label.toolTip() == "tip"
+    chip.set_hint("", dot=tokens.MASK)  # no hint: no dot either
+    assert chip.hint_label.isHidden() and chip.hint_dot.isHidden()
+
+
+def test_status_chip_dot_is_the_size_of_the_hint_text(host):
+    from app.gui.widgets import StatusChip, tokens
+
+    chip = StatusChip(host)
+    chip.set_hint("Mask · Brush", dot=tokens.MASK)
+    chip.ensurePolished()
+    assert chip.hint_dot.font().pixelSize() == chip.hint_label.font().pixelSize() == 12
+
+
+def test_status_chip_width_fit_accounts_for_the_dot(host):
+    from app.gui.widgets import StatusChip, tokens
+
+    hint = "Skeleton · Polyline · 3 points · drag points to adjust them"
+    chip = StatusChip(host, max_hint_width=460)
+    chip.set_text("T001_L044.jpg")
+    chip.set_state("dirty")
+    chip.set_hint(hint, dot=tokens.SKEL)
+    chip.adjustSize()
+    natural = chip.width()
+    for budget in (natural - 60, 260):
+        chip.fit_to_width(budget)
+        chip.adjustSize()
+        assert chip.width() <= budget
+        assert chip.hint_label.wordWrap()
+        assert chip.hint_dot.geometry().right() < chip.hint_label.geometry().left()
+    chip.fit_to_width(None)
+    chip.adjustSize()
+    assert chip.width() == natural

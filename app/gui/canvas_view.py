@@ -2,15 +2,17 @@
 
 ``CanvasViewMixin`` is mixed into each image ``QGraphicsView`` as
 ``class X(CanvasViewMixin, QGraphicsView)``: the Library display, the Correct
-Mask / Trace GT canvas and the Correct Skeleton canvas. So all three behave the
-same way:
+canvas and the Trace GT canvas. So all of them behave the same way:
 
 Zoom
     The view transform is the single source of truth. ``zoom_factor`` is read
     from it, every zoom goes through :meth:`set_zoom` (clamped to
     ``MIN_ZOOM``..``MAX_ZOOM``) and ``zoom_changed`` reports the new factor.
-    Ctrl+wheel zooms about the cursor. Ctrl+0 fits, Ctrl+1 shows actual pixels,
-    Ctrl+= / Ctrl++ and Ctrl+- step the zoom.
+    Ctrl+wheel zooms about the cursor, continuously (``WHEEL_STEP`` per notch,
+    fractions from touchpads). Ctrl+0 fits, Ctrl+1 shows actual pixels, and
+    Ctrl+= / Ctrl++ and Ctrl+- step along the ``ZOOM_STOPS`` ladder
+    (:meth:`zoom_step`: round percentages, 80 % and 125 % around 100 %, integer
+    stops from 200 %, so exact-pixel layers show uniform blocks).
 
 Fit
     :meth:`fit_to_view` fits the content rect into the viewport minus insets
@@ -24,7 +26,8 @@ Pan
     PageDown are left to the parent widgets instead of scrolling the canvas.
 
 Viewport
-    One OpenGL policy (:mod:`app.gui.canvas_gl`). After every viewport swap the
+    One OpenGL policy (:mod:`app.gui.canvas_gl`); a GL viewport requests
+    ``canvas_gl.gl_samples()`` MSAA samples. After every viewport swap the
     update mode (Full for OpenGL, Smart for the raster viewport), mouse tracking
     and cursor are applied again.
 
@@ -57,7 +60,12 @@ class CanvasViewMixin:
     MIN_ZOOM = 0.1
     MAX_ZOOM = 20.0
     WHEEL_STEP = 1.2  # zoom per wheel notch (120 angle-delta units)
-    KEY_STEP = 1.25  # zoom per Ctrl+= / Ctrl+- press (and the editors' zoom buttons)
+    # Stops of Ctrl+= / Ctrl+- and the zoom buttons (zoom_step), MIN_ZOOM to MAX_ZOOM.
+    ZOOM_STOPS: tuple[float, ...] = (
+        0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 0.8, 1.0, 1.25,
+        1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0,
+    )  # fmt: skip
+    ZOOM_STOP_TOLERANCE = 1e-3  # a zoom this close to a stop counts as on it
     FIT_MARGIN = 24  # default inset on every side when fitting
     PAN_PADDING = 0.5  # scene padding around the content, as a fraction of its size
 
@@ -98,9 +106,14 @@ class CanvasViewMixin:
 
     @staticmethod
     def _new_gl_viewport() -> QWidget:
+        """A ``QOpenGLWidget`` asking for ``canvas_gl.gl_samples()`` MSAA samples."""
         from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
-        return QOpenGLWidget()
+        viewport = QOpenGLWidget()
+        surface = viewport.format()
+        surface.setSamples(canvas_gl.gl_samples())
+        viewport.setFormat(surface)
+        return viewport
 
     def _configure_viewport(self) -> None:
         """Apply what every fresh viewport widget needs (runs after each swap)."""
@@ -149,6 +162,22 @@ class CanvasViewMixin:
     def zoom_by(self, step: float, anchor: QPointF | None = None) -> None:
         """Multiply the zoom by ``step`` (see :meth:`set_zoom`)."""
         self.set_zoom(self.zoom_factor * step, anchor)
+
+    def zoom_step(self, direction: int, anchor: QPointF | None = None) -> None:
+        """Zoom to the next stop of ``ZOOM_STOPS``: up for ``direction > 0``, else down.
+
+        A zoom within ``ZOOM_STOP_TOLERANCE`` of a stop counts as on it; past the last
+        stop the zoom stays clamped to ``MIN_ZOOM`` / ``MAX_ZOOM``. ``anchor`` as in
+        :meth:`set_zoom`.
+        """
+        if not direction:
+            return
+        zoom, tol = self.zoom_factor, self.ZOOM_STOP_TOLERANCE
+        if direction > 0:
+            target = next((s for s in self.ZOOM_STOPS if s > zoom + tol), self.MAX_ZOOM)
+        else:
+            target = next((s for s in reversed(self.ZOOM_STOPS) if s < zoom - tol), self.MIN_ZOOM)
+        self.set_zoom(target, anchor)
 
     def _clamp_zoom(self, factor: float) -> float:
         return max(self.MIN_ZOOM, min(self.MAX_ZOOM, float(factor)))
@@ -259,9 +288,9 @@ class CanvasViewMixin:
             action = {
                 Qt.Key.Key_0: self.fit_to_view,
                 Qt.Key.Key_1: lambda: self.set_zoom(1.0),
-                Qt.Key.Key_Equal: lambda: self.zoom_by(self.KEY_STEP),
-                Qt.Key.Key_Plus: lambda: self.zoom_by(self.KEY_STEP),
-                Qt.Key.Key_Minus: lambda: self.zoom_by(1 / self.KEY_STEP),
+                Qt.Key.Key_Equal: lambda: self.zoom_step(+1),
+                Qt.Key.Key_Plus: lambda: self.zoom_step(+1),
+                Qt.Key.Key_Minus: lambda: self.zoom_step(-1),
             }.get(key)
             if action is not None:
                 action()

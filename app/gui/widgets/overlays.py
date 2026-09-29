@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QToolButton,
     QVBoxLayout,
@@ -191,14 +192,18 @@ QToolButton#zoomReadout:hover {{ background-color: {tokens.BG_3}; }}
 class ZoomCluster(CornerPanel):
     """Zoom controls shared by the canvas editors: out, readout, in | fit.
 
-    The readout is a flat button: a click shows the image at 100 % (actual
-    pixels), or fits it again when it already is at 100 %. :meth:`bind` wires
-    the cluster to a canvas view with ``zoom_changed(float)``, ``zoom_by``,
-    ``fit_to_view`` and ``set_zoom``.
+    The − / + buttons step along the view's zoom ladder (``zoom_step``). The readout
+    is a flat button: a click shows the image at 100 % (actual pixels), or fits it
+    again when it already is at 100 %; a right-click opens :meth:`preset_menu` (Fit and
+    fixed zooms). :meth:`bind` wires the cluster to a canvas view with
+    ``zoom_changed(float)``, ``zoom_step``, ``fit_to_view`` and ``set_zoom``.
     """
 
+    # Old editors' button steps (zoom_by); kept until they are gone. The cluster steps
+    # along the view's ZOOM_STOPS ladder instead.
     ZOOM_IN_STEP = 1.25
     ZOOM_OUT_STEP = 0.8
+    PRESETS = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0)  # readout menu, after "Fit"
 
     def __init__(self, parent=None, *, corner: str = "br", margin: int = 14, v_margin: int = 18):
         super().__init__(parent, corner=corner, margin=margin, v_margin=v_margin)
@@ -219,10 +224,12 @@ class ZoomCluster(CornerPanel):
         self._view = None
         self._fit: Callable[[], None] | None = None
         self._factor = 1.0
-        self.zoom_in_button.clicked.connect(lambda: self._ask("zoom_by", self.ZOOM_IN_STEP))
-        self.zoom_out_button.clicked.connect(lambda: self._ask("zoom_by", self.ZOOM_OUT_STEP))
+        self.zoom_in_button.clicked.connect(lambda: self._ask("zoom_step", 1))
+        self.zoom_out_button.clicked.connect(lambda: self._ask("zoom_step", -1))
         self.fit_button.clicked.connect(self._fit_view)
         self.zoom_pct_label.clicked.connect(self._toggle_actual_pixels)
+        self.zoom_pct_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.zoom_pct_label.customContextMenuRequested.connect(self._show_presets)
         self.set_zoom_factor(1.0)
 
     def bind(self, view, *, fit: Callable[[], None] | None = None) -> None:
@@ -246,13 +253,38 @@ class ZoomCluster(CornerPanel):
         self._factor = float(factor)
         percent = round(self._factor * 100)
         tip = "Fit to window (Ctrl+0)" if self._at_actual_pixels() else "Actual pixels (Ctrl+1)"
+        tip += " · right-click: zoom presets"
         self.zoom_pct_label.setText(f"{percent}%")
         self.zoom_pct_label.setToolTip(tip)
         self.zoom_pct_label.setAccessibleName(f"Zoom {percent}%")
         self.zoom_pct_label.setAccessibleDescription(tip)
 
+    def preset_menu(self) -> QMenu:
+        """The readout's right-click menu: "Fit", then the ``PRESETS`` zooms.
+
+        Presets are checkable; the one equal to the current zoom is checked. Styled by
+        the app's ``QMenu`` rules like every other menu.
+        """
+        menu = QMenu(self)
+        menu.addAction("Fit").triggered.connect(self._fit_view)
+        menu.addSeparator()
+        for preset in self.PRESETS:
+            action = menu.addAction(f"{round(preset * 100)}%")
+            action.setCheckable(True)
+            action.setChecked(self._at(preset))
+            action.triggered.connect(lambda _checked=False, z=preset: self._ask("set_zoom", z))
+        return menu
+
+    def _show_presets(self, pos: QPoint) -> None:
+        menu = self.preset_menu()
+        menu.exec(self.zoom_pct_label.mapToGlobal(pos))
+        menu.deleteLater()
+
+    def _at(self, factor: float) -> bool:
+        return abs(self._factor - factor) < 0.005 * factor
+
     def _at_actual_pixels(self) -> bool:
-        return abs(self._factor - 1.0) < 0.005
+        return self._at(1.0)
 
     def _toggle_actual_pixels(self) -> None:
         if self._at_actual_pixels():
@@ -280,7 +312,8 @@ class StatusChip(CornerPanel):
     ``label`` replaces the default text, e.g. ``set_state("none", "No mask")`` or
     ``set_state("clean", "Saved · 2/3 checked")``. Long names are elided in the
     middle (full name in the tooltip); an :class:`OverlayLayout` narrows the chip
-    further with :meth:`fit_to_width`.
+    further with :meth:`fit_to_width`. The hint line can start with a coloured dot
+    (``set_hint(..., dot=tokens.MASK)``), e.g. the active layer of the Correct editor.
     """
 
     STATES = {
@@ -292,6 +325,8 @@ class StatusChip(CornerPanel):
     }
     MIN_NAME_WIDTH = 80  # about a dozen mono characters: "24EF…SMM.jpg"
     MIN_HINT_WIDTH = 160  # narrowest useful hint column
+    HINT_DOT = "●"
+    _HINT_QSS = "color: {color}; font-size: 12px; background: transparent;"
 
     def __init__(
         self,
@@ -309,6 +344,7 @@ class StatusChip(CornerPanel):
         self._max_width: int | None = None
         self._name = ""
         self._hint = ""
+        self._dot: str | None = None
         self._state = "none"
 
         self.file_label = QLabel()
@@ -320,19 +356,28 @@ class StatusChip(CornerPanel):
         self.state_label.setTextFormat(Qt.TextFormat.RichText)
         self.hint_label = QLabel()
         self.hint_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.hint_label.setStyleSheet(
-            f"color: {tokens.TEXT_MUTED}; font-size: 12px; background: transparent;"
-        )
+        self.hint_label.setStyleSheet(self._HINT_QSS.format(color=tokens.TEXT_MUTED))
+        # The hint's leading dot: a separate label so the hint text stays plain text.
+        self.hint_dot = QLabel(self.HINT_DOT)
+        self.hint_dot.setTextFormat(Qt.TextFormat.PlainText)
+        self._dot_color = tokens.TEXT_MUTED  # the colour its style sheet carries
+        self.hint_dot.setStyleSheet(self._HINT_QSS.format(color=self._dot_color))
+        self.hint_dot.hide()
         name_row = QHBoxLayout()
         name_row.setSpacing(9)
         name_row.addWidget(self.file_label)
         name_row.addWidget(self.state_label)
         name_row.addStretch(1)
+        hint_row = QHBoxLayout()
+        hint_row.setSpacing(6)
+        hint_row.addWidget(self.hint_dot, 0, Qt.AlignmentFlag.AlignTop)
+        hint_row.addWidget(self.hint_label, 1)
         column = QVBoxLayout()
         column.setSpacing(3)
         column.addLayout(name_row)
-        column.addWidget(self.hint_label)
+        column.addLayout(hint_row)
         self._name_row = name_row
+        self._hint_row = hint_row
         self._box.addLayout(column)
         self.set_state("none")
         self.set_hint("")
@@ -365,12 +410,23 @@ class StatusChip(CornerPanel):
     def state(self) -> str:
         return self._state
 
-    def set_hint(self, text: str, tooltip: str = "") -> None:
-        """Show ``text`` on a muted line under the name (hidden while empty)."""
+    def set_hint(self, text: str, tooltip: str = "", *, dot: str | None = None) -> None:
+        """Show ``text`` on a muted line under the name (hidden while empty).
+
+        ``dot`` is a colour from ``tokens`` (e.g. a layer's ``tokens.MASK``): a "●" in
+        that colour then leads the hint; ``None`` hides it. The hint stays plain text.
+        """
         self._hint = text
         self.hint_label.setText(text)
         self.hint_label.setToolTip(tooltip or text)
         self.hint_label.setVisible(bool(text))
+        dot = dot if text else None
+        if dot is not None and dot != self._dot_color:  # restyle only on a new colour
+            self._dot_color = dot
+            self.hint_dot.setStyleSheet(self._HINT_QSS.format(color=dot))
+        self._dot = dot
+        self.hint_dot.setToolTip(tooltip or text)
+        self.hint_dot.setVisible(dot is not None)
         self._refresh()
         self.reposition()
 
@@ -413,6 +469,9 @@ class StatusChip(CornerPanel):
         hint_width = self._max_hint_width
         if inner is not None:
             hint_width = max(self.MIN_HINT_WIDTH, min(hint_width, inner))
+        if self._dot is not None:  # the dot and its spacing share the hint line's width
+            self.hint_dot.ensurePolished()
+            hint_width -= self.hint_dot.sizeHint().width() + self._hint_row.spacing()
         wrap_label(self.hint_label, hint_width)
         self._box.activate()  # the name row / column layouts cache hints until activated
 

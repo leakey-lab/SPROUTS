@@ -16,6 +16,10 @@ Cost: creating the first context loads the GL driver (about a second on a cold
 Windows start). Qt pays that cost anyway as soon as a window holding a
 ``QOpenGLWidget`` is shown, so probing first adds no time where GL is used, and
 with the env opt-out set the probe never runs.
+
+GL viewports ask for :func:`gl_samples` MSAA samples (4 by default) so vector items
+(skeleton lines, brush rings, endpoint markers, previews) are antialiased on GL too;
+``ROOT_VIEWER_GL_SAMPLES=0`` turns multisampling off on weak GPUs.
 """
 
 from __future__ import annotations
@@ -29,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 ENV_VAR = "ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+SAMPLES_ENV_VAR = "ROOT_VIEWER_GL_SAMPLES"
+DEFAULT_GL_SAMPLES = 4
+MAX_GL_SAMPLES = 16
 
 # Lower-case GL_RENDERER fragments of CPU rasterizers.
 _SOFTWARE_RENDERERS = (
@@ -58,6 +66,22 @@ def opengl_viewport_requested() -> bool:
     if value is None:
         return True
     return value.strip().lower() in _TRUE_VALUES
+
+
+def gl_samples() -> int:
+    """MSAA samples for GL canvas viewports: ``ROOT_VIEWER_GL_SAMPLES``, read now.
+
+    Unset or not an integer → ``DEFAULT_GL_SAMPLES`` (4); ``0`` disables multisampling;
+    other values are clamped to ``0 .. MAX_GL_SAMPLES``.
+    """
+    value = os.environ.get(SAMPLES_ENV_VAR)
+    if value is None:
+        return DEFAULT_GL_SAMPLES
+    try:
+        samples = int(value.strip())
+    except ValueError:
+        return DEFAULT_GL_SAMPLES
+    return max(0, min(MAX_GL_SAMPLES, samples))
 
 
 def is_software_renderer(renderer: str) -> bool:
