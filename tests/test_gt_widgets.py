@@ -17,6 +17,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QPalette  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gt.registry import default_registry  # noqa: E402
 from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
 from app.gui.class_panel import ClassPanel  # noqa: E402
+from app.gui.widgets import tokens  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -154,6 +156,80 @@ def test_panel_shrinks_back_after_fewer_classes(app):
     panel.reposition()
     assert panel.height() < grown_height
     assert panel.height() <= int(host.height() * 0.6)
+
+
+def _relative_luminance(color: QColor) -> float:
+    def channel(c: float) -> float:
+        c /= 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return (
+        0.2126 * channel(color.red())
+        + 0.7152 * channel(color.green())
+        + 0.0722 * channel(color.blue())
+    )
+
+
+def _contrast(a: QColor, b: QColor) -> float:
+    la, lb = sorted((_relative_luminance(a), _relative_luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def test_contrast_helper_matches_wcag_reference_values():
+    assert round(_contrast(QColor("#000000"), QColor("#ffffff")), 1) == 21.0
+    assert round(_contrast(QColor("#777777"), QColor("#ffffff")), 2) == 4.48
+
+
+def test_class_panel_paints_its_own_background(app):
+    """UXE-04: the rows used to be drawn straight on the soil image (no panel fill)."""
+    host = _host(900, 600)
+    panel = ClassPanel(host)
+    panel.set_registry(default_registry())
+    host.show()
+    try:
+        QTest.qWaitForWindowExposed(host)
+        panel.reposition()
+        # A pixel inside the 6 px content margin, clear of the rounded corners.
+        pixel = panel.grab().toImage().pixelColor(3, panel.height() // 2)
+        assert pixel.alpha() == 255
+        assert pixel.name() == QColor(tokens.BG_1).name()
+    finally:
+        host.close()
+
+
+def test_class_key_hints_are_readable_on_the_panel(app):
+    """UXE-04: the 1-9/0 hints need WCAG AA contrast (4.5:1) on the panel fill."""
+    host = _host()
+    panel = ClassPanel(host)
+    panel.set_registry(default_registry())
+    hint = panel._rows["root"]._number_label
+    hint.ensurePolished()
+    color = hint.palette().color(QPalette.ColorRole.WindowText)
+    assert _contrast(color, QColor(tokens.BG_1)) >= 4.5
+
+
+def test_class_panel_prefers_all_rows_up_to_60_percent_of_the_host(app):
+    """``preferred_height`` is the height the standalone placement uses."""
+    host = _host(400, 600)
+    panel = ClassPanel(host)
+    panel.set_registry(default_registry())
+    short = panel.preferred_height(600)
+    panel.reposition()
+    assert panel.height() == short < 360
+
+    panel.set_registry(_registry_with_many_classes(25))
+    assert panel.preferred_height(600) == 360
+    assert panel.preferred_height(400) == 240
+
+
+def test_class_panel_fits_a_smaller_height_and_scrolls(app):
+    """An open Enhance popover leaves the panel less room; its rows scroll (UXE-09)."""
+    host = _host(400, 600)
+    panel = ClassPanel(host)
+    panel.set_registry(_registry_with_many_classes(25))
+    panel.fit_height(200)
+    assert panel.height() == 200
+    assert panel._rows_container.sizeHint().height() > panel._scroll.height()
 
 
 def test_gear_button_emits_edit_requested(app):

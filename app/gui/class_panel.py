@@ -12,7 +12,7 @@ a "checked" box (spec §3.4: a flipped review flag silently changes the
 dataset).
 
 This module never touches ``app/gui/widgets/*`` — it only consumes the
-existing ``_FloatingPanel``/``IconButton`` primitives.
+existing ``_FloatingPanel``/``IconButton``/``keep_canvas_focus`` primitives.
 """
 
 from __future__ import annotations
@@ -31,16 +31,12 @@ from PyQt6.QtWidgets import (
 from app.gt.registry import ClassDef, Registry
 from app.gui.widgets import tokens
 from app.gui.widgets.controls import IconButton
+from app.gui.widgets.focus import keep_canvas_focus
 from app.gui.widgets.overlays import _FloatingPanel
 
 _MARGIN = 14
 _MAX_HEIGHT_FRACTION = 0.6
 _REVIEWED_TOOLTIP = "Checked: this class was looked for on this image"
-
-
-def _no_focus(*widgets: QWidget) -> None:
-    for w in widgets:
-        w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
 
 class _ClassRow(QFrame):
@@ -59,7 +55,6 @@ class _ClassRow(QFrame):
         self.key = class_def.key
         self.setObjectName("classRow")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        _no_focus(self)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 5, 8, 5)
@@ -88,9 +83,11 @@ class _ClassRow(QFrame):
         if not class_def.is_ignore:
             self.checkbox = QCheckBox()
             self.checkbox.setToolTip(_REVIEWED_TOOLTIP)
-            _no_focus(self.checkbox)
             self.checkbox.toggled.connect(self._on_checkbox_toggled)
             row.addWidget(self.checkbox)
+        # A click falls through to the nearest focusable ancestor, so the row
+        # itself (not only the checkbox) must refuse focus.
+        keep_canvas_focus(self, tab_reachable=False)
 
         self._suppress_toggle = False
         self._active = False
@@ -183,8 +180,7 @@ class ClassPanel(_FloatingPanel):
         self._scroll.viewport().setStyleSheet("background: transparent;")
         # A click falls through to the nearest focusable ancestor, so every
         # layer (not only the checkbox) must refuse focus.
-        _no_focus(self, header, self._gear, self._scroll, self._scroll.viewport())
-        _no_focus(self._rows_container)
+        keep_canvas_focus(self, tab_reachable=False)
 
         self._registry: Registry | None = None
         self._rows: dict[str, _ClassRow] = {}
@@ -252,9 +248,40 @@ class ClassPanel(_FloatingPanel):
             return labelled[n - 1].key
         return None
 
-    def reposition(self) -> None:
-        if self.parent() is None:
-            return
+    def preferred_height(self, host_height: int) -> int:
+        """Height showing every row, capped at 60% of ``host_height`` (then it scrolls)."""
+        chrome = self._chrome_height()
+        cap = max(0, int(host_height * _MAX_HEIGHT_FRACTION) - chrome)
+        return chrome + min(self._content_height(), cap)
+
+    def fit_height(self, height: int) -> None:
+        """Resize to ``height`` (never below the header); the rows scroll inside."""
+        self.adjustSize()  # settles the natural width from the header row
+        chrome = self._chrome_height()
+        scroll_height = min(self._content_height(), max(0, height - chrome))
+        self._scroll.setFixedHeight(scroll_height)
+        self.resize(self.width(), chrome + scroll_height)
+
+    def _place(self) -> None:
+        """Standalone placement (no OverlayLayout): right edge, vertically centred."""
+        parent_width = self.parent().width()
+        parent_height = self.parent().height()
+        self.fit_height(self.preferred_height(parent_height))
+        x = parent_width - self.width() - _MARGIN
+        y = max(0, (parent_height - self.height()) // 2)
+        self.move(x, y)
+
+    def _chrome_height(self) -> int:
+        """Everything but the rows: margins, header and the gap below it."""
+        margins = self._box.contentsMargins()
+        return (
+            margins.top()
+            + margins.bottom()
+            + self._box.spacing()
+            + self._header.sizeHint().height()
+        )
+
+    def _content_height(self) -> int:
         # NOTE: QScrollArea.sizeHint() caches the contained widget's size the
         # first time it is computed and does not reliably invalidate that
         # cache without a real show/resize event cycle (which this in-window
@@ -262,23 +289,7 @@ class ClassPanel(_FloatingPanel):
         # ``_rows_container``'s own sizeHint() directly sidesteps that stale
         # cache so the panel shrinks correctly when the registry shrinks
         # (e.g. after retiring classes), not just when it grows.
-        self.adjustSize()  # settles the natural width from the header row
-        parent_width = self.parent().width()
-        parent_height = self.parent().height()
-        max_height = int(parent_height * _MAX_HEIGHT_FRACTION)
-
-        margins = self._box.contentsMargins()
-        chrome_height = margins.top() + margins.bottom()
-        chrome_height += self._box.spacing()
-        chrome_height += self._header.sizeHint().height()
-        content_height = self._rows_container.sizeHint().height()
-        scroll_height = min(content_height, max(0, max_height - chrome_height))
-        self._scroll.setFixedHeight(scroll_height)
-        self.resize(self.width(), chrome_height + scroll_height)
-
-        x = parent_width - self.width() - _MARGIN
-        y = max(0, (parent_height - self.height()) // 2)
-        self.move(x, y)
+        return self._rows_container.sizeHint().height()
 
     def _handle_row_activated(self, key: str) -> None:
         self.set_active(key)

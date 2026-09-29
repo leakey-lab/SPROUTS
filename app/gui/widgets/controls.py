@@ -1,14 +1,19 @@
-"""Reusable SPROUTS controls: SegmentedControl, IconButton.
+"""Reusable SPROUTS controls: SegmentedControl, IconButton, DockSlider.
 
 Pure presentation — these wrap standard Qt widgets and expose plain signals so
 callers can forward to existing handlers without behaviour changes.
+
+Accessibility (audit UXS-08): icon-only buttons and dock sliders take their
+accessible name from their tooltip, every control shows a keyboard-focus ring
+(its own stylesheet would otherwise hide the app's), and arrow keys move the
+SegmentedControl selection.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -22,6 +27,12 @@ from PyQt6.QtWidgets import (
 from . import tokens
 from .icons import load_icon
 
+
+def accessible_label(tooltip: str) -> str:
+    """Short control name from a tooltip: ``"Brush (B) · hold B ..."`` -> ``"Brush"``."""
+    return tooltip.split(" (")[0].split(" ·")[0].strip()
+
+
 _SEG_QSS = f"""
 QWidget#seg {{
     background-color: {tokens.BG_2};
@@ -30,18 +41,19 @@ QWidget#seg {{
 }}
 QPushButton#segBtn {{
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 6px;
     color: {tokens.TEXT_MUTED};
     font-size: 12.5px;
     font-weight: 500;
-    padding: 5px 12px;
+    padding: 4px 11px;
 }}
 QPushButton#segBtn:hover {{ color: {tokens.TEXT}; }}
 QPushButton#segBtn:checked {{
     background-color: {tokens.BG_ACTIVE};
     color: {tokens.TEXT};
 }}
+{tokens.focus_rule("QPushButton#segBtn")}
 """
 
 
@@ -49,10 +61,18 @@ class SegmentedControl(QWidget):
     """Exclusive pill segmented control. Emits ``valueChanged(str)``.
 
     ``options`` is an iterable of either ``value`` strings or ``(value, label)``
-    / ``(value, label, icon_name)`` tuples.
+    / ``(value, label, icon_name)`` tuples. With a segment focused, Left/Up and
+    Right/Down select the previous / next segment (wrapping), Home / End the
+    first / last, like a radio group.
     """
 
     valueChanged = pyqtSignal(str)
+    _STEP_KEYS = {
+        Qt.Key.Key_Left: -1,
+        Qt.Key.Key_Up: -1,
+        Qt.Key.Key_Right: 1,
+        Qt.Key.Key_Down: 1,
+    }
 
     def __init__(self, options: Iterable, value: str | None = None, parent=None):
         super().__init__(parent)
@@ -78,10 +98,12 @@ class SegmentedControl(QWidget):
             btn.setObjectName("segBtn")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setAccessibleName(label or str(val).replace("_", " ").capitalize())
             if icon:
                 btn.setIcon(load_icon(icon, tokens.TEXT_MUTED, 15))
                 btn.setIconSize(QSize(15, 15))
             btn.clicked.connect(lambda _=False, v=val: self._on_click(v))
+            btn.installEventFilter(self)
             self._group.addButton(btn)
             lay.addWidget(btn)
             self._buttons[val] = btn
@@ -93,6 +115,35 @@ class SegmentedControl(QWidget):
             value = first
         if value is not None:
             self.setValue(value, emit=False)
+
+    def button(self, value: str) -> QPushButton | None:
+        """The segment button for ``value`` (``None`` if there is no such segment)."""
+        return self._buttons.get(value)
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt override
+        if event.type() == QEvent.Type.KeyPress and obj in self._buttons.values():
+            target = self._keyboard_target(obj, event.key())
+            if target is not None:
+                self._buttons[target].setChecked(True)
+                self._on_click(target)
+                self._buttons[target].setFocus(Qt.FocusReason.TabFocusReason)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _keyboard_target(self, focused: QPushButton, key) -> str | None:
+        """Segment an arrow / Home / End key press on ``focused`` selects, if any."""
+        values = [v for v, b in self._buttons.items() if b.isEnabled() and not b.isHidden()]
+        if not values:
+            return None
+        if key == Qt.Key.Key_Home:
+            return values[0]
+        if key == Qt.Key.Key_End:
+            return values[-1]
+        step = self._STEP_KEYS.get(key)
+        current = next((v for v, b in self._buttons.items() if b is focused), None)
+        if step is None or current not in values:
+            return None
+        return values[(values.index(current) + step) % len(values)]
 
     def _on_click(self, value: str):
         if value != self._value:
@@ -117,6 +168,8 @@ class IconButton(QToolButton):
 
     The active/inactive colours are baked into the rendered icon so it tracks
     the checked state without relying on QSS ``currentColor`` (unsupported).
+    Its accessible name follows the tooltip (see :func:`accessible_label`)
+    unless a caller sets one explicitly.
     """
 
     def __init__(
@@ -136,6 +189,7 @@ class IconButton(QToolButton):
         self._color = color
         self._on_color = on_color
         self._icon_px = icon_px
+        self._derived_name = ""
         self.setObjectName("iconBtn")
         self.setCheckable(checkable)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -146,6 +200,18 @@ class IconButton(QToolButton):
         self.setStyleSheet(self._qss())
         self._refresh_icon()
         self.toggled.connect(lambda _=False: self._refresh_icon())
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ToolTipChange:
+            self._sync_accessible_name()
+        return super().event(event)
+
+    def _sync_accessible_name(self) -> None:
+        """Name the button after its tooltip, never over a name set by a caller."""
+        name = accessible_label(self.toolTip())
+        if self.accessibleName() in ("", self._derived_name):
+            self.setAccessibleName(name)
+        self._derived_name = name
 
     def _qss(self) -> str:
         return f"""
@@ -158,6 +224,7 @@ class IconButton(QToolButton):
         QToolButton#iconBtn:hover {{ background-color: {tokens.BG_3}; }}
         QToolButton#iconBtn:checked {{ background-color: {tokens.rgba(self._on_color, 0.14)}; }}
         QToolButton#iconBtn:disabled {{ background: transparent; }}
+        {tokens.focus_rule("QToolButton#iconBtn")}
         """
 
     def _refresh_icon(self):
@@ -184,10 +251,11 @@ QSlider::groove:horizontal {{
 }}
 QSlider::sub-page:horizontal {{ background: {tokens.ACCENT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
-    background: {tokens.TEXT}; border: none; width: 14px; height: 14px;
+    background: {tokens.TEXT}; border: 2px solid {tokens.BG_1}; width: 10px; height: 10px;
     margin: -5px 0; border-radius: 7px;
 }}
 QSlider::handle:horizontal:hover {{ background: #ffffff; }}
+QSlider::handle:horizontal:focus {{ border-color: {tokens.FOCUS}; }}
 QLabel#dockSliderValue {{
     color: {tokens.TEXT}; background: transparent;
     font-family: {tokens.MONO}; font-size: 12px;
@@ -200,8 +268,12 @@ class DockSlider(QWidget):
 
     ``fmt`` formats the readout from the integer value (e.g. ``"{} px"``).
     The inner :class:`QSlider` is exposed as ``.slider`` so callers keep using
-    the standard ``valueChanged`` / ``setValue`` API.
+    the standard ``valueChanged`` / ``setValue`` API; its accessible name follows
+    this control's tooltip. In compact mode (a narrow canvas, see
+    :meth:`set_compact`) the slider is shorter and the readout hidden.
     """
+
+    COMPACT_SLIDER_WIDTH = 64
 
     def __init__(
         self,
@@ -217,11 +289,14 @@ class DockSlider(QWidget):
     ):
         super().__init__(parent)
         self._fmt = fmt
+        self._width = width
+        self._compact_width = min(width, self.COMPACT_SLIDER_WIDTH)
+        self._compact = False
         self.setStyleSheet(_DOCK_SLIDER_QSS)
-        self.setToolTip(tooltip)
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 0, 4, 0)
         row.setSpacing(8)
+        self._row = row
 
         icon = QLabel()
         icon.setPixmap(load_icon(icon_name, tokens.TEXT_MUTED, 16).pixmap(16, 16))
@@ -241,6 +316,32 @@ class DockSlider(QWidget):
 
         self.slider.valueChanged.connect(self._sync_label)
         self._sync_label(value)
+        self.setToolTip(tooltip)  # after the slider exists: it names the slider
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ToolTipChange:
+            self.slider.setAccessibleName(accessible_label(self.toolTip()))
+            self.slider.setAccessibleDescription(self.toolTip())
+        return super().event(event)
 
     def _sync_label(self, value: int):
         self.value_label.setText(self._fmt.format(value))
+
+    def set_compact(self, compact: bool) -> None:
+        """Shorter slider without the value readout (``True``), or the full control."""
+        compact = bool(compact)
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self.slider.setFixedWidth(self._compact_width if compact else self._width)
+        self.value_label.setVisible(not compact)
+        self.updateGeometry()  # re-measure the dock that holds this control now
+
+    def is_compact(self) -> bool:
+        return self._compact
+
+    def compact_savings(self) -> int:
+        """Pixels of width this control gives up in compact mode."""
+        label = self.value_label
+        readout = label.sizeHint().expandedTo(label.minimumSize()).width()
+        return self._width - self._compact_width + self._row.spacing() + readout
