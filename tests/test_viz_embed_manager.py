@@ -31,14 +31,10 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 import app.project_layout as project_layout  # noqa: E402
 from app.gui import visualization_manager as vm  # noqa: E402
+from app.gui.panels import Panel  # noqa: E402
 
-_PANELS = {
-    "display": 0,
-    "mask_tracing": 1,
-    "visualization": 2,
-    "skeleton_correction": 3,
-    "gt_tracing": 4,
-}
+#: The fixed right-panel pages, in page order: ``switch_right_panel`` key -> index.
+_PANELS = {panel.key: int(panel) for panel in Panel}
 
 
 @pytest.fixture(scope="module")

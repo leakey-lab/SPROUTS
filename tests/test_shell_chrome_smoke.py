@@ -17,6 +17,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
+from app.gui.panels import Panel  # noqa: E402
+
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 
@@ -102,8 +104,6 @@ _CONNECT_MAP_ATTRS = [
     "load_images_button",
     "generate_mask_button",
     "generate_button",
-    "toggle_skeleton_correction_button",
-    "toggle_mask_tracing_button",
     "calculate_length_button",
     "calculate_area_button",
     "visualize_root_length_button",
@@ -126,21 +126,20 @@ def test_main_window_contract(app):
         for attr in _CONNECT_MAP_ATTRS:
             assert hasattr(mw, attr), f"missing {attr}"
         assert mw.view_mode_combo.count() == 3
-        assert mw.right_panel.count() == 5
-        # Seven-stage pipeline, in order: Trace GT (hand-traced ground truth)
-        # right after Library; mask+skeleton generation is one stage; the two
-        # corrections are separate editors.
+        assert mw.right_panel.count() == len(Panel)  # display, Correct, viz, Trace GT
+        # Six-stage pipeline, in order: Trace GT (hand-traced ground truth)
+        # right after Library; mask+skeleton generation is one stage, and so is
+        # their correction (one canvas, two layers).
         assert list(mw.ribbon_buttons.keys()) == [
             "Library",
             "Trace GT",
             "Generate",
-            "Correct Mask",
-            "Correct Skeleton",
+            "Correct",
             "Measure",
             "Visualize",
         ]
-        assert len(mw.ribbon_buttons) == 7
-        assert mw.right_panel.widget(4) is mw.gt_tracing_interface
+        assert mw.right_panel.widget(Panel.CORRECT) is mw.correct_editor
+        assert mw.right_panel.widget(Panel.GT_TRACING) is mw.gt_tracing_interface
         assert mw.gt_classes_button.text() == "Classes…"
         assert mw.gt_export_button.text() == "Export dataset…"
         assert mw.app_stack.count() >= 2
@@ -160,7 +159,7 @@ def main_window(app, monkeypatch):
 
     mw = MainWindow()
     # No editor prompt may block a headless run.
-    monkeypatch.setattr(mw.mask_tracing_interface, "maybe_save_changes", lambda: None)
+    monkeypatch.setattr(mw.correct_editor, "maybe_save_changes", lambda: None)
     yield mw
     mw.close()
     mw.deleteLater()
@@ -178,10 +177,10 @@ def test_lifecycle_hooks_call_gt_prompt(main_window, monkeypatch):
     assert calls == []
 
     mw.toggle_gt_tracing()
-    assert mw.right_panel.currentIndex() == 4
+    assert mw.right_panel.currentIndex() == Panel.GT_TRACING
     mw.switch_right_panel("display")  # leaving the stage prompts
     assert calls == [1]
-    assert mw.right_panel.currentIndex() == 0
+    assert mw.right_panel.currentIndex() == Panel.DISPLAY
 
     mw.close()  # closing the window prompts
     assert calls == [1, 1]
@@ -202,11 +201,11 @@ def test_trace_gt_stage_button_enters_editor(main_window):
     assert mw.right_panel.currentWidget() is mw.gt_tracing_interface
     # Clicking the active stage again must not toggle it off.
     mw.ribbon_buttons["Trace GT"].click()
-    assert mw.right_panel.currentIndex() == 4
-    mw.ribbon_buttons["Correct Mask"].click()
-    assert mw.right_panel.currentIndex() == 1
+    assert mw.right_panel.currentIndex() == Panel.GT_TRACING
+    mw.ribbon_buttons["Correct"].click()
+    assert mw.right_panel.currentIndex() == Panel.CORRECT
     mw.ribbon_buttons["Trace GT"].click()
-    assert mw.right_panel.currentIndex() == 4
+    assert mw.right_panel.currentIndex() == Panel.GT_TRACING
 
 
 def test_navigate_image_moves_tree_selection(main_window, monkeypatch):
@@ -426,12 +425,11 @@ def test_failed_gt_save_blocks_leaving_the_stage(main_window, monkeypatch, tmp_p
     paths, _leaves, titles = _open_dirty_gt_with_failing_save(mw, monkeypatch, tmp_path)
 
     assert mw.switch_right_panel("display") is False
-    assert mw.right_panel.currentIndex() == 4
-    for stage in ("Library", "Generate", "Correct Mask", "Correct Skeleton", "Measure"):
+    assert mw.right_panel.currentIndex() == Panel.GT_TRACING
+    for stage in ("Library", "Generate", "Correct", "Measure"):
         mw.ribbon_buttons[stage].click()
-        assert mw.right_panel.currentIndex() == 4, stage
+        assert mw.right_panel.currentIndex() == Panel.GT_TRACING, stage
         assert mw.ribbon_buttons["Trace GT"].isChecked(), stage
-    assert mw._mask_tracing_signals_connected is False
     assert gt.current_image_path == paths["a"] and gt.has_unsaved_changes()
     assert set(titles) == {"Unsaved GT", "GT not saved"}
     _drop_edits(mw)

@@ -32,7 +32,7 @@ def mw(app, monkeypatch):
 
     monkeypatch.setattr(MainWindow, "_record_recent_project", lambda self, count: None)
     w = MainWindow()
-    monkeypatch.setattr(w.mask_tracing_interface, "maybe_save_changes", lambda: None)
+    monkeypatch.setattr(w.correct_editor, "maybe_save_changes", lambda: None)
     toasts = []
     monkeypatch.setattr(w, "notify", lambda msg, kind="success", **_k: toasts.append((kind, msg)))
     w.toasts_seen = toasts
@@ -124,16 +124,16 @@ def test_saved_mask_counts_and_survives_stage_switches_without_stats(mw, tmp_pat
     folder = _open(mw, _project(tmp_path / "p"))
     _select(mw, STEMS[2])
     image_path = str(folder / f"{STEMS[2]}.jpg")
-    mw.toggle_mask_tracing()
+    mw.toggle_correct()
     mw.on_mask_saved(image_path)
     assert mw._image_has_mask(STEMS[2]) and mw.mask_exists(STEMS[2])
 
     calls = []
     real_exists = os.path.exists
     monkeypatch.setattr(os.path, "exists", lambda p: calls.append(p) or real_exists(p))
-    mw.toggle_mask_tracing()  # leave
-    mw.toggle_mask_tracing()  # enter again
-    mw.toggle_mask_tracing()  # leave
+    mw.toggle_correct()  # leave
+    mw.toggle_correct()  # enter again
+    mw.toggle_correct()  # leave
     monkeypatch.setattr(os.path, "exists", real_exists)
     # Only the editor looks up the open image's own mask: no per-leaf status stats.
     mask_stats = [p for p in calls if os.path.basename(os.path.dirname(str(p))) == "mask"]
@@ -174,17 +174,20 @@ def test_down_arrow_in_library_shows_next_image(mw, tmp_path):
     assert _wait(lambda: mw.display_controller.current_name == STEMS[2], 2.0)
 
 
-def test_pgdn_in_correct_mask_opens_next_image(mw, tmp_path, monkeypatch):
+def test_pgdn_in_correct_opens_next_image(mw, tmp_path, monkeypatch):
     folder = _open(mw, _project(tmp_path / "p"))
     loaded = []
-    monkeypatch.setattr(mw.mask_tracing_interface, "load_image", loaded.append)
+    monkeypatch.setattr(
+        mw.correct_editor, "load_image", lambda path, images_base_folder=None: loaded.append(path)
+    )
     _select(mw, STEMS[0])
-    mw.toggle_mask_tracing()
+    mw.toggle_correct()
     mw.show()
     mw.activateWindow()
     assert QTest.qWaitForWindowActive(mw, 3000)
-    mw.mask_tracing_interface.setFocus()
-    QTest.keyClick(mw.mask_tracing_interface, Qt.Key.Key_PageDown)
+    view = mw.correct_editor.graphics_view
+    view.setFocus()
+    QTest.keyClick(view, Qt.Key.Key_PageDown)
     assert loaded[-1] == str(folder / f"{STEMS[1]}.jpg")
     assert mw.file_list.currentItem().data(0, USER) == STEMS[1]
     QTest.keyClick(mw.file_list, Qt.Key.Key_PageUp)
@@ -263,9 +266,8 @@ def test_window_exposes_job_registry_and_toggles_every_view(mw, monkeypatch):
     seen = []
     views = [
         mw.display_controller.magnifying_view,
-        mw.mask_tracing_interface.graphics_view,
+        mw.correct_editor.graphics_view,
         mw.gt_tracing_interface.graphics_view,
-        mw.skeleton_correction_interface.graphics_view,
     ]
     for v in views:
         monkeypatch.setattr(v, "set_opengl_viewport_enabled", lambda e, v=v: seen.append((v, e)))

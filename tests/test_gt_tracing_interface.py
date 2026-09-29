@@ -29,7 +29,6 @@ from app.gt import (  # noqa: E402
     write_tracing,
 )
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
-from app.gui.mask_tracing_interface import MaskTracingInterface  # noqa: E402
 from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 
@@ -749,35 +748,3 @@ def test_edit_classes_recolours_without_changing_ids(app, project, monkeypatch):
     iface.undo()
     ids = iface._pixmap_to_ids()
     assert ids[30, 15] == 1 and ids[30, 40] == 1 and ids[10, 40] == 0
-
-
-def test_mask_mode_unchanged(app, tmp_path, monkeypatch):
-    folder = tmp_path / "plain"
-    folder.mkdir()
-    image_path = str(folder / "plot_001.png")
-    cv2.imwrite(image_path, np.full((H, W, 3), 90, np.uint8))
-
-    iface = MaskTracingInterface()
-    iface.resize(900, 700)
-    iface.load_image(image_path)
-    assert iface.save_button.text() == "Save mask"
-    assert iface.clear_button.text() == "Clear mask"
-    _stroke(iface, (10, 10), (40, 10), size=6)
-    assert iface.save_mask()
-
-    saved = cv2.imread(str(folder / "mask" / "plot_001.png"), cv2.IMREAD_GRAYSCALE)
-    assert saved is not None and saved.shape == (H, W)
-    assert set(np.unique(saved)) <= {0, 255}
-    assert saved[10, 25] == 255 and saved[50, 70] == 0
-    assert not (folder / "gt").exists()
-
-    texts = []
-
-    def _discard(box):
-        texts.append((box.windowTitle(), box.text()))
-        return QMessageBox.StandardButton.Discard
-
-    monkeypatch.setattr(QMessageBox, "exec", _discard)
-    _stroke(iface, (10, 50), (40, 50))
-    iface.maybe_save_changes()
-    assert texts == [("Unsaved mask", "Save changes to the mask for plot_001.png?")]

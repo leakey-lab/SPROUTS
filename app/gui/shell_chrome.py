@@ -3,13 +3,14 @@
 ONE chrome row on top (:class:`ShellTopbar`, 46 px) and ONE status band at the
 bottom (:class:`StatusLine`, 28 px)::
 
-    [logo SPROUTS] | Library  Trace GT  Generate  Correct Mask  … | <stage actions> | [load]
+    [logo SPROUTS] | Library  Trace GT  Generate  Correct  … | <stage actions> | [load]
     ● <status message>                         <task progress · ETA · Cancel>   <device>
 
 Topbar
-    Seven stages: Library, then Trace GT (hand-traced multi-class ground truth,
-    independent of the ML pipeline), then the measurement pipeline. Each stage
-    button forwards to the same MainWindow handler as before and shows its
+    Six stages: Library, then Trace GT (hand-traced multi-class ground truth,
+    independent of the ML pipeline), then the measurement pipeline: Generate,
+    Correct (the mask and the skeleton of an image on one canvas), Measure,
+    Visualize. Each stage button forwards to its MainWindow handler and shows its
     per-stage actions on the right (a stack sized to the CURRENT page only).
 
     Density is responsive. At or above the measured full width (taken with the
@@ -26,7 +27,7 @@ Statusline
     inline in the same row; the chip names the inference device only once the
     runtime module is loaded (it never imports torch to find out).
 
-Contract kept: ``mw.ribbon`` (the topbar), ``mw.ribbon_buttons`` (seven keys, in
+Contract kept: ``mw.ribbon`` (the topbar), ``mw.ribbon_buttons`` (six keys, in
 order), ``mw.action_bar_stack``, ``mw.action_bar_viz_seg``,
 ``mw._populate_action_bar``, ``mw._activate_action_stage``,
 ``mw.statusline_message`` and ``mw.statusline_info``.
@@ -102,16 +103,10 @@ _STAGES = [
         "Generate masks and skeletons for all loaded images in one pass.",
     ),
     (
-        "Correct Mask",
-        "Correct Mask",
+        "Correct",
+        "Correct",
         "brush",
-        "Paint, erase and fill to fix the segmentation mask.",
-    ),
-    (
-        "Correct Skeleton",
-        "Correct Skeleton",
-        "skeleton",
-        "Move, connect and prune skeleton nodes and branches.",
+        "Fix the mask (area) and the skeleton (length) of an image on one canvas.",
     ),
     ("Measure", "Measure", "ruler", "Compute root length (mm) and area (mm²)."),
     ("Visualize", "Visualize", "chart", "Explore length & area trends across the trial."),
@@ -124,8 +119,7 @@ STAGES = _STAGES
 #: (unsaved edits), so after a stage click the panel actually shown wins.
 _EDITOR_STAGES = {
     Panel.GT_TRACING: "Trace GT",
-    Panel.MASK_TRACING: "Correct Mask",
-    Panel.SKELETON_CORRECTION: "Correct Skeleton",
+    Panel.CORRECT: "Correct",
 }
 
 _STEP_QSS = f"""
@@ -312,16 +306,13 @@ class ShellTopbar(QFrame):
         if key == "Trace GT":
             if index != Panel.GT_TRACING:  # enter-only: never toggles the editor off
                 mw.toggle_gt_tracing()
-        elif key == "Correct Mask":
-            if index != Panel.MASK_TRACING:
-                mw.toggle_mask_tracing()
-        elif key == "Correct Skeleton":
-            if index != Panel.SKELETON_CORRECTION:
-                mw.toggle_skeleton_correction()
+        elif key == "Correct":
+            if index != Panel.CORRECT:
+                mw.toggle_correct()
         elif key == "Visualize" and self._viz_kind is not None:
             self._show_visualization(self._viz_kind)
         else:
-            mw.switch_right_panel("display")
+            mw.switch_right_panel(Panel.DISPLAY)
 
     def _on_stage_clicked(self, key: str) -> None:
         self._enter_stage(key)
@@ -360,23 +351,13 @@ class ShellTopbar(QFrame):
             "Skeletons only — predict skeletons from the original images (Pix2Pix); "
             "masks are not read or regenerated."
         )
-        mw.skeleton_clear_button = ghost_button(
-            "Clear skeleton",
-            "trash",
-            tooltip="Remove every skeleton line from this image (Ctrl+Z undoes)",
-            compact=True,
-        )
-        mw.skeleton_clear_button.clicked.connect(
-            lambda: mw.skeleton_correction_interface.clear_skeleton()
-        )
-        trace_clear = getattr(getattr(mw, "mask_tracing_interface", None), "clear_button", None)
 
         pages = {
             "Library": (mw.action_bar_view_seg,),
             "Trace GT": (mw.gt_classes_button, mw.gt_export_button),
             "Generate": (mw.generate_all_button, mw.generate_button),
-            "Correct Mask": (trace_clear,),
-            "Correct Skeleton": (mw.skeleton_clear_button,),
+            # "Clear mask" / "Clear skeleton": follows the edited layer, clears it.
+            "Correct": (mw.correct_editor.clear_button,),
             "Measure": (mw.calculate_length_button, mw.calculate_area_button),
             "Visualize": (self.viz_seg,),
         }

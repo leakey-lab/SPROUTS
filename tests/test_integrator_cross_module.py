@@ -49,10 +49,10 @@ def test_icon_paths_do_not_depend_on_the_working_directory(tmp_path, monkeypatch
 
 
 # --------------------------------------------------------------------------- shortcuts
-def test_skeleton_sheet_documents_every_tool_key():
+def test_correct_sheet_documents_every_skeleton_tool_key():
     from app.gui import shortcuts, skeleton_tools
 
-    scope = shortcuts.CORRECT_SKELETON
+    scope = shortcuts.CORRECT
     documented = {k for spec in shortcuts.specs_for(scope) for k in spec.keys}
     assert set(skeleton_tools.TOOL_KEYS.values()) <= documented
     assert {skeleton_tools.SMOOTH_KEY, "Ctrl+S", "[", "]", "Delete", "Backspace"} <= documented
@@ -99,15 +99,25 @@ def test_escape_closes_the_open_enhance_popover(app):
         host.close()
 
 
-def test_mask_editor_enhance_button_shows_whether_the_popover_is_open(app):
-    from app.gui.mask_tracing_interface import MaskTracingInterface
+@pytest.mark.parametrize("editor", ["CorrectEditor", "GtTracingInterface"])
+def test_editor_enhance_button_shows_whether_the_popover_is_open(app, editor):
+    from PyQt6.QtCore import QEvent
 
-    iface = MaskTracingInterface()
-    assert iface.enhance_button.isCheckable() and not iface.enhance_button.isChecked()
-    iface.enhance_button.click()
-    assert iface.enhance_button.isChecked() and not iface.enhance_popover.isHidden()
-    iface.enhance_popover.toggle()
-    assert not iface.enhance_button.isChecked()
+    from app.gui.correct.editor import CorrectEditor
+    from app.gui.gt_tracing_interface import GtTracingInterface
+
+    cls = {"CorrectEditor": CorrectEditor, "GtTracingInterface": GtTracingInterface}[editor]
+    iface = cls()
+    try:
+        assert iface.enhance_button.isCheckable() and not iface.enhance_button.isChecked()
+        iface.enhance_button.click()
+        assert iface.enhance_button.isChecked() and not iface.enhance_popover.isHidden()
+        iface.enhance_popover.toggle()
+        assert not iface.enhance_button.isChecked()
+    finally:
+        iface.close()
+        iface.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_segmented_control_reports_reclicks_on_activated(app):

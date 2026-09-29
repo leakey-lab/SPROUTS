@@ -13,14 +13,15 @@ nothing — the old dead Ctrl+Y).
 Kinds:
 
 * ``shortcut`` — a ``QShortcut`` (installed through :func:`install_shortcuts`).
-* ``key`` — handled in a ``keyPressEvent`` / event filter (canvas zoom keys,
-  hold-B, Space-pan, Enter/Esc/Delete in the skeleton editor).
+* ``key`` — handled in a ``keyPressEvent`` / event filter (Space-pan, hold-B,
+  and the gesture keys S, Enter, Esc, Delete of the Correct canvas).
 * ``gesture`` — mouse or wheel gestures, documentation only.
 
 Scopes: :data:`GLOBAL` shortcuts are window-wide and therefore overlap every
-other scope; the editor scopes are ``WidgetWithChildrenShortcut`` on their own
-page, so only the visible editor's keys are active and editors never collide.
-Stage accelerators are ``Alt+1 … Alt+7`` (not ``Ctrl+digit``: ``Ctrl+0`` /
+other scope; the editor scopes (:data:`TRACE_GT`, :data:`CORRECT`) are
+``WidgetWithChildrenShortcut`` on their own page, so only the visible editor's
+keys are active and editors never collide. Stage accelerators are
+``Alt+1 … Alt+6``, one per ribbon stage (not ``Ctrl+digit``: ``Ctrl+0`` /
 ``Ctrl+1`` are the canvas fit / 100 % keys and a window-level ``Ctrl+1`` would
 make them ambiguous).
 
@@ -42,8 +43,6 @@ __all__ = [
     "GLOBAL",
     "LIBRARY",
     "TRACE_GT",
-    "CORRECT_MASK",
-    "CORRECT_SKELETON",
     "CORRECT",
     "SCOPES",
     "STAGE_KEYS",
@@ -62,25 +61,16 @@ __all__ = [
 GLOBAL = "Global"
 LIBRARY = "Library"
 TRACE_GT = "Trace GT"
-CORRECT_MASK = "Correct Mask"
-CORRECT_SKELETON = "Correct Skeleton"
 CORRECT = "Correct"
-SCOPES: tuple[str, ...] = (
-    GLOBAL,
-    LIBRARY,
-    TRACE_GT,
-    CORRECT_MASK,
-    CORRECT_SKELETON,
-    CORRECT,
-)
+SCOPES: tuple[str, ...] = (GLOBAL, LIBRARY, TRACE_GT, CORRECT)
 
 Kind = Literal["shortcut", "key", "gesture"]
 SHORTCUT: Kind = "shortcut"
 KEY: Kind = "key"
 GESTURE: Kind = "gesture"
 
-#: Alt+1 … Alt+7 select the 7 ribbon stages in order.
-STAGE_KEYS: tuple[str, ...] = tuple(f"Alt+{i}" for i in range(1, 8))
+#: Alt+1 … Alt+6 select the six ribbon stages in order (``shell_chrome.STAGES``).
+STAGE_KEYS: tuple[str, ...] = tuple(f"Alt+{i}" for i in range(1, 7))
 
 
 @dataclass(frozen=True)
@@ -129,7 +119,7 @@ def _canvas_rows(kind: Kind) -> list[tuple]:
 
 
 def _paint_editor_rows() -> list[tuple]:
-    """Bindings shared by the mask editor and Trace GT (a MaskTracingInterface subclass)."""
+    """Trace GT's painting bindings (its ``RasterEditorBase`` installs them)."""
     return [
         *_history_rows(),
         ("save", ("Ctrl+S",), "Save"),
@@ -186,11 +176,11 @@ REGISTRY: tuple[ShortcutSpec, ...] = (
             (
                 "go_to_stage",
                 STAGE_KEYS,
-                "Go to stage 1–7 in ribbon order (Library … Visualize)",
+                "Go to stage 1–6 in ribbon order (Library … Visualize)",
                 SHORTCUT,
-                "Alt+1 … Alt+7",
+                "Alt+1 … Alt+6",
             ),
-            ("next_image", ("PgDown",), "Next image (editors offer to save first)"),
+            ("next_image", ("PgDown",), "Next image (editors save or ask first)"),
             ("previous_image", ("PgUp",), "Previous image"),
         ],
     ),
@@ -212,33 +202,6 @@ REGISTRY: tuple[ShortcutSpec, ...] = (
                 SHORTCUT,
                 "1–9, 0",
             ),
-        ],
-    ),
-    *_rows(CORRECT_MASK, _paint_editor_rows()),
-    *_rows(
-        CORRECT_SKELETON,
-        [
-            *_history_rows(),
-            ("save", ("Ctrl+S",), "Save the corrected skeleton", KEY),
-            ("select_tool", ("V",), "Select tool (pick a branch)", KEY),
-            ("eraser", ("E",), "Eraser (drag to erase)", KEY),
-            ("polyline", ("P",), "Polyline tool", KEY),
-            ("connect", ("C",), "Connect: drag from an endpoint to another point", KEY),
-            ("smooth", ("S",), "Smooth the polyline (Polyline tool)", KEY),
-            ("eraser_smaller", ("[",), "Smaller eraser", KEY),
-            ("eraser_larger", ("]",), "Larger eraser", KEY),
-            *_canvas_rows(KEY),
-            ("finish_line", ("Enter",), "Finish the polyline", KEY),
-            ("cancel", ("Esc",), "Cancel the current line or selection", KEY),
-            (
-                "delete_branch",
-                ("Delete", "Backspace"),
-                "Delete the picked branch (Select, then Delete); clears a Connect selection",
-                KEY,
-            ),
-            ("add_bend", ("Ctrl+click",), "Add a bend to a polyline segment", GESTURE),
-            ("move_line", ("Shift+drag",), "Move the whole polyline", GESTURE),
-            ("finish_line_click", ("Double-click",), "Finish the polyline", GESTURE),
         ],
     ),
     *_rows(CORRECT, _correct_rows()),
@@ -309,7 +272,7 @@ def install_shortcuts(
     """Create one ``QShortcut`` per registry key for each action in ``handlers``.
 
     A handler is one callable for every key of the action, or a sequence with
-    one callable per key (``go_to_stage``: Alt+1 … Alt+7).
+    one callable per key (``go_to_stage``: Alt+1 … Alt+6).
 
     ``context`` defaults to ``WidgetWithChildrenShortcut`` (editor pages); pass
     ``Qt.ShortcutContext.WindowShortcut`` for :data:`GLOBAL`. Raises

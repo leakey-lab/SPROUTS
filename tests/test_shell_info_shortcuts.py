@@ -8,6 +8,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtGui import QKeySequence, QShortcut  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
 
@@ -42,14 +43,7 @@ def test_registry_module_is_qt_free():
 
 
 def test_every_scope_has_rows_and_scopes_are_ordered():
-    assert sc.SCOPES == (
-        sc.GLOBAL,
-        sc.LIBRARY,
-        sc.TRACE_GT,
-        sc.CORRECT_MASK,
-        sc.CORRECT_SKELETON,
-        sc.CORRECT,
-    )
+    assert sc.SCOPES == (sc.GLOBAL, sc.LIBRARY, sc.TRACE_GT, sc.CORRECT)
     for scope in sc.SCOPES:
         assert sc.specs_for(scope), scope
 
@@ -60,18 +54,18 @@ def test_registry_has_no_conflicting_keys():
 
 def test_duplicate_key_in_one_scope_is_reported():
     """The Ctrl+Y double binding (UXE-07) is exactly what this catches."""
-    dup = sc.REGISTRY + (sc.ShortcutSpec("redo_again", ("Ctrl+Y",), "Redo", sc.CORRECT_MASK),)
+    dup = sc.REGISTRY + (sc.ShortcutSpec("redo_again", ("Ctrl+Y",), "Redo", sc.CORRECT),)
     conflicts = sc.find_conflicts(dup)
     assert [c[0] for c in conflicts] == ["CTRL+Y"]
 
 
 def test_global_keys_conflict_with_every_editor_scope():
-    dup = sc.REGISTRY + (sc.ShortcutSpec("oops", ("F1",), "x", sc.CORRECT_SKELETON),)
+    dup = sc.REGISTRY + (sc.ShortcutSpec("oops", ("F1",), "x", sc.CORRECT),)
     assert [c[0] for c in sc.find_conflicts(dup)] == ["F1"]
 
 
 def test_redo_is_ctrl_y_and_ctrl_shift_z_in_every_editor():
-    for scope in (sc.CORRECT_MASK, sc.TRACE_GT, sc.CORRECT_SKELETON):
+    for scope in (sc.TRACE_GT, sc.CORRECT):
         assert sc.keys_for("redo", scope) == ("Ctrl+Y", "Ctrl+Shift+Z")
         assert sc.keys_for("undo", scope) == ("Ctrl+Z",)
 
@@ -81,19 +75,25 @@ def test_global_keys_the_integrator_wires():
     assert sc.keys_for("open_folder", sc.GLOBAL) == ("Ctrl+O",)
     assert sc.keys_for("next_image", sc.GLOBAL) == ("PgDown",)
     assert sc.keys_for("previous_image", sc.GLOBAL) == ("PgUp",)
-    assert sc.STAGE_KEYS == tuple(f"Alt+{i}" for i in range(1, 8))
+    assert sc.STAGE_KEYS == tuple(f"Alt+{i}" for i in range(1, 7))
     assert sc.keys_for("go_to_stage", sc.GLOBAL) == sc.STAGE_KEYS
 
 
-def test_skeleton_sheet_lists_its_real_keys_and_gestures():
-    labels = " ".join(s.label for s in sc.specs_for(sc.CORRECT_SKELETON))
+def test_correct_sheet_lists_both_layers_keys_and_gestures():
+    specs = sc.specs_for(sc.CORRECT)
+    labels = " ".join(s.label for s in specs)
     for key in ("Enter", "Esc", "Delete", "Ctrl+click", "Shift+drag", "Double-click"):
         assert key in labels
-    # Mask-only keys are NOT claimed for the skeleton editor; its own Ctrl+S is
-    # handled in SkeletonCorrectionInterface.on_key_press (a KEY row, no QShortcut).
-    assert sc.find_spec("toggle_overlay", sc.CORRECT_SKELETON) is None
-    save = sc.find_spec("save", sc.CORRECT_SKELETON)
-    assert save is not None and save.keys == ("Ctrl+S",) and save.kind == sc.KEY
+    keys = {key for spec in specs for key in spec.keys}
+    mask_keys, skeleton_keys = {"B", "F"}, {"V", "P", "C", "S"}
+    layer_keys = {"1", "2", "X", "H", "Shift+H", "E", "[", "]", "Ctrl+S"}
+    assert mask_keys | skeleton_keys | layer_keys <= keys
+    # A key is either a page QShortcut or a canvas key, never both (both would fight).
+    shortcut_keys = {k.upper() for s in specs if s.kind == sc.SHORTCUT for k in s.keys}
+    canvas_keys = {k.upper() for s in specs if s.kind == sc.KEY for k in s.keys}
+    assert not shortcut_keys & canvas_keys
+    assert {"1", "2", "X", "E", "F", "V", "P", "C", "CTRL+S"} <= shortcut_keys
+    assert {"B", "S", "ENTER", "ESC", "DELETE", "BACKSPACE"} <= canvas_keys
 
 
 def test_gt_sheet_lists_class_digits():
@@ -104,13 +104,14 @@ def test_gt_sheet_lists_class_digits():
 
 
 def test_tooltip_appends_the_first_key():
-    assert sc.tooltip("Eraser", "eraser", sc.CORRECT_MASK) == "Eraser (E)"
-    assert sc.tooltip("Redo", "redo", sc.CORRECT_SKELETON) == "Redo (Ctrl+Y)"
-    assert sc.tooltip("Nothing", "no_such_action", sc.CORRECT_MASK) == "Nothing"
+    assert sc.tooltip("Eraser", "eraser", sc.CORRECT) == "Eraser (E)"
+    assert sc.tooltip("Redo", "redo", sc.TRACE_GT) == "Redo (Ctrl+Y)"
+    assert sc.tooltip("Nothing", "no_such_action", sc.CORRECT) == "Nothing"
 
 
 def test_scope_for_stage():
     assert sc.scope_for_stage("Trace GT") == sc.TRACE_GT
+    assert sc.scope_for_stage("Correct") == sc.CORRECT
     assert sc.scope_for_stage("Generate") is None
 
 
@@ -119,7 +120,7 @@ def test_install_shortcuts_binds_every_key_once(app):
     w = QWidget()
     hits = []
     installed = sc.install_shortcuts(
-        w, sc.CORRECT_MASK, {"redo": lambda: hits.append("redo"), "undo": lambda: None}
+        w, sc.CORRECT, {"redo": lambda: hits.append("redo"), "undo": lambda: None}
     )
     assert sorted(installed) == ["redo", "undo"]
     assert [s.key().toString() for s in installed["redo"]] == ["Ctrl+Y", "Ctrl+Shift+Z"]
@@ -131,30 +132,28 @@ def test_install_shortcuts_binds_every_key_once(app):
 def test_install_shortcuts_rejects_unknown_or_non_shortcut_actions(app):
     w = QWidget()
     with pytest.raises(KeyError):
-        sc.install_shortcuts(w, sc.CORRECT_MASK, {"no_such_action": lambda: None})
+        sc.install_shortcuts(w, sc.CORRECT, {"no_such_action": lambda: None})
     with pytest.raises(ValueError):
-        sc.install_shortcuts(w, sc.CORRECT_SKELETON, {"finish_line": lambda: None})
+        sc.install_shortcuts(w, sc.CORRECT, {"finish_line": lambda: None})
 
 
 def test_every_live_editor_shortcut_is_documented(app):
     """No binding may exist without its row on the F1 sheet."""
+    from app.gui.correct.editor import CorrectEditor
     from app.gui.gt_tracing_interface import GtTracingInterface
-    from app.gui.mask_tracing_interface import MaskTracingInterface
-    from app.gui.skeleton_correction_interface import SkeletonCorrectionInterface
 
     global_keys = {_portable(k) for s in sc.specs_for(sc.GLOBAL) for k in s.keys}
-    for cls, scope in (
-        (MaskTracingInterface, sc.CORRECT_MASK),
-        (GtTracingInterface, sc.TRACE_GT),
-        (SkeletonCorrectionInterface, sc.CORRECT_SKELETON),
-    ):
+    for cls, scope in ((CorrectEditor, sc.CORRECT), (GtTracingInterface, sc.TRACE_GT)):
         w = cls()
         try:
+            live = _live_keys(w)
             documented = {_portable(k) for s in sc.specs_for(scope) for k in s.keys}
-            undocumented = _live_keys(w) - documented - global_keys
-            assert not undocumented, (scope, undocumented)
+            assert live, scope
+            assert not live - documented - global_keys, (scope, live - documented - global_keys)
         finally:
+            w.close()
             w.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 # ------------------------------------------------------------------ F1 sheet
@@ -172,8 +171,8 @@ def test_shortcuts_dialog_has_one_row_per_spec(app):
 def test_shortcuts_dialog_puts_current_scope_first(app):
     from app.gui.empty_state import ShortcutsDialog
 
-    dlg = ShortcutsDialog(current_scope=sc.CORRECT_SKELETON)
-    assert dlg.section_titles()[0] == sc.CORRECT_SKELETON
+    dlg = ShortcutsDialog(current_scope=sc.CORRECT)
+    assert dlg.section_titles()[0] == sc.CORRECT
     assert sorted(dlg.section_titles()) == sorted(sc.SCOPES)
 
 
@@ -200,7 +199,7 @@ def test_shortcuts_dialog_is_deleted_on_close(app):
 
 
 def test_install_shortcuts_accepts_one_slot_per_key(app):
-    """Alt+1 … Alt+7 each go to their own stage."""
+    """Alt+1 … Alt+6 each go to their own stage."""
     w = QWidget()
     hits = []
     slots = [lambda i=i: hits.append(i) for i in range(len(sc.STAGE_KEYS))]

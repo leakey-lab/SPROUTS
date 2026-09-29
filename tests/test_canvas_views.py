@@ -1,11 +1,12 @@
 """Shared canvas behaviour of every image view (app/gui/canvas_view.py, AR-10).
 
-The Library display, Correct Mask / Trace GT and Correct Skeleton canvases share
-one zoom/pan/fit model: zoom read from the transform and clamped to the same
-limits, Ctrl+wheel zoom about the cursor, Ctrl+0/1/=/- keys, fit inside overlay
-insets (UXE-08) that is kept on resize until the user zooms or pans (PG-13),
-Space-hold and middle-drag pan (UXE-05), and one OpenGL viewport policy with
-partial updates and mouse tracking on the raster viewport (PE-05, PE-12, UI-16).
+The Library display and the editor canvas of Correct and Trace GT
+(``EditorCanvasView``) share one zoom/pan/fit model: zoom read from the transform
+and clamped to the same limits, Ctrl+wheel zoom about the cursor, Ctrl+0/1/=/- keys,
+fit inside overlay insets (UXE-08) that is kept on resize until the user zooms or
+pans (PG-13), Space-hold and middle-drag pan (UXE-05), and one OpenGL viewport
+policy with partial updates and mouse tracking on the raster viewport (PE-05,
+PE-12, UI-16). The Correct page's layers get the canvas input behind the view.
 """
 
 import os
@@ -28,10 +29,9 @@ from PyQt6.QtWidgets import (  # noqa: E402
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.display_controller import MagnifyingGraphicsView  # noqa: E402
-from app.gui.mask_graphics_view import MaskTracingGraphicsView  # noqa: E402
-from app.gui.skeleton_correction_graphics_view import SkeletonCorrectionGraphicsView  # noqa: E402
+from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
 
-VIEWS = [MagnifyingGraphicsView, MaskTracingGraphicsView, SkeletonCorrectionGraphicsView]
+VIEWS = [MagnifyingGraphicsView, EditorCanvasView]
 CTRL = Qt.KeyboardModifier.ControlModifier
 NO_MOD = Qt.KeyboardModifier.NoModifier
 IMAGE_W, IMAGE_H = 800, 600
@@ -354,68 +354,66 @@ def _write_image(path, w=64, h=48) -> str:
     return str(path)
 
 
-def test_mask_hover_reaches_the_brush_preview_on_the_raster_viewport(app, raster_only, tmp_path):
+@pytest.fixture
+def correct_page(app, raster_only):
+    """``open(image_path, size=(800, 600))``: a shown Correct page with the image open;
+    every page made is deleted deterministically afterwards."""
+    from app.gui.correct.editor import CorrectEditor
+
+    made = []
+
+    def open_page(image_path, size=(800, 600)):
+        page = CorrectEditor()
+        made.append(page)
+        page.resize(*size)
+        page.show()
+        app.processEvents()
+        page.load_image(image_path)
+        app.processEvents()
+        return page
+
+    yield open_page
+    for page in made:
+        page.layers["skeleton"].cancel_scheduled_render()
+        page.close()
+        page.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_mask_hover_reaches_the_brush_ring_on_the_raster_viewport(correct_page, tmp_path):
     """PE-12: with GL opted out, hover moves must still drive the brush ring."""
-    from app.gui.mask_tracing_interface import MaskTracingInterface
+    page = correct_page(_write_image(tmp_path / "a.png"))
+    ring = page.layers["mask"].ring  # the mask is the edited layer when a page opens
 
-    iface = MaskTracingInterface()
-    iface.resize(800, 600)
-    iface.show()
-    app.processEvents()
-    iface.load_image(_write_image(tmp_path / "a.png"))
-    app.processEvents()
-    hovered = []
-    original = iface.update_brush_preview
-    iface.update_brush_preview = lambda pos: (hovered.append(QPoint(pos)), original(pos))
-
-    view = iface.graphics_view
+    view = page.graphics_view
     target = QPointF(view.mapFromScene(QPointF(20.5, 30.5)))
     _mouse(view, QEvent.Type.MouseMove, target, Qt.MouseButton.NoButton)
 
     assert not view.viewport().inherits("QOpenGLWidget")  # the opt-out was honoured
     assert view.viewport().hasMouseTracking()
-    assert hovered == [QPoint(20, 30)]
-    iface.close()
+    assert ring.is_visible() and ring.rect().center() == QPointF(20.5, 30.5)
 
 
-def test_mask_view_pans_instead_of_painting_while_space_is_held(app, raster_only, tmp_path):
-    from app.gui.mask_tracing_interface import MaskTracingInterface
-
-    iface = MaskTracingInterface()
-    iface.resize(800, 600)
-    iface.show()
-    app.processEvents()
-    iface.load_image(_write_image(tmp_path / "a.png", 400, 300))
-    app.processEvents()
-    view = iface.graphics_view
+def test_mask_layer_pans_instead_of_painting_while_space_is_held(correct_page, tmp_path):
+    page = correct_page(_write_image(tmp_path / "a.png", 400, 300))
+    view = page.graphics_view
     view.set_zoom(4.0)
-    strokes = []
-    iface.begin_stroke = strokes.append
 
     view.set_space_pan(True)
     before = _scroll(view)
     _drag(view, Qt.MouseButton.LeftButton, QPointF(300, 300), QPointF(280, 290))
     view.set_space_pan(False)
 
-    assert strokes == []
+    assert not page.layers["mask"].document.history.plane.any()  # nothing painted
+    assert not page.session.can_undo()
     assert _scroll(view) == (before[0] + 20, before[1] + 10)
-    iface.close()
 
 
-def test_mask_view_ignores_a_left_press_during_a_middle_drag(app, raster_only, tmp_path):
+def test_mask_layer_ignores_a_left_press_during_a_middle_drag(correct_page, tmp_path):
     """A stroke must not start mid-pan: painting blocks scrolling, the view would desync."""
-    from app.gui.mask_tracing_interface import MaskTracingInterface
-
-    iface = MaskTracingInterface()
-    iface.resize(800, 600)
-    iface.show()
-    app.processEvents()
-    iface.load_image(_write_image(tmp_path / "a.png", 400, 300))
-    app.processEvents()
-    view = iface.graphics_view
+    page = correct_page(_write_image(tmp_path / "a.png", 400, 300))
+    view = page.graphics_view
     view.set_zoom(4.0)
-    strokes = []
-    iface.begin_stroke = strokes.append
     middle, left = Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton
     both = middle | left
 
@@ -426,29 +424,22 @@ def test_mask_view_ignores_a_left_press_during_a_middle_drag(app, raster_only, t
     _mouse(view, QEvent.Type.MouseButtonRelease, QPointF(280, 290), left, middle)
     _mouse(view, QEvent.Type.MouseButtonRelease, QPointF(280, 290), middle, Qt.MouseButton.NoButton)
 
-    assert strokes == []
+    assert not page.layers["mask"].document.history.plane.any()  # no stroke started
+    assert not page.session.can_undo()
     assert not view.drawing
     assert _scroll(view) == (before[0] + 20, before[1] + 10)
-    iface.close()
 
 
-def test_skeleton_view_delegates_tools_in_image_pixels_but_not_while_panning(
-    app, raster_only, tmp_path
-):
-    from app.gui.skeleton_correction_interface import SkeletonCorrectionInterface
-
-    iface = SkeletonCorrectionInterface()
-    iface.resize(900, 700)
-    iface.show()
-    app.processEvents()
-    iface.load_image(_write_image(tmp_path / "s.png", 400, 300), str(tmp_path))
-    app.processEvents()
-    view = iface.graphics_view
+def test_skeleton_layer_gets_tools_in_image_pixels_but_not_while_panning(correct_page, tmp_path):
+    page = correct_page(_write_image(tmp_path / "s.png", 400, 300), size=(900, 700))
+    page.set_active_layer("skeleton")
+    view = page.graphics_view
     view.set_zoom(4.0)
     view.centerOn(QPointF(200, 150))
+    skeleton = page.layers["skeleton"]
     calls = []
-    iface.on_tool_mouse_press = lambda pos, ev: calls.append(("press", QPoint(pos)))
-    iface.on_tool_mouse_release = lambda pos, ev: calls.append(("release", QPoint(pos)))
+    skeleton.press = lambda pos, modifiers: calls.append(("press", QPoint(pos)))
+    skeleton.release = lambda pos: calls.append(("release", QPoint(pos)))
 
     at = QPointF(view.mapFromScene(QPointF(150.5, 120.5)))
     _mouse(view, QEvent.Type.MouseButtonPress, at, Qt.MouseButton.LeftButton)
@@ -463,15 +454,3 @@ def test_skeleton_view_delegates_tools_in_image_pixels_but_not_while_panning(
     _drag(view, Qt.MouseButton.LeftButton, at, at + QPointF(10, 10))
     QTest.keyRelease(view, Qt.Key.Key_Space)
     assert calls == []
-    iface.close()
-
-
-def test_skeleton_view_reports_every_zoom_change_to_its_editor(app, raster_only):
-    from app.gui.skeleton_correction_interface import SkeletonCorrectionInterface
-
-    iface = SkeletonCorrectionInterface()
-    seen = []
-    iface.on_zoom_changed = seen.append
-    iface.graphics_view.zoom_by(2.0)
-    iface.graphics_view.set_zoom(3.0)
-    assert seen == [pytest.approx(2.0), pytest.approx(3.0)]

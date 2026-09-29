@@ -26,16 +26,21 @@ from app.gt import RegistryError, load_registry
 from app.handlers.job_registry import JobRegistry
 from app.naming import image_stem
 
-from . import file_tree_manager, shortcuts, ui_panels, visualization_manager
+from . import (
+    file_tree_manager,
+    shortcuts,
+    skeleton_graph_model,
+    ui_panels,
+    visualization_manager,
+)
+from .correct.editor import CorrectEditor
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
 from .gt_tracing_interface import GtTracingInterface
 from .image_manager import ImageManager, project_layout_of
 from .library_index import count_label
-from .mask_tracing_interface import MaskTracingInterface
 from .panels import Panel
 from .recent_projects import RecentProjectsStore
-from .skeleton_correction_interface import SkeletonCorrectionInterface
 from .task_progress import TaskProgressWidget
 from .ui_feedback import QtUiFeedback
 from .window_state import WindowStateStore
@@ -78,6 +83,18 @@ def _released(editor) -> bool:
     save; anything else (True, or ``None`` from a legacy stub) lets the caller move on.
     """
     return editor.maybe_save_changes() is not False
+
+
+def _prewarm_skeletonize_logged() -> None:
+    """Import scikit-image's skeletonize (a thread-pool job); a failure is only logged.
+
+    The first skeleton thinning imports it anyway, so a failure here costs nothing but
+    the head start; an exception must never leave the pool thread.
+    """
+    try:
+        skeleton_graph_model.prewarm_skeletonize()
+    except Exception:
+        logger.exception("Could not prewarm scikit-image")
 
 
 class _MeasurementSignals(QObject):
@@ -128,34 +145,36 @@ class MainWindow(QMainWindow):
         self.display_controller = DisplayController(self)
         self.skeleton_handler = SkeletonHandler(self)
         self.mask_generation_handler = MaskGenerationHandler(self)
-        self.mask_tracing_interface = MaskTracingInterface()
+        # The Correct stage: the mask (root area) and the skeleton (root length) of an
+        # image on one canvas.
+        self.correct_editor = CorrectEditor()
         # Multi-class ground-truth editor (Trace GT stage). Independent of the
         # ML pipeline: it reads/writes only gt/, never mask/ or skeletons/.
         self.gt_tracing_interface = GtTracingInterface()
-        self.skeleton_correction_interface = SkeletonCorrectionInterface()
         self.root_length_viz = None
         self.root_area_viz = None
 
-        # Tracks whether the mask-tracing interface signals are currently
-        # connected, so repeated toggles do not stack duplicate connections
-        # (F-015).
-        self._mask_tracing_signals_connected = False
-
-        # Connect the mask_saved and mask_cleared signals
+        # A saved / removed mask updates the Library badge (image_manager).
         self.mask_saved.connect(self.highlight_saved_mask)
         self.mask_cleared.connect(self.unhighlight_cleared_mask)
 
         # Transient editor feedback (fill hints, clear/undo notes, saves) -> toasts;
-        # unsaved edits -> the title's modified marker.
-        skeleton = self.skeleton_correction_interface
+        # unsaved edits -> the title's modified marker; PgDn / PgUp after a save.
         for editor in self._editors().values():
             editor.notice.connect(self.notify)
             editor.dirty_changed.connect(self._sync_window_modified)
-        self.gt_tracing_interface.navigate_requested.connect(self.navigate_image)
+            editor.navigate_requested.connect(self.navigate_image)
+        # The Correct page reports every mask it writes or removes, on every save path
+        # (Ctrl+S, PgDn, the prompt's Save). Connected once, here. Its skeleton_saved
+        # stays unconnected: a corrected skeleton is not measured (FR-03).
+        correct = self.correct_editor
+        correct.mask_saved.connect(self.on_mask_saved)
+        correct.mask_cleared.connect(self.on_mask_cleared)
+        correct.b_key_status_changed.connect(self.on_b_key_status_changed)
+        correct.set_generated_skeleton_resolver(self._generated_skeleton_for)
         self.gt_tracing_interface.gt_saved.connect(
             lambda p: self.toasts.show(f"GT saved for {os.path.basename(p)}", key="gt-saved")
         )
-        skeleton.set_generated_skeleton_resolver(self._generated_skeleton_for)
 
         # Keyboard browsing: the image whose row was last loaded, and the debounce
         # that loads the tree's current row once the arrow keys come to rest.
@@ -173,6 +192,15 @@ class MainWindow(QMainWindow):
             self.window_state.restore(self, self.body_splitter)
         else:
             self.window_state.apply_default_geometry(self)
+
+        # scikit-image (the skeleton's thinning, ~0.2 s to import) loads in the thread pool
+        # once the event loop runs, i.e. after main.py showed the window: neither the
+        # start-up nor the first Correct open waits for it.
+        QTimer.singleShot(0, self._prewarm_skeletonize)
+
+    def _prewarm_skeletonize(self) -> None:
+        """Start the scikit-image import in the thread pool (never on the GUI thread)."""
+        QThreadPool.globalInstance().start(_prewarm_skeletonize_logged)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Offer to save editor changes, stop a running job, then clean up and persist.
@@ -239,8 +267,7 @@ class MainWindow(QMainWindow):
     def _editors(self) -> dict:
         """The editor pages that hold unsaved work, by right-panel index."""
         return {
-            Panel.MASK_TRACING: self.mask_tracing_interface,
-            Panel.SKELETON_CORRECTION: self.skeleton_correction_interface,
+            Panel.CORRECT: self.correct_editor,
             Panel.GT_TRACING: self.gt_tracing_interface,
         }
 
@@ -258,10 +285,10 @@ class MainWindow(QMainWindow):
     def _build_body(self) -> QWidget:
         """Build the left/right splitter body (presentation extract of init_ui).
 
-        Returns a container widget holding the QSplitter. PRESERVES the
-        ``right_panel.addWidget`` calls in their fixed index order
-        (0=display, 1=mask_tracing, 2=visualization, 3=skeleton_correction,
-        4=gt_tracing).
+        Returns a container widget holding the QSplitter. The ``right_panel``
+        pages are added in the fixed order of :class:`Panel`: 0 display,
+        1 Correct, 2 visualization placeholder, 3 Trace GT (dashboards are
+        appended after them).
         """
         from app.gui.widgets import tokens
 
@@ -287,14 +314,13 @@ class MainWindow(QMainWindow):
         self.left_panel = left_panel
         splitter.addWidget(left_panel)
 
-        # Right Panel (Stacked Widget for Display Area and Mask Tracing)
+        # Right Panel: the display, the editors and the dashboards (one page each).
         self.right_panel = QStackedWidget()
-        self.right_panel.addWidget(ui_panels.create_right_panel(self))
-        self.right_panel.addWidget(self.mask_tracing_interface)
-        self.visualization_widget = QWidget()  # Placeholder for visualization
+        self.right_panel.addWidget(ui_panels.create_right_panel(self))  # Panel.DISPLAY
+        self.right_panel.addWidget(self.correct_editor)  # Panel.CORRECT
+        self.visualization_widget = QWidget()  # Panel.VISUALIZATION (placeholder)
         self.right_panel.addWidget(self.visualization_widget)
-        self.right_panel.addWidget(self.skeleton_correction_interface)
-        self.right_panel.addWidget(self.gt_tracing_interface)
+        self.right_panel.addWidget(self.gt_tracing_interface)  # Panel.GT_TRACING
         splitter.addWidget(self.right_panel)
 
         splitter.setStretchFactor(0, 0)
@@ -468,12 +494,8 @@ class MainWindow(QMainWindow):
         enabled = bool(enabled)
         views = (
             ("display", getattr(self.display_controller, "magnifying_view", None)),
-            ("mask tracing", getattr(self.mask_tracing_interface, "graphics_view", None)),
-            ("GT tracing", getattr(self.gt_tracing_interface, "graphics_view", None)),
-            (
-                "skeleton correction",
-                getattr(self.skeleton_correction_interface, "graphics_view", None),
-            ),
+            ("Correct", getattr(self.correct_editor, "graphics_view", None)),
+            ("Trace GT", getattr(self.gt_tracing_interface, "graphics_view", None)),
         )
         for label, view in views:
             if view is None or not hasattr(view, "set_opengl_viewport_enabled"):
@@ -486,7 +508,7 @@ class MainWindow(QMainWindow):
     # ==================== Shortcuts / help ====================
 
     def _install_global_shortcuts(self) -> None:
-        """F1 / ?, Ctrl+O and Alt+1…7 from the shortcut registry (window-wide)."""
+        """F1 / ?, Ctrl+O and Alt+1…6 from the shortcut registry (window-wide)."""
         stage_slots = [lambda k=k: self._go_to_stage(k) for k in self.ribbon_buttons]
         self._global_shortcuts = shortcuts.install_shortcuts(
             self,
@@ -878,19 +900,15 @@ class MainWindow(QMainWindow):
         self._shown_leaf_name = image_name
 
         current = self.right_panel.currentWidget()
-        if current == self.mask_tracing_interface:
-            self.mask_tracing_interface.load_image(image_path)
-            if self._kept_other_image(self.mask_tracing_interface, image_path):
-                return
-        elif current == self.gt_tracing_interface:
-            self.gt_tracing_interface.load_image(image_path)
-            if self._kept_other_image(self.gt_tracing_interface, image_path):
-                return
-        elif current == self.skeleton_correction_interface:
-            self.skeleton_correction_interface.load_image(
+        if current is self.correct_editor:
+            self.correct_editor.load_image(
                 image_path, images_base_folder=self.image_manager.original_folder
             )
-            if self._kept_other_image(self.skeleton_correction_interface, image_path):
+            if self._kept_other_image(self.correct_editor, image_path):
+                return
+        elif current is self.gt_tracing_interface:
+            self.gt_tracing_interface.load_image(image_path)
+            if self._kept_other_image(self.gt_tracing_interface, image_path):
                 return
         else:
             self.display_controller.display_selected_image_by_name(image_name)
@@ -940,63 +958,46 @@ class MainWindow(QMainWindow):
         file_tree_manager.update_file_list_mask_status(self)
         self._refresh_metrics_bar(self._current_image_name())
 
-    # ==================== Mask Tracing ====================
+    # ==================== The editors (Correct, Trace GT) ====================
 
-    def toggle_mask_tracing(self):
+    def toggle_correct(self) -> None:
+        """Enter / leave the Correct stage (``Panel.CORRECT``), then show the selected image
+        there (or in the Library). A leave the editor refuses (unsaved edits the user keeps)
+        stays in it."""
+        self._toggle_editor(Panel.CORRECT)
+
+    def toggle_gt_tracing(self) -> None:
+        """Enter / leave the multi-class GT editor (``Panel.GT_TRACING``), like Correct."""
+        self._toggle_editor(Panel.GT_TRACING)
+
+    def _toggle_editor(self, panel: Panel) -> None:
         # Status badges read image_manager at paint time: no recolour pass here
         # (a saved mask keeps its badge in every stage, F-016).
-        if self.right_panel.currentIndex() != Panel.MASK_TRACING:
-            if not self.switch_right_panel("mask_tracing"):
-                return  # another editor kept unsaved edits: stay there
-            self.toggle_mask_tracing_button.setText("Return to Main View")
-
-            # Connect signals for mask tracing interface.
-            # Guarded so repeated enter->exit->enter cycles do not stack up
-            # duplicate connections (F-015): each slot would otherwise fire
-            # multiple times per signal because the exit branch removes only one
-            # connection per disconnect call.
-            if not self._mask_tracing_signals_connected:
-                self.mask_tracing_interface.mask_saved.connect(self.on_mask_saved)
-                self.mask_tracing_interface.mask_cleared.connect(self.on_mask_cleared)
-                self.mask_tracing_interface.b_key_status_changed.connect(
-                    self.on_b_key_status_changed
-                )
-                self._mask_tracing_signals_connected = True
-        else:  # If in mask tracing view, switch back to main view
-            if not self.switch_right_panel("display"):
-                return  # the mask editor kept unsaved edits: stay in it
-            self.toggle_mask_tracing_button.setText("✏️ Toggle Mask Tracing")
-
-            # Disconnect signals (mirrors the guarded connect above, F-015).
-            if self._mask_tracing_signals_connected:
-                self.mask_tracing_interface.mask_saved.disconnect(self.on_mask_saved)
-                self.mask_tracing_interface.mask_cleared.disconnect(self.on_mask_cleared)
-                self.mask_tracing_interface.b_key_status_changed.disconnect(
-                    self.on_b_key_status_changed
-                )
-                self._mask_tracing_signals_connected = False
-
-        # Load the current image into the mask tracing interface
+        target = panel if self.right_panel.currentIndex() != panel else Panel.DISPLAY
+        if not self.switch_right_panel(target):
+            return  # the editor being left kept unsaved edits: stay there
         current_item = self.file_list.currentItem()
         if current_item:
             self.on_image_selected(current_item)
 
     def on_b_key_status_changed(self, is_pressed):
-        """Observer method for B key status changes in mask tracing interface."""
+        """B held on the Correct canvas: the status line says how to resize the brush."""
         if is_pressed:
             self.status_bar.showMessage("Scroll to resize the brush; release B when done", 3000)
         else:
             self.status_bar.clearMessage()
 
     def on_mask_saved(self, image_path):
+        """A mask was written: record it for the Library badge and refresh the metrics.
+
+        The editor's own summary toast says so; no second toast here.
+        """
         # mask_saved -> highlight_saved_mask records the mask in image_manager.
         self.mask_saved.emit(image_path)
-        image_name = image_stem(image_path)
-        if self.right_panel.currentWidget() == self.mask_tracing_interface:
-            self.notify(f"Mask saved for {image_name}")
-        self._refresh_metrics_if_current(image_name)
+        self._refresh_metrics_if_current(image_stem(image_path))
 
     def on_mask_cleared(self, image_path):
+        """An emptied mask removed the saved file: the badge and the metrics follow."""
         # mask_cleared -> unhighlight_cleared_mask forgets the mask in image_manager.
         self.mask_cleared.emit(image_path)
         self._refresh_metrics_if_current(image_stem(image_path))
@@ -1005,26 +1006,6 @@ class MainWindow(QMainWindow):
         item = self.file_list.currentItem()
         if item is not None and item.data(0, USER_ROLE) == image_name:
             self._refresh_metrics_bar(image_name)
-
-    # ==================== Ground-truth Tracing (Trace GT) ====================
-
-    def toggle_gt_tracing(self) -> None:
-        """Enter / leave the multi-class GT editor (right panel index 4)."""
-        if self.right_panel.currentIndex() != Panel.GT_TRACING:
-            # Leaving mask tracing: go through its toggle so its signals are
-            # disconnected.
-            if self.right_panel.currentIndex() == Panel.MASK_TRACING:
-                self.toggle_mask_tracing()
-                if self.right_panel.currentIndex() == Panel.MASK_TRACING:
-                    return  # the mask editor kept unsaved edits
-            if not self.switch_right_panel("gt_tracing"):
-                return  # another editor kept unsaved edits: stay there
-        elif not self.switch_right_panel("display"):
-            return  # unsaved GT the user kept: stay in the editor
-
-        current_item = self.file_list.currentItem()
-        if current_item:
-            self.on_image_selected(current_item)
 
     def _image_leaves(self, *, visible_only: bool = False) -> list:
         """Image leaves of the library tree, in display order."""
@@ -1056,12 +1037,13 @@ class MainWindow(QMainWindow):
     def navigate_image(self, delta: int) -> None:
         """Select and open the next/previous visible image leaf in the library tree.
 
-        In Trace GT, steps from the image open in the editor; otherwise (or when
-        nothing is open there) from the tree selection.
+        In an editor (Correct, Trace GT), steps from the image open in it; otherwise
+        (or when nothing is open there) from the tree selection.
         """
         current = None
-        if self.right_panel.currentIndex() == Panel.GT_TRACING:
-            current = self._leaf_for_image(self.gt_tracing_interface.current_image_path)
+        editor = self._editors().get(self.right_panel.currentIndex())
+        if editor is not None:
+            current = self._leaf_for_image(editor.current_image_path)
         if current is None:
             current = self.file_list.currentItem()
         target = self.library_index.step(current, delta, visible_only=True)
@@ -1084,17 +1066,15 @@ class MainWindow(QMainWindow):
 
     def _install_image_paging_shortcuts(self) -> None:
         """PgDn / PgUp (registry: Global next/previous image) open the next / previous
-        image from the library, the chrome, the display and the mask and skeleton
-        editors. Trace GT binds the same keys itself (it saves first), so these are
-        scoped to widgets outside it instead of window-wide (no ambiguity)."""
+        image from the library, the chrome and the display. The editor pages (Correct,
+        Trace GT) bind the same keys themselves (they save first), so these are scoped
+        to the widgets outside them instead of window-wide (no ambiguity)."""
         self._paging_shortcuts = []
         owners = (
             self.left_panel,
             self.ribbon,
             self.statusline,
             self.right_panel.widget(Panel.DISPLAY),
-            self.mask_tracing_interface,
-            self.skeleton_correction_interface,
         )
         for owner in owners:
             installed = shortcuts.install_shortcuts(
@@ -1108,10 +1088,10 @@ class MainWindow(QMainWindow):
             self._paging_shortcuts += installed["next_image"] + installed["previous_image"]
 
     def _page_image(self, delta: int) -> None:
-        if self.right_panel.currentIndex() == Panel.GT_TRACING:
-            # From the library while tracing GT: the editor saves before it moves.
-            gt = self.gt_tracing_interface
-            (getattr(gt, "navigate", None) or gt._navigate)(delta)
+        editor = self._editors().get(self.right_panel.currentIndex())
+        if editor is not None:
+            # From the library while an editor is open: it saves before it moves.
+            editor.navigate(delta)
         else:
             self.navigate_image(delta)
 
@@ -1141,44 +1121,13 @@ class MainWindow(QMainWindow):
         finally:
             dialog.deleteLater()  # parented to the window: free it
 
-    # ==================== Skeleton Correction (isolated stream) ====================
-
-    def toggle_skeleton_correction(self):
-        """
-        Toggle the Skeleton Correction editor view.
-
-        Important: This editor is intentionally isolated from the app's existing
-        skeleton generation + main display streams.
-        """
-        if self.right_panel.currentIndex() != Panel.SKELETON_CORRECTION:
-            # If leaving mask tracing, ensure its signals are disconnected cleanly
-            if self.right_panel.currentIndex() == Panel.MASK_TRACING:
-                self.toggle_mask_tracing()
-                if self.right_panel.currentIndex() == Panel.MASK_TRACING:
-                    return  # the mask editor kept unsaved edits
-
-            if not self.switch_right_panel("skeleton_correction"):
-                return  # another editor kept unsaved edits: stay there
-            if hasattr(self, "toggle_skeleton_correction_button"):
-                self.toggle_skeleton_correction_button.setText("Return to Main View")
-        else:
-            if not self.switch_right_panel("display"):
-                return  # the skeleton editor kept unsaved edits: stay in it
-            if hasattr(self, "toggle_skeleton_correction_button"):
-                self.toggle_skeleton_correction_button.setText("✏️ Skeleton Correction")
-
-        # Load the current image into the skeleton correction interface (if any)
-        current_item = self.file_list.currentItem()
-        if current_item:
-            self.on_image_selected(current_item)
-
     # ==================== Panel Switching ====================
 
     def switch_right_panel(self, panel) -> bool:
-        """Show ``panel`` (a :class:`Panel`, its index or its legacy key); returns False
+        """Show ``panel`` (a :class:`Panel`, its index or its key); returns False
         (and stays put) if the editor being left refuses. An unknown key does nothing.
 
-        Leaving the mask, skeleton or GT editor first offers to save pending
+        Leaving the Correct or Trace GT editor first offers to save pending
         edits; the editor refuses when the user cancels, or when its save failed
         and the user kept editing.
         """

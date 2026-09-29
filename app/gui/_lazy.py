@@ -34,12 +34,8 @@ _NAME_TO_MODULE: dict[str, str] = {
     "MagnifyingGraphicsView": "display_controller",
     "ImageManager": "image_manager",
     "ImageLoaderThread": "image_manager",
-    # Mask tracing components
-    "MaskTracingInterface": "mask_tracing_interface",
-    "MaskTracingGraphicsView": "mask_graphics_view",
-    "MaskDrawingMixin": "mask_drawing_tools",
-    "create_brush_cursor": "mask_cursor_utils",
-    "create_panning_cursor": "mask_cursor_utils",
+    # The Correct stage's editor (the mask and the skeleton of an image on one canvas)
+    "CorrectEditor": "correct.editor",
     # Image normalization
     "ImageNormalization": "image_normalization_interface",
     "NormalizationControls": "image_normalization_interface",
@@ -49,7 +45,7 @@ _NAME_TO_MODULE: dict[str, str] = {
     "visualization_manager": "visualization_manager",
 }
 
-# Public, discoverable surface -- identical to the old eager __init__ __all__.
+# Public, discoverable surface (tests/test_gui_public_names.py pins that each resolves).
 __all__ = list(_NAME_TO_MODULE.keys())
 
 

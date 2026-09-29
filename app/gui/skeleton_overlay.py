@@ -1,10 +1,10 @@
-"""Scene rendering for the skeleton editor: the skeleton overlay and its decorations.
+"""Scene helpers of the skeleton layer: its overlay palette and its decorations.
 
 - :func:`overlay_indices` (Qt-free) turns the 1-px skeleton mask into palette indices:
-  the line, plus a one-pixel dark halo so the orange line stays readable on bright
-  roots (UXE-13). Display only: the model's mask is never modified.
-- :class:`SkeletonOverlayRenderer` converts those indices into an 8-bit indexed
-  ``QPixmap`` (1 byte per pixel, no RGBA allocation).
+  the line, plus a one-pixel dark halo so the skeleton-coloured line stays readable on
+  bright roots (UXE-13). Display only: the model's mask is never modified. The
+  skeleton layer item (:mod:`app.gui.canvas_layers.skeleton`) draws them with
+  :data:`LINE_INDEX`, :data:`HALO_INDEX` and :data:`HALO_ALPHA`.
 - :class:`SkeletonDecorations` owns the transient vector items drawn over the canvas:
   endpoint markers (one path item), the highlighted endpoint, the polyline preview and
   its handles, and the Connect preview line.
@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 import cv2
 import numpy as np
 from PyQt6.QtCore import QPoint, QPointF, Qt
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QPainterPath, QPen
 from PyQt6.QtWidgets import QGraphicsLineItem, QGraphicsPathItem, QGraphicsScene
 
 from app.editing.geometry import catmull_rom_bezier
@@ -42,28 +42,6 @@ def overlay_indices(mask: np.ndarray) -> np.ndarray:
     out = np.where(halo > 0, np.uint8(HALO_INDEX), np.uint8(0))
     out[line] = LINE_INDEX
     return out
-
-
-class SkeletonOverlayRenderer:
-    """Builds the overlay pixmap from the skeleton mask."""
-
-    def __init__(self) -> None:
-        table = [0] * 256
-        table[LINE_INDEX] = QColor(tokens.SKEL).rgba()
-        halo = QColor(tokens.BG_0)
-        halo.setAlpha(HALO_ALPHA)
-        table[HALO_INDEX] = halo.rgba()
-        self._color_table = table
-
-    def pixmap(self, mask: np.ndarray | None) -> QPixmap:
-        if mask is None:
-            return QPixmap()
-        indices = np.ascontiguousarray(overlay_indices(mask))
-        h, w = indices.shape
-        image = QImage(indices.data, w, h, w, QImage.Format.Format_Indexed8)
-        image.setColorTable(self._color_table)
-        # fromImage deep-copies, so the numpy buffer may be released afterwards.
-        return QPixmap.fromImage(image)
 
 
 def _cosmetic_pen(color: str | QColor, width: float) -> QPen:

@@ -52,7 +52,7 @@ VISIBLE_RECENT_ROWS = 4
 
 
 def _ribbon_stage_labels() -> list[str]:
-    """The 7 ribbon stage labels, in order (single source: shell_chrome)."""
+    """The ribbon stage labels, in order (single source: ``shell_chrome.STAGES``)."""
     from app.gui import shell_chrome
 
     return [stage[1] for stage in shell_chrome.STAGES]

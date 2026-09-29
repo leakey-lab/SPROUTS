@@ -27,8 +27,7 @@ STAGES = [
     "Library",
     "Trace GT",
     "Generate",
-    "Correct Mask",
-    "Correct Skeleton",
+    "Correct",
     "Measure",
     "Visualize",
 ]
@@ -44,7 +43,7 @@ def mw(app):
     from app.gui.main_window import MainWindow
 
     window = MainWindow()
-    window.mask_tracing_interface.maybe_save_changes = lambda: None
+    window.correct_editor.maybe_save_changes = lambda: None
     window.app_stack.setCurrentIndex(1)
     window.show()
     app.processEvents()
@@ -74,11 +73,7 @@ def refusing_editor(mw, app, monkeypatch):
     """
     for editor in mw._editors().values():
         monkeypatch.setattr(editor, "maybe_save_changes", lambda: False)
-    for name in (
-        "toggle_mask_tracing",
-        "toggle_skeleton_correction",
-        "toggle_gt_tracing",
-    ):
+    for name in ("toggle_correct", "toggle_gt_tracing"):
         monkeypatch.setattr(mw, name, lambda: None)
     yield
     monkeypatch.undo()
@@ -90,12 +85,11 @@ def refusing_editor(mw, app, monkeypatch):
 @pytest.mark.parametrize(
     ("panel", "editor_stage", "clicked"),
     [
-        (Panel.MASK_TRACING, "Correct Mask", "Measure"),
-        (Panel.MASK_TRACING, "Correct Mask", "Library"),
-        (Panel.MASK_TRACING, "Correct Mask", "Correct Skeleton"),
-        (Panel.SKELETON_CORRECTION, "Correct Skeleton", "Measure"),
-        (Panel.SKELETON_CORRECTION, "Correct Skeleton", "Correct Mask"),
+        (Panel.CORRECT, "Correct", "Measure"),
+        (Panel.CORRECT, "Correct", "Library"),
+        (Panel.CORRECT, "Correct", "Trace GT"),
         (Panel.GT_TRACING, "Trace GT", "Generate"),
+        (Panel.GT_TRACING, "Trace GT", "Correct"),
     ],
 )
 def test_refused_stage_click_keeps_the_editor_stage(
@@ -162,8 +156,8 @@ def test_switching_to_a_wider_action_page_never_squeezes_the_row(mw, app):
     try:
         for width in range(low, high, 12):
             for src, dst in (
-                ("Correct Mask", "Generate"),
-                ("Correct Skeleton", "Measure"),
+                ("Correct", "Generate"),
+                ("Correct", "Measure"),
             ):
                 _enter(mw, app, "Library")
                 _enter(mw, app, src)

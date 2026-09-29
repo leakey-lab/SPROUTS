@@ -140,9 +140,9 @@ def test_missing_folder_changes_nothing(mw, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-#  Editor lifecycle (mask-editor / skeleton-editor / GT)
+#  Editor lifecycle (Correct / Trace GT)
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("attr", ["skeleton_correction_interface", "mask_tracing_interface"])
+@pytest.mark.parametrize("attr", ["correct_editor", "gt_tracing_interface"])
 def test_leaving_an_editor_that_refuses_stays_put(mw, attr):
     from app.gui.panels import Panel
 
@@ -159,28 +159,28 @@ def test_open_is_cancelled_by_an_editor_that_keeps_its_edits(mw, tmp_path):
     folder = _project(tmp_path / "proj")
     calls = []
     mw.image_manager.load_images = calls.append
-    mw.skeleton_correction_interface.maybe_save_changes = lambda: False
+    mw.correct_editor.maybe_save_changes = lambda: False
     mw.open_path(str(folder))
     assert calls == [] and mw.app_stack.currentIndex() == 0
-    mw.skeleton_correction_interface.maybe_save_changes = lambda: True
+    mw.correct_editor.maybe_save_changes = lambda: True
     mw.open_path(str(folder))
     assert calls == [str(folder)]
 
 
 def test_close_is_cancelled_by_an_editor_that_keeps_its_edits(mw, app):
     mw.show()
-    mw.mask_tracing_interface.maybe_save_changes = lambda: False
+    mw.correct_editor.maybe_save_changes = lambda: False
     mw.close()
     app.processEvents()
     assert mw.isVisible()
 
 
-def test_skeleton_editor_notices_become_toasts(mw):
+def test_correct_editor_notices_become_toasts(mw):
     seen = []
     mw.toasts.show = lambda msg, kind="success", *a, **k: seen.append((kind, msg))
-    mw.skeleton_correction_interface.notice.emit("Skeleton saved", "success")
-    mw.skeleton_correction_interface.notice.emit("Could not save", "danger")
-    assert seen == [("success", "Skeleton saved"), ("danger", "Could not save")]
+    mw.correct_editor.notice.emit("Saved skeleton · a.jpg", "success")
+    mw.correct_editor.notice.emit("Could not save", "danger")
+    assert seen == [("success", "Saved skeleton · a.jpg"), ("danger", "Could not save")]
 
 
 def test_selection_follows_an_editor_that_kept_its_image(mw, tmp_path):
@@ -188,10 +188,10 @@ def test_selection_follows_an_editor_that_kept_its_image(mw, tmp_path):
     _load(mw, folder)
     leaves = mw._image_leaves()
     kept = mw.image_manager.get_image_path(leaves[0].data(0, USER))
-    sk = mw.skeleton_correction_interface
-    mw.right_panel.setCurrentWidget(sk)
-    sk.load_image = lambda *_a, **_k: None
-    sk.current_image_path = kept
+    editor = mw.correct_editor
+    mw.right_panel.setCurrentWidget(editor)
+    editor.load_image(kept, str(folder))
+    editor.load_image = lambda *_a, **_k: None  # it keeps its image (the prompt said Cancel)
     mw.on_image_selected(leaves[2])
     assert mw.file_list.currentItem() is leaves[0]
 
@@ -238,26 +238,30 @@ def test_close_while_a_job_runs_asks_first(mw, app, monkeypatch):
 #  Global shortcuts (UXS-10) + About (UXS-15)
 # --------------------------------------------------------------------------- #
 def test_global_shortcuts_come_from_the_registry(mw):
-    from app.gui import shortcuts
+    from app.gui import shell_chrome, shortcuts
 
     keys = {
         action: [s.key().toString() for s in bound]
         for action, bound in mw._global_shortcuts.items()
     }
     assert keys["open_folder"] == list(shortcuts.keys_for("open_folder", shortcuts.GLOBAL))
-    assert len(keys["go_to_stage"]) == len(mw.ribbon_buttons) == 7
+    assert len(keys["go_to_stage"]) == len(mw.ribbon_buttons) == len(shell_chrome.STAGES)
     assert mw._help_shortcut_f1.key().toString() == "F1"
     for bound in mw._global_shortcuts.values():
         assert all(s.context() == Qt.ShortcutContext.WindowShortcut for s in bound)
-    # Paging keys are never window-wide (Trace GT binds its own): no ambiguity.
-    assert all(s.parent() is not mw.gt_tracing_interface for s in mw._paging_shortcuts)
+    # Paging keys are never window-wide (the editors bind their own): no ambiguity.
+    editors = set(mw._editors().values())
+    assert all(s.parent() not in editors for s in mw._paging_shortcuts)
     assert all(
         s.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut for s in mw._paging_shortcuts
     )
 
 
 def test_stage_shortcut_needs_a_loaded_folder(mw, tmp_path):
-    slot = mw._global_shortcuts["go_to_stage"][5]  # Alt+6 = Measure
+    from app.gui import shell_chrome
+
+    measure = [key for key, *_ in shell_chrome.STAGES].index("Measure")
+    slot = mw._global_shortcuts["go_to_stage"][measure]
     slot.activated.emit()
     assert not mw.ribbon_buttons["Measure"].isChecked()  # Welcome: nothing happens
     _load(mw, _project(tmp_path / "proj"))

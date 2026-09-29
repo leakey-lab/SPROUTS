@@ -204,24 +204,6 @@ def create_left_panel(main_window) -> QWidget:
     main_window.generate_all_button.setStyleSheet(text_button_style)
     main_window.generate_all_button.clicked.connect(main_window.generate_all)
 
-    # Skeleton Correction button (reparented; kept for .setText callers)
-    main_window.toggle_skeleton_correction_button = create_text_button(
-        "Skeleton Correction",
-        "Skeleton Correction\n\nOpen the skeleton correction editor to manually fix skeleton errors. Allows you to add, remove, or modify skeleton branches interactively.",
-    )
-    main_window.toggle_skeleton_correction_button.setStyleSheet(text_button_style)
-    main_window.toggle_skeleton_correction_button.clicked.connect(
-        main_window.toggle_skeleton_correction
-    )
-
-    # Toggle Mask Tracing button (reparented; kept for .setText callers)
-    main_window.toggle_mask_tracing_button = create_text_button(
-        "Mask Tracing",
-        "Toggle Mask Tracing\n\nSwitch to mask tracing mode to manually draw or edit segmentation masks using brush tools. Toggle again to return to the main view.",
-    )
-    main_window.toggle_mask_tracing_button.setStyleSheet(text_button_style)
-    main_window.toggle_mask_tracing_button.clicked.connect(main_window.toggle_mask_tracing)
-
     # Calculate Root Length button (Measure stage)
     main_window.calculate_length_button = create_text_button(
         "Root Length",

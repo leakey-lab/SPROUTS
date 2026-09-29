@@ -2,10 +2,11 @@
 Tests for the right-panel index enum (``app/gui/panels.py``) and the UI feedback
 protocol with its Qt-free doubles (``app/gui/feedback.py``).
 
-``Panel`` pins the right_panel page-index contract (0 display, 1 mask tracing,
-2 viz placeholder, 3 skeleton correction, 4 GT tracing) and maps the legacy
-``switch_right_panel`` string keys. The feedback doubles are what handler tests
-use instead of reaching into ``main_window`` widgets.
+``Panel`` pins the right_panel page-index contract (0 display, 1 Correct,
+2 viz placeholder, 3 GT tracing) and maps the ``switch_right_panel`` string keys;
+the keys and the index of the two editors the Correct stage replaced are rejected
+(a clean break, no aliases). The feedback doubles are what handler tests use
+instead of reaching into ``main_window`` widgets.
 """
 
 from __future__ import annotations
@@ -25,25 +26,23 @@ from app.gui.panels import Panel
 
 
 def test_panel_values_pin_the_right_panel_contract():
-    assert [int(p) for p in Panel] == [0, 1, 2, 3, 4]
+    assert [int(p) for p in Panel] == [0, 1, 2, 3]
     assert Panel.DISPLAY == 0
-    assert Panel.MASK_TRACING == 1
+    assert Panel.CORRECT == 1
     assert Panel.VISUALIZATION == 2
-    assert Panel.SKELETON_CORRECTION == 3
-    assert Panel.GT_TRACING == 4
+    assert Panel.GT_TRACING == 3
 
 
 @pytest.mark.parametrize(
     ("key", "panel"),
     [
         ("display", Panel.DISPLAY),
-        ("mask_tracing", Panel.MASK_TRACING),
+        ("correct", Panel.CORRECT),
         ("visualization", Panel.VISUALIZATION),
-        ("skeleton_correction", Panel.SKELETON_CORRECTION),
         ("gt_tracing", Panel.GT_TRACING),
     ],
 )
-def test_panel_key_round_trips_legacy_switch_keys(key, panel):
+def test_panel_key_round_trips_switch_keys(key, panel):
     assert panel.key == key
     assert Panel.coerce(key) is panel
     assert Panel.coerce(key.upper()) is panel
@@ -51,10 +50,14 @@ def test_panel_key_round_trips_legacy_switch_keys(key, panel):
 
 def test_panel_coerce_accepts_panels_and_indices():
     assert Panel.coerce(Panel.GT_TRACING) is Panel.GT_TRACING
-    assert Panel.coerce(3) is Panel.SKELETON_CORRECTION
+    assert Panel.coerce(1) is Panel.CORRECT
 
 
-@pytest.mark.parametrize("bad", ["nope", "", 7, -1, None, 1.5])
+@pytest.mark.parametrize(
+    "bad",
+    # the removed editors' keys and index: the Correct stage replaced them (no aliases)
+    ["mask_tracing", "skeleton_correction", 4, "nope", "", 7, -1, None, 1.5],
+)
 def test_panel_coerce_rejects_unknown_values(bad):
     with pytest.raises(ValueError):
         Panel.coerce(bad)

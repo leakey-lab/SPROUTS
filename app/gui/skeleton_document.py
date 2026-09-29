@@ -1,13 +1,13 @@
-"""Which skeleton file the editor opens and saves, and the unsaved-changes prompt.
+"""Which skeleton file the Correct stage opens and saves (Qt-free).
 
-:class:`SkeletonFiles` is Qt-free: for an image it names the saved correction
-(``skeleton_corrections/<stem>_skeleton.png``, the only file the editor writes) and
-the generated skeleton (``skeletons/<stem>_fake.png`` by default, read-only), via
-:class:`app.project_layout.ProjectLayout`. :meth:`SkeletonFiles.start_file` picks
-the file to open: the correction when one exists, else the generated skeleton.
-
-:func:`ask_unsaved` is the Save / Discard / Cancel question the editors ask before
-their edits would be lost (Qt's standard modified-document prompt; Esc = Cancel).
+:class:`SkeletonFiles`: for an image it names the saved correction
+(``skeleton_corrections/<stem>_skeleton.png``, the only skeleton file the editor
+writes) and the generated skeleton (``skeletons/<stem>_fake.png`` by default,
+read-only), via :class:`app.project_layout.ProjectLayout`.
+:meth:`SkeletonFiles.start_file` picks the file to open: the correction when one
+exists, else the generated skeleton. ``app.gui.correct.skeleton_document`` builds the
+skeleton layer's document on it; the unsaved-changes prompt is
+:mod:`app.gui.editor_prompts`.
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ CORRECTED = "corrected"
 GENERATED = "generated"
 
 GeneratedResolver = Callable[[str], "str | None"]
-
-SAVE, DISCARD, CANCEL = "save", "discard", "cancel"
 
 
 @dataclass(frozen=True)
@@ -66,27 +64,3 @@ class SkeletonFiles:
     def dialog_start(self) -> str:
         """Where a Load dialog starts: the generated file if any, else the skeletons folder."""
         return self.generated_path() or self.layout.skeletons_dir
-
-
-def ask_unsaved(parent, noun: str, name: str) -> str:
-    """Ask Save / Discard / Cancel about unsaved ``noun`` edits of ``name``.
-
-    Returns :data:`SAVE`, :data:`DISCARD` or :data:`CANCEL` (also for Esc / close).
-    """
-    from PyQt6.QtWidgets import QMessageBox
-
-    buttons = QMessageBox.StandardButton
-    box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Icon.Question)
-    box.setWindowTitle(f"Unsaved {noun}")
-    box.setText(f"Save changes to the {noun} for {name}?")
-    box.setInformativeText("Discarded edits cannot be recovered.")
-    box.setStandardButtons(buttons.Save | buttons.Discard | buttons.Cancel)
-    box.setDefaultButton(buttons.Save)
-    box.setEscapeButton(buttons.Cancel)
-    answer = box.exec()
-    if answer == buttons.Save:
-        return SAVE
-    if answer == buttons.Discard:
-        return DISCARD
-    return CANCEL

@@ -24,14 +24,9 @@ APP_MODULES = [
     "app.handlers.mask_generation_handler",
     "app.handlers.generate_skeleton_handler",
     "app.handlers.skeleton_handler",
-    "app.handlers.mask_handler",
     "app.data_processing.data_processor",
     "app.data_processing.data_processor_area",
     "app.gui.skeleton_graph_model",
-    "app.gui.skeleton_correction_graphics_view",
-    "app.gui.mask_graphics_view",
-    "app.gui.mask_drawing_tools",
-    "app.gui.mask_cursor_utils",
     "app.gui.image_manager",
     "app.gui.image_normalization_interface",
     "app.gui.file_tree_manager",
@@ -39,8 +34,6 @@ APP_MODULES = [
     "app.gui.task_progress",
     "app.gui.empty_state",
     "app.gui.display_controller",
-    "app.gui.mask_tracing_interface",
-    "app.gui.skeleton_correction_interface",
     "app.gui.visualization_manager",
     "app.gui.main_window",
     "app.visualization.dash_image_utils",
@@ -65,7 +58,6 @@ APP_MODULES = [
     "app.gui.brush_preview",
     "app.gui.canvas_background",
     "app.gui.canvas_gl",
-    "app.gui.canvas_item",
     "app.gui.canvas_view",
     "app.gui.class_editor_dialog",
     "app.gui.class_panel",
@@ -126,12 +118,37 @@ APP_MODULES = [
     "app.visualization.figure_memo",
     "app.visualization.theme",
     "app.visualization.viz_window",
+    # The unified Correct editor and the smooth-zoom render parts (2026-09-29).
+    "app.editing.journal",
+    "app.imaging",
+    "app.imaging.pyramid",
+    "app.gui.canvas_layers",
+    "app.gui.canvas_layers.photo",
+    "app.gui.canvas_layers.raster",
+    "app.gui.canvas_layers.skeleton",
+    "app.gui.editor_canvas",
+    "app.gui.paint_canvas",
+    "app.gui.editor_chrome",
+    "app.gui.editor_prompts",
+    "app.gui.raster_editor_base",
+    "app.gui.correct",
+    "app.gui.correct.layer",
+    "app.gui.correct.session",
+    "app.gui.correct.tool_router",
+    "app.gui.correct.mask_document",
+    "app.gui.correct.mask_tools",
+    "app.gui.correct.mask_layer",
+    "app.gui.correct.skeleton_document",
+    "app.gui.correct.skeleton_layer",
+    "app.gui.correct.controls",
+    "app.gui.correct.layer_panel",
+    "app.gui.correct.editor",
 ]
 
 
 @pytest.mark.parametrize("modname", APP_MODULES)
 def test_module_imports(modname):
-    # The mask_handler -> mask_tracing_interface -> main_window -> mask_handler
-    # cycle was broken in R5 (handlers imported lazily in MainWindow.__init__),
-    # so every module now imports cleanly standalone.
+    # Handlers are imported lazily in MainWindow.__init__ (the old handler ->
+    # editor -> main_window import cycle is gone), so every module imports
+    # cleanly standalone.
     importlib.import_module(modname)

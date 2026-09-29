@@ -24,8 +24,7 @@ STAGES = [
     "Library",
     "Trace GT",
     "Generate",
-    "Correct Mask",
-    "Correct Skeleton",
+    "Correct",
     "Measure",
     "Visualize",
 ]
@@ -41,7 +40,7 @@ def mw(app):
     from app.gui.main_window import MainWindow
 
     window = MainWindow()
-    window.mask_tracing_interface.maybe_save_changes = lambda: None
+    window.correct_editor.maybe_save_changes = lambda: None
     window.app_stack.setCurrentIndex(1)
     window.show()
     app.processEvents()
@@ -178,17 +177,37 @@ def test_generate_page_offers_skeletons_only(mw, app):
     _enter(mw, app, "Library")
 
 
-def test_correct_skeleton_page_has_a_working_action(mw, app, monkeypatch):
-    calls = []
-    monkeypatch.setattr(mw.skeleton_correction_interface, "clear_skeleton", lambda: calls.append(1))
-    monkeypatch.setattr(mw, "toggle_skeleton_correction", lambda: None)
-    _enter(mw, app, "Correct Skeleton")
+def test_the_correct_page_clear_button_clears_the_edited_layer_and_follows_it(mw, app, tmp_path):
+    import numpy as np
+
+    from tests.test_correct_editor import W, new_project
+
+    project = new_project(tmp_path)  # a.png: a model mask and a generated skeleton
+    _enter(mw, app, "Correct")
+    editor = mw.correct_editor
+    editor.load_image(project.a, project.folder)
+    _settle(app)
+    button = editor.clear_button
     page = mw.action_bar_stack.currentWidget()
-    visible = [w for w in page.findChildren(type(mw.skeleton_clear_button)) if w.isVisible()]
-    assert visible and mw.skeleton_clear_button in visible
-    mw.skeleton_clear_button.click()
-    assert calls == [1]
-    _enter(mw, app, "Library")
+    try:
+        assert button.parentWidget() is page and button.isVisible()
+        assert button.text() == "Clear mask"
+        mask = editor.layers["mask"].document.history
+        skeleton = editor.layers["skeleton"].document.model
+        assert mask.plane.any() and skeleton.mask[110, 20 : W - 20].all()
+
+        button.click()
+        assert not mask.plane.any() and skeleton.mask.any()  # the edited layer only
+
+        editor.set_active_layer("skeleton")
+        assert button.text() == "Clear skeleton"
+        button.click()
+        assert not np.any(skeleton.mask)
+    finally:
+        for layer in editor.layers.values():
+            layer.revert()  # back to the files, so leaving asks nothing
+        editor.reset()
+        _enter(mw, app, "Library")
 
 
 # --------------------------------------------------------------------------- #
