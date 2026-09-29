@@ -67,6 +67,9 @@ class SegmentedControl(QWidget):
     """
 
     valueChanged = pyqtSignal(str)
+    #: Every click or keyboard selection, also of the already-selected segment
+    #: (what a "show this view" selector needs; ``valueChanged`` fires on change only).
+    activated = pyqtSignal(str)
     _STEP_KEYS = {
         Qt.Key.Key_Left: -1,
         Qt.Key.Key_Up: -1,
@@ -149,6 +152,7 @@ class SegmentedControl(QWidget):
         if value != self._value:
             self._value = value
             self.valueChanged.emit(value)
+        self.activated.emit(value)
 
     def setValue(self, value: str, emit: bool = True):
         btn = self._buttons.get(value)
@@ -254,7 +258,7 @@ QSlider::handle:horizontal {{
     background: {tokens.TEXT}; border: 2px solid {tokens.BG_1}; width: 10px; height: 10px;
     margin: -5px 0; border-radius: 7px;
 }}
-QSlider::handle:horizontal:hover {{ background: #ffffff; }}
+QSlider::handle:horizontal:hover {{ background: {tokens.TEXT}; border-color: {tokens.BG_3}; }}
 QSlider::handle:horizontal:focus {{ border-color: {tokens.FOCUS}; }}
 QLabel#dockSliderValue {{
     color: {tokens.TEXT}; background: transparent;

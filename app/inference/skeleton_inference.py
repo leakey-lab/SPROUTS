@@ -545,6 +545,14 @@ def make_skeleton_spec(model: Any, output_dir: str) -> BatchSpec:
     return BatchSpec(load=load, step=step, save=save)
 
 
+def default_skeleton_batch_size(device_type: str) -> int:
+    """VRAM-sized batch on a GPU; at most ``SKELETON_BATCH_SIZE_CPU`` on the CPU fallback."""
+    batch_size = config.get_skeleton_batch_size(refresh=True)
+    if device_type == "cuda":
+        return batch_size
+    return min(batch_size, config.SKELETON_BATCH_SIZE_CPU)
+
+
 def run_skeleton_generation(
     input_dir: str,
     output_dir: str,
@@ -561,7 +569,9 @@ def run_skeleton_generation(
     next batch boundary. Writes the run manifest and releases the CUDA cache once.
 
     Args:
-        batch_size: default: auto-sized from free VRAM once the model is loaded.
+        batch_size: default: auto-sized from free VRAM once the model is loaded;
+            at most ``config.SKELETON_BATCH_SIZE_CPU`` on CPU, so Cancel is
+            honoured within a second or two.
         model: a ready SkeletonModel-like object with ``run_batch`` (tests);
             default: the cached ``runtime.get_skeleton_model()``.
     """
@@ -574,7 +584,7 @@ def run_skeleton_generation(
         if model is None and image_paths:
             model = runtime.get_skeleton_model(rt.device)
         if batch_size is None:
-            batch_size = config.get_skeleton_batch_size(refresh=True)
+            batch_size = default_skeleton_batch_size(rt.device.type)
         logger.info(
             "Skeleton generation: input=%s output=%s images=%d batch_size=%d",
             input_dir,

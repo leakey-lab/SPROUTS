@@ -47,13 +47,7 @@ class SkeletonCorrectionGraphicsView(CanvasViewMixin, QGraphicsView):
             handler(factor)
 
     def _tool_cursor(self) -> QCursor | Qt.CursorShape:
-        iface = self.skeleton_interface
-        eraser = getattr(iface, "TOOL_ERASER", None)
-        if eraser is not None and getattr(iface, "current_tool", None) == eraser:
-            # Legacy bitmap ring; the cross is used once the editor drops it.
-            cursor = getattr(iface, "brush_cursor", None)
-            if cursor is not None:
-                return cursor
+        # Every tool uses the cross; the eraser's size is shown by the scene ring.
         return Qt.CursorShape.CrossCursor
 
     def map_to_image(self, pos: QPointF) -> QPoint:

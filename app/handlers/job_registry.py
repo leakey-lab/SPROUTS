@@ -5,7 +5,8 @@ Measure cannot read a half-written ``skeletons/`` folder while generation runs.
 The registry clears itself on ``QThread``'s own ``finished`` signal, which Qt
 emits for every thread, including subclasses that shadow ``finished`` with a
 custom signature. ``stop_all`` is meant for ``closeEvent``: it requests a
-cooperative stop and waits, so the window never destroys a running thread.
+cooperative stop and waits, so the window never destroys a running thread;
+``shutdown`` (called first) makes ``try_start`` refuse every later job.
 
 Use from the GUI thread only.
 """
@@ -34,6 +35,7 @@ class JobRegistry(QObject):
         self._name: str | None = None
         self._thread: QThread | None = None
         self._generation = 0  # identifies the current job's finished connection
+        self._closing = False  # set by shutdown(): no new job may start
 
     def try_start(self, name: str, thread: QThread) -> bool:
         """Start ``thread`` as job ``name`` unless another job is running.
@@ -41,6 +43,9 @@ class JobRegistry(QObject):
         Returns:
             True if the job was registered and started, False if another job runs.
         """
+        if self._closing:
+            logger.info("Job %r not started: the application is closing", name)
+            return False
         if self._thread is not None:
             if self._thread.isRunning():
                 logger.info("Job %r not started: %r is running", name, self._name)
@@ -55,6 +60,18 @@ class JobRegistry(QObject):
         thread.start()
         self.busy_changed.emit(True)
         return True
+
+    def shutdown(self) -> None:
+        """Refuse every later ``try_start`` (call from ``closeEvent`` before ``stop_all``).
+
+        A job chained to the one being stopped (Generate: masks, then skeletons)
+        must not start while, or after, the window closes.
+        """
+        self._closing = True
+
+    def is_closing(self) -> bool:
+        """True once :meth:`shutdown` was called."""
+        return self._closing
 
     def running_name(self) -> str | None:
         """Name of the running job, or None when idle."""

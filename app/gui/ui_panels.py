@@ -25,6 +25,7 @@ from app.gui import file_tree_manager
 from app.gui.library_index import LibrarySearchController
 from app.gui.widgets import tokens
 from app.gui.widgets.icons import load_icon
+from resources.resource_utils import project_root
 
 
 def get_icon_path(icon_name: str) -> str:
@@ -38,7 +39,7 @@ def get_icon_path(icon_name: str) -> str:
         Full path to the icon file
     """
     # Check in resources/icons first
-    base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    base_path = str(project_root())
     resources_icons_path = os.path.join(base_path, "resources", "icons", icon_name)
     if os.path.exists(resources_icons_path):
         return resources_icons_path
@@ -91,17 +92,18 @@ def create_text_button(text: str, tooltip: str) -> QPushButton:
     return button
 
 
-def create_section_label(text: str, color: str = "#bd93f9") -> QLabel:
+def create_section_label(text: str, color: str | None = None) -> QLabel:
     """
     Create a styled section label for button groups.
 
     Args:
         text: Label text
-        color: Color for the label text (hex color code)
+        color: Color for the label text (default ``tokens.ACCENT``)
 
     Returns:
         Styled QLabel
     """
+    color = color or tokens.ACCENT
     label = QLabel(text)
     label.setStyleSheet(f"""
         QLabel {{
@@ -148,26 +150,7 @@ def create_left_panel(main_window) -> QWidget:
             border: 1px solid {tokens.ACCENT_LINE};
         }}
         QPushButton:pressed {{ background-color: {tokens.BG_ACTIVE}; }}
-    """
-
-    # Style for full-width primary button (Load Images)
-    primary_button_style = """
-        QPushButton {
-            background-color: #6272a4;
-            color: #f8f8f2;
-            border: none;
-            border-radius: 6px;
-            padding: 10px 16px;
-            font-weight: bold;
-            font-size: 10pt;
-        }
-        QPushButton:hover {
-            background-color: #7282b4;
-            border: 2px solid #bd93f9;
-        }
-        QPushButton:pressed {
-            background-color: #5262a4;
-        }
+        {tokens.focus_rule("QPushButton")}
     """
 
     # ========== LOAD IMAGES BUTTON (Full width, prominent) ==========
@@ -176,7 +159,7 @@ def create_left_panel(main_window) -> QWidget:
     if load_icon_path:
         main_window.load_images_button.setIcon(QIcon(load_icon_path))
         main_window.load_images_button.setIconSize(QSize(24, 24))
-    main_window.load_images_button.setStyleSheet(primary_button_style)
+    main_window.load_images_button.setStyleSheet(text_button_style)
     main_window.load_images_button.setToolTip("Load images from a directory")
     main_window.load_images_button.clicked.connect(main_window.load_images)
     # FIX1: Welcome screen is the sole load entry. The attr/connect stay alive
@@ -337,6 +320,7 @@ def create_left_panel(main_window) -> QWidget:
             color: {tokens.TEXT};
             border: 1px solid {tokens.BORDER_STRONG};
         }}
+        {tokens.focus_rule("QPushButton")}
     """
 
     main_window.expand_all_button = QPushButton()

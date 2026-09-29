@@ -30,7 +30,7 @@ from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
 
-from app.gui.widgets import tokens
+from app.design import tokens
 
 from ._viz_server import DASH_HOST, _DashServerThreadBase, join_qthread, release_qthread
 

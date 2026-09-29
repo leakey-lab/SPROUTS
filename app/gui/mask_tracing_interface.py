@@ -206,7 +206,7 @@ class RasterEditorBase(QWidget, MaskDrawingMixin):
             "eye", self._tip(f"Show {noun}", "toggle_overlay"), checkable=True
         )
         self.mask_visible_button.setChecked(True)
-        self.enhance_button = IconButton("contrast", "Image enhancement")
+        self.enhance_button = IconButton("contrast", "Image enhancement", checkable=True)
 
         # --- dock ---
         self.size_container = DockSlider(
@@ -317,6 +317,7 @@ class RasterEditorBase(QWidget, MaskDrawingMixin):
         self.mask_visible_button.toggled.connect(self.mask_item.setVisible)
         self.enhance_button.clicked.connect(self.enhance_popover.toggle)
         self.enhance_popover.toggled.connect(self._on_enhance_toggled)
+        self.enhance_popover.toggled.connect(self.enhance_button.setChecked)
 
         self.clear_button.clicked.connect(self.clear_mask)
         self.clear_icon_button.clicked.connect(self.clear_mask)

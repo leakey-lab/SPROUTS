@@ -1,9 +1,10 @@
 """``UiFeedback`` over the window's existing chrome (task progress, status bar, toasts).
 
-Handlers talk to :class:`app.gui.feedback.UiFeedback` only. Until the main
-window exposes its own ``feedback`` object, :class:`WindowFeedback` adapts the
-widgets it already has; every part is optional, so a partial window (tests,
-the UI harness) works too.
+Deprecated: no handler uses it any more. The main window exposes
+``main_window.feedback`` (:class:`app.gui.ui_feedback.QtUiFeedback`) and handlers
+without one fall back to ``NullFeedback`` (:class:`app.handlers.deps.HandlerDependencies`).
+Kept only until its remaining tests move to ``RecordingFeedback`` / ``QtUiFeedback``;
+do not use it in new code.
 """
 
 from __future__ import annotations

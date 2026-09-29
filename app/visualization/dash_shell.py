@@ -14,7 +14,6 @@ offline PC and never contact a CDN or Google Fonts.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,12 +23,14 @@ import dash_bootstrap_components as dbc
 from dash import Dash, Input, Output, State, ctx, dcc, html
 from dash.exceptions import PreventUpdate
 
+from resources.resource_utils import resource_path
+
 from . import dash_export, theme
 
 logger = logging.getLogger(__name__)
 
 #: ``app/assets`` -- vendored Bootstrap theme, fonts and the SPROUTS stylesheet.
-ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+ASSETS_DIR = resource_path("app", "assets")
 
 CARET_OPEN = "▾"
 CARET_CLOSED = "▸"
@@ -120,6 +121,18 @@ def graph_config(plot_filename: str) -> dict[str, Any]:
     }
 
 
+def data_notice(text: str) -> html.Div:
+    """The static notice strip under the header (``viz-data-notice``)."""
+    return html.Div(text, id="viz-data-notice", className="viz-data-notice", role="status")
+
+
+def exclusions_note(data_processor: Any) -> str | None:
+    """The processor's "N rows are not shown" sentence, or ``None`` (FR-15)."""
+    exclusions = getattr(data_processor, "exclusions", None)
+    message = getattr(exclusions, "message", None)
+    return message() if callable(message) else None
+
+
 def count_label(count: int, noun: str) -> str:
     """'1 tube', '3 tubes'."""
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
@@ -151,12 +164,24 @@ class DashboardShell:
 
     # ---- layout ------------------------------------------------------------
 
-    def page(self, *, controls: Any, chart: Any, stores: Sequence[Any] = ()) -> html.Div:
-        """Full page: header, control strip, full-bleed chart card, stores."""
+    def page(
+        self,
+        *,
+        controls: Any,
+        chart: Any,
+        stores: Sequence[Any] = (),
+        notice: str | None = None,
+    ) -> html.Div:
+        """Full page: header, optional data notice, control strip, chart card, stores.
+
+        ``notice`` is one sentence about the data (e.g. rows left out of the
+        charts, FR-15); it is shown once, under the header, only when given.
+        """
         return html.Div(
             className="sprouts-app viz-page",
             children=[
                 self.header(),
+                *([data_notice(notice)] if notice else []),
                 self.control_strip(controls),
                 # Hidden callback target kept for compatibility (Output of the
                 # main visualization callbacks).

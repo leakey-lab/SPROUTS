@@ -30,6 +30,7 @@ from .dash_shell import (
     ViewOption,
     count_label,
     create_dash_app,
+    exclusions_note,
     tube_options,
     with_uirevision,
 )
@@ -128,6 +129,7 @@ class DashApp(DashVisualizations):
                 dcc.Store(id="faceted-tubes-store", data=[]),
                 dcc.Store(id="faceted-dates-store", data=[]),
             ],
+            notice=exclusions_note(self.data_processor),
         )
 
     def _controls(self) -> list:

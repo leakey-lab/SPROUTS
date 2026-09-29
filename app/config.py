@@ -15,13 +15,19 @@ import os
 import threading
 from dataclasses import dataclass
 
+from resources.resource_utils import project_root
+
 logger = logging.getLogger(__name__)
 
 # --- Repository / resource paths -------------------------------------------
 # Resolve relative to this file so behavior does not depend on the current
 # working directory (fixes F-005: relative CHECKPOINTS_DIR).
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHECKPOINTS_DIR = os.path.join(PROJECT_ROOT, "checkpoints")
+PROJECT_ROOT = str(project_root())
+# SPROUTS_CHECKPOINTS_DIR relocates the model weights (e.g. for a pip-installed
+# SPROUTS, whose PROJECT_ROOT is site-packages); same convention as app.user_paths.
+CHECKPOINTS_DIR = os.environ.get("SPROUTS_CHECKPOINTS_DIR") or os.path.join(
+    PROJECT_ROOT, "checkpoints"
+)
 MASK_WEIGHTS_PATH = os.path.join(CHECKPOINTS_DIR, "mask_weights", "best_mask_model_V5.pth")
 SKELETONIZER_DIR = os.path.join(CHECKPOINTS_DIR, "skeletonizer")
 SKELETON_WEIGHTS_PATH = os.path.join(SKELETONIZER_DIR, "latest_net_G.pth")  # "<EPOCH>_net_G.pth"
@@ -74,11 +80,27 @@ DASH_AREA_PORT = 8051
 _SKELETON_BYTES_PER_SAMPLE = 80 * 1024 * 1024
 _SKELETON_BATCH_DEFAULT = 64
 
+# CPU fallback batches. Cancel is checked between batches, so a CPU batch must
+# take a second or two, not ~10 s (audit wf2 R2: 16 masks = 11 s, 64 skeletons
+# = 9 s on CPU, longer than the 5 s the window waits on close). Outputs do not
+# depend on the batch size (eval-mode BatchNorm).
+MASK_BATCH_SIZE_CPU = 4
+SKELETON_BATCH_SIZE_CPU = 8
+
+
+def _cuda_usable(torch_module) -> bool:
+    """CUDA available with at least one device (``CUDA_VISIBLE_DEVICES=""`` has none)."""
+    if not torch_module.cuda.is_available():
+        return False
+    device_count = getattr(torch_module.cuda, "device_count", None)  # absent in stand-ins
+    return device_count is None or device_count() > 0
+
 
 def _auto_skeleton_batch(default: int = _SKELETON_BATCH_DEFAULT) -> int:
     """Size the skeleton inference batch to the GPU's free VRAM.
 
-    Returns ``default`` on CPU or if the query fails. On CUDA, targets 70% of
+    Returns ``default`` on CPU or if the query fails (the CPU run itself uses
+    :data:`SKELETON_BATCH_SIZE_CPU`, see ``skeleton_inference``). On CUDA, targets 70% of
     *currently free* memory (leaving headroom for the driver, fragmentation, and
     pinned host transfers), rounds down to a multiple of 8, and never goes below
     ``default``. BatchNorm runs in eval() (running stats), so the skeleton output
@@ -90,7 +112,7 @@ def _auto_skeleton_batch(default: int = _SKELETON_BATCH_DEFAULT) -> int:
     try:
         import torch
 
-        if not torch.cuda.is_available():
+        if not _cuda_usable(torch):
             logger.info("CUDA unavailable; using default skeleton batch=%d", default)
             return default
         free, _ = torch.cuda.mem_get_info()  # bytes free on the active device
@@ -140,7 +162,7 @@ def __dir__() -> list[str]:
     return sorted([*globals(), *_LAZY_ATTRIBUTES])
 
 
-MASK_BATCH_SIZE = 16
+MASK_BATCH_SIZE = 16  # GPU; on CPU min(MASK_BATCH_SIZE, MASK_BATCH_SIZE_CPU) is used
 MASK_THRESHOLD = 0.5  # sigmoid threshold for binarizing the mask model output
 
 # Size (width, height) of the skeletonizer's saved output: the CROP_SIZE (256)

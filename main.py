@@ -108,7 +108,9 @@ def _sprouts_palette() -> QPalette:
     ):
         palette.setColor(color_role, QColor(color))
     palette.setColor(role.BrightText, QColor(Qt.GlobalColor.white))
-    palette.setColor(QPalette.ColorGroup.Disabled, role.Text, QColor(tokens.TEXT_FAINT))
+    # Disabled controls use the disabled tier (TEXT_FAINT is informational text, AA).
+    for disabled_role in (role.Text, role.WindowText, role.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, disabled_role, QColor(tokens.TEXT_DISABLED))
     return palette
 
 

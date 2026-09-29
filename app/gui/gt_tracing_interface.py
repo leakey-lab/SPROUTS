@@ -406,6 +406,10 @@ class GtTracingInterface(RasterEditorBase):
                 return  # stay put so the failure notice is not lost
         self.navigate_requested.emit(delta)
 
+    def navigate(self, delta: int) -> None:
+        """Public entry for the app's paging keys: save pending edits, then move ``delta``."""
+        self._navigate(delta)
+
     # ========================================================= load / save
     def reset(self) -> bool:
         """A new folder was opened: prompt, then drop the image and the registry.

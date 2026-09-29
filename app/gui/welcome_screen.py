@@ -12,7 +12,7 @@ Presentation-only landing page shown at ``app_stack`` index 0.
   most four rows, so eight entries no longer raise the window's minimum height.
   Folders that no longer exist are checked off the GUI thread (network paths
   can block), dimmed with "Folder not found" and can be removed.
-* Stage chips are the ribbon's stages (``app.gui.shell_chrome._STAGES``) and
+* Stage chips are the ribbon's stages (``app.gui.shell_chrome.STAGES``) and
   the footer shows ``app.__version__`` and the model files — no hardcoded
   device or version claims.
 """
@@ -55,7 +55,7 @@ def _ribbon_stage_labels() -> list[str]:
     """The 7 ribbon stage labels, in order (single source: shell_chrome)."""
     from app.gui import shell_chrome
 
-    return [stage[1] for stage in shell_chrome._STAGES]
+    return [stage[1] for stage in shell_chrome.STAGES]
 
 
 def _model_files() -> list[str]:

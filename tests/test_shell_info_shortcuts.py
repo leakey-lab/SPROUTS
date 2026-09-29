@@ -88,9 +88,11 @@ def test_skeleton_sheet_lists_its_real_keys_and_gestures():
     labels = " ".join(s.label for s in sc.specs_for(sc.CORRECT_SKELETON))
     for key in ("Enter", "Esc", "Delete", "Ctrl+click", "Shift+drag", "Double-click"):
         assert key in labels
-    # Mask-only keys are NOT claimed for the skeleton editor any more.
-    assert sc.find_spec("save", sc.CORRECT_SKELETON) is None
+    # Mask-only keys are NOT claimed for the skeleton editor; its own Ctrl+S is
+    # handled in SkeletonCorrectionInterface.on_key_press (a KEY row, no QShortcut).
     assert sc.find_spec("toggle_overlay", sc.CORRECT_SKELETON) is None
+    save = sc.find_spec("save", sc.CORRECT_SKELETON)
+    assert save is not None and save.keys == ("Ctrl+S",) and save.kind == sc.KEY
 
 
 def test_gt_sheet_lists_class_digits():

@@ -102,6 +102,13 @@ def make_mask_spec(model: Any, output_dir: str, *, threshold: float = config.MAS
     return BatchSpec(load=load, step=step, save=save)
 
 
+def default_mask_batch_size() -> int:
+    """``MASK_BATCH_SIZE`` on a GPU; at most ``MASK_BATCH_SIZE_CPU`` on the CPU fallback."""
+    if runtime.get_runtime().device.type == "cuda":
+        return config.MASK_BATCH_SIZE
+    return min(config.MASK_BATCH_SIZE, config.MASK_BATCH_SIZE_CPU)
+
+
 def generate_masks(
     input_dir: str,
     output_dir: str,
@@ -119,11 +126,13 @@ def generate_masks(
     Args:
         model: a ready model (tests); default: ``runtime.get_mask_model()``, loaded
             here on first use (``ModelUnavailableError`` if the weights are missing).
-        batch_size: default ``config.MASK_BATCH_SIZE`` (halved on out-of-memory).
+        batch_size: default ``config.MASK_BATCH_SIZE`` on a GPU (halved on
+            out-of-memory), ``config.MASK_BATCH_SIZE_CPU`` on CPU so Cancel is
+            honoured within a second or two.
         policy: the overwrite choice, recorded in the manifest.
         on_stage: called with ``STAGE_LOADING`` / ``STAGE_RUNNING``.
     """
-    batch_size = batch_size or config.MASK_BATCH_SIZE
+    batch_size = batch_size or default_mask_batch_size()
     os.makedirs(output_dir, exist_ok=True)
     names, todo, skipped = list_inputs(input_dir, skip_stems)
     try:

@@ -6,8 +6,8 @@ Orchestrates the GUI components and handles core functionality.
 import logging
 import os
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
+from PyQt6.QtCore import QObject, QPoint, QSettings, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -21,20 +21,24 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.data_processing.measurement_index import Measurement, MeasurementIndex
 from app.gt import RegistryError, load_registry
 from app.handlers.job_registry import JobRegistry
 from app.naming import image_stem
 
-from . import file_tree_manager, ui_panels, visualization_manager
+from . import file_tree_manager, shortcuts, ui_panels, visualization_manager
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
 from .gt_tracing_interface import GtTracingInterface
-from .image_manager import ImageManager
+from .image_manager import ImageManager, project_layout_of
 from .library_index import count_label
 from .mask_tracing_interface import MaskTracingInterface
 from .panels import Panel
+from .recent_projects import RecentProjectsStore
 from .skeleton_correction_interface import SkeletonCorrectionInterface
 from .task_progress import TaskProgressWidget
+from .ui_feedback import QtUiFeedback
+from .window_state import WindowStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,21 @@ USER_ROLE = Qt.ItemDataRole.UserRole
 #: so holding an arrow key decodes only the image it stops on.
 TREE_LOAD_DELAY_MS = 40
 
+#: Buttons that start a batch job; disabled (with a tooltip saying why) while one runs.
+JOB_BUTTONS = (
+    "generate_all_button",
+    "generate_button",
+    "calculate_length_button",
+    "calculate_area_button",
+)
+
+#: Gap kept between the toast stack and an editor dock sitting under it.
+_TOAST_DOCK_GAP = 8
+# Closing with a running job: first wait (window visible, "Stopping…"), then a
+# longer wait with the window hidden; a job still running after both is logged.
+_CLOSE_WAIT_MS = 5000
+_CLOSE_EXTRA_WAIT_MS = 120_000
+
 
 def _same_path(a: str | None, b: str | None) -> bool:
     """True when both are set and name the same file (case/separator-insensitive on Windows)."""
@@ -52,78 +71,62 @@ def _same_path(a: str | None, b: str | None) -> bool:
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
-class _ProgressBarShim:
-    """Compat facade exposing the legacy QProgressBar API on TaskProgressWidget.
+def _released(editor) -> bool:
+    """Ask ``editor`` to save or discard pending edits; False only when it refuses.
 
-    The status-bar QProgressBar was replaced by TaskProgressWidget. The mask and
-    skeleton *generation* handlers still call the old bar API
-    (setValue/show/hide/setFormat/setTextVisible); this shim maps those onto the
-    new widget so they keep working unchanged.
+    Editors return False when the user cancelled or kept editing after a failed
+    save; anything else (True, or ``None`` from a legacy stub) lets the caller move on.
+    """
+    return editor.maybe_save_changes() is not False
+
+
+class _MeasurementSignals(QObject):
+    """Carries 'CSV parsed' from a pool thread back to the GUI thread.
+
+    Unparented and kept alive by the worker's closure, so a worker that ends
+    after the window was destroyed emits into nothing instead of a dead object.
     """
 
-    def __init__(self, tp):
-        self._tp = tp
-
-    def setValue(self, v):
-        self._tp.set_progress(v)
-
-    def show(self):
-        # Legacy callers call show() then setValue() repeatedly; start with a
-        # generic op name so the labelled widget actually appears.
-        if not self._tp.isVisible():
-            self._tp.start("Working")
-
-    def hide(self):
-        self._tp.finish()
-
-    def setFormat(self, *_a, **_k):
-        pass  # text-on-bar disabled; the label carries the text now
-
-    def setTextVisible(self, *_a, **_k):
-        pass
-
-    def setRange(self, *_a, **_k):
-        pass
-
-    def setMinimumWidth(self, *_a, **_k):
-        pass
+    ready = pyqtSignal(object)
 
 
 class MainWindow(QMainWindow):
     mask_saved = pyqtSignal(str)
     mask_cleared = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, *, settings: QSettings | None = None):
+        """Build the window.
+
+        ``settings`` (optional) is where window geometry, the last folder and the
+        recent projects persist; by default the app's own QSettings. Headless
+        (``offscreen``) runs without explicit settings neither restore nor save
+        the window geometry / last folder, so test runs never touch the user's.
+        """
         super().__init__()
-        self.setWindowTitle("Root Viewer")
-        self.setGeometry(100, 100, 1200, 700)
+        self.setWindowTitle("Root Viewer[*]")
 
-        # Set window icon with multiple sizes for better visibility
-        icon_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "resources", "app_icon.ico"
+        self.window_state = WindowStateStore(settings)
+        self.recent_projects = RecentProjectsStore(settings)
+        self._persist_window_state = (
+            settings is not None or QApplication.platformName() != "offscreen"
         )
-        if os.path.exists(icon_path):
-            icon = QIcon(icon_path)
-            self.setWindowIcon(icon)
+        self._measurements: MeasurementIndex | None = None
+        self._measurements_loading = False
+        self._measurement_signals = _MeasurementSignals()
+        self._measurement_signals.ready.connect(self._on_measurements_ready)
+        self._job_button_tooltips: dict[str, str] = {}
 
-        # Initialize components.
-        #
-        # Handlers are imported lazily here rather than at module top to break a
-        # circular import (F: mask_handler -> app.gui (package init) ->
-        # main_window -> mask_handler). By the time __init__ runs, the app.gui
-        # package is fully initialized, so these imports resolve cleanly and
-        # `import app.handlers.mask_handler` succeeds standalone.
+        # Handlers are imported lazily (they import app.gui modules themselves).
         from app.handlers.mask_generation_handler import MaskGenerationHandler
-        from app.handlers.mask_handler import MaskHandler
         from app.handlers.skeleton_handler import SkeletonHandler
 
         # One background job at a time (generation / measurement); handlers register
         # their threads here, so it must exist before they are built.
         self.jobs = JobRegistry(self)
+        self.jobs.busy_changed.connect(self._on_jobs_busy_changed)
         self.image_manager = ImageManager(self)
         self.display_controller = DisplayController(self)
         self.skeleton_handler = SkeletonHandler(self)
-        self.mask_handler = MaskHandler(self)
         self.mask_generation_handler = MaskGenerationHandler(self)
         self.mask_tracing_interface = MaskTracingInterface()
         # Multi-class ground-truth editor (Trace GT stage). Independent of the
@@ -142,13 +145,17 @@ class MainWindow(QMainWindow):
         self.mask_saved.connect(self.highlight_saved_mask)
         self.mask_cleared.connect(self.unhighlight_cleared_mask)
 
-        # Transient editor feedback (fill hints, clear/undo notes) -> toasts.
-        self.mask_tracing_interface.notice.connect(self.notify)
-        self.gt_tracing_interface.notice.connect(self.notify)
+        # Transient editor feedback (fill hints, clear/undo notes, saves) -> toasts;
+        # unsaved edits -> the title's modified marker.
+        skeleton = self.skeleton_correction_interface
+        for editor in self._editors().values():
+            editor.notice.connect(self.notify)
+            editor.dirty_changed.connect(self._sync_window_modified)
         self.gt_tracing_interface.navigate_requested.connect(self.navigate_image)
         self.gt_tracing_interface.gt_saved.connect(
-            lambda p: self.notify(f"GT saved for {os.path.basename(p)}")
+            lambda p: self.toasts.show(f"GT saved for {os.path.basename(p)}", key="gt-saved")
         )
+        skeleton.set_generated_skeleton_resolver(self._generated_skeleton_for)
 
         # Keyboard browsing: the image whose row was last loaded, and the debounce
         # that loads the tree's current row once the arrow keys come to rest.
@@ -160,29 +167,24 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
         self._install_image_paging_shortcuts()
+        self._install_global_shortcuts()
 
-        # Keyboard-shortcut help dialog (F1 / ?).
-        self._help_shortcut_f1 = QShortcut(QKeySequence("F1"), self)
-        self._help_shortcut_f1.activated.connect(lambda: ShortcutsDialog(self).exec())
-        self._help_shortcut_q = QShortcut(QKeySequence("?"), self)
-        self._help_shortcut_q.activated.connect(lambda: ShortcutsDialog(self).exec())
-
-    @property
-    def loading_progress_bar(self):
-        """Legacy QProgressBar facade backed by the TaskProgressWidget.
-
-        Lets the mask/skeleton generation handlers keep calling the old bar API
-        unchanged while the nicer status-bar widget is what actually renders.
-        """
-        return _ProgressBarShim(self.task_progress)
+        if self._persist_window_state:
+            self.window_state.restore(self, self.body_splitter)
+        else:
+            self.window_state.apply_default_geometry(self)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Stop Dash server threads before the window (and embedded viz widgets) are destroyed.
+        """Offer to save editor changes, stop a running job, then clean up and persist.
 
-        Unsaved GT the user chose to keep (its save failed) cancels the close.
+        An editor that keeps unsaved edits (the user cancelled, or the save
+        failed and they kept editing) or a job the user keeps running cancels the close.
         """
-        self.mask_tracing_interface.maybe_save_changes()
-        if not self.gt_tracing_interface.maybe_save_changes():
+        for editor in self._editors().values():
+            if not _released(editor):
+                event.ignore()
+                return
+        if not self._stop_jobs_for_close():
             event.ignore()
             return
         try:
@@ -192,8 +194,66 @@ class MainWindow(QMainWindow):
                 self.close_root_area_visualization()
         except Exception:
             logger.exception("Error cleaning up visualizations on close")
+        self._save_window_state()
         QApplication.processEvents()
         super().closeEvent(event)
+
+    def _stop_jobs_for_close(self) -> bool:
+        """True when no job runs any more (asks before stopping one).
+
+        The registry is shut down first, so a job chained to the stopped one
+        (Generate: masks, then skeletons) can never start during or after the
+        close. A job that outlives the first wait (a CPU batch in flight) gets
+        the window hidden and a longer wait, instead of the process exiting
+        under a running worker.
+        """
+        if not self.jobs.is_busy():
+            self.jobs.shutdown()
+            return True
+        name = self.jobs.running_name() or "A task"
+        answer = QMessageBox.question(self, "Quit", f"{name} is running. Stop it and quit?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self.jobs.shutdown()
+        self.feedback.status(f"Stopping: {name}…", 0)
+        QApplication.processEvents()
+        if self.jobs.stop_all(timeout_ms=_CLOSE_WAIT_MS):
+            return True
+        self.hide()
+        if not self.jobs.stop_all(timeout_ms=_CLOSE_EXTRA_WAIT_MS):
+            logger.warning("Job %r did not stop in time; quitting anyway", self.jobs.running_name())
+        return True
+
+    def _save_window_state(self) -> None:
+        if not self._persist_window_state:
+            return
+        try:
+            if self._pre_viz_splitter_sizes:
+                # The library is collapsed for a dashboard: store the user's layout.
+                self.left_panel.setVisible(True)
+                self.body_splitter.setSizes(self._pre_viz_splitter_sizes)
+            self.window_state.save(self, self.body_splitter)
+        except Exception:
+            logger.exception("Failed to save the window state")
+
+    def _editors(self) -> dict:
+        """The editor pages that hold unsaved work, by right-panel index."""
+        return {
+            Panel.MASK_TRACING: self.mask_tracing_interface,
+            Panel.SKELETON_CORRECTION: self.skeleton_correction_interface,
+            Panel.GT_TRACING: self.gt_tracing_interface,
+        }
+
+    def _sync_window_modified(self, *_args) -> None:
+        """Title marker ``*`` while any editor holds unsaved edits."""
+        self.setWindowModified(any(e.has_unsaved_changes() for e in self._editors().values()))
+
+    def _generated_skeleton_for(self, image_path: str) -> str | None:
+        """The skeleton the last generation run wrote for ``image_path`` (None: editor default)."""
+        base = getattr(self.image_manager, "processed_base_path", None)
+        if not base or not image_path:
+            return None
+        return os.path.join(base, f"{image_stem(image_path)}_fake.png")
 
     def _build_body(self) -> QWidget:
         """Build the left/right splitter body (presentation extract of init_ui).
@@ -275,6 +335,9 @@ class MainWindow(QMainWindow):
                 if self._pre_viz_splitter_sizes:
                     splitter.setSizes(self._pre_viz_splitter_sizes)
                     self._pre_viz_splitter_sizes = None
+        toasts = getattr(self, "toasts", None)
+        if toasts is not None:
+            toasts.reposition()  # the editor dock under the toasts may have changed
 
     def _build_shell(self) -> QWidget:
         """Build the guided shell: one chrome row over the body (stretch) over
@@ -297,10 +360,8 @@ class MainWindow(QMainWindow):
         # Populate the stage-aware action bar now that the body (and the real
         # stage buttons created in create_left_panel) exists; then show the
         # default Library stage.
-        if callable(getattr(self, "_populate_action_bar", None)):
-            self._populate_action_bar()
-        if callable(getattr(self, "_activate_action_stage", None)):
-            self._activate_action_stage("Library")
+        self._populate_action_bar()
+        self._activate_action_stage("Library")
         return shell
 
     # Sentinel: presence signals the PR4 guided shell (app_stack) is wired, used
@@ -311,11 +372,17 @@ class MainWindow(QMainWindow):
         # Guided app shell: a QStackedWidget that flips between the Welcome
         # screen (index 0) and the working shell/body (index 1). The window
         # starts on Welcome; load_images flips to the shell (T4.6).
+        from app.gui import shell_chrome
         from app.gui.loading_overlay import LoadingOverlay
         from app.gui.welcome_screen import WelcomeWidget
 
         self.app_stack = QStackedWidget()
-        self.welcome = WelcomeWidget(on_get_started=self.load_images, on_open_recent=self.open_path)
+        self.welcome = WelcomeWidget(
+            on_get_started=self.load_images,
+            on_open_recent=self.open_path,
+            recent_store=self.recent_projects,
+            on_about=self.show_about,
+        )
         self.app_stack.addWidget(self.welcome)  # index 0
 
         shell = self._build_shell()
@@ -329,28 +396,57 @@ class MainWindow(QMainWindow):
         self.loading_overlay = LoadingOverlay(self)
         self.loading_overlay.hide()
 
-        # Status Bar with first-class task-progress widget.
-        # Replaces the old cramped status-bar QProgressBar (text-on-bar). The
-        # legacy loading_progress_bar API is preserved via the _ProgressBarShim
-        # exposed by the loading_progress_bar property, so generation handlers
-        # are unchanged.
+        # One status surface: the statusline shows the QStatusBar's messages and
+        # hosts the task progress inline; the QStatusBar itself stays (API kept,
+        # hidden) so every existing showMessage() caller keeps working.
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-
         self.task_progress = TaskProgressWidget()
         self.status_bar.addPermanentWidget(self.task_progress)
 
-        # Transient success/feedback toasts (bottom-right of the window). Hard
-        # errors keep using QMessageBox.critical; this is additive.
+        # Transient success/feedback toasts (bottom-right, above the statusline
+        # and clear of an editor dock). Decisions keep using QMessageBox.
         from app.gui.widgets import ToastManager
 
         self.toasts = ToastManager(self)
+        self.toasts.set_bottom_offset(self._toast_bottom_offset)
+
+        shell_chrome.install_status_surface(self)
+        # Handlers report progress / results / failures through this (AR-07).
+        self.feedback = QtUiFeedback(
+            self.task_progress,
+            status_bar=self.status_bar,
+            notifier=lambda message, kind: self.notify(message, kind),
+            on_task_end=self.statusline.refresh_runtime,
+        )
 
     def notify(self, message: str, kind: str = "success", timeout: int = 3200) -> None:
         """Show a transient toast. ``kind`` in success/info/warn/danger."""
         toasts = getattr(self, "toasts", None)
         if toasts is not None:
             toasts.show(message, kind=kind, timeout=timeout)
+
+    def _toast_bottom_offset(self) -> int:
+        """Pixels the toast stack keeps above the window's bottom edge: the
+        statusline, or the current editor's dock when it sits under the toasts."""
+        offset = 0
+        line = getattr(self, "statusline", None)
+        if line is not None and line.isVisible():
+            offset = line.height()
+        right_panel = getattr(self, "right_panel", None)
+        if right_panel is None:
+            return offset
+        editor = self._editors().get(right_panel.currentIndex())
+        dock = getattr(editor, "dock", None)
+        if dock is None or not dock.isVisible():
+            return offset
+        from app.gui.widgets.toasts import MAX_TOAST_WIDTH
+
+        top_left = dock.mapTo(self, QPoint(0, 0))
+        toast_left = self.width() - min(MAX_TOAST_WIDTH, self.width()) - 16
+        if top_left.x() + dock.width() > toast_left:
+            offset = max(offset, self.height() - top_left.y() + _TOAST_DOCK_GAP)
+        return offset
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -386,6 +482,78 @@ class MainWindow(QMainWindow):
                 view.set_opengl_viewport_enabled(enabled)
             except RuntimeError as e:
                 logger.warning("Failed to toggle OpenGL on %s view: %s", label, e)
+
+    # ==================== Shortcuts / help ====================
+
+    def _install_global_shortcuts(self) -> None:
+        """F1 / ?, Ctrl+O and Alt+1…7 from the shortcut registry (window-wide)."""
+        stage_slots = [lambda k=k: self._go_to_stage(k) for k in self.ribbon_buttons]
+        self._global_shortcuts = shortcuts.install_shortcuts(
+            self,
+            shortcuts.GLOBAL,
+            {
+                "help": self.show_shortcuts,
+                "open_folder": self.load_images,
+                "go_to_stage": stage_slots,
+            },
+            context=Qt.ShortcutContext.WindowShortcut,
+        )
+        # Legacy attribute names (F1 / ?).
+        self._help_shortcut_f1, self._help_shortcut_q = self._global_shortcuts["help"]
+
+    def _go_to_stage(self, key: str) -> None:
+        button = self.ribbon_buttons.get(key)
+        if button is None or not button.isEnabled() or self.app_stack.currentIndex() != 1:
+            return  # nothing loaded yet: the stages are not on screen
+        button.click()
+
+    def _current_stage(self) -> str | None:
+        buttons = getattr(self, "ribbon_buttons", {}) or {}
+        return next((k for k, b in buttons.items() if b.isChecked()), None)
+
+    def show_shortcuts(self) -> None:
+        """The F1 keyboard-shortcut sheet, opened on the current stage's keys."""
+        dialog = ShortcutsDialog(
+            self,
+            current_scope=shortcuts.scope_for_stage(self._current_stage()),
+            on_about=self.show_about,
+        )
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
+
+    def show_about(self) -> None:
+        """About SPROUTS: version, calibration, runtime, models and how to cite."""
+        from app.gui.about_dialog import AboutDialog
+
+        dialog = AboutDialog(self)
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
+
+    # ==================== Background jobs ====================
+
+    def _on_jobs_busy_changed(self, busy: bool) -> None:
+        """Disable the job buttons while a job runs; refresh measured values after one."""
+        name = self.jobs.running_name() or "A task"
+        for attr in JOB_BUTTONS:
+            button = getattr(self, attr, None)
+            if button is None:
+                continue
+            if busy:
+                self._job_button_tooltips.setdefault(attr, button.toolTip())
+                button.setEnabled(False)
+                button.setToolTip(f"{name} is running. Wait for it, or press Cancel.")
+            else:
+                button.setEnabled(True)
+                if attr in self._job_button_tooltips:
+                    button.setToolTip(self._job_button_tooltips.pop(attr))
+        if not busy and self._measurements is not None:
+            # A Measure run may have rewritten the CSVs: re-locate and re-read them.
+            self._measurements.invalidate()
+            self._refresh_metrics_bar(self._current_image_name())
 
     # ==================== File Tree Methods (delegated) ====================
 
@@ -454,8 +622,9 @@ class MainWindow(QMainWindow):
     # ==================== Image Loading ====================
 
     def load_images(self):
-        """Open the directory dialog, then load the chosen folder."""
-        dir_name = QFileDialog.getExistingDirectory(self, "Select Image Directory")
+        """Open the directory dialog (at the last folder), then load the chosen folder."""
+        start = self.window_state.last_folder() if self._persist_window_state else ""
+        dir_name = QFileDialog.getExistingDirectory(self, "Select Image Directory", start)
         if dir_name:
             self.open_path(dir_name)
 
@@ -463,41 +632,45 @@ class MainWindow(QMainWindow):
         """Load a directory of images (no dialog).
 
         Shared by ``load_images`` (after the dialog) and the Welcome screen's
-        recent-projects rows. A missing folder is reported and changes nothing.
-        Otherwise flips to the working shell, shows the loading overlay, and
-        kicks off ``image_manager.load_images``; the current library stays until
-        the scan delivers images.
+        recent-projects rows. A missing folder is reported and changes nothing,
+        and so does an editor that keeps unsaved edits. Otherwise flips to the
+        working shell, shows the loading overlay, and kicks off
+        ``image_manager.load_images``; the current library stays until the scan
+        delivers images.
         """
         if not dir_name:
             return
         if not os.path.isdir(dir_name):
             self.notify(f"Folder not found: {dir_name}", "danger")
+            self._refresh_recents()
             return
-        # Unsaved GT the user chose to keep (its save failed) cancels the open.
-        gt = getattr(self, "gt_tracing_interface", None)
-        if gt is not None and not gt.maybe_save_changes():
-            return
+        # Pending edits: save or discard first; an editor the user keeps editing
+        # (cancel, or a failed save) cancels the open. Asked before the overlay.
+        for editor in self._editors().values():
+            if not _released(editor):
+                return
         # Stash for on_loading_finished so it can persist a recent entry.
         self._last_loaded_dir = dir_name
 
         # Leave the Welcome screen for the working shell and show the
         # full-window loading overlay (PR4 T4.6).
-        if getattr(self, "app_stack", None) is not None:
-            self.app_stack.setCurrentIndex(1)
-        if getattr(self, "loading_overlay", None) is not None:
-            self.loading_overlay.start("Loading images")
+        self.app_stack.setCurrentIndex(1)
+        self.loading_overlay.start("Loading images")
 
         # Show progress before loading.
         self.task_progress.start("Loading images")
 
-        # Offer to save pending mask / GT edits, then drop the editors' history.
-        if hasattr(self, "mask_tracing_interface"):
-            self.mask_tracing_interface.reset()
-        if hasattr(self, "gt_tracing_interface"):
-            self.gt_tracing_interface.reset()
+        # The editors are clean now: drop their image and history (no prompt).
+        for editor in self._editors().values():
+            editor.reset()
 
         # Load images through image manager
         self.image_manager.load_images(dir_name)
+        if self._persist_window_state:
+            self.window_state.set_last_folder(dir_name)
+        reset_viz = getattr(self.ribbon, "reset_visualize_selection", None)
+        if callable(reset_viz):
+            reset_viz()
 
     def update_loading_progress(self, value):
         """Update the loading progress bar"""
@@ -508,6 +681,9 @@ class MainWindow(QMainWindow):
     def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
         """Show a freshly scanned folder: build the library, then drop the overlay."""
         self._shown_leaf_name = None
+        layout = project_layout_of(self.image_manager)
+        folder = layout.root if layout is not None else getattr(self, "_last_loaded_dir", None)
+        self._measurements = MeasurementIndex(folder) if folder else None
         self.populate_file_list()
         reset = getattr(self.display_controller, "reset", None)
         if callable(reset):
@@ -527,6 +703,7 @@ class MainWindow(QMainWindow):
         # Persist a recent-projects entry for the Welcome screen (FIX2).
         if images:
             self._record_recent_project(len(images))
+        self._prewarm_measurements()  # parse the CSVs before the first selection
 
     def on_loading_empty(self, folder):
         """The scanned folder has no images: warn and keep whatever was loaded."""
@@ -549,37 +726,24 @@ class MainWindow(QMainWindow):
             self.app_stack.setCurrentIndex(0)  # nothing to show: back to Welcome
 
     def _record_recent_project(self, count):
-        """Append the just-loaded dir to QSettings recent_projects (MRU, cap 8)."""
+        """Record the just-loaded dir in the recent projects (MRU, capped)."""
         dir_name = getattr(self, "_last_loaded_dir", None)
         if not dir_name:
             return
         try:
-            import json
-            from datetime import datetime
-
-            from PyQt6.QtCore import QSettings
-
-            settings = QSettings("LeakeyLab", "SPROUTS")
-            raw = settings.value("recent_projects", "[]")
-            try:
-                entries = json.loads(raw) if isinstance(raw, str) else list(raw)
-            except (ValueError, TypeError):
-                entries = []
-            if not isinstance(entries, list):
-                entries = []
-
-            entry = {
-                "name": os.path.basename(os.path.normpath(dir_name)),
-                "path": dir_name,
-                "count": int(count),
-                "ts": datetime.now().isoformat(),
-            }
-            # Dedup by path, most-recent-first, cap 8.
-            entries = [e for e in entries if isinstance(e, dict) and e.get("path") != dir_name]
-            entries.insert(0, entry)
-            settings.setValue("recent_projects", json.dumps(entries[:8]))
+            self.recent_projects.add(dir_name, count)
         except Exception:
             logger.exception("Failed to record recent project")
+        self._refresh_recents()
+
+    def _refresh_recents(self) -> None:
+        welcome = getattr(self, "welcome", None)
+        if welcome is None:
+            return
+        try:
+            welcome.refresh_recents()
+        except Exception:
+            logger.exception("Failed to refresh the recent projects")
 
     # ==================== Tree Item Selection ====================
 
@@ -599,13 +763,20 @@ class MainWindow(QMainWindow):
         """Return True if a processed ``<name>_fake.png`` skeleton is known for the image."""
         return self.image_manager.has_skeleton(stored_name)
 
+    def _current_image_name(self) -> str | None:
+        """Stem of the image selected in the library (else the one on the display)."""
+        file_list = getattr(self, "file_list", None)
+        item = file_list.currentItem() if file_list is not None else None
+        name = item.data(0, USER_ROLE) if item is not None else None
+        return name or getattr(self.display_controller, "current_name", None)
+
     def _refresh_metrics_bar(self, stored_name=None):
         """Update the read-only metrics strip for the selected image.
 
-        Pure presentation (Track M). Status is derived from existing on-disk /
-        in-memory mask + skeleton state. Measured root length/area are not
-        retained per-image at selection time (they live only in the batch CSV
-        outputs), so they are passed as ``None`` rather than computed here.
+        Status comes from the mask / skeleton state in ``image_manager``. Root
+        length / area are the values the Measure run wrote to its CSVs, read
+        through :class:`MeasurementIndex` (never computed here, never parsed on
+        the GUI thread: an unparsed CSV is parsed in the pool, then this runs again).
         """
         bar = getattr(self, "metrics_bar", None)
         if bar is None:
@@ -620,28 +791,64 @@ class MainWindow(QMainWindow):
             else:
                 status = "No mask"
 
-        bar.set_metrics(length=None, area=None, status=status, name=stored_name)
+        measured, stale, source = Measurement(None, None, None), False, None
+        index = self._measurements
+        if stored_name and index is not None:
+            try:
+                measured = index.lookup(stored_name, load=False)
+                if index.needs_load():
+                    self._prewarm_measurements()
+                stale = index.is_outdated(stored_name)
+                sources = index.sources()
+                source = sources.get("length") or sources.get("area")
+            except Exception:
+                logger.exception("Could not read the measured values of %s", stored_name)
+
+        bar.set_metrics(
+            length=measured.length_mm,
+            area=measured.area_mm2,
+            status=status,
+            name=stored_name,
+            error=measured.error,
+            stale=stale,
+            source=source,
+        )
+
+    def _prewarm_measurements(self) -> None:
+        """Parse new / changed measurement CSVs in the thread pool (once at a time)."""
+        index = self._measurements
+        if index is None or self._measurements_loading or not index.needs_load():
+            return
+        self._measurements_loading = True
+        signals = self._measurement_signals
+
+        def work(index=index, signals=signals):
+            try:
+                index.prewarm()
+            except Exception:
+                logger.exception("Could not read the measurement CSVs")
+            try:
+                signals.ready.emit(index)
+            except RuntimeError:
+                pass  # the window is gone
+
+        QThreadPool.globalInstance().start(work)
+
+    def _on_measurements_ready(self, index) -> None:
+        self._measurements_loading = False
+        if index is self._measurements:
+            self._refresh_metrics_bar(self._current_image_name())
 
     def generate_all(self):
         """Generate masks, then skeletons, as one user-visible operation.
 
-        Mask generation runs on a QThread, so the skeleton pass is queued on its
-        ``finished`` signal and starts only once masks exist on disk. The
-        connection is one-shot — a later solo mask run must not re-trigger it.
+        The skeleton pass starts only after a completed mask run (never after
+        Cancel or a failure); a second click while a job runs is refused by the
+        handler / job registry, so the chain is never doubled.
         """
-        self.mask_generation_handler.generate_masks()
-        thread = getattr(self.mask_generation_handler, "generation_thread", None)
-        if thread is None:
-            return  # guard tripped (no directory / already running)
-
-        def _then_skeleton(*_args):
-            try:
-                thread.finished.disconnect(_then_skeleton)
-            except TypeError:
-                pass
-            self.skeleton_handler.generate_skeleton()
-
-        thread.finished.connect(_then_skeleton)
+        return self.mask_generation_handler.generate_masks(
+            on_success=self.skeleton_handler.generate_skeleton
+        )
 
     def on_tree_item_clicked(self, item, column):
         """Handle tree item clicks - expand/collapse folders, load images"""
@@ -670,25 +877,35 @@ class MainWindow(QMainWindow):
             return
         self._shown_leaf_name = image_name
 
-        if self.right_panel.currentWidget() == self.mask_tracing_interface:
+        current = self.right_panel.currentWidget()
+        if current == self.mask_tracing_interface:
             self.mask_tracing_interface.load_image(image_path)
-        elif self.right_panel.currentWidget() == self.gt_tracing_interface:
-            gt = self.gt_tracing_interface
-            gt.load_image(image_path)
-            if gt.current_image_path and not _same_path(gt.current_image_path, image_path):
-                # The editor kept its open image (its save failed and the user
-                # kept editing): point the library back at that image.
-                self._select_tree_image(gt.current_image_path)
+            if self._kept_other_image(self.mask_tracing_interface, image_path):
                 return
-        elif self.right_panel.currentWidget() == self.skeleton_correction_interface:
+        elif current == self.gt_tracing_interface:
+            self.gt_tracing_interface.load_image(image_path)
+            if self._kept_other_image(self.gt_tracing_interface, image_path):
+                return
+        elif current == self.skeleton_correction_interface:
             self.skeleton_correction_interface.load_image(
                 image_path, images_base_folder=self.image_manager.original_folder
             )
+            if self._kept_other_image(self.skeleton_correction_interface, image_path):
+                return
         else:
             self.display_controller.display_selected_image_by_name(image_name)
 
         # Read-only: refresh the metrics strip for the now-selected image.
         self._refresh_metrics_bar(image_name)
+
+    def _kept_other_image(self, editor, image_path: str) -> bool:
+        """True when ``editor`` kept its open image (the user cancelled or its save
+        failed): the library is pointed back at that image."""
+        kept = getattr(editor, "current_image_path", None)
+        if kept and not _same_path(kept, image_path):
+            self._select_tree_image(kept)
+            return True
+        return False
 
     # ==================== Calculation Methods ====================
 
@@ -721,9 +938,7 @@ class MainWindow(QMainWindow):
         controller.current_fake_image = None
         controller.update_display()
         file_tree_manager.update_file_list_mask_status(self)
-        item = self.file_list.currentItem()
-        name = item.data(0, USER_ROLE) if item is not None else None
-        self._refresh_metrics_bar(name or getattr(controller, "current_name", None))
+        self._refresh_metrics_bar(self._current_image_name())
 
     # ==================== Mask Tracing ====================
 
@@ -732,7 +947,7 @@ class MainWindow(QMainWindow):
         # (a saved mask keeps its badge in every stage, F-016).
         if self.right_panel.currentIndex() != Panel.MASK_TRACING:
             if not self.switch_right_panel("mask_tracing"):
-                return  # the GT editor kept unsaved edits: stay there
+                return  # another editor kept unsaved edits: stay there
             self.toggle_mask_tracing_button.setText("Return to Main View")
 
             # Connect signals for mask tracing interface.
@@ -748,7 +963,8 @@ class MainWindow(QMainWindow):
                 )
                 self._mask_tracing_signals_connected = True
         else:  # If in mask tracing view, switch back to main view
-            self.switch_right_panel("display")
+            if not self.switch_right_panel("display"):
+                return  # the mask editor kept unsaved edits: stay in it
             self.toggle_mask_tracing_button.setText("✏️ Toggle Mask Tracing")
 
             # Disconnect signals (mirrors the guarded connect above, F-015).
@@ -777,7 +993,6 @@ class MainWindow(QMainWindow):
         self.mask_saved.emit(image_path)
         image_name = image_stem(image_path)
         if self.right_panel.currentWidget() == self.mask_tracing_interface:
-            self.status_bar.showMessage(f"Mask saved for {image_name}", 3000)
             self.notify(f"Mask saved for {image_name}")
         self._refresh_metrics_if_current(image_name)
 
@@ -800,7 +1015,10 @@ class MainWindow(QMainWindow):
             # disconnected.
             if self.right_panel.currentIndex() == Panel.MASK_TRACING:
                 self.toggle_mask_tracing()
-            self.switch_right_panel("gt_tracing")
+                if self.right_panel.currentIndex() == Panel.MASK_TRACING:
+                    return  # the mask editor kept unsaved edits
+            if not self.switch_right_panel("gt_tracing"):
+                return  # another editor kept unsaved edits: stay there
         elif not self.switch_right_panel("display"):
             return  # unsaved GT the user kept: stay in the editor
 
@@ -865,35 +1083,45 @@ class MainWindow(QMainWindow):
             self.on_image_selected(item)
 
     def _install_image_paging_shortcuts(self) -> None:
-        """PgDn / PgUp open the next / previous image from the library and from the
-        display, mask and skeleton pages (Trace GT binds its own, which save first)."""
+        """PgDn / PgUp (registry: Global next/previous image) open the next / previous
+        image from the library, the chrome, the display and the mask and skeleton
+        editors. Trace GT binds the same keys itself (it saves first), so these are
+        scoped to widgets outside it instead of window-wide (no ambiguity)."""
         self._paging_shortcuts = []
         owners = (
             self.left_panel,
+            self.ribbon,
+            self.statusline,
             self.right_panel.widget(Panel.DISPLAY),
             self.mask_tracing_interface,
             self.skeleton_correction_interface,
         )
         for owner in owners:
-            for key, delta in ((Qt.Key.Key_PageDown, 1), (Qt.Key.Key_PageUp, -1)):
-                shortcut = QShortcut(QKeySequence(key), owner)
-                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-                shortcut.activated.connect(lambda d=delta: self._page_image(d))
-                self._paging_shortcuts.append(shortcut)
+            installed = shortcuts.install_shortcuts(
+                owner,
+                shortcuts.GLOBAL,
+                {
+                    "next_image": lambda: self._page_image(1),
+                    "previous_image": lambda: self._page_image(-1),
+                },
+            )
+            self._paging_shortcuts += installed["next_image"] + installed["previous_image"]
 
     def _page_image(self, delta: int) -> None:
         if self.right_panel.currentIndex() == Panel.GT_TRACING:
             # From the library while tracing GT: the editor saves before it moves.
-            self.gt_tracing_interface._navigate(delta)
+            gt = self.gt_tracing_interface
+            (getattr(gt, "navigate", None) or gt._navigate)(delta)
         else:
             self.navigate_image(delta)
 
     def export_gt_dataset(self) -> None:
         """Open the dataset-export dialog for the loaded folder's GT tracings."""
-        folder = getattr(self.image_manager, "original_folder", None)
-        if not folder:
+        layout = project_layout_of(self.image_manager)
+        if layout is None:
             self.notify("Load an image folder first", "warn")
             return
+        folder = layout.root
         # Pending edits on the open image belong in the export; if they could
         # not be saved and the user kept editing, do not export without them.
         if not self.gt_tracing_interface.maybe_save_changes():
@@ -926,13 +1154,16 @@ class MainWindow(QMainWindow):
             # If leaving mask tracing, ensure its signals are disconnected cleanly
             if self.right_panel.currentIndex() == Panel.MASK_TRACING:
                 self.toggle_mask_tracing()
+                if self.right_panel.currentIndex() == Panel.MASK_TRACING:
+                    return  # the mask editor kept unsaved edits
 
             if not self.switch_right_panel("skeleton_correction"):
-                return  # the GT editor kept unsaved edits: stay there
+                return  # another editor kept unsaved edits: stay there
             if hasattr(self, "toggle_skeleton_correction_button"):
                 self.toggle_skeleton_correction_button.setText("Return to Main View")
         else:
-            self.switch_right_panel("display")
+            if not self.switch_right_panel("display"):
+                return  # the skeleton editor kept unsaved edits: stay in it
             if hasattr(self, "toggle_skeleton_correction_button"):
                 self.toggle_skeleton_correction_button.setText("✏️ Skeleton Correction")
 
@@ -945,10 +1176,11 @@ class MainWindow(QMainWindow):
 
     def switch_right_panel(self, panel) -> bool:
         """Show ``panel`` (a :class:`Panel`, its index or its legacy key); returns False
-        (and stays put) if the GT editor refuses. An unknown key does nothing.
+        (and stays put) if the editor being left refuses. An unknown key does nothing.
 
-        Leaving the mask / GT editor first offers to save pending edits. The
-        GT editor refuses when its save failed and the user kept editing.
+        Leaving the mask, skeleton or GT editor first offers to save pending
+        edits; the editor refuses when the user cancels, or when its save failed
+        and the user kept editing.
         """
         try:
             target = Panel.coerce(panel)
@@ -956,10 +1188,8 @@ class MainWindow(QMainWindow):
             logger.warning("Unknown right panel %r", panel)
             return True
         current = self.right_panel.currentIndex()
-        if current == Panel.MASK_TRACING and target != Panel.MASK_TRACING:
-            self.mask_tracing_interface.maybe_save_changes()
-        if current == Panel.GT_TRACING and target != Panel.GT_TRACING:
-            if not self.gt_tracing_interface.maybe_save_changes():
-                return False
+        editor = self._editors().get(current)
+        if editor is not None and target != current and not _released(editor):
+            return False
         self.right_panel.setCurrentIndex(target)
         return True

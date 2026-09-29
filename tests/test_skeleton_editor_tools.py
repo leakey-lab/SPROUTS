@@ -212,7 +212,12 @@ def test_eraser_display_flushes_the_last_move_without_release(editor, app):
     app.processEvents()
     editor.on_tool_mouse_move(QPoint(200, 240), None)
     key = editor.skeleton_item.pixmap().cacheKey()
-    QTest.qWait(40)
+    # The 16 ms render timer fires without a release; poll (a loaded machine's
+    # timer granularity made a single fixed 40 ms wait flaky).
+    for _ in range(100):
+        QTest.qWait(10)
+        if editor.skeleton_item.pixmap().cacheKey() != key:
+            break
     assert editor.skeleton_item.pixmap().cacheKey() != key
 
 

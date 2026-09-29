@@ -17,8 +17,9 @@ from typing import Any
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
+from app.gui.image_manager import project_layout_of
+from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
-from app.handlers.window_feedback import WindowFeedback
 from app.inference.measure_run import AREA, LENGTH, SPECS, MeasureRun, MetricSpec
 from app.inference.metric_thread import MetricCalculatorThread
 from app.project_layout import ProjectLayout
@@ -36,7 +37,7 @@ def job_name(spec: MetricSpec) -> str:
     return f"Measuring {spec.label}"
 
 
-class SkeletonHandler:
+class SkeletonHandler(HandlerDependencies):
     """Starts skeleton generation and the two Measure jobs for ``main_window``.
 
     Args:
@@ -54,37 +55,14 @@ class SkeletonHandler:
         jobs: JobRegistry | None = None,
         generation: GenerateSkeletonHandler | None = None,
     ) -> None:
-        self.main_window = main_window
+        super().__init__(main_window, feedback=feedback, jobs=jobs)
         self.skeleton_handler = generation or GenerateSkeletonHandler(main_window)
         # Strong references to the running threads (F-024); cleared only after
         # the thread has fully finished (RB-08).
         self.calculator_thread: MetricCalculatorThread | None = None
         self.area_calculator_thread: MetricCalculatorThread | None = None
-        self._feedback = feedback
-        self._jobs = jobs
-        self._fallback_feedback: WindowFeedback | None = None
-        self._fallback_jobs: JobRegistry | None = None
         self._retry_jobs: dict[str, MeasureRun] = {}  # measured rows whose CSV save failed
         self._retry_box: QMessageBox | None = None
-
-    # ------------------------------------------------------------------ dependencies
-    @property
-    def feedback(self) -> UiFeedback:
-        found = self._feedback or getattr(self.main_window, "feedback", None)
-        if found is not None:
-            return found
-        if self._fallback_feedback is None:
-            self._fallback_feedback = WindowFeedback(self.main_window)
-        return self._fallback_feedback
-
-    @property
-    def jobs(self) -> JobRegistry:
-        found = self._jobs or getattr(self.main_window, "jobs", None)
-        if found is not None:
-            return found
-        if self._fallback_jobs is None:  # serializes at least the Measure jobs
-            self._fallback_jobs = JobRegistry()
-        return self._fallback_jobs
 
     # ------------------------------------------------------------------ public API
     def generate_skeleton(self):
@@ -135,14 +113,10 @@ class SkeletonHandler:
 
     # ------------------------------------------------------------------ starting
     def _layout(self) -> ProjectLayout | None:
-        images = self.main_window.image_manager
-        folder = images.original_folder
-        if not folder:
-            if not images.images:
-                self._warn("No images loaded. Load images first.")
-                return None
-            folder = os.path.dirname(next(iter(images.images.values())))
-        return ProjectLayout(folder)
+        layout = project_layout_of(self.main_window.image_manager)
+        if layout is None:
+            self._warn("No images loaded. Load images first.")
+        return layout
 
     def _measure(self, spec: MetricSpec, layout: ProjectLayout, folder: str, scan) -> None:
         if self.is_busy(spec.kind):

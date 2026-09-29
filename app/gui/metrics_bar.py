@@ -24,7 +24,9 @@ unaffected.
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QPainter, QPalette
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from app import config
 from app.gui.widgets import tokens
@@ -38,6 +40,52 @@ def fov_text() -> str:
     """Display text of the calibrated field of view, e.g. ``18×13 mm``."""
     cal = config.CALIBRATION
     return f"{cal.fov_width_mm:g}×{cal.fov_height_mm:g} mm"
+
+
+class _ElidedLabel(QLabel):
+    """A label that elides its text in the middle instead of widening its layout.
+
+    ``text()`` keeps the full string (callers and tests read it); only the painted
+    text is shortened, and the full text becomes the tooltip whenever it is cut.
+    """
+
+    MIN_WIDTH = 72
+
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self.MIN_WIDTH), hint.height())
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt override
+        super().setText(text)
+        self._sync_tooltip()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._sync_tooltip()
+
+    def _elided(self) -> str:
+        return self.fontMetrics().elidedText(
+            self.text(), Qt.TextElideMode.ElideMiddle, self.contentsRect().width()
+        )
+
+    def _sync_tooltip(self) -> None:
+        self.setToolTip(self.text() if self._elided() != self.text() else "")
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        self.style().drawItemText(
+            painter,
+            self.contentsRect(),
+            int(self.alignment()),
+            self.palette(),
+            self.isEnabled(),
+            self._elided(),
+            QPalette.ColorRole.WindowText,
+        )
 
 
 def _value_qss(color: str) -> str:
@@ -65,7 +113,7 @@ class MetricsBar(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
 
-        self._name_cell, self._name_value = self._add_cell(row, None, first=True)
+        self._name_cell, self._name_value = self._add_cell(row, None, first=True, elide=True)
         self._name_value.setStyleSheet(
             f"color: {tokens.TEXT}; font-size: 11.5px; font-weight: 600; border: none;"
         )
@@ -86,8 +134,13 @@ class MetricsBar(QWidget):
         label_text: str | None,
         accent: bool = False,
         first: bool = False,
+        elide: bool = False,
     ) -> tuple[QFrame, QLabel]:
-        """Add one inline label/value cell; return (cell, value QLabel)."""
+        """Add one inline label/value cell; return (cell, value QLabel).
+
+        ``elide`` makes the value shorten itself (middle ellipsis) rather than set the
+        bar's minimum width; used for the free-length image name.
+        """
         cell = QFrame()
         cell.setObjectName("metricsCell")
         border = "none" if first else f"border-left: 1px solid {tokens.BORDER};"
@@ -105,7 +158,7 @@ class MetricsBar(QWidget):
             )
             line.addWidget(label)
 
-        value = QLabel(_DASH)
+        value = _ElidedLabel(_DASH) if elide else QLabel(_DASH)
         value.setProperty("baseColor", tokens.ACCENT if accent else tokens.TEXT)
         value.setStyleSheet(_value_qss(value.property("baseColor")))
         line.addWidget(value)

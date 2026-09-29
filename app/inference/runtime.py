@@ -120,6 +120,21 @@ class RuntimeConfig:
 # ---------------------------------------------------------------------------
 # Cached runtime detection
 # ---------------------------------------------------------------------------
+def cuda_usable(torch_module: Any = None) -> bool:
+    """True when CUDA reports itself available AND exposes at least one device.
+
+    ``CUDA_VISIBLE_DEVICES=""`` makes ``torch.cuda.is_available()`` return True
+    with ``device_count() == 0``; loading a checkpoint onto "cuda" then fails, so
+    that case must take the CPU fallback.
+    """
+    if torch_module is None:
+        import torch as torch_module
+    try:
+        return bool(torch_module.cuda.is_available()) and torch_module.cuda.device_count() > 0
+    except (RuntimeError, AssertionError):
+        return False
+
+
 @functools.lru_cache(maxsize=1)
 def get_runtime() -> RuntimeConfig:
     """Detect and cache the inference runtime for this machine.
@@ -133,7 +148,7 @@ def get_runtime() -> RuntimeConfig:
     torch.backends.cudnn.benchmark = benchmark
     torch.backends.cudnn.deterministic = not benchmark
 
-    is_cuda = torch.cuda.is_available()
+    is_cuda = cuda_usable(torch)
     compute_capability: tuple[int, int] | None = None
     bf16_supported = False
     precision = "fp32"

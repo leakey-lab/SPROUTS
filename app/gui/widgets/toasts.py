@@ -28,7 +28,6 @@ from PyQt6.QtWidgets import (
 
 from . import tokens
 from .controls import IconButton
-from .effects import pop_shadow
 from .icons import load_pixmap
 from .text_fit import elide_long_words, wrap_label
 
@@ -56,6 +55,9 @@ class Toast(QWidget):
     """One toast: kind colour bar, icon, wrapped text, close button for warn / danger.
 
     Fades via a QGraphicsOpacityEffect (windowOpacity is unreliable on some Qt platforms).
+    It carries no drop shadow: Qt cannot nest graphics effects, and a shadow on the frame
+    inside the faded widget made every partial repaint log seven QPainter warnings. The
+    strong border and the kind colour bar provide the elevation instead.
     ``dismissed`` fires when it starts fading out, ``closed`` when it is gone.
     """
 
@@ -93,7 +95,6 @@ class Toast(QWidget):
             }}
             QLabel {{ color: {tokens.TEXT}; background: transparent; font-size: 12.5px; }}
         """)
-        pop_shadow(frame)
         row = QHBoxLayout(frame)
         row.setContentsMargins(13, 10, 10, 10)
         row.setSpacing(9)

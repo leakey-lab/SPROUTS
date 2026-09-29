@@ -64,7 +64,9 @@ class SkeletonGeneratorThread(GuardedThread):
             progress=self._report_progress,
             should_stop=self.is_cancelled,
         )
-        if self.report.cancelled:
+        # A Cancel during the last batch leaves report.cancelled False (every
+        # image was done); it is still a cancel, so nothing chains (wf2 R1).
+        if self.report.cancelled or self.is_cancelled():
             raise JobCancelled
         logger.info("SkeletonGeneratorThread complete: output=%s", self.output_dir)
         self.completed = True
@@ -104,8 +106,7 @@ class GenerateSkeletonHandler(GenerationHandlerBase):
             )
             if not input_dir:
                 return False
-        if self.is_busy():
-            self.feedback.notify(f"{self.job_label} is already running", "warn")
+        if self.refuse_if_busy():
             return False
 
         output_dir = os.path.normpath(os.path.join(input_dir, "skeletons"))

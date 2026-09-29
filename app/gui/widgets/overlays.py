@@ -463,6 +463,14 @@ class EnhancePopover(_FloatingPanel):
             self.raise_()
         self.toggled.emit(opening)
 
+    def keyPressEvent(self, event):
+        """Esc closes the open popover (keys its sliders / combos leave unhandled land here)."""
+        if event.key() == Qt.Key.Key_Escape and not self.isHidden():
+            self.toggle()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 # --------------------------------------------------------------------------- #
 #  Progress overlay (generate / loading feedback)

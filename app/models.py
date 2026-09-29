@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass
 from typing import Literal
 
-from app.config import PROJECT_ROOT
+from app import config
 from app.provenance import file_sha256
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 __all__ = ["MODELS", "ModelSpec", "ModelState", "ModelStatus", "verify", "verify_all"]
 
 ModelState = Literal["ok", "mismatch", "missing"]
+
+
+_CHECKPOINTS_PREFIX = "checkpoints"  # first relpath segment, resolved via CHECKPOINTS_DIR
 
 
 @dataclass(frozen=True)
@@ -41,8 +44,16 @@ class ModelSpec:
     description: str = ""
 
     def path(self, root: str | None = None) -> str:
-        """Absolute path of the checkpoint under ``root`` (default: the app folder)."""
-        return os.path.normpath(os.path.join(root or PROJECT_ROOT, *self.relpath.split("/")))
+        """Absolute path of the checkpoint under ``root`` (default: the app folder).
+
+        Without ``root``, a ``checkpoints/...`` relpath resolves under
+        ``config.CHECKPOINTS_DIR``, so ``SPROUTS_CHECKPOINTS_DIR`` relocates the
+        weights (a pip-installed SPROUTS); provenance keeps the relpath.
+        """
+        parts = self.relpath.split("/")
+        if root is None and parts[0] == _CHECKPOINTS_PREFIX:
+            return os.path.normpath(os.path.join(config.CHECKPOINTS_DIR, *parts[1:]))
+        return os.path.normpath(os.path.join(root or config.PROJECT_ROOT, *parts))
 
 
 @dataclass(frozen=True)

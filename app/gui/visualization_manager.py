@@ -32,10 +32,11 @@ from dataclasses import dataclass
 # Qt6 only lets QtWebEngineWidgets load before the QApplication exists. The
 # dashboard modules that use it are imported lazily, so import it here.
 from PyQt6 import QtWebEngineWidgets  # noqa: F401
-from PyQt6.QtCore import QEventLoop, Qt
-from PyQt6.QtWidgets import QApplication, QMessageBox, QTreeWidgetItemIterator
+from PyQt6.QtCore import QEventLoop
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
+from app.gui.image_manager import project_layout_of
 from app.project_layout import ProjectLayout, find_test_latest_dir
 
 logger = logging.getLogger(__name__)
@@ -191,17 +192,6 @@ def _source_signature(path: str | None) -> tuple | None:
     except OSError:
         return None
     return os.path.normcase(os.path.abspath(path)), stat.st_size, stat.st_mtime_ns
-
-
-def _first_image_name(tree) -> str | None:
-    """Stored name of the first image leaf in the library tree."""
-    it = QTreeWidgetItemIterator(tree)
-    while it.value():
-        name = it.value().data(0, Qt.ItemDataRole.UserRole)
-        if name:
-            return name
-        it += 1
-    return None
 
 
 def _opengl_viewports_in_use(window) -> bool:
@@ -436,14 +426,8 @@ class DashboardController:
 
     # ------------------------------------------------------------------ plumbing
     def _project_layout(self) -> ProjectLayout | None:
-        """Layout of the loaded project: its folder, else the first image's folder."""
-        mw = self._mw
-        folder = getattr(mw.image_manager, "original_folder", None)
-        if not folder:
-            name = _first_image_name(mw.file_list)
-            path = mw.image_manager.get_image_path(name) if name else None
-            folder = os.path.dirname(path) if path else None
-        return ProjectLayout(folder) if folder else None
+        """Layout of the loaded project (``ImageManager.project_layout``)."""
+        return project_layout_of(self._mw.image_manager)
 
     def _is_busy(self, spec: DashboardSpec) -> bool:
         """True while a run that writes (or invalidates) the dashboard's CSV is going."""

@@ -12,8 +12,9 @@ Topbar
     button forwards to the same MainWindow handler as before and shows its
     per-stage actions on the right (a stack sized to the CURRENT page only).
 
-    Density is responsive. At or above the measured full width every stage shows
-    its icon and name. Below it (with a 24 px hysteresis) the unchecked stages
+    Density is responsive. At or above the measured full width (taken with the
+    WIDEST action page, so a stage switch never elides the names) every stage
+    shows its icon and name. Below it (with a 24 px hysteresis) the unchecked stages
     become icon-only and the wordmark hides; the checked stage keeps its name,
     and every button keeps ``text()``, its accessible name and its "name —
     description" tooltip. That keeps the window's minimum width well under
@@ -50,6 +51,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.gui import shortcuts
 from app.gui.panels import Panel
 from app.gui.task_progress import TaskProgressWidget
 from app.gui.widgets import SegmentedControl, tokens
@@ -114,6 +116,17 @@ _STAGES = [
     ("Measure", "Measure", "ruler", "Compute root length (mm) and area (mm²)."),
     ("Visualize", "Visualize", "chart", "Explore length & area trends across the trial."),
 ]
+
+#: Public name of the stage table (the welcome screen reads its labels).
+STAGES = _STAGES
+
+#: Editor panels -> the stage that owns them. An editor can refuse to be left
+#: (unsaved edits), so after a stage click the panel actually shown wins.
+_EDITOR_STAGES = {
+    Panel.GT_TRACING: "Trace GT",
+    Panel.MASK_TRACING: "Correct Mask",
+    Panel.SKELETON_CORRECTION: "Correct Skeleton",
+}
 
 _STEP_QSS = f"""
     QToolButton {{
@@ -186,18 +199,9 @@ class _CurrentPageStack(QStackedWidget):
         self.updateGeometry()
 
 
-class _SelectorSegments(SegmentedControl):
-    """SegmentedControl that also reports re-clicks of the selected segment.
-
-    ``valueChanged`` (base) only fires on a change; ``activated`` fires on every
-    click or keyboard selection, which is what a "show this view" selector needs.
-    """
-
-    activated = pyqtSignal(str)
-
-    def _on_click(self, value: str) -> None:
-        super()._on_click(value)
-        self.activated.emit(value)
+#: The Visualize selector: ``SegmentedControl.activated`` reports re-clicks of the
+#: selected segment too (kept as a name for callers and tests).
+_SelectorSegments = SegmentedControl
 
 
 # --------------------------------------------------------------------------- #
@@ -255,6 +259,8 @@ class ShellTopbar(QFrame):
 
         self.action_stack = _CurrentPageStack()
         self.action_stack.setFixedHeight(32)
+        # connected after the stack's own _fit_current, so it sees the new page
+        self.action_stack.currentChanged.connect(lambda _index: self._update_density())
         row.addWidget(self.action_stack)
 
         row.addWidget(_vrule())
@@ -279,13 +285,14 @@ class ShellTopbar(QFrame):
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self.stage_buttons: dict[str, QToolButton] = {}
-        for key, label, icon_name, tip in _STAGES:
+        for index, (key, label, icon_name, tip) in enumerate(_STAGES):
             btn = QToolButton(steps)
             btn.setText(label)
             btn.setAccessibleName(label)
             btn.setIcon(_stage_icon(icon_name))
             btn.setIconSize(QSize(15, 15))
-            btn.setToolTip(f"{label} — {tip}")
+            keys = shortcuts.STAGE_KEYS[index] if index < len(shortcuts.STAGE_KEYS) else None
+            btn.setToolTip(f"{label} — {tip} ({keys})" if keys else f"{label} — {tip}")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -319,10 +326,11 @@ class ShellTopbar(QFrame):
     def _on_stage_clicked(self, key: str) -> None:
         self._enter_stage(key)
         self.stage_requested.emit(key)
-        # Still on Trace GT after another stage was asked for: the GT editor kept
-        # unsaved edits (its save failed), so keep its stage highlighted.
-        stuck = key != "Trace GT" and self._mw.right_panel.currentIndex() == Panel.GT_TRACING
-        self.activate_stage("Trace GT" if stuck else key)
+        # Still in an editor after another stage was asked for: the editor
+        # refused to close (unsaved prompt answered Cancel, or its save failed),
+        # so keep ITS stage and action page, not the clicked one.
+        shown = _EDITOR_STAGES.get(self._mw.right_panel.currentIndex())
+        self.activate_stage(shown if shown is not None and shown != key else key)
 
     # ----------------------------------------------------------- actions
     def populate(self) -> None:
@@ -349,8 +357,8 @@ class ShellTopbar(QFrame):
         # legacy button, next to the one-pass masks-then-skeletons run.
         mw.generate_button.setText("Skeletons only")
         mw.generate_button.setToolTip(
-            "Skeletons only — extract skeletons from the masks in mask/ (hand-corrected "
-            "masks included) without regenerating any mask."
+            "Skeletons only — predict skeletons from the original images (Pix2Pix); "
+            "masks are not read or regenerated."
         )
         mw.skeleton_clear_button = ghost_button(
             "Clear skeleton",
@@ -445,9 +453,24 @@ class ShellTopbar(QFrame):
     def _wordmark_width(self) -> int:
         return self.wordmark.sizeHint().width() + self._row.spacing()
 
+    def _action_page_slack(self) -> int:
+        """How much wider the widest action page is than the current one.
+
+        Density is decided against the WIDEST page so a stage switch never
+        leaves the row squeezed below its minimum (names elided) until the next
+        resize, and the stage names do not appear/disappear from one stage to
+        the next at a fixed window width.
+        """
+        stack = self.action_stack
+        current = stack.currentWidget()
+        if current is None:
+            return 0
+        widest = max(stack.widget(i).minimumSizeHint().width() for i in range(stack.count()))
+        return max(0, widest - current.minimumSizeHint().width())
+
     def full_width(self) -> int:
-        """Minimum width at which every stage fits with its name (current stage page)."""
-        width = self._row.minimumSize().width()
+        """Minimum width at which every stage fits with its name, on EVERY stage page."""
+        width = self._row.minimumSize().width() + self._action_page_slack()
         for key, btn in self.stage_buttons.items():
             if btn.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly:
                 text_w, icon_w = self._widths(key)
@@ -457,16 +480,22 @@ class ShellTopbar(QFrame):
         return width
 
     def compact_width(self) -> int:
-        """Minimum width in compact density (the topbar's minimum)."""
-        width = self._row.minimumSize().width()
+        """Minimum width in compact density (the topbar's minimum), on EVERY stage.
+
+        Measured with every stage icon-only except the one with the longest
+        name, and with the widest action page, so entering another stage never
+        needs a wider window than the one the user already has.
+        """
+        width = self._row.minimumSize().width() + self._action_page_slack()
+        longest_name = 0
         for key, btn in self.stage_buttons.items():
-            text_mode = btn.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-            if text_mode and not btn.isChecked():
-                text_w, icon_w = self._widths(key)
+            text_w, icon_w = self._widths(key)
+            longest_name = max(longest_name, text_w - icon_w)
+            if btn.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextBesideIcon:
                 width -= text_w - icon_w
         if not self.wordmark.isHidden():
             width -= self._wordmark_width()
-        return width
+        return width + longest_name
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(self.compact_width(), TOPBAR_HEIGHT)

@@ -7,8 +7,8 @@ import time
 
 from PyQt6.QtCore import pyqtSignal
 
-from app.handlers.worker_base import GuardedThread
 from app.inference.measure_run import MeasureRun, MetricSpec
+from app.workers import GuardedThread
 
 logger = logging.getLogger(__name__)
 

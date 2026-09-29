@@ -81,6 +81,23 @@ class ImageLoaderThread(QThread):
         return False
 
 
+def project_layout_of(manager: object) -> ProjectLayout | None:
+    """Layout of ``manager``'s project: ``original_folder``, else the first image's folder.
+
+    ``manager`` is the window's :class:`ImageManager` or any stand-in with
+    ``original_folder`` / ``images``; None when nothing is loaded. Generate,
+    Measure, Visualize and the window all resolve the project through here, so
+    they can never disagree about it.
+    """
+    folder = getattr(manager, "original_folder", None)
+    if folder:
+        return ProjectLayout(folder)
+    images = getattr(manager, "images", None)
+    if images:
+        return ProjectLayout.for_image(next(iter(images.values())))
+    return None
+
+
 class ImageManager:
     def __init__(self, main_window=None):
         self.images = {}
@@ -208,6 +225,15 @@ class ImageManager:
         self._hierarchy_cache = None
         self._hierarchy_cache_valid = False
         self._labels_cache = None
+
+    # ------------------------------------------------------------ project folder
+    def project_layout(self) -> ProjectLayout | None:
+        """Layout of the loaded project: ``original_folder``, else the first image's folder.
+
+        The one project-folder lookup shared by Generate, Measure, Visualize and
+        the window (see :func:`project_layout_of`); None when nothing is loaded.
+        """
+        return project_layout_of(self)
 
     # ------------------------------------------------------------ output status
     def _layout(self) -> ProjectLayout:

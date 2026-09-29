@@ -21,18 +21,10 @@ _LITERALS = re.compile(
     r"|QColor\(\s*\d+\s*,\s*\d+\s*,\s*\d+"  # QColor(20, 255, 57, ...)
 )
 
-# Colour literals per module at a1599e6. Only ever lower these numbers.
+# Colour literals allowed per module (counted at a1599e6, lowered since). Only ever lower.
 BASELINE = {
     "class_editor_dialog.py": 10,  # _ADD_PALETTE: default GT class colours (data, not chrome)
-    "display_controller.py": 1,
-    "empty_state.py": 12,
-    "file_tree_manager.py": 7,
-    "main_window.py": 6,
-    "mask_tracing_interface.py": 3,
-    "skeleton_correction_interface.py": 23,
-    "task_progress.py": 7,
-    "ui_panels.py": 6,
-    "widgets/controls.py": 1,
+    "main_window.py": 6,  # 0 today; lower once its integration work has landed
     "widgets/effects.py": 1,  # QColor(0, 0, 0, alpha): drop-shadow black
 }
 

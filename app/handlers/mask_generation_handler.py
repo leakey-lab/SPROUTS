@@ -90,7 +90,9 @@ class MaskGenerationThread(GuardedThread):
             should_stop=self.is_cancelled,
             on_stage=self.stage.emit,
         )
-        if self.report.cancelled:
+        # A Cancel during the last batch leaves report.cancelled False (every
+        # image was done); it is still a cancel, so nothing chains (wf2 R1).
+        if self.report.cancelled or self.is_cancelled():
             raise JobCancelled
         self.completed = True
         self.finished.emit(self.output_dir, self.report.failed_names)

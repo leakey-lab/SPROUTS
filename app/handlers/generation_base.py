@@ -1,8 +1,8 @@
 """Plumbing shared by the mask and skeleton generation handlers.
 
-``GenerationHandlerBase`` owns the handler's dependencies (``UiFeedback`` and the
-``JobRegistry``, both injectable, defaulting to ``main_window.feedback`` /
-``main_window.jobs`` with local stand-ins), the project folder lookup, starting a
+``GenerationHandlerBase`` gets its dependencies (``UiFeedback`` and the
+``JobRegistry``) from :class:`~app.handlers.deps.HandlerDependencies`, and owns
+the project folder lookup (``ImageManager.project_layout``), starting a
 worker as a named job (RB-07: refused politely while another job runs) and
 wiring its Cancel button (PI-08). ``show_failure_report`` lists the inputs that
 produced no output in ONE non-modal dialog, so a long unattended Generate
@@ -12,7 +12,6 @@ produced no output in ONE non-modal dialog, so a long unattended Generate
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
 from typing import Any
 
@@ -20,8 +19,9 @@ from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
+from app.gui.image_manager import project_layout_of
+from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
-from app.handlers.window_feedback import WindowFeedback
 from app.handlers.worker_base import GuardedThread
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _REPORT_PREVIEW = 20  # failed names listed in the dialog text (all go to the details)
 
 
-class GenerationHandlerBase:
+class GenerationHandlerBase(HandlerDependencies):
     """Dependencies + job lifecycle for one kind of generation run.
 
     Subclasses set ``job_label`` (the job's user-visible name) and keep the
@@ -45,33 +45,10 @@ class GenerationHandlerBase:
         feedback: UiFeedback | None = None,
         jobs: JobRegistry | None = None,
     ) -> None:
-        self.main_window = main_window
-        self._feedback = feedback
-        self._jobs = jobs
-        self._fallback_feedback: WindowFeedback | None = None
-        self._fallback_jobs: JobRegistry | None = None
+        super().__init__(main_window, feedback=feedback, jobs=jobs)
         # Strong reference: a running QThread must never be garbage-collected (F-025).
         self._thread: GuardedThread | None = None
         self._report_box: QMessageBox | None = None
-
-    # ------------------------------------------------------------------ dependencies
-    @property
-    def feedback(self) -> UiFeedback:
-        found = self._feedback or getattr(self.main_window, "feedback", None)
-        if found is not None:
-            return found
-        if self._fallback_feedback is None:
-            self._fallback_feedback = WindowFeedback(self.main_window)
-        return self._fallback_feedback
-
-    @property
-    def jobs(self) -> JobRegistry:
-        found = self._jobs or getattr(self.main_window, "jobs", None)
-        if found is not None:
-            return found
-        if self._fallback_jobs is None:
-            self._fallback_jobs = JobRegistry()
-        return self._fallback_jobs
 
     def parent_widget(self) -> QWidget | None:
         return self.main_window if isinstance(self.main_window, QWidget) else None
@@ -82,15 +59,16 @@ class GenerationHandlerBase:
         return self._thread is not None and self._thread.isRunning()
 
     def project_folder(self) -> str | None:
-        """The loaded image folder, or None when no images are loaded."""
-        manager = getattr(self.main_window, "image_manager", None)
-        images = getattr(manager, "images", None)
-        if not images:
-            return None
-        folder = getattr(manager, "original_folder", None)
-        if folder:
-            return folder
-        return os.path.dirname(next(iter(images.values())))
+        """The loaded project's folder (``ImageManager.project_layout``), or None."""
+        layout = project_layout_of(getattr(self.main_window, "image_manager", None))
+        return layout.root if layout is not None else None
+
+    def refuse_if_busy(self) -> bool:
+        """True (and a warning toast) while this handler's worker is running."""
+        if self.is_busy():
+            self.feedback.notify(f"{self.job_label} is already running", "warn")
+            return True
+        return False
 
     def outputs_changed(self) -> None:
         """Tell the window that files on disk changed (mask status, metrics)."""
@@ -105,10 +83,9 @@ class GenerationHandlerBase:
         ``on_success`` runs once the thread has completed (``thread.completed``)
         AND fully finished -- after the job registry released the job, so a
         chained job (Generate: masks, then skeletons) can start. It never runs
-        after a cancel or a failure.
+        after a cancel (even one that landed during the last batch) or a failure.
         """
-        if self.is_busy():
-            self.feedback.notify(f"{self.job_label} is already running", "warn")
+        if self.refuse_if_busy():
             thread.deleteLater()
             return False
         if not self.jobs.try_start(self.job_label, thread):
@@ -129,6 +106,9 @@ class GenerationHandlerBase:
         thread_finished = QThread.finished.__get__(thread, QThread)
 
         def fire() -> None:
+            # ``completed`` stays False after any Cancel, including one that landed
+            # during the last batch (the worker checks is_cancelled() itself; Qt
+            # clears the interruption flag once the thread has finished).
             if getattr(thread, "completed", False):
                 QTimer.singleShot(0, on_success)
 

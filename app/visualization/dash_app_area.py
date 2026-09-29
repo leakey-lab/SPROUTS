@@ -24,6 +24,7 @@ from .dash_shell import (
     ShellSpec,
     ViewOption,
     create_dash_app,
+    exclusions_note,
     tube_options,
     with_uirevision,
 )
@@ -82,6 +83,7 @@ class DashAppArea:
                 ),
             ],
             chart=self.shell.chart_graph(),
+            notice=exclusions_note(self.data_processor),
         )
 
     def _profile_tube(self, selected_tube):
