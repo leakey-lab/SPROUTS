@@ -6,8 +6,8 @@ Orchestrates the GUI components and handles core functionality.
 import logging
 import os
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QCloseEvent, QColor, QIcon, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -17,23 +17,32 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStatusBar,
-    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
 
 from app.gt import RegistryError, load_registry
+from app.handlers.job_registry import JobRegistry
+from app.naming import image_stem
 
 from . import file_tree_manager, ui_panels, visualization_manager
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
 from .gt_tracing_interface import GtTracingInterface
 from .image_manager import ImageManager
+from .library_index import count_label
 from .mask_tracing_interface import MaskTracingInterface
+from .panels import Panel
 from .skeleton_correction_interface import SkeletonCorrectionInterface
 from .task_progress import TaskProgressWidget
 
 logger = logging.getLogger(__name__)
+
+USER_ROLE = Qt.ItemDataRole.UserRole
+
+#: Keyboard browsing in the library loads the image this long after the last move,
+#: so holding an arrow key decodes only the image it stops on.
+TREE_LOAD_DELAY_MS = 40
 
 
 def _same_path(a: str | None, b: str | None) -> bool:
@@ -108,6 +117,9 @@ class MainWindow(QMainWindow):
         from app.handlers.mask_handler import MaskHandler
         from app.handlers.skeleton_handler import SkeletonHandler
 
+        # One background job at a time (generation / measurement); handlers register
+        # their threads here, so it must exist before they are built.
+        self.jobs = JobRegistry(self)
         self.image_manager = ImageManager(self)
         self.display_controller = DisplayController(self)
         self.skeleton_handler = SkeletonHandler(self)
@@ -138,7 +150,16 @@ class MainWindow(QMainWindow):
             lambda p: self.notify(f"GT saved for {os.path.basename(p)}")
         )
 
+        # Keyboard browsing: the image whose row was last loaded, and the debounce
+        # that loads the tree's current row once the arrow keys come to rest.
+        self._shown_leaf_name = None
+        self._tree_load_timer = QTimer(self)
+        self._tree_load_timer.setSingleShot(True)
+        self._tree_load_timer.setInterval(TREE_LOAD_DELAY_MS)
+        self._tree_load_timer.timeout.connect(self._load_current_tree_item)
+
         self.init_ui()
+        self._install_image_paging_shortcuts()
 
         # Keyboard-shortcut help dialog (F1 / ?).
         self._help_shortcut_f1 = QShortcut(QKeySequence("F1"), self)
@@ -349,43 +370,27 @@ class MainWindow(QMainWindow):
         re-enable them afterwards for performance elsewhere.
         """
         enabled = bool(enabled)
-
-        # Main image display view
-        try:
-            gv = getattr(self.display_controller, "magnifying_view", None)
-            if gv is not None and hasattr(gv, "set_opengl_viewport_enabled"):
-                gv.set_opengl_viewport_enabled(enabled)
-        except RuntimeError as e:
-            logger.warning("Failed to toggle OpenGL on display view: %s", e)
-
-        # Mask tracing view
-        try:
-            gv = getattr(self.mask_tracing_interface, "graphics_view", None)
-            if gv is not None and hasattr(gv, "set_opengl_viewport_enabled"):
-                gv.set_opengl_viewport_enabled(enabled)
-        except RuntimeError as e:
-            logger.warning("Failed to toggle OpenGL on mask tracing view: %s", e)
-
-        # GT tracing view
-        try:
-            gv = getattr(self.gt_tracing_interface, "graphics_view", None)
-            if gv is not None and hasattr(gv, "set_opengl_viewport_enabled"):
-                gv.set_opengl_viewport_enabled(enabled)
-        except RuntimeError as e:
-            logger.warning("Failed to toggle OpenGL on GT tracing view: %s", e)
-
-        # Skeleton correction view
-        try:
-            gv = getattr(self.skeleton_correction_interface, "graphics_view", None)
-            if gv is not None and hasattr(gv, "set_opengl_viewport_enabled"):
-                gv.set_opengl_viewport_enabled(enabled)
-        except RuntimeError as e:
-            logger.warning("Failed to toggle OpenGL on skeleton correction view: %s", e)
+        views = (
+            ("display", getattr(self.display_controller, "magnifying_view", None)),
+            ("mask tracing", getattr(self.mask_tracing_interface, "graphics_view", None)),
+            ("GT tracing", getattr(self.gt_tracing_interface, "graphics_view", None)),
+            (
+                "skeleton correction",
+                getattr(self.skeleton_correction_interface, "graphics_view", None),
+            ),
+        )
+        for label, view in views:
+            if view is None or not hasattr(view, "set_opengl_viewport_enabled"):
+                continue
+            try:
+                view.set_opengl_viewport_enabled(enabled)
+            except RuntimeError as e:
+                logger.warning("Failed to toggle OpenGL on %s view: %s", label, e)
 
     # ==================== File Tree Methods (delegated) ====================
 
     def find_tree_item_by_image_name(self, image_name):
-        """Recursively find a tree item by its stored image name"""
+        """The library row of ``image_name`` (O(1)), or None."""
         return file_tree_manager.find_tree_item_by_image_name(self.file_list, image_name)
 
     def highlight_saved_mask(self, image_path):
@@ -399,7 +404,7 @@ class MainWindow(QMainWindow):
         file_tree_manager.populate_file_list(self)
 
     def update_file_list_mask_status(self):
-        """Update the file tree items to show mask status"""
+        """Repaint the per-image status badges of the library tree."""
         file_tree_manager.update_file_list_mask_status(self)
 
     def natural_sort_key(self, text):
@@ -458,10 +463,15 @@ class MainWindow(QMainWindow):
         """Load a directory of images (no dialog).
 
         Shared by ``load_images`` (after the dialog) and the Welcome screen's
-        recent-projects rows. Flips to the working shell, shows the loading
-        overlay, and kicks off ``image_manager.load_images``.
+        recent-projects rows. A missing folder is reported and changes nothing.
+        Otherwise flips to the working shell, shows the loading overlay, and
+        kicks off ``image_manager.load_images``; the current library stays until
+        the scan delivers images.
         """
         if not dir_name:
+            return
+        if not os.path.isdir(dir_name):
+            self.notify(f"Folder not found: {dir_name}", "danger")
             return
         # Unsaved GT the user chose to keep (its save failed) cancels the open.
         gt = getattr(self, "gt_tracing_interface", None)
@@ -496,13 +506,18 @@ class MainWindow(QMainWindow):
             self.loading_overlay.set_progress(value)
 
     def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
-        """Handle completion of image loading"""
-        self.task_progress.finish(f"Loaded {len(images)} images")
+        """Show a freshly scanned folder: build the library, then drop the overlay."""
+        self._shown_leaf_name = None
+        self.populate_file_list()
+        reset = getattr(self.display_controller, "reset", None)
+        if callable(reset):
+            reset()  # never keep showing the previous folder's image
+        self._refresh_metrics_bar(None)
         if getattr(self, "loading_overlay", None) is not None:
             self.loading_overlay.hide()
-        self.populate_file_list()
-        self.status_bar.showMessage(f"Loaded {len(images)} images", 5000)
-        self.notify(f"Loaded {len(images)} images")
+        message = f"Loaded {count_label(len(images))}"
+        self.task_progress.finish(message)
+        self.notify(message)
 
         # Swap the index-0 display page from the empty state to the real display
         # area now that images exist.
@@ -512,6 +527,26 @@ class MainWindow(QMainWindow):
         # Persist a recent-projects entry for the Welcome screen (FIX2).
         if images:
             self._record_recent_project(len(images))
+
+    def on_loading_empty(self, folder):
+        """The scanned folder has no images: warn and keep whatever was loaded."""
+        name = os.path.basename(os.path.normpath(folder or "")) or folder
+        self._end_failed_load(f"No .jpg/.png images in {name} — nothing loaded", "warn")
+
+    def on_loading_failed(self, folder, message):
+        """The folder could not be scanned: report it and keep whatever was loaded."""
+        self._end_failed_load(message, "danger")
+
+    def _end_failed_load(self, message, kind):
+        if getattr(self, "loading_overlay", None) is not None:
+            self.loading_overlay.hide()
+        if kind == "danger":
+            self.task_progress.fail(message)
+        else:
+            self.task_progress.finish(message)
+        self.notify(message, kind)
+        if not self.image_manager.images and getattr(self, "app_stack", None) is not None:
+            self.app_stack.setCurrentIndex(0)  # nothing to show: back to Welcome
 
     def _record_recent_project(self, count):
         """Append the just-loaded dir to QSettings recent_projects (MRU, cap 8)."""
@@ -549,37 +584,20 @@ class MainWindow(QMainWindow):
     # ==================== Tree Item Selection ====================
 
     def mask_exists(self, image_name):
-        image_path = self.image_manager.get_image_path(image_name)
-        mask_dir = os.path.join(os.path.dirname(image_path), "mask")
-        mask_path = os.path.join(mask_dir, os.path.basename(image_name))
-        exists = os.path.exists(mask_path)
-        return exists
+        """True when ``image_name`` has a saved mask (kept in ``image_manager``, no stat)."""
+        return self.image_manager.has_mask(image_name)
 
     def _image_has_mask(self, stored_name):
         """Return True if the image has a saved mask.
 
-        Checks both the on-disk ``mask`` directory and the image manager's
-        in-memory state. Used to drive the green/white tree-item coloring so it
-        can be re-evaluated (rather than blindly reset) when leaving the
-        mask-tracing view (F-016).
+        ``image_manager`` is the single source of truth: filled by the folder scan,
+        updated on ``mask_saved`` / ``mask_cleared`` and after generation runs.
         """
-        image_path = self.image_manager.get_image_path(stored_name)
-        if not image_path:
-            return False
-        mask_dir = os.path.join(os.path.dirname(image_path), "mask")
-        mask_path = os.path.join(mask_dir, os.path.basename(image_path))
-        return os.path.exists(mask_path) or self.image_manager.has_mask(stored_name)
+        return self.image_manager.has_mask(stored_name)
 
     def _image_has_skeleton(self, stored_name):
-        """Return True if a processed ``<name>_fake.png`` skeleton exists on disk.
-
-        Read-only: inspects the image manager's discovered skeletons folder
-        (``processed_base_path``) without computing anything.
-        """
-        base = getattr(self.image_manager, "processed_base_path", None)
-        if not base:
-            return False
-        return os.path.exists(os.path.join(base, f"{stored_name}_fake.png"))
+        """Return True if a processed ``<name>_fake.png`` skeleton is known for the image."""
+        return self.image_manager.has_skeleton(stored_name)
 
     def _refresh_metrics_bar(self, stored_name=None):
         """Update the read-only metrics strip for the selected image.
@@ -650,6 +668,7 @@ class MainWindow(QMainWindow):
         image_path = self.image_manager.get_image_path(image_name)
         if image_path is None:
             return
+        self._shown_leaf_name = image_name
 
         if self.right_panel.currentWidget() == self.mask_tracing_interface:
             self.mask_tracing_interface.load_image(image_path)
@@ -683,33 +702,35 @@ class MainWindow(QMainWindow):
         self.display_controller.update_display()
 
     def load_results(self, results_dir):
+        """Show freshly generated skeletons without reloading the folder.
+
+        ``results_dir`` is the folder the skeleton run wrote (``<project>/skeletons``);
+        an old ``<results>/images`` layout is accepted too.
         """
-        Load results after skeleton generation.
-        This method updates the skeleton information without reloading all images.
-        """
-        images_dir = os.path.join(results_dir, "images")
-        if not os.path.isdir(images_dir):
-            QMessageBox.critical(self, "Error", f"Images directory not found at: {images_dir}")
+        if not os.path.isdir(results_dir):
+            QMessageBox.critical(self, "Error", f"Results folder not found at: {results_dir}")
             return
+        self.on_outputs_changed()
+        self.notify("Results loaded")
 
-        # Update the skeleton paths
-        if self.image_manager:
-            self.image_manager._find_processed_base_path()
-            # Update the view mode to trigger skeleton loading
-            self.view_mode_combo.setCurrentText(self.view_mode_combo.currentText())
-
-        self.status_bar.showMessage("Results loaded successfully.", 5000)
-        self.notify("Results loaded successfully")
-
-        # Read-only: re-evaluate the metrics strip. ``load_results`` is a batch
-        # event (no specific image selected), so we reset to the empty state;
-        # the per-image status is repopulated on the next image selection.
-        self._refresh_metrics_bar(None)
+    def on_outputs_changed(self):
+        """Masks or skeletons changed on disk (a generation run finished): re-read them
+        and refresh the canvas, the status badges and the metrics of the current image."""
+        self.image_manager.refresh_outputs()
+        controller = self.display_controller
+        controller.current_fake_image = None
+        controller.update_display()
+        file_tree_manager.update_file_list_mask_status(self)
+        item = self.file_list.currentItem()
+        name = item.data(0, USER_ROLE) if item is not None else None
+        self._refresh_metrics_bar(name or getattr(controller, "current_name", None))
 
     # ==================== Mask Tracing ====================
 
     def toggle_mask_tracing(self):
-        if self.right_panel.currentIndex() != 1:  # If not in mask tracing view
+        # Status badges read image_manager at paint time: no recolour pass here
+        # (a saved mask keeps its badge in every stage, F-016).
+        if self.right_panel.currentIndex() != Panel.MASK_TRACING:
             if not self.switch_right_panel("mask_tracing"):
                 return  # the GT editor kept unsaved edits: stay there
             self.toggle_mask_tracing_button.setText("Return to Main View")
@@ -726,24 +747,6 @@ class MainWindow(QMainWindow):
                     self.on_b_key_status_changed
                 )
                 self._mask_tracing_signals_connected = True
-
-            # Update mask status colors when entering mask tracing view
-            def update_mask_colors(item):
-                stored_name = item.data(0, Qt.ItemDataRole.UserRole)
-                if stored_name:  # Only update leaf items (images)
-                    if self._image_has_mask(stored_name):
-                        item.setForeground(0, QColor("green"))
-                    else:
-                        item.setForeground(0, QColor("white"))
-
-                # Recursively update children
-                for i in range(item.childCount()):
-                    update_mask_colors(item.child(i))
-
-            # Update all top-level items
-            for i in range(self.file_list.topLevelItemCount()):
-                update_mask_colors(self.file_list.topLevelItem(i))
-
         else:  # If in mask tracing view, switch back to main view
             self.switch_right_panel("display")
             self.toggle_mask_tracing_button.setText("✏️ Toggle Mask Tracing")
@@ -756,26 +759,6 @@ class MainWindow(QMainWindow):
                     self.on_b_key_status_changed
                 )
                 self._mask_tracing_signals_connected = False
-
-            # Re-evaluate mask status colors when leaving mask tracing view.
-            # F-016: do NOT blindly reset every item to white — that wiped the
-            # green markers on legitimately saved masks. Items with a saved mask
-            # stay green; only items without a mask are reset to white.
-            def reset_colors(item):
-                stored_name = item.data(0, Qt.ItemDataRole.UserRole)
-                if stored_name:  # Only update leaf items (images)
-                    if self._image_has_mask(stored_name):
-                        item.setForeground(0, QColor("green"))
-                    else:
-                        item.setForeground(0, QColor("white"))
-
-                # Recursively reset children
-                for i in range(item.childCount()):
-                    reset_colors(item.child(i))
-
-            # Reset all top-level items
-            for i in range(self.file_list.topLevelItemCount()):
-                reset_colors(self.file_list.topLevelItem(i))
 
         # Load the current image into the mask tracing interface
         current_item = self.file_list.currentItem()
@@ -790,37 +773,32 @@ class MainWindow(QMainWindow):
             self.status_bar.clearMessage()
 
     def on_mask_saved(self, image_path):
-        # Always emit the signal
+        # mask_saved -> highlight_saved_mask records the mask in image_manager.
         self.mask_saved.emit(image_path)
-
-        # Only update the visual status if we're in mask tracing view
+        image_name = image_stem(image_path)
         if self.right_panel.currentWidget() == self.mask_tracing_interface:
-            image_name = os.path.splitext(os.path.basename(os.path.normpath(image_path)))[0]
-            item = self.find_tree_item_by_image_name(image_name)
-            if item:
-                item.setForeground(0, QColor("green"))
             self.status_bar.showMessage(f"Mask saved for {image_name}", 3000)
             self.notify(f"Mask saved for {image_name}")
+        self._refresh_metrics_if_current(image_name)
 
     def on_mask_cleared(self, image_path):
-        # Always emit the signal
+        # mask_cleared -> unhighlight_cleared_mask forgets the mask in image_manager.
         self.mask_cleared.emit(image_path)
+        self._refresh_metrics_if_current(image_stem(image_path))
 
-        # Only update the visual status if we're in mask tracing view
-        if self.right_panel.currentWidget() == self.mask_tracing_interface:
-            image_name = os.path.splitext(os.path.basename(os.path.normpath(image_path)))[0]
-            item = self.find_tree_item_by_image_name(image_name)
-            if item:
-                item.setForeground(0, QColor("white"))
+    def _refresh_metrics_if_current(self, image_name):
+        item = self.file_list.currentItem()
+        if item is not None and item.data(0, USER_ROLE) == image_name:
+            self._refresh_metrics_bar(image_name)
 
     # ==================== Ground-truth Tracing (Trace GT) ====================
 
     def toggle_gt_tracing(self) -> None:
         """Enter / leave the multi-class GT editor (right panel index 4)."""
-        if self.right_panel.currentIndex() != 4:
+        if self.right_panel.currentIndex() != Panel.GT_TRACING:
             # Leaving mask tracing: go through its toggle so its signals are
-            # disconnected and its tree colours restored.
-            if self.right_panel.currentIndex() == 1:
+            # disconnected.
+            if self.right_panel.currentIndex() == Panel.MASK_TRACING:
                 self.toggle_mask_tracing()
             self.switch_right_panel("gt_tracing")
         elif not self.switch_right_panel("display"):
@@ -832,50 +810,83 @@ class MainWindow(QMainWindow):
 
     def _image_leaves(self, *, visible_only: bool = False) -> list:
         """Image leaves of the library tree, in display order."""
-        leaves = []
-        it = QTreeWidgetItemIterator(self.file_list)
-        while it.value():
-            item = it.value()
-            if item.data(0, Qt.ItemDataRole.UserRole) and not (visible_only and item.isHidden()):
-                leaves.append(item)
-            it += 1
-        return leaves
+        return self.library_index.leaves(visible_only=visible_only)
 
-    def _leaf_for_image(self, image_path: str, leaves: list):
-        """The leaf among ``leaves`` whose image is ``image_path``, or None."""
+    def _leaf_for_image(self, image_path: str, leaves: list | None = None):
+        """The leaf whose image is ``image_path`` (O(1)), or None.
+
+        With ``leaves``, only a leaf among them counts.
+        """
         if not image_path:
             return None
-        for item in leaves:
-            name = item.data(0, Qt.ItemDataRole.UserRole)
-            if _same_path(self.image_manager.get_image_path(name), image_path):
-                return item
-        return None
+        name = image_stem(image_path)
+        item = self.library_index.item_for(name)
+        if item is None or not _same_path(self.image_manager.get_image_path(name), image_path):
+            return None
+        if leaves is not None and item not in leaves:
+            return None
+        return item
 
     def _select_tree_image(self, image_path: str) -> None:
         """Make ``image_path``'s leaf the tree's current item (without loading it)."""
-        item = self._leaf_for_image(image_path, self._image_leaves())
+        item = self._leaf_for_image(image_path)
         if item is not None:
+            self._shown_leaf_name = item.data(0, USER_ROLE)  # it is already open
             self.file_list.setCurrentItem(item)
             self.file_list.scrollToItem(item)
 
     def navigate_image(self, delta: int) -> None:
-        """Select the next/previous visible image leaf in the library tree.
+        """Select and open the next/previous visible image leaf in the library tree.
 
-        Steps from the image open in the GT editor (arrow keys move the tree
-        selection without loading anything), else from the tree selection.
+        In Trace GT, steps from the image open in the editor; otherwise (or when
+        nothing is open there) from the tree selection.
         """
-        leaves = self._image_leaves(visible_only=True)
-        if not leaves:
-            return
-        current = self._leaf_for_image(self.gt_tracing_interface.current_image_path, leaves)
+        current = None
+        if self.right_panel.currentIndex() == Panel.GT_TRACING:
+            current = self._leaf_for_image(self.gt_tracing_interface.current_image_path)
         if current is None:
             current = self.file_list.currentItem()
-        idx = leaves.index(current) if current in leaves else -1
-        new = idx + delta
-        if 0 <= new < len(leaves):
-            self.file_list.setCurrentItem(leaves[new])
-            self.file_list.scrollToItem(leaves[new])
-            self.on_image_selected(leaves[new])
+        target = self.library_index.step(current, delta, visible_only=True)
+        if target is None:
+            return
+        self.file_list.setCurrentItem(target)
+        self.file_list.scrollToItem(target)
+        self.on_image_selected(target)
+
+    def on_tree_current_changed(self, current, _previous=None) -> None:
+        """Arrow keys moved the library selection: load it once the keys come to rest."""
+        if current is not None and current.data(0, USER_ROLE):
+            self._tree_load_timer.start()
+
+    def _load_current_tree_item(self) -> None:
+        item = self.file_list.currentItem()
+        name = item.data(0, USER_ROLE) if item is not None else None
+        if name and name != self._shown_leaf_name:
+            self.on_image_selected(item)
+
+    def _install_image_paging_shortcuts(self) -> None:
+        """PgDn / PgUp open the next / previous image from the library and from the
+        display, mask and skeleton pages (Trace GT binds its own, which save first)."""
+        self._paging_shortcuts = []
+        owners = (
+            self.left_panel,
+            self.right_panel.widget(Panel.DISPLAY),
+            self.mask_tracing_interface,
+            self.skeleton_correction_interface,
+        )
+        for owner in owners:
+            for key, delta in ((Qt.Key.Key_PageDown, 1), (Qt.Key.Key_PageUp, -1)):
+                shortcut = QShortcut(QKeySequence(key), owner)
+                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                shortcut.activated.connect(lambda d=delta: self._page_image(d))
+                self._paging_shortcuts.append(shortcut)
+
+    def _page_image(self, delta: int) -> None:
+        if self.right_panel.currentIndex() == Panel.GT_TRACING:
+            # From the library while tracing GT: the editor saves before it moves.
+            self.gt_tracing_interface._navigate(delta)
+        else:
+            self.navigate_image(delta)
 
     def export_gt_dataset(self) -> None:
         """Open the dataset-export dialog for the loaded folder's GT tracings."""
@@ -911,12 +922,9 @@ class MainWindow(QMainWindow):
         Important: This editor is intentionally isolated from the app's existing
         skeleton generation + main display streams.
         """
-        # Right panel indexes:
-        # 0 = display, 1 = mask tracing, 2 = visualization, 3 = skeleton correction,
-        # 4 = GT tracing
-        if self.right_panel.currentIndex() != 3:
+        if self.right_panel.currentIndex() != Panel.SKELETON_CORRECTION:
             # If leaving mask tracing, ensure its signals are disconnected cleanly
-            if self.right_panel.currentIndex() == 1:
+            if self.right_panel.currentIndex() == Panel.MASK_TRACING:
                 self.toggle_mask_tracing()
 
             if not self.switch_right_panel("skeleton_correction"):
@@ -936,24 +944,22 @@ class MainWindow(QMainWindow):
     # ==================== Panel Switching ====================
 
     def switch_right_panel(self, panel) -> bool:
-        """Show ``panel``; returns False (and stays put) if the GT editor refuses.
+        """Show ``panel`` (a :class:`Panel`, its index or its legacy key); returns False
+        (and stays put) if the GT editor refuses. An unknown key does nothing.
 
         Leaving the mask / GT editor first offers to save pending edits. The
         GT editor refuses when its save failed and the user kept editing.
         """
-        if self.right_panel.currentIndex() == 1 and panel != "mask_tracing":
+        try:
+            target = Panel.coerce(panel)
+        except ValueError:
+            logger.warning("Unknown right panel %r", panel)
+            return True
+        current = self.right_panel.currentIndex()
+        if current == Panel.MASK_TRACING and target != Panel.MASK_TRACING:
             self.mask_tracing_interface.maybe_save_changes()
-        if self.right_panel.currentIndex() == 4 and panel != "gt_tracing":
+        if current == Panel.GT_TRACING and target != Panel.GT_TRACING:
             if not self.gt_tracing_interface.maybe_save_changes():
                 return False
-        if panel == "display":
-            self.right_panel.setCurrentIndex(0)
-        elif panel == "mask_tracing":
-            self.right_panel.setCurrentIndex(1)
-        elif panel == "visualization":
-            self.right_panel.setCurrentIndex(2)
-        elif panel == "skeleton_correction":
-            self.right_panel.setCurrentIndex(3)
-        elif panel == "gt_tracing":
-            self.right_panel.setCurrentIndex(4)
+        self.right_panel.setCurrentIndex(target)
         return True

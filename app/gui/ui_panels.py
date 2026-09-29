@@ -17,11 +17,12 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QToolButton,
     QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from app.gui import file_tree_manager
+from app.gui.library_index import LibrarySearchController
 from app.gui.widgets import tokens
 from app.gui.widgets.icons import load_icon
 
@@ -203,7 +204,9 @@ def create_left_panel(main_window) -> QWidget:
     # Generate Skeleton button (kept wired + reparented)
     main_window.generate_button = create_text_button(
         "Generate Skeleton",
-        "Generate Skeleton\n\nExtract skeleton structure (medial axis) from segmentation masks. Converts mask images into line-based skeleton representations for length measurement.",
+        "Generate Skeleton\n\nPredict root skeletons directly from the original images "
+        "(Pix2Pix skeletonizer) for length measurement. Independent of masks: mask "
+        "corrections change root area only.",
     )
     main_window.generate_button.setStyleSheet(text_button_style)
     main_window.generate_button.clicked.connect(main_window.skeleton_handler.generate_skeleton)
@@ -212,8 +215,8 @@ def create_left_panel(main_window) -> QWidget:
     main_window.generate_all_button = create_text_button(
         "Generate Mask + Skeleton",
         "Generate Mask + Skeleton\n\nRun the ResNet segmentation model over all "
-        "loaded images, then extract medial-axis skeletons from the masks it "
-        "produces. One pass — no need to run the two steps separately.",
+        "loaded images (masks -> root area), then predict skeletons from the same "
+        "original images (Pix2Pix -> root length). One click runs both.",
     )
     main_window.generate_all_button.setStyleSheet(text_button_style)
     main_window.generate_all_button.clicked.connect(main_window.generate_all)
@@ -302,7 +305,16 @@ def create_left_panel(main_window) -> QWidget:
         }}
         QLineEdit:focus {{ border: 1px solid {tokens.ACCENT_LINE}; }}
     """)
-    main_window.library_search.textChanged.connect(lambda text: filter_file_list(main_window, text))
+    # Debounced (one filter per typing burst) with a match count under the field.
+    main_window.library_search_status = QLabel()
+    main_window.library_search_status.setStyleSheet(
+        f"color: {tokens.TEXT_FAINT}; font-size: 11px; padding: 0 2px;"
+    )
+    main_window.library_search_controller = LibrarySearchController(
+        main_window.library_search,
+        lambda text: filter_file_list(main_window, text),
+        main_window.library_search_status,
+    )
 
     # ========== SEARCH + TREE CONTROLS (one row) ==========
     # Search field takes the slack; the expand/collapse controls are icon-only
@@ -344,6 +356,7 @@ def create_left_panel(main_window) -> QWidget:
     tree_controls_layout.addWidget(main_window.collapse_all_button)
 
     layout.addLayout(tree_controls_layout)
+    layout.addWidget(main_window.library_search_status)
 
     # The tree's own header (Field → Tube → Date → Images) names the panel, and
     # it is the only left panel in the app — no redundant "Image Library" label.
@@ -352,13 +365,15 @@ def create_left_panel(main_window) -> QWidget:
     main_window.file_list = QTreeWidget()
     main_window.file_list.setHeaderLabels(["Field → Tube → Date → Images"])
     main_window.file_list.itemClicked.connect(main_window.on_tree_item_clicked)
+    # Keyboard browsing (arrows, Home/End) loads the image after a short debounce.
+    main_window.file_list.currentItemChanged.connect(main_window.on_tree_current_changed)
     main_window.file_list.setAnimated(True)
     main_window.file_list.setIndentation(20)
 
     # Names follow the splitter: the name column takes the slack, other columns
-    # size to contents, and long names elide in the MIDDLE so both the prefix
-    # and the extension stay readable (MR_11_001_rep2.png → MR_11_0…rep2.png).
-    main_window.file_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+    # size to contents. Image rows are short ("L44 · 11:15:30"; the full stem is
+    # in the tooltip and the metrics bar), so a narrow panel cuts only the end.
+    main_window.file_list.setTextElideMode(Qt.TextElideMode.ElideRight)
     main_window.file_list.setUniformRowHeights(True)
     _hdr = main_window.file_list.header()
     _hdr.setStretchLastSection(False)
@@ -393,35 +408,26 @@ def create_left_panel(main_window) -> QWidget:
             font-size: 8pt;
             font-weight: 600;
         }}
+        {tokens.focus_rule("QTreeWidget")}
     """)
+    # Per-window index: O(1) lookup/navigation, fast filter, status badges.
+    file_tree_manager.library_index_for(main_window)
 
     layout.addWidget(main_window.file_list, 1)
 
     return left_widget
 
 
-def filter_file_list(main_window, query: str) -> None:
-    """Filter the image-library tree by item text (case-insensitive contains).
+def filter_file_list(main_window, query: str) -> int:
+    """Filter the image-library tree (case-insensitive contains); returns the match count.
 
-    FIX5: empty query shows everything. A parent stays visible if any of its
-    descendants match (so the path to a matching image is preserved).
+    Images match on their row text or full stem; a group whose own label matches keeps
+    all of its images; an empty query shows everything. Parents of matches stay visible
+    and small result sets are expanded (see :meth:`LibraryIndex.apply_filter`).
     """
-    tree = getattr(main_window, "file_list", None)
-    if tree is None:
-        return
-    needle = (query or "").strip().lower()
-
-    def visit(item: "QTreeWidgetItem") -> bool:
-        child_match = False
-        for i in range(item.childCount()):
-            child_match = visit(item.child(i)) or child_match
-        self_match = needle in item.text(0).lower() if needle else True
-        visible = self_match or child_match
-        item.setHidden(not visible)
-        return visible
-
-    for i in range(tree.topLevelItemCount()):
-        visit(tree.topLevelItem(i))
+    if getattr(main_window, "file_list", None) is None:
+        return 0
+    return file_tree_manager.library_index_for(main_window).apply_filter(query or "")
 
 
 def create_right_panel(main_window) -> QWidget:

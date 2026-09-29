@@ -1,51 +1,84 @@
+"""Library state: which images a project folder has, and which have masks / skeletons.
+
+:class:`ImageManager` is the single source of truth for per-image output status
+(``has_mask`` / ``has_skeleton``): it is filled by one folder scan and kept current by
+the editors' save/clear signals and by :meth:`ImageManager.refresh_outputs` after a
+generation run, so nothing on the GUI thread stats files per image.
+
+:class:`ImageLoaderThread` scans a folder off the GUI thread and also builds the library
+hierarchy there. Opening another folder never kills a scan: the old one is asked to stop
+and its late result is dropped by a generation token.
+"""
+
 import logging
 import os
-import re
+from functools import partial
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog
+
+from app.gui.library_index import index_names
+from app.naming import image_stem, parse_image_name
+from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
 
 
 class ImageLoaderThread(QThread):
+    """Scans ``folder_path`` for images, masks and skeletons, and builds the hierarchy.
+
+    Signals:
+        progress(int): percent, per scan phase.
+        finished(images, fake_images, masks, has_fake_real_pairs): the scan result
+            (``fake_images`` is always empty; skeleton paths are resolved lazily).
+        failed(str): the folder is missing or unreadable (``finished`` is not emitted).
+
+    An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
+    ``hierarchy``, ``labels`` (library row texts) and ``skeleton_stems`` hold the
+    extra results.
+    """
+
     progress = pyqtSignal(int)
     finished = pyqtSignal(dict, dict, dict, bool)
+    failed = pyqtSignal(str)
 
     def __init__(self, folder_path):
         super().__init__()
         self.folder_path = folder_path
+        self.hierarchy = None
+        self.labels: dict[str, str] = {}
+        self.skeleton_stems: set[str] = set()
 
     def run(self):
-        images = {}
-        masks = {}
-
+        if not os.path.isdir(self.folder_path):
+            self.failed.emit(f"Folder not found: {self.folder_path}")
+            return
+        layout = ProjectLayout(self.folder_path)
         try:
-            # Load regular images using os.scandir (faster than os.listdir)
-            with os.scandir(self.folder_path) as entries:
-                for entry in entries:
-                    if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg")):
-                        base_name = os.path.splitext(entry.name)[0]
-                        images[base_name] = entry.path
-
-            # Load mask images if they exist
-            mask_dir = os.path.join(self.folder_path, "mask")
-            if os.path.exists(mask_dir):
-                with os.scandir(mask_dir) as entries:
-                    for entry in entries:
-                        if entry.is_file() and entry.name.lower().endswith(
-                            (".png", ".jpg", ".jpeg")
-                        ):
-                            base_name = os.path.splitext(entry.name)[0]
-                            masks[base_name] = entry.path
-
-            self.progress.emit(100)
-            self.finished.emit(images, {}, masks, False)
-
-        except OSError:
+            images = layout.scan_images()
+            if self._stop(50):
+                return
+            masks = layout.scan_masks()
+            if self._stop(70):
+                return
+            self.skeleton_stems = layout.scan_skeleton_stems()
+            if self._stop(85):
+                return
+            self.hierarchy, self.labels = index_names(images)
+        except OSError as exc:
             logger.exception("Failed to scan image folder %s", self.folder_path)
-            self.progress.emit(100)
-            self.finished.emit({}, {}, {}, False)
+            self.failed.emit(f"Cannot read {self.folder_path}: {exc.strerror or exc}")
+            return
+        if self._stop(100):
+            return
+        self.finished.emit(images, {}, masks, False)
+
+    def _stop(self, percent: int) -> bool:
+        """Report ``percent``; True when the scan was superseded and must stop."""
+        if self.isInterruptionRequested():
+            return True
+        self.progress.emit(percent)
+        return False
 
 
 class ImageManager:
@@ -53,6 +86,7 @@ class ImageManager:
         self.images = {}
         self.fake_images = {}
         self.masks = {}
+        self.skeleton_stems: set[str] = set()
         self.has_fake_real_pairs = False
         self.original_folder = None
         self.loader_thread = None
@@ -62,35 +96,164 @@ class ImageManager:
         # Cache for hierarchical structure
         self._hierarchy_cache = None
         self._hierarchy_cache_valid = False
+        self._labels_cache = None
+        # Scan bookkeeping: only the newest scan may deliver; superseded scans are kept
+        # referenced until their thread really ends (never terminate()).
+        self._generation = 0
+        self._pending_folder = None
+        self._retired_threads: set[QThread] = set()
 
+    # ------------------------------------------------------------------ loading
     def load_images(self, folder_path=None):
+        """Scan ``folder_path`` (asks with a dialog when None) in the background.
+
+        The current library stays until the scan delivers images; a failed or
+        image-less scan is reported to the main window and changes nothing.
+        """
         if folder_path is None:
             folder_path = QFileDialog.getExistingDirectory(None, "Select Image Directory")
+        if not folder_path:
+            return
 
-        if folder_path:
-            self.original_folder = folder_path
-            self._clear_images()
-            self._find_processed_base_path()
+        self._retire_loader()
+        self._generation += 1
+        self._pending_folder = folder_path
+        thread = ImageLoaderThread(folder_path)
+        self.loader_thread = thread
+        if self.main_window:
+            thread.progress.connect(self.main_window.update_loading_progress)
+        thread.finished.connect(partial(self._on_scan_finished, self._generation, thread))
+        thread.failed.connect(partial(self._on_scan_failed, self._generation))
+        thread.start()
 
-            if self.loader_thread and self.loader_thread.isRunning():
-                self.loader_thread.terminate()
-                self.loader_thread.wait()
+    def _retire_loader(self):
+        """Ask a running scan to stop; keep it alive until its thread finishes."""
+        old = self.loader_thread
+        self.loader_thread = None
+        if old is None or not old.isRunning():
+            return
+        old.requestInterruption()
+        self._retired_threads.add(old)
+        # QThread's own finished (the class shadows it with the result signal).
+        QThread.finished.__get__(old, QThread).connect(
+            lambda t=old: self._retired_threads.discard(t)
+        )
 
-            self.loader_thread = ImageLoaderThread(folder_path)
+    def _on_scan_finished(self, generation, thread, images, fake_images, masks, pairs):
+        if generation != self._generation:
+            return  # a newer folder was opened meanwhile
+        folder, self._pending_folder = self._pending_folder, None
+        if not images:
             if self.main_window:
-                self.loader_thread.progress.connect(self.main_window.update_loading_progress)
-                self.loader_thread.finished.connect(self.on_loading_finished)
-            self.loader_thread.start()
+                self.main_window.on_loading_empty(folder)
+            return
+        self.original_folder = folder
+        self.on_loading_finished(
+            images,
+            fake_images,
+            masks,
+            pairs,
+            hierarchy=thread.hierarchy,
+            labels=thread.labels,
+            skeleton_stems=thread.skeleton_stems,
+        )
+
+    def _on_scan_failed(self, generation, message):
+        if generation != self._generation:
+            return
+        folder, self._pending_folder = self._pending_folder, None
+        if self.main_window:
+            self.main_window.on_loading_failed(folder, message)
+
+    def on_loading_finished(
+        self,
+        images,
+        fake_images,
+        masks,
+        has_fake_real_pairs,
+        *,
+        hierarchy=None,
+        labels=None,
+        skeleton_stems=None,
+    ):
+        """Adopt a scan result as the library (``original_folder`` is already set).
+
+        ``hierarchy`` / ``labels`` / ``skeleton_stems`` come precomputed from the loader
+        thread; without them they are computed here (the first two lazily).
+        """
+        self._clear_images()
+        self.images = images
+        self.masks = masks
+        self._find_processed_base_path()
+        self._hierarchy_cache = hierarchy
+        self._hierarchy_cache_valid = hierarchy is not None
+        self._labels_cache = labels if hierarchy is not None else None
+        if skeleton_stems is not None:
+            self.skeleton_stems = set(skeleton_stems)
+        elif self.original_folder:
+            self.skeleton_stems = self._layout().scan_skeleton_stems()
+        if self.main_window:
+            self.main_window.on_loading_finished(
+                images, self.fake_images, masks, self.has_fake_real_pairs
+            )
+
+    def _clear_images(self):
+        self.images = {}
+        self.fake_images.clear()
+        self.has_fake_real_pairs = False
+        self.masks = {}
+        self.skeleton_stems = set()
+        self.processed_base_path = None
+        # Invalidate cache
+        self._hierarchy_cache = None
+        self._hierarchy_cache_valid = False
+        self._labels_cache = None
+
+    # ------------------------------------------------------------ output status
+    def _layout(self) -> ProjectLayout:
+        return ProjectLayout(self.original_folder)
 
     def _find_processed_base_path(self):
         if not self.original_folder:
             return
+        skeletons = self._layout().skeletons_dir
+        self.processed_base_path = skeletons if os.path.isdir(skeletons) else None
 
-        # Look for skeletons folder directly
-        potential_path = os.path.join(self.original_folder, "skeletons")
-        if os.path.exists(potential_path):
-            self.processed_base_path = potential_path
+    def refresh_outputs(self):
+        """Re-read mask/ and skeletons/ after a generation run (two scandirs)."""
+        if not self.original_folder:
+            return
+        layout = self._layout()
+        self.masks = layout.scan_masks()
+        self.skeleton_stems = layout.scan_skeleton_stems()
+        self.fake_images.clear()
+        self._find_processed_base_path()
 
+    def mask_path_for(self, name) -> str | None:
+        """Where the mask editor saves the mask of ``name`` (stem or image path).
+
+        ``<image folder>/mask/<stem>.png`` (the editor's rule); None for an unknown stem.
+        """
+        image_path = self.get_image_path(image_stem(name))
+        if image_path is None and os.path.isabs(os.fspath(name)):
+            image_path = os.fspath(name)
+        return ProjectLayout.for_image(image_path).mask_path(image_path) if image_path else None
+
+    def set_mask(self, name, path=None):
+        """Record that ``name`` (stem or image path) has a mask at ``path`` (None: none)."""
+        stem = image_stem(name)
+        if path:
+            self.masks[stem] = path
+        else:
+            self.masks.pop(stem, None)
+
+    def has_mask(self, name):
+        return name in self.masks
+
+    def has_skeleton(self, name) -> bool:
+        return name in self.skeleton_stems
+
+    # ------------------------------------------------------------ view / lookup
     def get_fake_image_path(self, name):
         if name in self.fake_images:
             return self.fake_images[name]
@@ -105,38 +268,11 @@ class ImageManager:
         return None
 
     def reload_for_view_mode(self, view_mode):
+        """Remember the display mode (state only: the library tree does not depend on it)."""
         self.current_view_mode = view_mode
         if view_mode == "Single Image":
             self.fake_images.clear()
             self.has_fake_real_pairs = False
-
-        if self.main_window:
-            self.main_window.populate_file_list()
-            self.main_window.display_controller.update_display()
-
-    def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
-        self.images = images
-        self.masks = masks
-        # Invalidate cache when images change
-        self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
-        if self.main_window:
-            self.main_window.on_loading_finished(
-                images,
-                self.fake_images,
-                masks,
-                self.has_fake_real_pairs,
-            )
-
-    def _clear_images(self):
-        self.images.clear()
-        self.fake_images.clear()
-        self.has_fake_real_pairs = False
-        self.masks.clear()
-        self.processed_base_path = None
-        # Invalidate cache
-        self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
 
     def get_image_names(self):
         return list(self.images.keys())
@@ -144,114 +280,26 @@ class ImageManager:
     def get_image_path(self, name):
         return self.images.get(name)
 
-    def has_mask(self, name):
-        return name in self.masks
-
     def parse_image_name(self, name):
-        """
-        Parse image name to extract field, tube number, length position (depth), date, and time.
-        Expected format: Field_T{XXX}_L{XXX}_YYYY.MM.DD_HHMMSS_anything
-        Returns a dictionary with the parsed information.
-        """
-        try:
-            # Initialize default values
-            info = {
-                "original_name": name,
-                "field": None,
-                "tube_number": None,
-                "length_position": None,
-                "date": None,
-                "time": None,
-            }
-
-            # Extract field name (everything before first underscore, but remove camera suffixes)
-            parts = name.split("_", 1)
-            if parts:
-                field_name = parts[0]
-                # Remove camera suffixes like cam1, CAM1, cam2, etc. from the end of field name
-                # This handles cases like xyzcam1, xyzCAM1, etc.
-                field_name = re.sub(r"cam\d+$", "", field_name, flags=re.IGNORECASE)
-                info["field"] = field_name
-
-            # Extract tube number (T followed by numbers)
-            tube_match = re.search(r"T(\d+)", name)
-            if tube_match:
-                info["tube_number"] = int(tube_match.group(1))
-
-            # Extract length position (L followed by numbers) - this is the depth
-            length_match = re.search(r"L(\d+)", name)
-            if length_match:
-                info["length_position"] = int(length_match.group(1))
-
-            # Extract date (YYYY.MM.DD format)
-            date_match = re.search(r"(\d{4})\.(\d{2})\.(\d{2})", name)
-            if date_match:
-                year, month, day = date_match.groups()
-                info["date"] = f"{year}.{month}.{day}"
-
-            # Extract time (HHMMSS format)
-            time_match = re.search(r"_(\d{6})(?:_|$)", name)
-            if time_match:
-                time_str = time_match.group(1)
-                formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:]}"
-                info["time"] = formatted_time
-
-            return info
-
-        except (AttributeError, TypeError, re.error) as e:
-            logger.debug("Failed to parse image name %r: %s", name, e)
-            return {
-                "original_name": name,
-                "field": name,  # Fallback to using full name as field
-                "tube_number": None,
-                "length_position": None,
-                "date": None,
-                "time": None,
-            }
+        """Field, tube, depth, date and time of ``name`` (see :mod:`app.naming`)."""
+        parsed = parse_image_name(name)
+        return {
+            "original_name": name,
+            "field": parsed.field,
+            "tube_number": parsed.tube,
+            "length_position": parsed.position,
+            "date": parsed.date,
+            "time": parsed.time,
+        }
 
     def get_hierarchical_structure(self):
-        """
-        Organize images into a hierarchical structure:
-        Field → Tube → Date → Images (with L prefix)
+        """Field -> Tube -> Date -> [(depth, name)], cached until the images change."""
+        if not (self._hierarchy_cache_valid and self._hierarchy_cache is not None):
+            self._hierarchy_cache, self._labels_cache = index_names(self.images)
+            self._hierarchy_cache_valid = True
+        return self._hierarchy_cache
 
-        Cached for performance - only recalculated when images change.
-
-        Returns a nested dictionary structure.
-        """
-        # Return cached result if valid
-        if self._hierarchy_cache_valid and self._hierarchy_cache is not None:
-            return self._hierarchy_cache
-
-        hierarchy = {}
-
-        for image_name in self.images.keys():
-            info = self.parse_image_name(image_name)
-
-            # Use parsed values or fallbacks
-            field = info["field"] or "Unknown"
-            tube = f"T{info['tube_number']}" if info["tube_number"] is not None else "No Tube"
-            date = info["date"] or "No Date"
-
-            # Build hierarchy (no separate depth level)
-            if field not in hierarchy:
-                hierarchy[field] = {}
-            if tube not in hierarchy[field]:
-                hierarchy[field][tube] = {}
-            if date not in hierarchy[field][tube]:
-                hierarchy[field][tube][date] = []
-
-            # Store image with its depth info for sorting
-            depth = info["length_position"] if info["length_position"] is not None else float("inf")
-            hierarchy[field][tube][date].append((depth, image_name))
-
-        # Sort images by depth within each date
-        for field in hierarchy:
-            for tube in hierarchy[field]:
-                for date in hierarchy[field][tube]:
-                    hierarchy[field][tube][date].sort(key=lambda x: x[0])
-
-        # Cache the result
-        self._hierarchy_cache = hierarchy
-        self._hierarchy_cache_valid = True
-
-        return hierarchy
+    def get_leaf_labels(self) -> dict[str, str]:
+        """Library row text per image (computed with the hierarchy)."""
+        self.get_hierarchical_structure()
+        return self._labels_cache or {}
