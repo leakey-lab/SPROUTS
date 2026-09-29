@@ -1,22 +1,18 @@
-"""Root-length calculation thread (thin wrapper over app.inference.metrics)."""
+"""Root-length calculation thread (thin wrapper over app.inference.measure_run)."""
 
-import logging
-import os
-import time
+from __future__ import annotations
 
-from PyQt6.QtCore import QThread, pyqtSignal
-
-logger = logging.getLogger(__name__)
-
-from app.config import LENGTH_CSV_HEADERS, ROOT_LENGTHS_CSV
+from app.inference.measure_run import LENGTH, MeasureRun
+from app.inference.metric_thread import MetricCalculatorThread
 from app.inference.metrics import (
     calculate_root_length,
+    length_row,
     parse_image_name,
     preprocess_image,
-    root_length_mm,
-    run_metric_pool,
-    write_metric_csv,
 )
+
+# Backwards-compatible name of the per-image worker.
+process_single_image = length_row
 
 __all__ = [
     "calculate_root_length",
@@ -27,58 +23,13 @@ __all__ = [
 ]
 
 
-def process_single_image(name, path):
-    """Compute the length row for a single skeleton image."""
-    try:
-        total_length = root_length_mm(preprocess_image(path))
-        info = parse_image_name(name)
-        return {
-            "Image": info["original_name"],
-            "Tube": info["tube_number"],
-            "Position": info["length_position"],
-            "Date": info["date"],
-            "Time": info["time"],
-            "Length (mm)": round(total_length, 2),
-        }
-    except Exception as e:
-        logger.error("Length metric failed for %r: %s", name, e)
-        return {
-            "Image": name,
-            "Tube": None,
-            "Position": None,
-            "Date": None,
-            "Time": None,
-            "Length (mm)": 0,
-            "Error": str(e),
-        }
+class RootLengthCalculatorThread(MetricCalculatorThread):
+    """Measure root length of ``fake_images`` (name -> skeleton path) into
+    ``<output_dir>/root_lengths.csv``."""
 
+    def __init__(self, fake_images: dict[str, str], output_dir: str) -> None:
+        super().__init__(MeasureRun(LENGTH, fake_images, output_dir))
 
-class RootLengthCalculatorThread(QThread):
-    finished = pyqtSignal(str)
-    progress = pyqtSignal(int)
-
-    def __init__(self, fake_images, output_dir):
-        super().__init__()
-        self.fake_images = fake_images
-        self.output_dir = output_dir
-
-    def run(self):
-        if not self.fake_images:
-            logger.debug("RootLengthCalculatorThread: no images, skipping")
-            self.finished.emit("")
-            return
-        logger.info(
-            "RootLengthCalculatorThread: processing %d images → %s",
-            len(self.fake_images),
-            self.output_dir,
-        )
-        t0 = time.monotonic()
-        results = run_metric_pool(self.fake_images, process_single_image, self.progress.emit)
-        csv_path = os.path.join(self.output_dir, ROOT_LENGTHS_CSV)
-        write_metric_csv(results, csv_path, LENGTH_CSV_HEADERS)
-        logger.info(
-            "RootLengthCalculatorThread: done in %.1fs, wrote %s",
-            time.monotonic() - t0,
-            csv_path,
-        )
-        self.finished.emit(csv_path)
+    @property
+    def fake_images(self) -> dict[str, str]:
+        return self.job.images

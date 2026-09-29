@@ -1,0 +1,215 @@
+"""SkeletonHandler Measure flow: jobs, feedback, Retry, cancel, thread release, is_busy.
+
+Covers RB-03/FR-06 (locked CSV -> Retry), RB-07 (one job at a time, Cancel),
+RB-08 (thread released only after it finished), AR-07 (named feedback,
+``is_busy(kind)``). Uses a fake main window: no MainWindow internals needed.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from types import SimpleNamespace
+
+import cv2
+import numpy as np
+import pytest
+from PyQt6 import sip
+from PyQt6.QtWidgets import QApplication
+
+from app.gui.feedback import RecordingFeedback
+from app.handlers.job_registry import JobRegistry
+from app.handlers.skeleton_handler import SkeletonHandler
+from app.handlers.window_feedback import WindowFeedback
+from app.inference import measure_run
+from app.io_utils import FileLockedError
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    return QApplication.instance() or QApplication([])
+
+
+class _IdleGeneration:
+    def is_busy(self) -> bool:
+        return False
+
+
+def _project(tmp_path, n=4, skeletons=True, masks=True):
+    for i in range(n):
+        img = np.zeros((64, 80), np.uint8)
+        cv2.line(img, (0, i), (79, 40 + i), 255, 2)
+        name = f"x_T{i + 1}_L2_2024.01.02_01020{i}_001"
+        cv2.imwrite(str(tmp_path / f"{name}.jpg"), img)
+        if skeletons:
+            (tmp_path / "skeletons").mkdir(exist_ok=True)
+            cv2.imwrite(str(tmp_path / "skeletons" / f"{name}_fake.png"), img)
+        if masks:
+            (tmp_path / "mask").mkdir(exist_ok=True)
+            cv2.imwrite(str(tmp_path / "mask" / f"{name}.png"), img)
+    return tmp_path
+
+
+def _handler(tmp_path, qapp, jobs=None):
+    mw = SimpleNamespace(
+        image_manager=SimpleNamespace(original_folder=str(tmp_path), images={}),
+        feedback=RecordingFeedback(),
+        jobs=jobs if jobs is not None else JobRegistry(),
+    )
+    return SkeletonHandler(mw, generation=_IdleGeneration()), mw
+
+
+def _wait_idle(handler, qapp, timeout=20.0):
+    end = time.monotonic() + timeout
+    while handler.is_busy() or handler.main_window.jobs.is_busy():
+        assert time.monotonic() < end, "measure did not finish"
+        qapp.processEvents()
+        time.sleep(0.005)
+    qapp.processEvents()
+
+
+def test_measure_length_runs_as_named_job_with_feedback(tmp_path, qapp):
+    _project(tmp_path)
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_length()
+    thread = handler.calculator_thread
+    assert thread is not None
+    assert mw.jobs.running_name() == "Measuring root length"
+    _wait_idle(handler, qapp)
+
+    assert handler.calculator_thread is None
+    # RB-08: waited for, then deleteLater()'d; deleting a still-running QThread would
+    # abort the process ("QThread: Destroyed while thread is still running").
+    assert sip.isdeleted(thread)
+    names = mw.feedback.names()
+    assert names[0] == "task_started" and "task_finished" in names
+    label = mw.feedback.calls[0].args[0]
+    assert "root length" in label.lower() and "4" in label
+    assert mw.feedback.calls[0].kwargs["cancelable"] is True
+    assert os.path.isfile(tmp_path / "skeletons" / "root_lengths.csv")
+    assert os.path.isfile(tmp_path / "skeletons" / "root_lengths.csv.provenance.json")
+
+
+def test_measure_area_reads_png_masks(tmp_path, qapp):
+    _project(tmp_path, skeletons=False)
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    assert mw.jobs.running_name() == "Measuring root area"
+    _wait_idle(handler, qapp)
+    assert handler.area_calculator_thread is None
+    assert os.path.isfile(tmp_path / "mask" / "root_areas.csv")
+
+
+def test_is_busy_reports_each_kind(tmp_path, qapp):
+    handler, _ = _handler(tmp_path, qapp)
+    assert handler.is_busy() is False
+    handler.calculator_thread = SimpleNamespace(isRunning=lambda: True)
+    assert handler.is_busy("length") and handler.is_busy()
+    assert not handler.is_busy("area")
+
+
+def test_skeleton_generation_makes_length_busy(tmp_path, qapp):
+    handler, _ = _handler(tmp_path, qapp)
+    handler.skeleton_handler = SimpleNamespace(is_busy=lambda: True)
+    assert handler.is_busy("length")
+    assert not handler.is_busy("area")
+
+
+def test_refused_while_another_job_runs(tmp_path, qapp):
+    _project(tmp_path)
+    jobs = SimpleNamespace(
+        try_start=lambda name, thread: False,
+        running_name=lambda: "Generating skeletons",
+        is_busy=lambda: True,
+    )
+    handler, mw = _handler(tmp_path, qapp, jobs=jobs)
+    handler.calculate_root_length()
+    assert handler.calculator_thread is None
+    assert mw.feedback.names() == ["notify"]
+    message, kind = mw.feedback.calls[0].args
+    assert "Generating skeletons" in message and kind == "warn"
+
+
+def test_missing_skeletons_is_a_warning_not_a_job(tmp_path, qapp):
+    _project(tmp_path, skeletons=False)
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_length()
+    assert handler.calculator_thread is None
+    assert mw.feedback.calls[-1].args[1] == "warn"
+    assert not mw.jobs.is_busy()
+
+
+def test_locked_csv_fails_softly_and_retry_saves_kept_rows(tmp_path, qapp, monkeypatch):
+    _project(tmp_path)
+    handler, mw = _handler(tmp_path, qapp)
+    prompts = []
+    monkeypatch.setattr(handler, "_offer_retry", lambda kind, msg: prompts.append((kind, msg)))
+
+    def locked(results, filename, headers):
+        raise FileLockedError(filename)
+
+    monkeypatch.setattr(measure_run, "write_metric_csv", locked)
+    handler.calculate_root_length()
+    _wait_idle(handler, qapp)
+    assert "task_failed" in mw.feedback.names()
+    assert prompts and prompts[0][0] == "length"
+    assert "root_lengths.csv is open in another program" in prompts[0][1]
+    assert handler.calculator_thread is None
+
+    monkeypatch.undo()  # the user closed Excel
+    monkeypatch.setattr(measure_run, "run_metric_pool", pytest.fail)  # no re-measuring
+    assert handler.retry_measure("length") is True
+    _wait_idle(handler, qapp)
+    assert mw.feedback.names()[-2:] == ["task_finished", "notify"]
+    assert os.path.isfile(tmp_path / "skeletons" / "root_lengths.csv")
+    assert handler.retry_measure("length") is False  # nothing left to retry
+
+
+def test_cancel_stops_the_run_without_writing(tmp_path, qapp):
+    _project(tmp_path, n=12)
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_length()
+    mw.feedback.cancel()  # the Cancel button
+    _wait_idle(handler, qapp)
+    assert mw.feedback.names()[-1] == "task_finished"
+    assert "cancel" in mw.feedback.last_message.lower()
+    assert not os.path.exists(tmp_path / "skeletons" / "root_lengths.csv")
+
+
+def test_window_feedback_drives_task_progress_and_status():
+    calls = []
+    tp = SimpleNamespace(
+        start=lambda label, cancelable=False, on_cancel=None: calls.append(("start", label)),
+        set_progress=lambda pct: calls.append(("pct", pct)),
+        set_counts=lambda done, total: calls.append(("counts", done, total)),
+        finish=lambda msg=None: calls.append(("finish", msg)),
+        fail=lambda msg: calls.append(("fail", msg)),
+    )
+    bar = SimpleNamespace(showMessage=lambda msg, ms=0: calls.append(("status", msg)))
+    mw = SimpleNamespace(task_progress=tp, status_bar=bar)
+    fb = WindowFeedback(mw)
+    fb.task_started("Measuring root length")
+    fb.task_progress(42)
+    fb.task_progress(3, 12)
+    fb.task_finished("done")
+    fb.notify("saved")  # no notify() on the window -> status bar
+    assert ("start", "Measuring root length") in calls
+    assert ("pct", 42) in calls and ("counts", 3, 12) in calls
+    assert ("finish", "done") in calls and ("status", "saved") in calls
+    assert any(c[0] == "status" and "42%" in c[1] for c in calls)
+
+
+def test_retry_prompt_buttons_drive_retry(tmp_path, qapp, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    handler, _ = _handler(tmp_path, qapp)
+    retried = []
+    monkeypatch.setattr(handler, "retry_measure", retried.append)
+    handler._retry_jobs["area"] = object()
+    handler._offer_retry("length", "root_lengths.csv is open in another program")
+    handler._retry_box.button(QMessageBox.StandardButton.Retry).click()
+    handler._offer_retry("area", "root_areas.csv is open in another program")
+    handler._retry_box.button(QMessageBox.StandardButton.Cancel).click()
+    qapp.processEvents()
+    assert retried == ["length"]
+    assert "area" not in handler._retry_jobs and handler._retry_box is None

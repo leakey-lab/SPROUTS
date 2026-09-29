@@ -1,0 +1,336 @@
+"""Qt-free Measure core: metric rows, CSV writing, cancellation and provenance.
+
+Pins the hard contract that the Measure CSVs are byte-identical to the
+pre-refactor pipeline (legacy reference implementation inlined below), plus
+RB-03/FR-06 (atomic CSV), RB-06 (non-ASCII paths), FR-15 (token-anchored
+names) and FR-02 (provenance sidecars).
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import math
+import os
+import re
+
+import cv2
+import numpy as np
+import pytest
+
+from app import provenance
+from app.config import AREA_CSV_HEADERS, CALIBRATION, LENGTH_CSV_HEADERS
+from app.inference import measure_run, metrics
+from app.inference.measure_run import AREA, LENGTH, MeasureRun
+
+# --------------------------------------------------------------------------- legacy reference
+# Verbatim logic of the pre-refactor pipeline (metrics.py @ a1599e6): cv2.imread,
+# first-match T/L regexes, open(..., "w") + csv.DictWriter.
+
+
+def _legacy_parse(name):
+    info = {"original_name": name, "tube_number": None, "length_position": None}
+    info.update(date=None, time=None)
+    if m := re.search(r"T(\d+)", name):
+        info["tube_number"] = int(m.group(1))
+    if m := re.search(r"L(\d+)", name):
+        info["length_position"] = int(m.group(1))
+    if m := re.search(r"(\d{4})\.(\d{2})\.(\d{2})", name):
+        info["date"] = ".".join(m.groups())
+    if m := re.search(r"_(\d{6})(?:_|$)", name):
+        t = m.group(1)
+        info["time"] = f"{t[:2]}:{t[2:4]}:{t[4:]}"
+    return info
+
+
+def _legacy_row(name, path, kind):
+    from skimage.morphology import skeletonize
+
+    value_col = LENGTH_CSV_HEADERS[5] if kind == "length" else AREA_CSV_HEADERS[5]
+    try:
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            what = "image" if kind == "length" else "mask"
+            raise FileNotFoundError(f"Could not read {what}: {path}")
+        h, w = img.shape[:2]
+        if kind == "length":
+            _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            if np.mean(b) > 127:
+                b = 255 - b
+            s = skeletonize(b / 255) > 0
+            mx, my = CALIBRATION.mm_per_px(w, h)
+            value = (
+                np.count_nonzero(s[:, :-1] & s[:, 1:]) * mx
+                + np.count_nonzero(s[:-1, :] & s[1:, :]) * my
+                + (
+                    np.count_nonzero(s[:-1, :-1] & s[1:, 1:])
+                    + np.count_nonzero(s[:-1, 1:] & s[1:, :-1])
+                )
+                * math.hypot(mx, my)
+            )
+        else:
+            _, b = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+            value = int(np.count_nonzero(b == 255)) * CALIBRATION.area_per_px_mm2(w, h)
+        info = _legacy_parse(name)
+        return {
+            "Image": info["original_name"],
+            "Tube": info["tube_number"],
+            "Position": info["length_position"],
+            "Date": info["date"],
+            "Time": info["time"],
+            value_col: round(value, 2),
+        }
+    except Exception as e:  # noqa: BLE001 - mirrors the legacy worker
+        row = {"Image": name, "Tube": None, "Position": None, "Date": None, "Time": None}
+        return row | {value_col: 0, "Error": str(e)}
+
+
+def _legacy_csv(images, kind, out_path):
+    headers = LENGTH_CSV_HEADERS if kind == "length" else AREA_CSV_HEADERS
+    rows = sorted(
+        (_legacy_row(n, p, kind) for n, p in images.items()),
+        key=lambda r: (
+            r.get("Tube") or float("inf"),
+            r.get("Date") or "",
+            r.get("Time") or "",
+            r.get("Position") or float("inf"),
+        ),
+    )
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=headers)
+        w.writeheader()
+        for r in rows:
+            w.writerow({h: r.get(h, "") for h in headers})
+    return out_path
+
+
+# --------------------------------------------------------------------------- fixtures
+
+_NAMES = [
+    "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM",
+    "24EFCAM1_T001_L045_2024.07.18_111529_001_SMM",
+    "24EFCAM1_T012_L043_2024.07.18_101914_001_SMM",
+    "24EFCAM2_T005_L056_2024.08.26_085019_003_SMM",
+    "24EFCAM3_T100_L049_2024.08.07_103103_002_SMM",
+    "24EFCAM1_T150_L038_2024.08.27_084641_003_SMM",
+]
+
+
+def _skeleton_image(seed: int, shape=(256, 341)) -> np.ndarray:
+    """A deterministic grey image with diagonal + orthogonal strokes."""
+    rng = np.random.default_rng(seed)
+    img = np.zeros(shape, np.uint8)
+    for _ in range(6):
+        p1 = tuple(int(v) for v in rng.integers(0, shape[1], 2) % (shape[1], shape[0]))
+        p2 = tuple(int(v) for v in rng.integers(0, shape[1], 2) % (shape[1], shape[0]))
+        cv2.line(img, p1, p2, int(rng.integers(160, 256)), int(rng.integers(1, 4)))
+    return img
+
+
+def _write_png(path, img):
+    ok, buf = cv2.imencode(".png", img)
+    assert ok
+    buf.tofile(str(path))  # works for non-ASCII paths
+
+
+def _make_dataset(folder, kind, names=_NAMES):
+    folder.mkdir(parents=True, exist_ok=True)
+    images = {}
+    for i, name in enumerate(names):
+        img = _skeleton_image(i)
+        if kind == "area":
+            img = cv2.dilate(img, np.ones((5, 5), np.uint8))
+            p = folder / f"{name}.png"
+        else:
+            p = folder / f"{name}_fake.png"
+        _write_png(p, img)
+        images[name] = str(p)
+    return images
+
+
+# --------------------------------------------------------------------------- byte identity
+
+
+@pytest.mark.parametrize("spec", [LENGTH, AREA], ids=["length", "area"])
+def test_measure_csv_is_byte_identical_to_legacy_pipeline(tmp_path, spec):
+    images = _make_dataset(tmp_path / "in", spec.kind)
+    # plus a corrupt file and a name with no metadata (Error row / None fields)
+    bad = tmp_path / "in" / "corrupt_T001_L001.png"
+    bad.write_bytes(b"not a png")
+    images["corrupt_T001_L001"] = str(bad)
+    images["IMG_0001"] = images[_NAMES[0]]
+
+    legacy = _legacy_csv(images, spec.kind, str(tmp_path / "legacy.csv"))
+    out = tmp_path / "out"
+    out.mkdir()
+    run = MeasureRun(spec, images, str(out))
+    run.compute()
+    csv_path = run.write()
+
+    assert os.path.basename(csv_path) == spec.csv_name
+    with open(legacy, "rb") as a, open(csv_path, "rb") as b:
+        assert b.read() == a.read()
+
+
+REAL = "D:/2024 EF image data"
+
+
+@pytest.mark.skipif(not os.path.isdir(REAL), reason="real dataset not present")
+@pytest.mark.parametrize("spec", [LENGTH, AREA], ids=["length", "area"])
+def test_real_sample_is_byte_identical_to_legacy_pipeline(tmp_path, spec):
+    sub, suffix = ("skeletons", "_fake.png") if spec.kind == "length" else ("mask", ".png")
+    folder = os.path.join(REAL, sub)
+    names = sorted(e.name for e in os.scandir(folder) if e.name.endswith(suffix))
+    sample = names[:: max(1, len(names) // 60)][:60]
+    images = {n[: -len(suffix)]: os.path.join(folder, n) for n in sample}
+    legacy = _legacy_csv(images, spec.kind, str(tmp_path / "legacy.csv"))
+    run = MeasureRun(spec, images, str(tmp_path))
+    run.compute()
+    with open(legacy, "rb") as a, open(run.write(), "rb") as b:
+        assert b.read() == a.read()
+
+
+# --------------------------------------------------------------------------- RB-06
+
+
+@pytest.mark.parametrize("spec", [LENGTH, AREA], ids=["length", "area"])
+def test_non_ascii_folder_measures_same_values(tmp_path, spec):
+    ascii_images = _make_dataset(tmp_path / "plain", spec.kind, _NAMES[:2])
+    uni_images = _make_dataset(tmp_path / "Données_根系", spec.kind, _NAMES[:2])
+    for name in _NAMES[:2]:
+        a = spec.row(name, ascii_images[name])
+        u = spec.row(name, uni_images[name])
+        assert "Error" not in u
+        assert u == a
+        assert u[spec.value_column] > 0
+
+
+# --------------------------------------------------------------------------- FR-15
+
+
+@pytest.mark.parametrize(
+    "name, tube, position",
+    [
+        ("PLOT12_T001_L005_2024.07.18_111618_001_SMM", 1, 5),
+        ("EXPT2_T014_L033_2024.07.18_111618_001_SMM", 14, 33),
+        ("CAL1_T001_L011_2024.07.18_111618_001_SMM", 1, 11),
+    ],
+)
+def test_parse_image_name_uses_standalone_tokens(name, tube, position):
+    info = metrics.parse_image_name(name)
+    assert (info["tube_number"], info["length_position"]) == (tube, position)
+    assert info["original_name"] == name
+    assert info["date"] == "2024.07.18" and info["time"] == "11:16:18"
+
+
+@pytest.mark.parametrize("name", _NAMES + ["scan_T005_L030_2024.03.15_143022_fake.png"])
+def test_parse_image_name_matches_legacy_for_canonical_names(name):
+    assert metrics.parse_image_name(name) == _legacy_parse(name)
+
+
+# --------------------------------------------------------------------------- RB-03 / FR-06
+
+
+def test_failed_csv_replace_leaves_previous_csv_and_no_temp(tmp_path, monkeypatch):
+    target = tmp_path / "root_lengths.csv"
+    target.write_bytes(b"previous,complete\r\n1,2\r\n")
+
+    def boom(src, dst):
+        raise PermissionError(13, "Permission denied", dst)
+
+    monkeypatch.setattr("app.io_utils.os.replace", boom)
+    rows = [{"Image": "a", "Tube": 1, "Length (mm)": 1.0}]
+    with pytest.raises(OSError):
+        metrics.write_metric_csv(rows, str(target), LENGTH_CSV_HEADERS)
+    assert target.read_bytes() == b"previous,complete\r\n1,2\r\n"
+    assert sorted(os.listdir(tmp_path)) == ["root_lengths.csv"]
+
+
+# --------------------------------------------------------------------------- RB-07
+
+
+def test_run_metric_pool_stops_early_when_asked():
+    calls = []
+
+    def worker(name, path):
+        calls.append(name)
+        return {"Image": name}
+
+    images = {str(i): "p" for i in range(400)}
+    rows = metrics.run_metric_pool(images, worker, should_stop=lambda: len(calls) >= 5)
+    assert len(rows) < len(images)
+
+
+def test_cancelled_compute_keeps_no_rows(tmp_path):
+    images = _make_dataset(tmp_path / "in", "length", _NAMES[:3])
+    run = MeasureRun(LENGTH, images, str(tmp_path))
+    run.compute(should_stop=lambda: True)
+    assert run.rows is None
+
+
+def test_compute_is_skipped_when_rows_are_already_known(tmp_path, monkeypatch):
+    images = _make_dataset(tmp_path / "in", "length", _NAMES[:2])
+    run = MeasureRun(LENGTH, images, str(tmp_path))
+    run.compute()
+    monkeypatch.setattr(measure_run, "run_metric_pool", pytest.fail)
+    run.compute()  # retry path: rows reused, nothing recomputed
+    assert len(run.rows) == 2
+
+
+# --------------------------------------------------------------------------- FR-02
+
+
+def test_write_adds_provenance_sidecar_without_touching_csv(tmp_path):
+    images = _make_dataset(tmp_path / "skeletons", "length", _NAMES[:3])
+    bad = tmp_path / "skeletons" / "x_fake.png"
+    bad.write_bytes(b"")
+    images["x"] = str(bad)
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"), project_root=str(tmp_path))
+    run.compute()
+    csv_path = run.write()
+    first = open(csv_path, "rb").read()
+
+    sidecar = provenance.sidecar_path(csv_path)
+    assert os.path.basename(sidecar) == "root_lengths.csv.provenance.json"
+    record = json.loads(open(sidecar, encoding="utf-8").read())
+    assert record["kind"] == "root_length"
+    assert record["calibration"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    assert record["inputs"]["folder"] == "skeletons"
+    assert record["inputs"]["n_images"] == 4
+    assert record["inputs"]["names_sha256"] == provenance.names_digest(images)
+    assert record["outputs"]["csv"] == "root_lengths.csv"
+    assert record["outputs"]["columns"] == LENGTH_CSV_HEADERS
+    assert record["outputs"]["n_rows"] == 4
+    assert record["outputs"]["n_errors"] == 1
+    assert "D:" not in json.dumps(record["inputs"]) and str(tmp_path) not in json.dumps(record)
+
+    os.remove(sidecar)
+    run.write()
+    assert open(csv_path, "rb").read() == first
+
+
+def test_sidecar_failure_does_not_fail_the_measurement(tmp_path, monkeypatch):
+    images = _make_dataset(tmp_path / "in", "area", _NAMES[:1])
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(measure_run.provenance, "write_sidecar", broken)
+    run = MeasureRun(AREA, images, str(tmp_path))
+    run.compute()
+    assert os.path.isfile(run.write())
+
+
+def test_rows_with_equal_sort_keys_keep_input_order():
+    """Legacy order of tied rows (e.g. error rows) depended on thread completion."""
+    import random
+    import time
+
+    def worker(name, path):
+        time.sleep(random.random() / 500)
+        return {"Image": name}
+
+    images = {f"img{i:02d}": "" for i in range(12)}
+    for _ in range(3):
+        rows = metrics.run_metric_pool(images, worker)
+        assert [r["Image"] for r in rows] == list(images)

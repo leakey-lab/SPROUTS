@@ -24,24 +24,25 @@ import csv
 import logging
 import math
 import os
-import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-logger = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
 from skimage.morphology import skeletonize
 
-from app.config import CALIBRATION
+from app.config import AREA_VALUE_COLUMN, CALIBRATION, LENGTH_VALUE_COLUMN
+from app.io_utils import atomic_open, imread_unicode
+from app.naming import parse_image_name as _parse_name
+
+logger = logging.getLogger(__name__)
 
 # --------------------------- image -> binary -------------------------------
 
 
 def preprocess_image(image_path: str) -> np.ndarray:
     """Read an image and return its 1px skeleton (uint8 0/255)."""
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    img = imread_unicode(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
     _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -53,7 +54,7 @@ def preprocess_image(image_path: str) -> np.ndarray:
 
 def load_mask(image_path: str) -> np.ndarray:
     """Read a mask image and return a binary (0/255) array."""
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    img = imread_unicode(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError(f"Could not read mask: {image_path}")
     _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
@@ -104,36 +105,81 @@ def calculate_root_area(mask: np.ndarray) -> float:
 
 
 def parse_image_name(name: str) -> dict:
-    """Parse ``..._T{tube}_L{pos}_YYYY.MM.DD_HHMMSS_...`` into its fields."""
-    info = {
+    """Parse ``..._T{tube}_L{pos}_YYYY.MM.DD_HHMMSS_...`` into its fields.
+
+    Delegates to :func:`app.naming.parse_image_name` (tube/position come only
+    from stand-alone ``T#``/``L#`` tokens, FR-15) and keeps this module's dict
+    shape; missing fields are ``None``.
+    """
+    parsed = _parse_name(name)
+    return {
         "original_name": name,
-        "tube_number": None,
-        "length_position": None,
-        "date": None,
-        "time": None,
+        "tube_number": parsed.tube,
+        "length_position": parsed.position,
+        "date": parsed.date,
+        "time": parsed.time,
     }
+
+
+# ----------------------------- rows ----------------------------------------
+
+
+def _metric_row(
+    name: str,
+    path: str,
+    measure: Callable[[str], float],
+    value_column: str,
+    label: str,
+) -> dict:
+    """One CSV row: ``measure(path)`` rounded to 2 dp, or a 0 row with ``Error``."""
     try:
-        if m := re.search(r"T(\d+)", name):
-            info["tube_number"] = int(m.group(1))
-        if m := re.search(r"L(\d+)", name):
-            info["length_position"] = int(m.group(1))
-        if m := re.search(r"(\d{4})\.(\d{2})\.(\d{2})", name):
-            y, mo, d = m.groups()
-            info["date"] = f"{y}.{mo}.{d}"
-        if m := re.search(r"_(\d{6})(?:_|$)", name):
-            t = m.group(1)
-            info["time"] = f"{t[:2]}:{t[2:4]}:{t[4:]}"
-    except (ValueError, AttributeError) as exc:
-        logger.debug("parse_image_name could not parse %r: %s", name, exc)
-    return info
+        value = measure(path)
+        info = parse_image_name(name)
+        return {
+            "Image": info["original_name"],
+            "Tube": info["tube_number"],
+            "Position": info["length_position"],
+            "Date": info["date"],
+            "Time": info["time"],
+            value_column: round(value, 2),
+        }
+    except Exception as e:  # per-image boundary: one bad file never aborts a run
+        logger.error("%s metric failed for %r: %s", label, name, e)
+        return {
+            "Image": name,
+            "Tube": None,
+            "Position": None,
+            "Date": None,
+            "Time": None,
+            value_column: 0,
+            "Error": str(e),
+        }
+
+
+def length_row(name: str, path: str) -> dict:
+    """The ``root_lengths.csv`` row for the skeleton image at ``path``."""
+    return _metric_row(
+        name, path, lambda p: root_length_mm(preprocess_image(p)), LENGTH_VALUE_COLUMN, "Length"
+    )
+
+
+def area_row(name: str, path: str) -> dict:
+    """The ``root_areas.csv`` row for the mask image at ``path``."""
+    return _metric_row(name, path, lambda p: root_area_mm2(load_mask(p)), AREA_VALUE_COLUMN, "Area")
 
 
 # ----------------------------- CSV -----------------------------------------
 
 
 def write_metric_csv(results: list[dict], filename: str, headers: list[str]) -> None:
+    """Write ``results`` as a CSV with exactly ``headers`` (missing cells empty).
+
+    The file is replaced atomically: a failure (disk full, the CSV held open by
+    Excel -> :class:`app.io_utils.FileLockedError`) leaves the previous CSV intact
+    and no temp file behind.
+    """
     try:
-        with open(filename, mode="w", newline="", encoding="utf-8") as f:
+        with atomic_open(filename, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
             for row in results:
@@ -157,23 +203,37 @@ def run_metric_pool(
     images: dict[str, str],
     worker: Callable[[str, str], dict],
     progress_cb: Callable[[int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict]:
-    """Run ``worker(name, path)`` over ``images`` on a thread pool, return rows."""
-    results: list[dict] = []
+    """Run ``worker(name, path)`` over ``images`` on a thread pool, return sorted rows.
+
+    ``should_stop`` is polled after each finished image; once it returns True
+    the pending images are cancelled and the rows so far are returned, so the
+    caller must check its own cancel flag before using them.
+    """
     total = len(images)
     if total == 0:
-        return results
+        return []
+    # Rows are kept in input order before the (stable) sort, so rows with equal
+    # sort keys (e.g. error rows) come out in a deterministic order.
+    results: list[dict | None] = [None] * total
     # Cap at half of logical cores (min 2, max 8) so the Qt main thread
     # is not starved by workers saturating every CPU core.
     max_workers = min(max(2, (os.cpu_count() or 4) // 2), 8, total)
     last_pct = -1
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(worker, name, path): name for name, path in images.items()}
+        futures = {
+            ex.submit(worker, name, path): index
+            for index, (name, path) in enumerate(images.items())
+        }
         for i, fut in enumerate(as_completed(futures), start=1):
-            results.append(fut.result())
+            results[futures[fut]] = fut.result()
+            if should_stop is not None and should_stop():
+                ex.shutdown(wait=True, cancel_futures=True)
+                break
             if progress_cb is not None:
                 pct = int(i / total * 100)
                 if pct != last_pct:
                     last_pct = pct
                     progress_cb(pct)
-    return sorted(results, key=_sort_key)
+    return sorted((row for row in results if row is not None), key=_sort_key)
