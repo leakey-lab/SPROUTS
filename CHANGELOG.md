@@ -11,6 +11,44 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
+Optimization, UI-error and FAIR pass (branch `feat/ui-perf-refinement`, 2026-09-28): a
+161-finding audit implemented by per-area packages, then integrated and reviewed.
+
+### Fixed
+- **Generate no longer overwrites hand-corrected masks**: when `mask/` already has
+  masks, a dialog offers "Keep existing masks (generate missing only)" (default),
+  "Overwrite all" (counts the hand-corrected ones) or Cancel.
+- Dashboards no longer drop data: `Position` was downcast to int8 and wrapped for depths
+  L121-L127, hiding 7.9% of the real 2024 rows in Growth Lines and Faceted views.
+- Correct Skeleton no longer freezes on a skeleton with a loop off a junction
+  (`vectorize_skeleton` looped forever).
+- A successful skeleton run no longer ends in a false "Images directory not found" error,
+  and new outputs appear without reloading the folder.
+- JPG projects no longer show every traced mask as "No mask" (the status check looked
+  for `mask/<stem>.jpg`).
+- Ctrl+Y redo works in Correct Mask and Trace GT (two identical shortcuts cancelled each
+  other); Ctrl+Shift+Z also redoes.
+- A metric CSV open in Excel no longer crashes the app: writes are atomic and a locked
+  file gives a Retry prompt. Unhandled exceptions are logged and shown once instead of
+  aborting the process.
+- Correct Skeleton asks before discarding unsaved corrections and opens the generated or
+  corrected skeleton for the selected image automatically (no file dialog per image).
+- Keyboard browsing: arrow keys load the highlighted image; PgDn/PgUp step images in
+  every stage.
+- Toasts no longer nest graphics effects (seven QPainter warnings per repaint); the
+  metrics bar elides long image names instead of forcing a 1058 px minimum window width.
+
+### Performance
+- Cold start to first window 4.1 s -> 0.6 s: no torch, CUDA, Dash or model load on the
+  startup path.
+- 46k-image library: view-mode switch 2.0 s -> 27 ms, entering/leaving Correct Mask
+  1.7 s -> 3 ms, search 80 ms -> 6-19 ms per keystroke (debounced), PgDn 79 ms -> 1 ms.
+- Mask/GT editor strokes repaint only their dirty rectangle (3-7 ms -> <0.1 ms per
+  segment); undo stores patches (2048 px canvas: +300 MiB -> <1 MiB after 50 strokes);
+  saved masks are compressed (1.2 MB -> ~5-8 KB, identical pixels).
+- Dashboards: first chart about 30-40% sooner, closing 0.5 s -> 3 ms, faceted profile
+  3-7x faster; first GPU run no longer spends 40-70 s in cuDNN autotuning.
+
 ### Added
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
@@ -26,6 +64,14 @@ produced before and after the change can be told apart.
   `build_info.json` (version, commit, build time) to the app.
 - CI runs the tests on Windows as well as Linux, builds and inspects the wheel, and
   validates `CITATION.cff`.
+- Interface: responsive top bar (compact below the full width), one status line with the
+  real device and task state, task progress with counts, ETA and Cancel, Alt+1..7 stage
+  keys, a generated F1 shortcut sheet, an About dialog (version, commit, model checksums,
+  citation), measured length/area in the metrics bar (read from the Measure CSVs),
+  visible focus rings, AA-contrast text tokens, crisp HiDPI icons, collision-free editor
+  overlays, offline dashboard assets and a CSV export from each dashboard.
+- Provenance sidecars (`*.provenance.json`) next to metric CSVs and generation runs:
+  app version, commit, model SHA-256, calibration and runtime precision.
 
 ### Changed
 - `gt/classes.json` is parsed strictly: a wrong field type (for example
@@ -36,9 +82,45 @@ produced before and after the change can be told apart.
   fails (`build.bat` used to report success after a failed build).
 - README: the documented PyTorch nightly no longer exists; install the stable
   torch 2.8.0 / torchvision 0.23.0 build for your CUDA version (or the CPU build).
+- `SPROUTS_CHECKPOINTS_DIR` relocates the model weights, so a `pip install .` copy
+  (whose application folder is `site-packages`) can find them.
+- Cancel (or "Stop it and quit") during the last mask batch no longer starts the
+  chained skeleton pass; once the window closes no new job can start. On the CPU
+  fallback batches are small (masks 4, skeletons 8), so Cancel takes a second or two
+  instead of about 10 s; a job that still runs after the first 5 s on close gets the
+  window hidden and a longer wait instead of being killed mid-batch.
+- `CUDA_VISIBLE_DEVICES=""` (CUDA reported available with no device) now takes the CPU
+  fallback; the mask model used to fail to load.
+
+### Removed
+- `MainWindow.mask_handler` and the legacy `MainWindow.loading_progress_bar` progress
+  shim (handlers report through `MainWindow.feedback`).
+- `VisualizationInitWorker` / `VisualizationInitWorkerArea` and their `finished` /
+  `error` signals; both dashboards use `app.visualization.viz_window.DashInitWorker`
+  (`built` / `failed`).
+- black and isort configuration: ruff is the single lint, import-sort and format tool,
+  as pre-commit already ran it.
 
 ### Scientific output changes
-- None from the changes above.
+- **Tube / Position** (`app/naming.py`, FR-15) come only from stand-alone `T<n>` /
+  `L<n>` tokens of the file name. A leading field such as `PLOT12_` or `EXPT2_` is no
+  longer read as the tube, and a name without separators (`T1L2_...`) now gives an
+  empty Tube and Position. This changes the `Tube` / `Position` columns of both metric
+  CSVs and the tube grouping (`group_by_tube`) of a GT dataset export split.
+- **Non-ASCII paths** (for example `résumé_T1_L1.png`) are now read
+  (`io_utils.imread_unicode`) and measured; they used to become an error row with
+  value 0.
+- **Deterministic GPU inference** (`app/inference/runtime.py`): cuDNN runs with
+  `benchmark` off and `deterministic` on (set `SPROUTS_CUDNN_BENCHMARK=1` for the old
+  autotuning). Generated masks and skeletons are now reproducible run to run on the same
+  GPU, but they are numerically equivalent to 2.x/3.0 output, not bit-identical: on 128
+  real images, 40 of 39.3 M mask pixels differed (area changed on 24/128 images by at
+  most 0.00076 mm², 0.085 %) and 502 of 33.5 M skeleton channel values differed by one
+  grey level with no pixel crossing the binarisation threshold (root length identical on
+  128/128). 2.x/3.0 masks were not reproducible run to run on the GPU either (two
+  baseline runs gave different masks).
+- Batch sizes (including the new CPU batches) do not change outputs: BatchNorm runs in
+  eval mode.
 
 ## [3.0.0] - not yet tagged
 
@@ -57,6 +139,7 @@ and skeleton editors, multi-class ground-truth tracing with dataset export, and 
   the reason is in `Error`). GPU mask and skeleton inference switched to mixed-precision
   autocast (bf16 where the GPU supports it).
 - `bf1f898` (2026-06-01) GPU mask and skeleton inference returned to fp32 without
-  autocast (cuDNN TF32 convolutions and `cudnn.benchmark` stay enabled, so GPU results
-  are not bit-reproducible run to run). Masks and skeletons generated on a GPU between
+  autocast. In this release cuDNN TF32 convolutions and `cudnn.benchmark` stayed
+  enabled, so its GPU results were not bit-reproducible run to run (fixed under
+  [Unreleased]: deterministic cuDNN). Masks and skeletons generated on a GPU between
   2026-05-31 and 2026-06-01 used mixed precision.

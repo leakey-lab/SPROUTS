@@ -122,10 +122,14 @@ Both kinds share the folder and the name; Measure treats them alike.
 
 Saving an empty tracing deletes the file (the image then has no mask). The editor also
 opens `mask/<stem>.jpg`/`.jpeg` masks, but Measure reads only `.png`. The file does not
-record its origin; mode `L` versus `RGBA` is the only practical tell. *Generate* writes
-every image's mask and replaces a hand-traced mask of the same name. An image that
-cannot be decoded gets an all-background mask, so its area reads `0.0` with an empty
-`Error`; only the log records the skipped image.
+record its origin; mode `L` versus `RGBA` is the only practical tell.
+
+When masks already exist, *Generate* asks first: **Keep existing masks** (the default;
+only missing masks are generated), **Overwrite all** (the dialog counts the
+hand-corrected ones), or **Cancel**. Hand-corrected masks are recognised by their RGBA
+PNG header (`app/inference/mask_origin.py`). An image that cannot be decoded gets no
+mask file; it is listed in `mask/_sprouts_run.json` (`"failed"`) and in the warning
+shown at the end of the run.
 
 ## Skeletons
 
@@ -133,6 +137,10 @@ cannot be decoded gets an all-background mask, so its area reads `0.0` with an e
 |---|---|---|
 | `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
 | `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Hand-corrected skeleton, saved at the size of the skeleton it was edited from (341 x 256 by default) |
+
+An image that cannot be decoded gets no skeleton file; it is listed in
+`skeletons/_sprouts_run.json` (`"failed"`) and in the warning shown at the end of the
+run.
 
 ## Ground truth (`gt/`)
 
@@ -203,8 +211,11 @@ at least `val_fraction` of the images; the last group always stays in train.
 ## Provenance records
 
 `<output>.provenance.json` next to an output describes what produced it
-(`app/provenance.py`, schema `sprouts-provenance/1`). The GT export writes
-`manifest.csv.provenance.json`.
+(`app/provenance.py`, schema `sprouts-provenance/1`). Measure writes
+`root_lengths.csv.provenance.json` / `root_areas.csv.provenance.json`, the GT export
+`manifest.csv.provenance.json`. Mask and skeleton generation write one
+`_sprouts_run.json` per output folder (`app/inference/run_record.py`) with the same
+keys, describing the latest run into that folder.
 
 | Key | Content |
 |---|---|

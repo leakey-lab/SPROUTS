@@ -68,6 +68,14 @@ is not published yet; ask the maintainers. Check that you have the right files w
 SHA-256 digests in [`docs/MODELS.md`](docs/MODELS.md); the app warns in its log when a
 checkpoint does not match.
 
+To keep the weights somewhere else (required for a `pip install .` copy, whose
+application folder is `site-packages`), point `SPROUTS_CHECKPOINTS_DIR` at the folder
+that holds `mask_weights/` and `skeletonizer/`:
+
+```powershell
+$env:SPROUTS_CHECKPOINTS_DIR = 'D:\models\sprouts-checkpoints'
+```
+
 ## Running
 
 ```powershell
@@ -82,7 +90,9 @@ pip install -e .
 sprouts
 ```
 
-Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log`.
+Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log` (set `SPROUTS_LOG_DIR` to use another
+folder). A native crash writes the stacks of every thread to `fault.log` next to it; an
+unexpected Python error is logged and shown in a dialog instead of closing the app.
 
 ## Outputs
 
@@ -93,6 +103,17 @@ Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log`.
 | `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
 | `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error` |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
+| `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
+| `mask/_sprouts_run.json`, `skeletons/_sprouts_run.json` | the latest generation run into that folder: model SHA-256, device and precision, parameters, failed inputs |
+
+Generating masks into a folder that already has masks asks first: keep them and
+generate only the missing ones (the default), or replace every mask. On a GPU, outputs
+are reproducible run to run (cuDNN autotuning is off, deterministic algorithms on). They
+are numerically equivalent to earlier versions, not bit-identical: root length is
+unchanged and area moves by under 0.1 % (see `CHANGELOG.md`). On
+Ampere and newer GPUs convolutions use TF32, recorded as `precision` in the run file.
+Set `SPROUTS_CUDNN_BENCHMARK=1` to allow cuDNN autotuning (faster on some GPUs, not
+bit-reproducible).
 
 Tube, position, date and time come from the image file name,
 `<field>_T<tube>_L<position>_<YYYY.MM.DD>_<HHMMSS>_...`. A row that could not be measured
