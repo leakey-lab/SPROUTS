@@ -1,584 +1,560 @@
 """
-Visualization management for the main window.
-Handles root length and root area visualization toggling and cleanup.
+Dashboard management for the main window: open, bring forward and close the
+embedded root-length and root-area Dash dashboards.
+
+The two dashboards differ only in data, described by a :class:`DashboardSpec`
+(:data:`LENGTH`, :data:`AREA`). One :class:`DashboardController` per window
+runs their shared lifecycle:
+
+* ``show`` is idempotent: it builds a dashboard when none is alive, when its
+  CSV changed on disk, or when it failed, and otherwise brings the live one
+  forward. Showing one dashboard hides the other; it never closes it.
+* ``close`` removes a dashboard exactly once, and ``toggle`` keeps the legacy
+  open/close meaning for the old buttons.
+* OpenGL canvas viewports stay off while any dashboard embeds a browser (Qt6
+  cannot composite a QWebEngineView in a window holding a QOpenGLWidget) and
+  come back when the last one closes, but only if they were on before.
+
+The module functions keep their historical names. The dashboard classes are
+imported on first use, so opening the app does not load the Dash stack.
 """
 
+from __future__ import annotations
+
+import importlib
 import logging
 import os
+import sys
+import weakref
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QApplication, QMessageBox
+# Qt6 only lets QtWebEngineWidgets load before the QApplication exists. The
+# dashboard modules that use it are imported lazily, so import it here.
+from PyQt6 import QtWebEngineWidgets  # noqa: F401
+from PyQt6.QtCore import QEventLoop, Qt
+from PyQt6.QtWidgets import QApplication, QMessageBox, QTreeWidgetItemIterator
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
-from app.visualization.root_area_visualization import RootAreaVisualization
-from app.visualization.root_length_visulization import RootLengthVisualization
+from app.project_layout import ProjectLayout, find_test_latest_dir
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "AREA",
+    "LENGTH",
+    "SPECS",
+    "CsvLookup",
+    "DashboardController",
+    "DashboardSpec",
+    "ViewportGlSuspension",
+    "close_root_area_visualization",
+    "close_root_length_visualization",
+    "close_visualization",
+    "controller_for",
+    "find_test_latest_dir",
+    "show_root_area_visualization",
+    "show_root_length_visualization",
+    "show_visualization",
+    "toggle_root_area_visualization",
+    "toggle_root_length_visualization",
+    "toggle_visualization",
+    "visible_kind",
+]
 
-def find_test_latest_dir(start_path, max_depth=3):
-    """
-    Efficiently search for 'test_latest' directory using a focused search strategy.
+# Dashboard classes, imported on first use. Assigning the module attribute
+# (tests, the UI harness) replaces the class the controller builds.
+_DASHBOARD_MODULES = {
+    "RootLengthVisualization": "app.visualization.root_length_visulization",
+    "RootAreaVisualization": "app.visualization.root_area_visualization",
+}
 
-    Args:
-        start_path (str): Starting directory path
-        max_depth (int): Maximum levels to search in either direction
 
-    Returns:
-        str or None: Path to test_latest directory if found, None otherwise
-    """
-    start_path = os.path.abspath(start_path)
+def __getattr__(name: str):
+    module = _DASHBOARD_MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(module), name)
 
-    def search_directory(root_path, depth=0):
-        """Search a directory and its immediate subdirectories for test_latest"""
-        if depth > max_depth:
-            return None
 
-        # First check if current directory is test_latest
-        if os.path.basename(root_path) == "test_latest":
-            return root_path
+# --------------------------------------------------------------------------- #
+#  What differs between the two dashboards
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class CsvLookup:
+    """A dashboard's CSV, or the title and text telling the user why there is none."""
 
-        try:
-            # Get immediate subdirectories, prioritizing likely candidates
-            subdirs = []
-            with os.scandir(root_path) as entries:
-                for entry in entries:
-                    if entry.is_dir():
-                        # Prioritize directories that are likely to contain our target
-                        name = entry.name.lower()
-                        if name in (
-                            "output",
-                            "results",
-                            "test",
-                            "latest",
-                            "test_latest",
-                        ):
-                            subdirs.insert(0, entry.path)
-                        else:
-                            subdirs.append(entry.path)
+    path: str | None
+    title: str = ""
+    message: str = ""
 
-            # Search prioritized subdirectories
-            for subdir in subdirs:
-                result = search_directory(subdir, depth + 1)
-                if result:
-                    return result
 
-        except OSError as e:
-            # Unreadable/inaccessible directory (permissions, vanished path);
-            # skip it and continue the search elsewhere.
-            logger.debug("Skipping directory %s during search: %s", root_path, e)
+def _find_lengths_csv(layout: ProjectLayout) -> CsvLookup:
+    path = layout.find_lengths_csv()
+    if path:
+        return CsvLookup(path)
+    return CsvLookup(
+        None,
+        "No root length data",
+        "No root length data was found.\n\n"
+        "Run Measure → Root Length first (after generating skeletons).\n\n"
+        "Expected file locations:\n"
+        f"  • {os.path.join(layout.skeletons_dir, ROOT_LENGTHS_CSV)}\n"
+        f"  • {os.path.join(layout.root, ROOT_LENGTHS_CSV)}",
+    )
 
+
+def _find_areas_csv(layout: ProjectLayout) -> CsvLookup:
+    masks_dir = layout.resolve_masks_dir()
+    if masks_dir is None:
+        return CsvLookup(
+            None,
+            "No mask data",
+            "No masks folder was found.\n\nGenerate masks first, then run Measure → Root Area.",
+        )
+    path = layout.find_areas_csv()
+    if path:
+        return CsvLookup(path)
+    return CsvLookup(
+        None,
+        "No root area data",
+        "No root area data was found.\n\n"
+        "Run Measure → Root Area first (after generating masks).\n\n"
+        f"Expected file:\n  • {os.path.join(masks_dir, ROOT_AREAS_CSV)}",
+    )
+
+
+@dataclass(frozen=True)
+class DashboardSpec:
+    """Everything that distinguishes one dashboard from the other."""
+
+    kind: str  # "length" | "area"; also the SkeletonHandler.is_busy() key
+    noun: str  # for messages
+    attr: str  # MainWindow attribute holding the live dashboard (public contract)
+    class_name: str  # dashboard class, resolved on this module
+    needs_image_manager: bool  # constructor takes (csv_path, image_manager)
+    closed_slot: str  # MainWindow slot connected to the dashboard's server_closed
+    button_attr: str  # legacy button whose text follows open / closed
+    open_text: str
+    close_text: str
+    calculator_attr: str  # SkeletonHandler thread attribute, for handlers without is_busy()
+    find_csv: Callable[[ProjectLayout], CsvLookup]
+
+
+LENGTH = DashboardSpec(
+    kind="length",
+    noun="root length",
+    attr="root_length_viz",
+    class_name="RootLengthVisualization",
+    needs_image_manager=True,
+    closed_slot="on_visualization_server_closed",
+    button_attr="visualize_root_length_button",
+    open_text="📊 Visualize Root Length",
+    close_text="Close Visualization",
+    calculator_attr="calculator_thread",
+    find_csv=_find_lengths_csv,
+)
+
+AREA = DashboardSpec(
+    kind="area",
+    noun="root area",
+    attr="root_area_viz",
+    class_name="RootAreaVisualization",
+    needs_image_manager=False,
+    closed_slot="on_area_visualization_server_closed",
+    button_attr="visualize_root_area_button",
+    open_text="📈 Visualize Root Area",
+    close_text="Close Area Visualization",
+    calculator_attr="area_calculator_thread",
+    find_csv=_find_areas_csv,
+)
+
+SPECS: dict[str, DashboardSpec] = {spec.kind: spec for spec in (LENGTH, AREA)}
+
+
+def _spec(kind: str) -> DashboardSpec:
+    try:
+        return SPECS[kind]
+    except KeyError:
+        raise ValueError(f"unknown dashboard {kind!r}; expected one of {sorted(SPECS)}") from None
+
+
+# --------------------------------------------------------------------------- #
+#  Helpers
+# --------------------------------------------------------------------------- #
+def _source_signature(path: str | None) -> tuple | None:
+    """Identity of a CSV's content on disk (path, size, mtime), or None if unreadable."""
+    if not path:
         return None
-
-    def search_up(path, depth=0):
-        """Search parent directories and their siblings"""
-        if depth > max_depth:
-            return None
-
-        try:
-            # Check current directory
-            if os.path.basename(path) == "test_latest":
-                return path
-
-            # Get parent directory
-            parent = os.path.dirname(path)
-            if parent == path:  # Reached root
-                return None
-
-            # Check siblings of current directory
-            with os.scandir(parent) as entries:
-                for entry in entries:
-                    if entry.is_dir() and entry.path != path:
-                        # Quick check for the target directory name
-                        if entry.name == "test_latest":
-                            return entry.path
-                        # Only search promising sibling directories
-                        if entry.name.lower() in (
-                            "output",
-                            "results",
-                            "test",
-                            "latest",
-                        ):
-                            sibling_result = search_directory(entry.path, 0)
-                            if sibling_result:
-                                return sibling_result
-
-            # Move up to parent
-            return search_up(parent, depth + 1)
-
-        except OSError as e:
-            # Unreadable/inaccessible directory; stop ascending this branch.
-            logger.debug("Skipping parent %s during search: %s", path, e)
-
+    try:
+        stat = os.stat(path)
+    except OSError:
         return None
+    return os.path.normcase(os.path.abspath(path)), stat.st_size, stat.st_mtime_ns
 
-    # Try searching down first with early termination
-    result = search_directory(start_path)
-    if result:
-        return result
 
-    # If not found, search up
-    result = search_up(start_path)
-    if result:
-        return result
-
+def _first_image_name(tree) -> str | None:
+    """Stored name of the first image leaf in the library tree."""
+    it = QTreeWidgetItemIterator(tree)
+    while it.value():
+        name = it.value().data(0, Qt.ItemDataRole.UserRole)
+        if name:
+            return name
+        it += 1
     return None
 
 
-def toggle_root_length_visualization(main_window):
-    """Toggle between showing and hiding the root length visualization."""
+def _opengl_viewports_in_use(window) -> bool:
+    """True if any canvas of *window* currently renders through a QOpenGLWidget."""
+    find_children = getattr(window, "findChildren", None)
+    if find_children is None:
+        return False
     try:
-        logger.info(
-            "DBG toggle_root_length_viz: root_length_viz=%s, currentWidget=%s",
-            main_window.root_length_viz,
-            main_window.right_panel.currentWidget().__class__.__name__,
-        )
-        # Branch on existence alone, not on which panel is current. The viz may
-        # be alive but hidden (panel switched to mask-tracing/skeleton/display);
-        # gating on currentWidget routed those Close clicks into show(), whose
-        # "already exists" branch closes then reopens after 500ms -> flicker.
-        if main_window.root_length_viz is not None:
-            close_root_length_visualization(main_window)
-        else:
-            show_root_length_visualization(main_window)
-    except Exception as e:
-        # Top-level UI guard: log with traceback, then surface to the user.
-        logger.exception("Error toggling root length visualization")
-        QMessageBox.critical(main_window, "Error", f"Error toggling visualization: {str(e)}")
+        from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+    except ImportError:  # Qt built without OpenGL widgets: nothing to switch off
+        return False
+    return bool(find_children(QOpenGLWidget))
 
 
-def show_root_length_visualization(main_window):
-    """Show the root length visualization with proper loading state management."""
-    logger.info(
-        "DBG show_root_length_viz: entered, topLevelItemCount=%d",
-        main_window.file_list.topLevelItemCount(),
-    )
-
-    if main_window.file_list.topLevelItemCount() == 0:
-        QMessageBox.warning(main_window, "Warning", "No images loaded. Please load images first.")
+def _disconnect(signal, slot) -> None:
+    if slot is None:
         return
+    try:
+        signal.disconnect(slot)
+    except (TypeError, RuntimeError):
+        pass
 
-    # Guard: don't open the visualization while a calculation that produces
-    # (or invalidates) the length CSV is still running. Launching mid-calc reads
-    # a half-written / empty CSV -> the init worker raises "No data found in CSV
-    # file" and is torn down the instant it errors, racing thread destruction
-    # ("QThread: Destroyed while thread '' is still running").
-    sh = getattr(main_window, "skeleton_handler", None)
-    if sh is not None:
-        busy = (
-            getattr(sh, "calculator_thread", None) is not None and sh.calculator_thread.isRunning()
-        ) or (
-            getattr(sh, "skeleton_handler", None) is not None
-            and getattr(sh.skeleton_handler, "_thread", None) is not None
-            and sh.skeleton_handler._thread.isRunning()
-        )
-        if busy:
+
+class ViewportGlSuspension:
+    """Keeps OpenGL canvas viewports off while any dashboard holds a browser.
+
+    The first holder switches the canvases to raster viewports; the last one
+    to leave restores OpenGL, and only if it was on when the first arrived, so
+    ``ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0`` or a machine without OpenGL stays
+    on raster viewports.
+    """
+
+    def __init__(self, set_enabled: Callable[[bool], None], is_enabled: Callable[[], bool]):
+        self._set_enabled = set_enabled
+        self._is_enabled = is_enabled
+        self._holders: set[str] = set()
+        self._restore = False
+
+    def acquire(self, holder: str) -> None:
+        if holder in self._holders:
+            return
+        if not self._holders:
+            self._restore = self._is_enabled()
+            if self._restore:
+                self._set_enabled(False)
+        self._holders.add(holder)
+
+    def release(self, holder: str) -> None:
+        if holder not in self._holders:
+            return
+        self._holders.discard(holder)
+        if not self._holders and self._restore:
+            self._restore = False
+            self._set_enabled(True)
+
+
+# --------------------------------------------------------------------------- #
+#  Controller
+# --------------------------------------------------------------------------- #
+class DashboardController:
+    """Opens, brings forward and closes the dashboards of one main window.
+
+    Reads and writes only the window's public dashboard surface:
+    ``right_panel``, ``file_list``, ``image_manager``, ``skeleton_handler``,
+    ``switch_right_panel``, ``set_opengl_viewports_enabled``,
+    ``on_image_selected``, ``notify``, the ``root_*_viz`` attributes, their
+    ``on_*_server_closed`` slots and the legacy visualize buttons.
+    """
+
+    def __init__(self, main_window) -> None:
+        self._window = weakref.ref(main_window)
+        self._gl = ViewportGlSuspension(self._set_opengl, self._opengl_in_use)
+        self._sources: dict[str, tuple | None] = {}  # kind -> CSV signature it was built from
+        self._showing = False
+
+    @property
+    def _mw(self):
+        window = self._window()
+        if window is None:
+            raise RuntimeError("the main window of this dashboard controller is gone")
+        return window
+
+    # ------------------------------------------------------------------ queries
+    def dashboard(self, spec: DashboardSpec):
+        """The live dashboard of *spec*, or None."""
+        return getattr(self._mw, spec.attr, None)
+
+    def visible_kind(self) -> str | None:
+        """Kind of the dashboard that is the right panel's current page, if any."""
+        current = self._mw.right_panel.currentWidget()
+        for spec in SPECS.values():
+            dashboard = self.dashboard(spec)
+            if dashboard is not None and dashboard is current:
+                return spec.kind
+        return None
+
+    # ------------------------------------------------------------------ commands
+    def show(self, spec: DashboardSpec) -> None:
+        """Bring the dashboard forward, building (or rebuilding) it when needed."""
+        if self._showing:
+            return  # re-entered from processEvents while a dashboard is being built
+        self._showing = True
+        try:
+            self._show(spec)
+        finally:
+            self._showing = False
+
+    def close(self, spec: DashboardSpec) -> None:
+        """Close and remove the dashboard (if open)."""
+        dashboard = self.dashboard(spec)
+        if dashboard is None:
+            return
+        mw = self._mw
+        was_current = mw.right_panel.currentWidget() is dashboard
+        self._set_button_text(spec, spec.open_text)
+        if was_current:
+            mw.switch_right_panel("display")
+        self._discard(spec, dashboard)
+        if was_current:
+            item = mw.file_list.currentItem()
+            if item is not None:
+                mw.on_image_selected(item)
+
+    def toggle(self, spec: DashboardSpec) -> None:
+        """Legacy buttons: close the dashboard if it is open, else show it."""
+        if self.dashboard(spec) is not None:
+            self.close(spec)
+        else:
+            self.show(spec)
+
+    # ------------------------------------------------------------------ show
+    def _show(self, spec: DashboardSpec) -> None:
+        mw = self._mw
+        current = self.dashboard(spec)
+        if current is not None and self._is_up_to_date(spec, current):
+            self._bring_forward(current)
+            return
+        if mw.file_list.topLevelItemCount() == 0:
+            QMessageBox.warning(mw, "Warning", "No images loaded. Please load images first.")
+            return
+        if self._is_busy(spec):
             QMessageBox.information(
-                main_window,
+                mw,
                 "Please wait",
                 "A calculation is still running. Wait for it to finish before "
-                "opening the length visualization.",
+                f"opening the {spec.noun} visualization.",
             )
             return
+        layout = self._project_layout()
+        if layout is None:
+            QMessageBox.warning(mw, "Warning", "The folder of the loaded images was not found.")
+            return
+        lookup = spec.find_csv(layout)
+        if lookup.path is None:
+            QMessageBox.information(mw, lookup.title, lookup.message)
+            return
+        # Leave the current page first so an open editor offers to save; the
+        # GT editor may refuse (its save failed and the user kept editing).
+        if mw.switch_right_panel("visualization") is False:
+            return
+        self._build(spec, lookup.path)
+        if current is not None:  # a stale or failed one: replaced in place
+            self._discard(spec, current, keep_opengl_off=True)
 
-    try:
-        # Qt6 limitation: QtWebEngine (QWebEngineView) can't render in a window that
-        # contains any QOpenGLWidget. Temporarily disable OpenGL viewports before
-        # constructing the visualization (QWebEngineView is created in its __init__).
-        if hasattr(main_window, "set_opengl_viewports_enabled"):
-            main_window.set_opengl_viewports_enabled(False)
-            try:
-                QApplication.processEvents()
-            except RuntimeError as e:
-                # Event loop may be unavailable mid-teardown; non-fatal.
-                logger.debug("processEvents failed: %s", e)
+    def _is_up_to_date(self, spec: DashboardSpec, dashboard) -> bool:
+        """False when *dashboard* failed or its CSV changed on disk."""
+        if getattr(dashboard, "failed", False):
+            return False
+        if self._is_busy(spec):
+            return True  # the CSV is being rewritten: keep showing what is there
+        layout = self._project_layout()
+        if layout is None:
+            return False
+        signature = _source_signature(spec.find_csv(layout).path)
+        return signature == self._sources.get(spec.kind)
 
-        # Find the CSV file path - get the first actual image from the tree
-        first_image_name = None
+    def _bring_forward(self, dashboard) -> None:
+        panel = self._mw.right_panel
+        if panel.currentWidget() is dashboard:
+            return
+        if self._mw.switch_right_panel("visualization") is False:
+            return  # an editor kept its unsaved edits
+        panel.setCurrentWidget(dashboard)
 
-        def find_first_image(item):
-            stored_name = item.data(0, Qt.ItemDataRole.UserRole)
-            if stored_name:
-                return stored_name
-            for i in range(item.childCount()):
-                result = find_first_image(item.child(i))
-                if result:
-                    return result
-            return None
+    def _build(self, spec: DashboardSpec, csv_path: str) -> None:
+        mw = self._mw
+        self._gl.acquire(spec.kind)  # before the dashboard creates its browser widget
+        try:
+            cls = getattr(sys.modules[__name__], spec.class_name)
+            if spec.needs_image_manager:
+                dashboard = cls(csv_path, mw.image_manager)
+            else:
+                dashboard = cls(csv_path)
+        except Exception:
+            if self.dashboard(spec) is None:
+                self._gl.release(spec.kind)
+            raise
+        slot = getattr(mw, spec.closed_slot, None)
+        if slot is not None:
+            dashboard.server_closed.connect(slot)
+        notify = getattr(mw, "notify", None)
+        if notify is not None and hasattr(dashboard, "export_saved"):
+            dashboard.export_saved.connect(
+                lambda path: notify(
+                    f"Saved {os.path.basename(path)} in {os.path.dirname(path)}", "success"
+                )
+            )
+        self._sources[spec.kind] = _source_signature(csv_path)
+        # Set the attribute before the page switch: MainWindow collapses the
+        # library when the current page is one of its dashboards.
+        setattr(mw, spec.attr, dashboard)
+        mw.right_panel.addWidget(dashboard)
+        mw.right_panel.setCurrentWidget(dashboard)
+        self._set_button_text(spec, spec.close_text)
 
-        for i in range(main_window.file_list.topLevelItemCount()):
-            first_image_name = find_first_image(main_window.file_list.topLevelItem(i))
-            if first_image_name:
-                break
+    # ------------------------------------------------------------------ close
+    def _discard(self, spec: DashboardSpec, dashboard, *, keep_opengl_off: bool = False) -> None:
+        """Stop and remove *dashboard*, exactly once."""
+        mw = self._mw
+        if getattr(mw, spec.attr, None) is dashboard:
+            # First, so the server_closed emitted below cannot re-enter close().
+            setattr(mw, spec.attr, None)
+            self._sources.pop(spec.kind, None)
+        _disconnect(dashboard.server_closed, getattr(mw, spec.closed_slot, None))
+        try:
+            dashboard.cleanup_server()
+        finally:
+            mw.right_panel.removeWidget(dashboard)
+            dashboard.deleteLater()
+            if not keep_opengl_off:
+                self._gl.release(spec.kind)
 
-        if not first_image_name:
-            raise ValueError("No images found in tree")
+    # ------------------------------------------------------------------ plumbing
+    def _project_layout(self) -> ProjectLayout | None:
+        """Layout of the loaded project: its folder, else the first image's folder."""
+        mw = self._mw
+        folder = getattr(mw.image_manager, "original_folder", None)
+        if not folder:
+            name = _first_image_name(mw.file_list)
+            path = mw.image_manager.get_image_path(name) if name else None
+            folder = os.path.dirname(path) if path else None
+        return ProjectLayout(folder) if folder else None
 
-        first_image_path = main_window.image_manager.get_image_path(first_image_name)
-
-        if first_image_path is None:
-            raise ValueError("Failed to get image path from image manager")
-        # Get the directory containing the first image
-        start_dir = os.path.dirname(first_image_path)
-
-        # Try to get the base folder (parent of start_dir if images are in a subfolder)
-        if main_window.image_manager.original_folder:
-            base_folder = main_window.image_manager.original_folder
-        else:
-            base_folder = start_dir
-
-        # Search for CSV in multiple locations (prioritize skeletons folder)
-        potential_csv_paths = [
-            os.path.join(base_folder, "skeletons", ROOT_LENGTHS_CSV),  # New format
-            os.path.join(base_folder, ROOT_LENGTHS_CSV),  # Base folder
-        ]
-
-        # Add legacy paths
-        base_path = find_test_latest_dir(start_dir)
-        if base_path:
-            potential_csv_paths.append(os.path.join(base_path, ROOT_LENGTHS_CSV))
-
-        logger.info(
-            "DBG show_root_length_viz: base_folder=%s, searching CSV paths: %s",
-            base_folder,
-            potential_csv_paths,
+    def _is_busy(self, spec: DashboardSpec) -> bool:
+        """True while a run that writes (or invalidates) the dashboard's CSV is going."""
+        handler = getattr(self._mw, "skeleton_handler", None)
+        if handler is None:
+            return False
+        is_busy = getattr(handler, "is_busy", None)
+        if callable(is_busy):
+            return bool(is_busy(spec.kind))
+        # Older SkeletonHandler without is_busy(): look at its threads.
+        threads = (
+            getattr(handler, spec.calculator_attr, None),
+            getattr(getattr(handler, "skeleton_handler", None), "_thread", None),
         )
+        return any(thread is not None and thread.isRunning() for thread in threads)
 
-        # Try each path until we find the CSV
-        csv_path = None
-        for path in potential_csv_paths:
-            exists = os.path.exists(path)
-            logger.info("DBG show_root_length_viz: checking %s -> exists=%s", path, exists)
-            if exists:
-                csv_path = path
-                break
+    def _set_button_text(self, spec: DashboardSpec, text: str) -> None:
+        button = getattr(self._mw, spec.button_attr, None)
+        if button is not None:
+            button.setText(text)
 
-        logger.info("DBG show_root_length_viz: csv_path=%s", csv_path)
+    def _opengl_in_use(self) -> bool:
+        return _opengl_viewports_in_use(self._mw)
 
-        if csv_path is None:
-            QMessageBox.information(
-                main_window,
-                "No root length data",
-                "No root length data was found.\n\n"
-                "Run **Calculate Root Length** first (after generating skeletons).\n\n"
-                "Expected file locations:\n"
-                f"  • {potential_csv_paths[0]}\n"
-                f"  • {potential_csv_paths[1]}",
-            )
+    def _set_opengl(self, enabled: bool) -> None:
+        setter = getattr(self._mw, "set_opengl_viewports_enabled", None)
+        if setter is None:
             return
-
-        def create_new_visualization():
-            logger.info(
-                "DBG show_root_length_viz: creating RootLengthVisualization with csv=%s", csv_path
-            )
-            main_window.root_length_viz = RootLengthVisualization(
-                csv_path, main_window.image_manager
-            )
-            main_window.root_length_viz.server_closed.connect(
-                main_window.on_visualization_server_closed
-            )
-
-            # Add to right panel and show
-            main_window.right_panel.addWidget(main_window.root_length_viz)
-            main_window.right_panel.setCurrentWidget(main_window.root_length_viz)
-            logger.info(
-                "DBG show_root_length_viz: widget added, currentWidget=%s",
-                main_window.right_panel.currentWidget().__class__.__name__,
-            )
-
-            # Update button text
-            main_window.visualize_root_length_button.setText("Close Visualization")
-
-        if main_window.root_length_viz:
-            try:
-                main_window.root_length_viz.server_closed.disconnect()
-            except TypeError:
-                pass
-            main_window.root_length_viz.server_closed.connect(
-                lambda: QTimer.singleShot(500, create_new_visualization)
-            )
-            close_root_length_visualization(main_window)
-        else:
-            create_new_visualization()
-
-    except Exception as e:
-        logger.exception("Failed to create root length visualization")
-        QMessageBox.critical(main_window, "Error", f"Failed to create visualization: {str(e)}")
-        main_window.visualize_root_length_button.setText("📊 Visualize Root Length")
+        setter(enabled)
+        # Let the viewport swap settle before a browser widget is created (or
+        # after the last one is gone). User input stays queued meanwhile.
+        try:
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        except RuntimeError as exc:  # no event loop mid-teardown; harmless
+            logger.debug("processEvents failed: %s", exc)
 
 
-def close_root_length_visualization(main_window):
-    """Safely close and cleanup the root length visualization component."""
+_controllers: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
-    if not main_window.root_length_viz:
-        return
 
+def controller_for(main_window) -> DashboardController:
+    """The :class:`DashboardController` of *main_window*, created on first use."""
+    controller = _controllers.get(main_window)
+    if controller is None:
+        controller = _controllers[main_window] = DashboardController(main_window)
+    return controller
+
+
+# --------------------------------------------------------------------------- #
+#  Public API (MainWindow delegates here; names are a contract)
+# --------------------------------------------------------------------------- #
+def show_visualization(main_window, kind: str) -> None:
+    """Show the ``kind`` dashboard ("length" or "area"): build it, or bring it forward."""
+    spec = _spec(kind)
     try:
-        # Update UI state first
-        main_window.visualize_root_length_button.setText("📊 Visualize Root Length")
-        main_window.switch_right_panel("display")
-
-        # Clean up visualization
-        if main_window.root_length_viz:
-            main_window.root_length_viz.cleanup_server()
-
-        # Remove the visualization from the right panel
-        if main_window.root_length_viz:
-            try:
-                main_window.right_panel.removeWidget(main_window.root_length_viz)
-            except RuntimeError as e:
-                # Widget may already be detached/deleted; safe to ignore.
-                logger.debug("removeWidget (length viz) failed: %s", e)
-            main_window.root_length_viz.deleteLater()
-        main_window.root_length_viz = None
-
-        # Re-enable OpenGL viewports now that WebEngine widget is removed.
-        if hasattr(main_window, "set_opengl_viewports_enabled"):
-            main_window.set_opengl_viewports_enabled(True)
-            try:
-                QApplication.processEvents()
-            except RuntimeError as e:
-                # Event loop may be unavailable mid-teardown; non-fatal.
-                logger.debug("processEvents failed: %s", e)
-
-        # Update current image display if available
-        current_item = main_window.file_list.currentItem()
-        if current_item:
-            main_window.on_image_selected(current_item)
-
-    except Exception as e:
-        logger.exception("Error during root length visualization cleanup")
-        main_window.root_length_viz = None
-        main_window.switch_right_panel("display")
-        QMessageBox.warning(main_window, "Warning", f"Error during cleanup: {str(e)}")
+        controller_for(main_window).show(spec)
+    except Exception as exc:  # noqa: BLE001 -- top-level UI guard
+        logger.exception("Failed to show the %s visualization", spec.noun)
+        QMessageBox.critical(main_window, "Error", f"Failed to create visualization: {exc}")
 
 
-def toggle_root_area_visualization(main_window):
-    """Toggle between showing and hiding the root area visualization."""
-
+def close_visualization(main_window, kind: str) -> None:
+    """Close and remove the ``kind`` dashboard, if it is open."""
+    spec = _spec(kind)
     try:
-        logger.info(
-            "DBG toggle_root_area_viz: root_area_viz=%s, currentWidget=%s",
-            main_window.root_area_viz,
-            main_window.right_panel.currentWidget().__class__.__name__,
-        )
-        # Branch on existence alone, not on which panel is current. See the
-        # matching note in toggle_root_length_visualization: gating on
-        # currentWidget made hidden-but-alive viz Close clicks fall into show(),
-        # which closes then reopens after 500ms -> flicker.
-        if main_window.root_area_viz is not None:
-            close_root_area_visualization(main_window)
-        else:
-            show_root_area_visualization(main_window)
-    except Exception as e:
-        # Top-level UI guard: log with traceback, then surface to the user.
-        logger.exception("Error toggling root area visualization")
-        QMessageBox.critical(main_window, "Error", f"Error toggling visualization: {str(e)}")
+        controller_for(main_window).close(spec)
+    except Exception as exc:  # noqa: BLE001 -- top-level UI guard
+        logger.exception("Error closing the %s visualization", spec.noun)
+        QMessageBox.warning(main_window, "Warning", f"Error during cleanup: {exc}")
 
 
-def show_root_area_visualization(main_window):
-    """Show the root area visualization with proper loading state management."""
-    logger.info(
-        "DBG show_root_area_viz: entered, topLevelItemCount=%d",
-        main_window.file_list.topLevelItemCount(),
-    )
-
-    if main_window.file_list.topLevelItemCount() == 0:
-        QMessageBox.warning(main_window, "Warning", "No images loaded. Please load images first.")
-        return
-
-    # Guard: don't open the visualization while a calculation that produces
-    # (or invalidates) the area CSV is still running. Launching mid-calc reads a
-    # half-written / empty CSV -> the init worker raises "No data found in CSV
-    # file" and is torn down the instant it errors, racing thread destruction
-    # ("QThread: Destroyed while thread '' is still running").
-    sh = getattr(main_window, "skeleton_handler", None)
-    if sh is not None:
-        busy = (
-            getattr(sh, "area_calculator_thread", None) is not None
-            and sh.area_calculator_thread.isRunning()
-        ) or (
-            getattr(sh, "skeleton_handler", None) is not None
-            and getattr(sh.skeleton_handler, "_thread", None) is not None
-            and sh.skeleton_handler._thread.isRunning()
-        )
-        if busy:
-            QMessageBox.information(
-                main_window,
-                "Please wait",
-                "A calculation is still running. Wait for it to finish before "
-                "opening the area visualization.",
-            )
-            return
-
+def toggle_visualization(main_window, kind: str) -> None:
+    """Close the ``kind`` dashboard if it is open, else show it (legacy buttons)."""
+    spec = _spec(kind)
     try:
-        # Qt6 limitation: QtWebEngine (QWebEngineView) can't render in a window that
-        # contains any QOpenGLWidget. Temporarily disable OpenGL viewports before
-        # constructing the visualization.
-        if hasattr(main_window, "set_opengl_viewports_enabled"):
-            main_window.set_opengl_viewports_enabled(False)
-            try:
-                QApplication.processEvents()
-            except RuntimeError as e:
-                # Event loop may be unavailable mid-teardown; non-fatal.
-                logger.debug("processEvents failed: %s", e)
-
-        # Find the CSV file path - get the first actual image from the tree
-        first_image_name = None
-
-        def find_first_image(item):
-            stored_name = item.data(0, Qt.ItemDataRole.UserRole)
-            if stored_name:
-                return stored_name
-            for i in range(item.childCount()):
-                result = find_first_image(item.child(i))
-                if result:
-                    return result
-            return None
-
-        for i in range(main_window.file_list.topLevelItemCount()):
-            first_image_name = find_first_image(main_window.file_list.topLevelItem(i))
-            if first_image_name:
-                break
-
-        if not first_image_name:
-            raise ValueError("No images found in tree")
-
-        first_image_path = main_window.image_manager.get_image_path(first_image_name)
-
-        if first_image_path is None:
-            raise ValueError("Failed to get image path from image manager")
-
-        # Get the directory containing the first image
-        start_dir = os.path.dirname(first_image_path)
-
-        # For area, look for masks directory
-        if main_window.image_manager.original_folder:
-            base_folder = main_window.image_manager.original_folder
-        else:
-            base_folder = start_dir
-
-        logger.info("DBG show_root_area_viz: base_folder=%s, start_dir=%s", base_folder, start_dir)
-
-        # Check for masks directory
-        potential_paths = [
-            os.path.join(base_folder, "output", "mask"),
-            os.path.join(base_folder, "mask"),
-        ]
-
-        masks_dir = None
-        for path in potential_paths:
-            exists = os.path.exists(path)
-            logger.info("DBG show_root_area_viz: checking mask dir %s -> exists=%s", path, exists)
-            if exists:
-                masks_dir = path
-                break
-
-        logger.info("DBG show_root_area_viz: masks_dir=%s", masks_dir)
-
-        if not masks_dir:
-            QMessageBox.information(
-                main_window,
-                "No mask data",
-                "No masks directory was found.\n\n"
-                "Generate masks first, then run **Calculate Root Area**.",
-            )
-            return
-
-        csv_path = os.path.join(masks_dir, ROOT_AREAS_CSV)
-        logger.info(
-            "DBG show_root_area_viz: csv_path=%s, exists=%s", csv_path, os.path.exists(csv_path)
-        )
-
-        if not os.path.exists(csv_path):
-            QMessageBox.information(
-                main_window,
-                "No root area data",
-                "No root area data was found.\n\n"
-                "Run **Calculate Root Area** first (after generating masks).\n\n"
-                f"Expected file:\n  • {csv_path}",
-            )
-            return
-
-        def create_new_visualization():
-            logger.info(
-                "DBG show_root_area_viz: creating RootAreaVisualization with csv=%s", csv_path
-            )
-            main_window.root_area_viz = RootAreaVisualization(csv_path)
-            main_window.root_area_viz.server_closed.connect(
-                main_window.on_area_visualization_server_closed
-            )
-
-            # Add to right panel and show
-            main_window.right_panel.addWidget(main_window.root_area_viz)
-            main_window.right_panel.setCurrentWidget(main_window.root_area_viz)
-            logger.info(
-                "DBG show_root_area_viz: widget added, currentWidget=%s",
-                main_window.right_panel.currentWidget().__class__.__name__,
-            )
-
-            # Update button text
-            main_window.visualize_root_area_button.setText("Close Area Visualization")
-
-        if main_window.root_area_viz:
-            try:
-                main_window.root_area_viz.server_closed.disconnect()
-            except TypeError:
-                pass
-            main_window.root_area_viz.server_closed.connect(
-                lambda: QTimer.singleShot(500, create_new_visualization)
-            )
-            close_root_area_visualization(main_window)
-        else:
-            create_new_visualization()
-
-    except Exception as e:
-        logger.exception("Failed to create root area visualization")
-        QMessageBox.critical(main_window, "Error", f"Failed to create visualization: {str(e)}")
-        main_window.visualize_root_area_button.setText("📈 Visualize Root Area")
+        controller_for(main_window).toggle(spec)
+    except Exception as exc:  # noqa: BLE001 -- top-level UI guard
+        logger.exception("Error toggling the %s visualization", spec.noun)
+        QMessageBox.critical(main_window, "Error", f"Error toggling visualization: {exc}")
 
 
-def close_root_area_visualization(main_window):
-    """Safely close and cleanup the root area visualization component."""
+def visible_kind(main_window) -> str | None:
+    """ "length" or "area" when that dashboard is the right panel's page, else None."""
+    return controller_for(main_window).visible_kind()
 
-    if not main_window.root_area_viz:
-        return
 
-    try:
-        # Update UI state first
-        main_window.visualize_root_area_button.setText("📈 Visualize Root Area")
-        main_window.switch_right_panel("display")
+def toggle_root_length_visualization(main_window) -> None:
+    """Close the root-length dashboard if it is open, else show it."""
+    toggle_visualization(main_window, LENGTH.kind)
 
-        # Clean up visualization
-        if main_window.root_area_viz:
-            main_window.root_area_viz.cleanup_server()
 
-        # Remove the visualization from the right panel
-        if main_window.root_area_viz:
-            try:
-                main_window.right_panel.removeWidget(main_window.root_area_viz)
-            except RuntimeError as e:
-                # Widget may already be detached/deleted; safe to ignore.
-                logger.debug("removeWidget (area viz) failed: %s", e)
-            main_window.root_area_viz.deleteLater()
-        main_window.root_area_viz = None
+def show_root_length_visualization(main_window) -> None:
+    """Show the root-length dashboard (idempotent: build it or bring it forward)."""
+    show_visualization(main_window, LENGTH.kind)
 
-        # Re-enable OpenGL viewports now that WebEngine widget is removed.
-        if hasattr(main_window, "set_opengl_viewports_enabled"):
-            main_window.set_opengl_viewports_enabled(True)
-            try:
-                QApplication.processEvents()
-            except RuntimeError as e:
-                # Event loop may be unavailable mid-teardown; non-fatal.
-                logger.debug("processEvents failed: %s", e)
 
-        # Update current image display if available
-        current_item = main_window.file_list.currentItem()
-        if current_item:
-            main_window.on_image_selected(current_item)
+def close_root_length_visualization(main_window) -> None:
+    """Close and remove the root-length dashboard."""
+    close_visualization(main_window, LENGTH.kind)
 
-    except Exception as e:
-        logger.exception("Error during root area visualization cleanup")
-        main_window.root_area_viz = None
-        main_window.switch_right_panel("display")
-        QMessageBox.warning(main_window, "Warning", f"Error during cleanup: {str(e)}")
+
+def toggle_root_area_visualization(main_window) -> None:
+    """Close the root-area dashboard if it is open, else show it."""
+    toggle_visualization(main_window, AREA.kind)
+
+
+def show_root_area_visualization(main_window) -> None:
+    """Show the root-area dashboard (idempotent: build it or bring it forward)."""
+    show_visualization(main_window, AREA.kind)
+
+
+def close_root_area_visualization(main_window) -> None:
+    """Close and remove the root-area dashboard."""
+    close_visualization(main_window, AREA.kind)
