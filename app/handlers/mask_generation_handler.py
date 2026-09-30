@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import partial
 from typing import Any
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QMessageBox, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
 from app.handlers.generation_base import (
@@ -109,6 +111,23 @@ class MaskGenerationThread(GuardedThread):
     def _report_progress(self, done: int, total: int) -> None:
         self.progress.emit(progress_percent(done, total))
         self.progress_counts.emit(done, total)
+
+
+@contextmanager
+def _wait_cursor() -> Iterator[None]:
+    """A wait cursor for GUI-thread work that takes a noticeable moment (R6).
+
+    Reading every mask header before a run takes about 1 s for 46k masks; the
+    cursor shows the click was taken. Restored on the way out, also on errors.
+    """
+    if QApplication.instance() is None:
+        yield
+        return
+    QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
 
 
 def ask_overwrite_policy(
@@ -216,8 +235,9 @@ class MaskGenerationHandler(GenerationHandlerBase):
 
         layout = ProjectLayout(input_dir)
         try:
-            stems = set(layout.scan_images())
-            existing = scan_existing_masks(layout, stems)
+            with _wait_cursor():  # one header read per existing mask (R6)
+                stems = set(layout.scan_images())
+                existing = scan_existing_masks(layout, stems)
         except OSError as exc:
             logger.exception("Could not scan %s", input_dir)
             QMessageBox.critical(parent, "Mask generation", f"Could not read the folder:\n{exc}")

@@ -5,7 +5,9 @@ The worker loads torch and the cached skeleton model only when a run starts
 (PI-03 / RB-10); out-of-memory batches are split (PI-07); Cancel stops at the
 next batch and keeps finished skeletons (PI-08); progress and results go
 through ``UiFeedback`` (PI-12 / AR-07). On success the results are loaded with
-``main_window.load_results(<skeletons folder>)``.
+``main_window.load_results(<skeletons folder>)``; after a Cancel or a failure the
+window re-reads the outputs (``on_outputs_changed``), since the skeletons written
+before it stay on disk (R7).
 """
 
 from __future__ import annotations
@@ -168,6 +170,8 @@ class GenerateSkeletonHandler(GenerationHandlerBase):
     def _on_failed(self, thread: SkeletonGeneratorThread, message: str) -> None:
         logger.error("Skeleton generation error: %s", message)
         self.feedback.task_failed("Skeleton generation failed")
+        # Skeletons written before the error stay on disk (R7): show them.
+        self.outputs_changed()
         QMessageBox.critical(self.parent_widget(), "Skeleton generation failed", message)
 
     def _on_cancelled(self, thread: SkeletonGeneratorThread) -> None:
@@ -177,6 +181,7 @@ class GenerateSkeletonHandler(GenerationHandlerBase):
         self.feedback.notify(
             f"Skeleton generation cancelled{done}; finished skeletons were kept", "info"
         )
+        self.outputs_changed()  # the kept skeletons: badges, display and metrics follow
 
 
 __all__ = ["GenerateSkeletonHandler", "SkeletonGeneratorThread"]

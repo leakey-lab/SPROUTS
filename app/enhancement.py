@@ -12,7 +12,8 @@
 * :class:`EnhanceDefaultsStore` - the user's saved defaults, stored per user in
   ``user_config_dir()/normalization_defaults.json`` (atomic write). The shipped
   ``config/normalization_defaults.json`` is read-only factory defaults and seeds the user file
-  on first run (audit RB-13 / UI-19 / PE-14).
+  on first run (audit RB-13 / UI-19 / PE-14). The first load in a process sweeps that folder
+  for the temp files of killed saves, on a daemon thread (R4).
 
 Nothing here touches masks, skeletons or measurements: enhancement only changes what is shown.
 """
@@ -23,13 +24,14 @@ import json
 import logging
 import math
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import cv2
 import numpy as np
 
-from app.io_utils import atomic_write_text, imread_unicode
+from app.io_utils import atomic_write_text, imread_unicode, sweep_stale_temp_files
 
 logger = logging.getLogger(__name__)
 
@@ -270,12 +272,46 @@ def _read_json(path: str) -> Any | None:
         return None
 
 
+#: Settings folders already swept by this process (normcased absolute paths, R4).
+_swept_settings_dirs: set[str] = set()
+_sweep_lock = threading.Lock()
+
+
+def _sweep_settings_dir_once(folder: str) -> threading.Thread | None:
+    """Sweep ``folder`` for stale temp files on a daemon thread, once per process (R4).
+
+    The same rule as a project's output folders (``app.io_utils.sweep_stale_temp_files``:
+    only ``.<name>.<8 hex>.tmp`` files older than an hour). Returns the started thread,
+    or None when this process already swept ``folder``. Never raises.
+    """
+    key = os.path.normcase(os.path.abspath(folder))
+    with _sweep_lock:
+        if key in _swept_settings_dirs:
+            return None
+        _swept_settings_dirs.add(key)
+
+    def run() -> None:
+        try:
+            removed = sweep_stale_temp_files(folder)
+        except Exception:  # housekeeping: never let it disturb the editors
+            logger.exception("Stale temp-file sweep failed in %s", folder)
+            return
+        if removed:
+            logger.info("Removed %d stale temp file(s) in %s", len(removed), folder)
+
+    thread = threading.Thread(target=run, name="settings-temp-sweep", daemon=True)
+    thread.start()
+    return thread
+
+
 class EnhanceDefaultsStore:
     """Load and save the user's default enhancement settings.
 
     Load order: the user file, then the shipped factory file, then :data:`DEFAULT_SETTINGS`.
     On first run (no user file) the factory values seed the user file, so a preference
     previously saved into the shipped file carries over. The factory file is never written.
+    The first :meth:`load` in a process also sweeps the user file's folder for the temp
+    files of killed saves, on a daemon thread (``sweep_thread``; R4).
     """
 
     def __init__(self, user_path: str | None = None, factory_path: str | None = None) -> None:
@@ -289,6 +325,8 @@ class EnhanceDefaultsStore:
             factory_path = resource_path("config", DEFAULTS_FILE_NAME)
         self.user_path = user_path
         self.factory_path = factory_path
+        #: The stale temp-file sweep this store started (None: none, or already swept).
+        self.sweep_thread: threading.Thread | None = None
 
     def _validated(self, data: Any, path: str) -> EnhanceSettings:
         settings, problems = EnhanceSettings.from_dict(data)
@@ -298,6 +336,9 @@ class EnhanceDefaultsStore:
 
     def load(self) -> EnhanceSettings:
         """The saved defaults (never raises)."""
+        thread = _sweep_settings_dir_once(os.path.dirname(os.path.abspath(self.user_path)))
+        if thread is not None:
+            self.sweep_thread = thread
         user_exists = os.path.exists(self.user_path)
         if user_exists:
             data = _read_json(self.user_path)

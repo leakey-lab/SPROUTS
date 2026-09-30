@@ -366,12 +366,22 @@ def release_cuda_cache() -> None:
 
     No-op when torch is not loaded or CUDA was never initialised. Never call it
     per batch: that defeats the caching allocator.
+
+    Never raises (R2): it runs in the ``finally`` of every generation run, and
+    after a sticky CUDA error (e.g. an illegal memory access) every CUDA call
+    fails again, ``empty_cache()`` included. Raising there would replace the
+    run's own error, or fail a run that had finished; the failure is logged.
     """
     torch = sys.modules.get("torch")
-    if torch is None or not torch.cuda.is_initialized():
+    if torch is None:
         return
-    gc.collect()
-    torch.cuda.empty_cache()
+    try:
+        if not torch.cuda.is_initialized():
+            return
+        gc.collect()
+        torch.cuda.empty_cache()
+    except Exception as exc:  # noqa: BLE001 - housekeeping must not mask the outcome
+        logger.warning("Could not release the CUDA cache: %s", exc)
 
 
 __all__ = [

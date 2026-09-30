@@ -49,6 +49,7 @@ __all__ = [
     "calibration_info",
     "file_sha256",
     "git_commit",
+    "minimal_record",
     "names_digest",
     "portable_path",
     "run_manifest_path",
@@ -373,6 +374,31 @@ def build_record(
         "inputs": dict(inputs or {}),
         "parameters": dict(parameters or {}),
         "outputs": dict(outputs or {}),
+    }
+
+
+def minimal_record(kind: str, *, outputs: Mapping[str, Any], reason: str) -> dict[str, Any]:
+    """The record to write when :func:`build_record` failed (R5).
+
+    Same top-level keys as :func:`build_record`, so readers keep working, filled only
+    from constants and the writer's ``outputs``: ``git_commit`` is None and
+    ``runtime``, ``models``, ``inputs`` and ``parameters`` are empty (not described).
+    ``provenance_error`` says why. Better than leaving an older record in place,
+    which would describe a different run.
+    """
+    return {
+        "schema": SCHEMA,
+        "kind": kind,
+        "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "app": app_info(),
+        "git_commit": None,
+        "calibration": calibration_info(),
+        "runtime": {},
+        "models": {},
+        "inputs": {},
+        "parameters": {},
+        "outputs": dict(outputs),
+        "provenance_error": reason,
     }
 
 

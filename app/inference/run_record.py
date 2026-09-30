@@ -9,12 +9,16 @@ failed inputs with reasons, skipped stems, cancel flag).
 Every image scanner filters by image extension, so the JSON is never read as data.
 The file describes the latest run into that folder that returned (completed or
 cancelled, even with no outputs) or that raised after writing outputs (R7); a run
-that raised before writing anything leaves it alone.
+that raised before writing anything leaves it alone. When the full record cannot be
+built or written, a minimal one (``provenance.minimal_record``: the outcome and
+``provenance_error``) replaces it, and if even that fails the outdated file is
+removed: the folder never describes an older run than its outputs (R5).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -22,6 +26,12 @@ from app import provenance
 from app.inference.batch_engine import BatchReport
 
 logger = logging.getLogger(__name__)
+
+
+def _reason(exc: BaseException) -> str:
+    """``"<ExceptionType>: <message>"``, the form ``outputs.error`` uses."""
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
 def write_run_manifest(
@@ -36,8 +46,10 @@ def write_run_manifest(
 ) -> str | None:
     """Write the run manifest; returns its path, or None if it could not be written.
 
-    A provenance failure is logged and never fails the run (the outputs exist).
-    Call from the worker thread: the first call hashes the checkpoints (~0.3 s).
+    A provenance failure is logged and never fails the run (the outputs exist); the
+    minimal record, or else the removal of the outdated one, keeps the folder from
+    describing an older run (R5). Call from the worker thread: the first call hashes
+    the checkpoints (~0.3 s).
     """
     try:
         record = provenance.build_record(
@@ -54,7 +66,30 @@ def write_run_manifest(
         return provenance.write_run_manifest(output_dir, record)
     except Exception as exc:  # noqa: BLE001 - (R7) any provenance failure, not only I/O
         logger.warning("Could not write the run manifest in %s: %s", output_dir, exc, exc_info=exc)
-        return None
+        return _write_minimal_manifest(kind, output_dir, report, exc)
+
+
+def _write_minimal_manifest(
+    kind: str, output_dir: str, report: BatchReport, cause: BaseException
+) -> str | None:
+    """(R5) Replace the manifest by a minimal record, else remove the outdated one.
+
+    Never raises. Returns the path written, or None.
+    """
+    try:
+        record = provenance.minimal_record(kind, outputs=report.summary(), reason=_reason(cause))
+        return provenance.write_run_manifest(output_dir, record)
+    except Exception as exc:  # noqa: BLE001 - e.g. the disk is full: nothing can be written
+        logger.warning("Could not write a minimal run manifest in %s: %s", output_dir, exc)
+    path = provenance.run_manifest_path(output_dir)
+    try:
+        os.remove(path)
+        logger.warning("Removed the outdated run manifest %s: it described an older run", path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.error("Could not remove the outdated run manifest %s: %s", path, exc)
+    return None
 
 
 def record_failed_run(

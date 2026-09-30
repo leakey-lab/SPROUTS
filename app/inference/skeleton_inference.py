@@ -34,6 +34,7 @@ from app.config import SKELETONIZER_DIR
 from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
 from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
+from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
 
@@ -84,16 +85,26 @@ def is_image_file(filename):
     return ext in {e.lower() for e in IMG_EXTENSIONS}
 
 
+# The extensions make_dataset reads, in stem-clash priority: the Library's
+# (config.IMAGE_EXTENSIONS) first, then the formats only skeleton generation reads.
+_INPUT_EXTENSIONS = tuple(
+    dict.fromkeys((*config.IMAGE_EXTENSIONS, *(e.lower() for e in IMG_EXTENSIONS)))
+)
+
+
 def make_dataset(directory):
-    """Find all image files in a directory (sorted)."""
-    images = []
+    """Find all image files in a directory (sorted), one per stem.
+
+    Two files with one stem (``a.png`` and ``a.jpg``) would race for one
+    ``<stem>_fake.png``; the one the Library shows is taken (R7).
+    """
     if not os.path.isdir(directory):
         raise ValueError(f"{directory} is not a valid directory")
-    for fname in sorted(os.listdir(directory)):
-        if is_image_file(fname):
-            path = os.path.join(directory, fname)
-            images.append(path)
-    return images
+    chosen = ProjectLayout(directory).scan_images(extensions=_INPUT_EXTENSIONS)
+    return [
+        os.path.join(directory, fname)
+        for fname in sorted(os.path.basename(path) for path in chosen.values())
+    ]
 
 
 def skeleton_to_uint8(output_batch: torch.Tensor) -> np.ndarray:

@@ -16,12 +16,16 @@ One loop for both models, so their failure, memory and cancel policies cannot dr
   computed are still written, and the report says the run was cancelled.
 * R7 -- a caller's ``report`` is filled in place, also when a step raises: the
   caller still knows which outputs reached disk and can describe the failed run.
+* R7 -- a save that finds the disk full ends the run with that error at the next
+  batch boundary (every later save would fail too); other save errors stay
+  per-image failures.
 
 torch is imported lazily (only a running job needs it).
 """
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import threading
@@ -120,6 +124,18 @@ def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
+# (R7) Errors that mean the disk (or the user's quota) is full: every later save fails.
+_DISK_FULL_ERRNOS = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
+_DISK_FULL_WINERRORS = frozenset({39, 112})  # ERROR_HANDLE_DISK_FULL, ERROR_DISK_FULL
+
+
+def is_disk_full(exc: BaseException) -> bool:
+    """True for a write error that means no more space: the run cannot go on (R7)."""
+    return isinstance(exc, OSError) and (
+        exc.errno in _DISK_FULL_ERRNOS or getattr(exc, "winerror", None) in _DISK_FULL_WINERRORS
+    )
+
+
 class ItemOutOfMemory(Exception):
     """One image that ran out of GPU memory even alone (a recorded failure, no traceback)."""
 
@@ -212,7 +228,14 @@ class OomBackoff:
 
 
 class _Progress:
-    """Thread-safe done counter that reports only when the integer percent grows."""
+    """Thread-safe done counter that reports only when the integer percent grows.
+
+    The callback runs under the lock, so updates from several writer threads
+    arrive in order: an early count delivered late can no longer send the
+    progress bar backwards or leave it below the total (R3). A callback that
+    raises is logged and ignored (R3): progress is advisory, and a failure there
+    must neither mark a written input as failed nor end the run.
+    """
 
     def __init__(self, total: int, callback: ProgressCallback | None) -> None:
         self._total = total
@@ -220,6 +243,7 @@ class _Progress:
         self._done = 0
         self._last_pct = -1
         self._lock = threading.Lock()
+        self._callback_failed = False
 
     def add(self, n: int = 1) -> None:
         if self._callback is None:
@@ -230,8 +254,16 @@ class _Progress:
             if pct <= self._last_pct:
                 return
             self._last_pct = pct
-            done = self._done
-        self._callback(done, self._total)
+            try:
+                self._callback(self._done, self._total)
+            except Exception as exc:  # noqa: BLE001 - see the class docstring
+                # The first failure with its traceback; repeats would flood the log.
+                logger.warning(
+                    "Progress callback failed (ignored): %s",
+                    exc,
+                    exc_info=None if self._callback_failed else exc,
+                )
+                self._callback_failed = True
 
 
 def run_batches(
@@ -267,14 +299,24 @@ def run_batches(
     written: list[str] = []
     written_lock = threading.Lock()
     writer: AsyncWriter | None = None
+    disk_full: list[BaseException] = []  # (R7) the first save that found no space left
 
     def save_one(arr: Any, path: str) -> None:
         try:
             spec.save(arr, path)
             with written_lock:
                 written.append(os.path.basename(path))
+        except OSError as exc:
+            if is_disk_full(exc) and not disk_full:
+                disk_full.append(exc)
+            raise  # still this input's recorded failure (AsyncWriter.errors)
         finally:
             ticks.add()  # progress counts outputs once they are on disk (or failed)
+
+    def stop_if_disk_full() -> None:
+        if disk_full:
+            logger.error("The disk is full; stopping the run: %s", disk_full[0])
+            raise disk_full[0]
 
     def record_failure(path: str, reason: str) -> None:
         report.failed.append((os.path.basename(path), reason))
@@ -309,6 +351,7 @@ def run_batches(
                 for batch_paths, (x, bad) in zip(
                     batches, prefetched, strict=False
                 ):  # cancel ends early
+                    stop_if_disk_full()  # (R7) at a batch boundary, as Cancel
                     for i, reason in bad.items():
                         record_failure(batch_paths[i], reason)
                     if x is None:
@@ -321,6 +364,7 @@ def run_batches(
                                 record_failure(batch_paths[i], _describe(result))
                                 continue
                             writer.submit(batch_paths[i], save_one, result[offset], batch_paths[i])
+            stop_if_disk_full()  # (R7) also when the last batch's saves found it full
         finally:
             # (R7) Leaving the ``with`` drained the writer (``AsyncWriter.close`` waits
             # for every queued save), so this is what is on disk even if a step raised.
@@ -339,6 +383,7 @@ __all__ = [
     "BatchSpec",
     "ItemOutOfMemory",
     "OomBackoff",
+    "is_disk_full",
     "is_out_of_memory",
     "run_batches",
 ]

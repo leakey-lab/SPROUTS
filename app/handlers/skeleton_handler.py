@@ -103,6 +103,12 @@ class SkeletonHandler(HandlerDependencies):
         existing = [d for d in layout.mask_dir_candidates if os.path.isdir(d)]
         if len(existing) > 1:
             logger.warning("Both %s exist; measuring %s", " and ".join(existing), folder)
+            # Generate and Correct save to mask/: say that it is left out (R7).
+            others = ", ".join(os.path.relpath(d, layout.root) for d in existing if d != folder)
+            self._warn(
+                f"Measuring the older {os.path.relpath(folder, layout.root)} folder: "
+                f"masks in {others} are not measured."
+            )
         self._measure(AREA, layout, folder, partial(layout.scan_masks, extensions=(".png",)))
 
     def retry_measure(self, kind: str) -> bool:

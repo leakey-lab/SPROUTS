@@ -4,7 +4,8 @@ Generated masks and hand-corrected masks share one file name (``mask/<stem>.png`
 so a blind re-run of Generate would overwrite manual work. The two kinds differ in
 their PNG header: the Correct Mask editor saves ARGB32 (white on transparent ->
 PNG colour type 6) while the mask model writes 8-bit greyscale (colour type 0).
-Reading the 26-byte header is enough to tell them apart (about 2 s for 46k files).
+Reading the 26-byte header is enough to tell them apart (about 1.0 s for 46k files
+with ``os.read``; a buffered ``open`` read 8 KB per file and took 1.6 s, R6).
 
 Qt-free and torch-free, so the pre-flight scan is cheap and unit-testable.
 """
@@ -12,6 +13,7 @@ Qt-free and torch-free, so the pre-flight scan is cheap and unit-testable.
 from __future__ import annotations
 
 import enum
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
@@ -19,6 +21,8 @@ from app.project_layout import ProjectLayout
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _IHDR_COLOUR_TYPE_OFFSET = 25  # 8 signature + 4 length + 4 "IHDR" + 4 w + 4 h + 1 depth
+_HEADER_BYTES = _IHDR_COLOUR_TYPE_OFFSET + 1
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0)  # O_BINARY: Windows only
 
 # PNG colour types with an alpha channel: what the mask editor writes.
 _MANUAL_COLOUR_TYPES = frozenset({4, 6})  # grey+alpha, RGBA
@@ -33,11 +37,28 @@ class MaskOrigin(enum.Enum):
     UNKNOWN = "unknown"  # anything else (JPEG, RGB PNG, unreadable)
 
 
+def _read_head(path: str) -> bytes:
+    """The first ``_HEADER_BYTES`` of ``path`` (fewer at end of file); raises OSError.
+
+    A raw ``os.read``: the header without a buffered reader's 8 KB read (R6).
+    """
+    fd = os.open(path, _OPEN_FLAGS)
+    try:
+        head = b""
+        while len(head) < _HEADER_BYTES:
+            chunk = os.read(fd, _HEADER_BYTES - len(head))  # a share may return less
+            if not chunk:
+                break
+            head += chunk
+        return head
+    finally:
+        os.close(fd)
+
+
 def png_colour_type(path: str) -> int | None:
     """The IHDR colour-type byte of a PNG file, or None if it is not a readable PNG."""
     try:
-        with open(path, "rb") as fh:
-            head = fh.read(_IHDR_COLOUR_TYPE_OFFSET + 1)
+        head = _read_head(path)
     except OSError:
         return None
     if len(head) <= _IHDR_COLOUR_TYPE_OFFSET or not head.startswith(_PNG_SIGNATURE):

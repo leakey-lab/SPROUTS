@@ -196,7 +196,10 @@ def test_a_provenance_error_never_fails_a_normal_run(
         report = _run(kind, src, out, _model(kind))
 
     assert report.status == "completed" and len(report.written) == len(_pngs(out)) == 3
-    assert not os.path.exists(provenance.run_manifest_path(out))
+    # (R5) A minimal record says what happened instead of the full one.
+    record = _manifest(out)
+    assert record["outputs"]["status"] == "completed" and record["outputs"]["n_written"] == 3
+    assert "provenance bug (simulated)" in record["provenance_error"]
     assert "provenance bug (simulated)" in caplog.text  # logged, not raised
 
 

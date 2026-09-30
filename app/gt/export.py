@@ -38,6 +38,7 @@ from app.gt.store import (
     present_keys,
     read_tracing,
 )
+from app.io_utils import atomic_open, atomic_write_text
 from app.naming import parse_image_name
 from app.provenance import build_record, portable_path, write_sidecar
 
@@ -154,10 +155,23 @@ def _check_out_dir(project_dir: str, out_dir: str) -> None:
             )
 
 
+def _check_image_size(image_path: str, shape: tuple[int, ...]) -> None:
+    """Raise ``ValueError`` when a tracing is not the size of its source image.
+
+    Trace GT treats such a file as unreadable (the image was replaced or resized
+    after tracing); exported, the pair would be misaligned. Reads the image
+    header only; a missing or unidentifiable image raises ``OSError``.
+    """
+    with Image.open(image_path) as image:
+        width, height = image.size
+    if tuple(shape) != (height, width):
+        gt_h, gt_w = shape[:2]
+        raise ValueError(f"GT is {gt_w}x{gt_h} but the image is {width}x{height}")
+
+
 def _write_split_file(path: str, stems: list[str]) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        for stem in stems:
-            fh.write(stem + "\n")
+    # Text mode as before (CRLF on Windows), so the bytes are unchanged (R1).
+    atomic_write_text(path, "".join(stem + "\n" for stem in stems))
 
 
 def _write_provenance(
@@ -209,15 +223,19 @@ def export_dataset(
 
     ``images`` is ``image_manager.images`` (stem -> image path). Stems
     without a GT file are silently skipped. A GT file that fails to read
-    (``GtFileError``), a missing/unreadable source image, or a failure while
+    (``GtFileError``), a missing/unreadable source image, a tracing whose size
+    is not the image's (Trace GT does not open it either), or a failure while
     writing that stem's mask/copy (``OSError``/``ValueError``) is recorded in
     ``errors`` and the export continues with the remaining stems (spec §5.4);
     any partial mask/image already written for that stem is removed so it is
     never half-exported or counted in the splits/manifest. When there are
     errors, ``<out_dir>/errors.txt`` lists them, one ``stem<TAB>message`` per
-    line. ``mask/``, ``skeletons/`` and the GT files themselves are never
-    modified: an ``out_dir`` inside ``mask/``, ``skeletons/``,
-    ``skeleton_corrections/`` or ``gt/`` raises ``ExportError``.
+    line. The split files, ``classes.json``, ``manifest.csv`` and ``errors.txt``
+    are written atomically (``app.io_utils``): complete or absent, and a file
+    held open by another program raises ``FileLockedError`` (R1). ``mask/``,
+    ``skeletons/`` and the GT files themselves are never modified: an
+    ``out_dir`` inside ``mask/``, ``skeletons/``, ``skeleton_corrections/`` or
+    ``gt/`` raises ``ExportError``.
     """
     out_dir = options.out_dir
     _check_out_dir(project_dir, out_dir)
@@ -261,6 +279,7 @@ def export_dataset(
                     if options.only_complete and not is_complete(aligned, registry):
                         skipped_incomplete += 1
                     else:
+                        _check_image_size(image_path, aligned.ids.shape)
                         remapped = remap_ids(aligned.ids, registry)
                         mask_out_path = os.path.join(masks_dir, f"{stem}.png")
                         Image.fromarray(remapped, mode="L").save(mask_out_path)
@@ -306,14 +325,17 @@ def export_dataset(
     train_stems = sorted(s for s in exported_stems if splits.get(s) == "train")
     val_stems = sorted(s for s in exported_stems if splits.get(s) == "val")
 
+    # (R1) Every file below is written to a temp file and swapped in (app.io_utils):
+    # a failure or a killed export leaves it complete or absent, never truncated.
     _write_split_file(os.path.join(splits_dir, "train.txt"), train_stems)
     _write_split_file(os.path.join(splits_dir, "val.txt"), val_stems)
 
-    with open(os.path.join(out_dir, "classes.json"), "w", encoding="utf-8") as fh:
-        json.dump(_classes_json(registry), fh, indent=2)
+    atomic_write_text(
+        os.path.join(out_dir, "classes.json"), json.dumps(_classes_json(registry), indent=2)
+    )
 
     manifest_path = os.path.join(out_dir, _MANIFEST_FILENAME)
-    with open(manifest_path, "w", newline="", encoding="utf-8") as fh:
+    with atomic_open(manifest_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=_MANIFEST_FIELDS)
         writer.writeheader()
         for stem in exported_stems:
@@ -322,10 +344,11 @@ def export_dataset(
             writer.writerow(row)
 
     if errors:
-        with open(os.path.join(out_dir, _ERRORS_FILENAME), "w", encoding="utf-8") as fh:
-            for stem, message in errors:
-                # One line per error, whatever the message contains.
-                fh.write(stem + "\t" + " ".join(message.split()) + "\n")
+        # One line per error, whatever the message contains.
+        atomic_write_text(
+            os.path.join(out_dir, _ERRORS_FILENAME),
+            "".join(stem + "\t" + " ".join(message.split()) + "\n" for stem, message in errors),
+        )
 
     result = ExportResult(
         out_dir=out_dir,

@@ -89,7 +89,9 @@ class GenerationHandlerBase(HandlerDependencies):
         AND fully finished -- after the job registry released the job, so a
         chained job (Generate: masks, then skeletons) can start. It never runs
         after a cancel (even one that landed during the last batch) or a failure,
-        including a run in which every input failed (R6).
+        including a run in which every input failed (R6). A value that is not
+        callable chains nothing: a button's ``clicked`` connected straight to a
+        handler passes its ``checked`` flag (False) as ``on_success``.
         """
         if self.refuse_if_busy():
             thread.deleteLater()
@@ -100,7 +102,7 @@ class GenerationHandlerBase(HandlerDependencies):
             thread.deleteLater()
             return False
         self._thread = thread
-        if on_success is not None:
+        if callable(on_success):
             self._chain_on_success(thread, on_success)
         return True
 

@@ -162,7 +162,13 @@ def atomic_open(
         fh.close()
         _replace(tmp, target)
     except BaseException:
-        fh.close()
+        # On a full disk the close fails too (it flushes the rest): it must neither
+        # replace the error being raised nor keep the temp file on disk (R7). The
+        # file is closed even when its final flush fails.
+        try:
+            fh.close()
+        except Exception:  # noqa: BLE001 - the original error is the one to raise
+            pass
         _remove_quietly(tmp)
         raise
 
