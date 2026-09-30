@@ -203,15 +203,26 @@ Two passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
-- **None from the Correct stage and the zoom work.** For the same edits, saved masks
-  (`mask/<stem>.png`, RGBA; a model mask is never rewritten unless you save it) and saved
-  skeleton corrections are pixel-identical to the two editors they replace, and no CSV
-  value changes. This is pinned by pixel goldens captured from the pre-merge editors
+- **Skeleton corrections are saved at image resolution (Q1 fixed).**
+  `skeleton_corrections/<stem>_skeleton.png` is now written at the photo's size, exactly
+  as edited, instead of being shrunk back to the generated file's 341 x 256 with nearest
+  neighbour. The shrink broke 1 px lines apart (an unedited save turned 7 components into
+  48 and 12 into 109, and kept only 8-22 % of the skeleton's length); a saved correction
+  now reopens pixel for pixel. Opening a generated `skeletons/<stem>_fake.png` (or an older
+  small correction) upscales the grey file bilinearly before thresholding and thinning, not
+  nearest neighbour: lines keep their connectivity (0 splits in 300 random files) and
+  their length (within 0.6-2.3 % of the generated file on the real data, was 2.5-4.2 %).
+  Generated skeletons and Measure are unchanged, and corrections are still not measured
+  (FR-03), so no CSV value changes. Corrections saved before this change stay 341 x 256
+  and keep the fragments they lost. The skeleton pixel goldens were re-recorded for this
+  change (`tests/data/correct_goldens.json`; the mask goldens are untouched).
+- **Otherwise none from the Correct stage and the zoom work.** For the same edits, saved
+  masks (`mask/<stem>.png`, RGBA; a model mask is never rewritten unless you save it) are
+  pixel-identical to the editor they replace, and no CSV value changes. This is pinned by pixel goldens captured from the pre-merge editors
   (`tests/data/correct_goldens.json`, replayed per layer and through the Correct editor);
   four more cases from the real dataset are a pre-merge gate. Interaction changes that
   alter what a gesture paints (a tool, layer or visibility key pressed in the middle of a
-  drag; a GT class key in the middle of a stroke) are listed under *Changed*. The
-  skeleton save keeps its known fragmentation (`docs/KNOWN_ISSUES.md` #6, Q1).
+  drag; a GT class key in the middle of a stroke) are listed under *Changed*.
 - **Tube / Position** (`app/naming.py`, FR-15) come only from stand-alone `T<n>` /
   `L<n>` tokens of the file name. A leading field such as `PLOT12_` or `EXPT2_` is no
   longer read as the tube, and a name without separators (`T1L2_...`) now gives an

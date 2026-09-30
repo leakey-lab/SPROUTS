@@ -10,8 +10,9 @@ Load file and Save are today's skeleton editor code
 The file rules are :class:`app.gui.skeleton_document.SkeletonFiles`: the saved
 correction ``skeleton_corrections/<stem>_skeleton.png`` wins over the generated
 ``skeletons/<stem>_fake.png`` (an injected resolver is asked first). Saving writes only
-the correction, atomically, at the size of the raster that was opened (usually
-341x256), else ``SKELETON_OUTPUT_SIZE``.
+the correction, atomically, at image resolution: the generated file is smaller
+(``SKELETON_OUTPUT_SIZE``) and is upscaled when opened, so a save never shrinks
+the edited skeleton back and never breaks its lines (known issue Q1).
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from dataclasses import dataclass
 
 import cv2
 
-from app.config import SKELETON_OUTPUT_SIZE
 from app.gui.correct.layer import LayerStatus, Notice
 from app.gui.skeleton_document import CORRECTED, GENERATED, GeneratedResolver, SkeletonFiles
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel
@@ -61,8 +61,8 @@ class SkeletonDocument:
     ``model`` is one object for the document's whole life: opening, Discard, Load
     and close reset it in place, so hooks set on it (``on_action``) stay connected.
     ``source`` is ``CORRECTED``, ``GENERATED``, ``LOADED`` or None (nothing was read).
-    ``save_size`` is the ``(w, h)`` of the raster read, the size the correction is
-    saved at. ``save_error`` and ``error_revision`` describe the last failed save,
+    ``save_size`` is the ``(w, h)`` of the raster read (informational; saves are at
+    image resolution). ``save_error`` and ``error_revision`` describe the last failed save,
     which :meth:`status` reports until the next edit.
     """
 
@@ -176,14 +176,17 @@ class SkeletonDocument:
     def save(self) -> SkeletonSaveResult:
         """Write ``skeleton_corrections/<stem>_skeleton.png`` atomically.
 
-        The raster is the model rendered at ``save_size`` (else ``SKELETON_OUTPUT_SIZE``)
-        with nearest neighbour and thinned again. A failure keeps the previous file,
-        is recorded for :meth:`status` and is returned, never raised.
+        The raster is written at image resolution, exactly as edited (1 px, 0/255), so
+        reopening it gives back the same skeleton. Shrinking it to the generated file's
+        size (``SKELETON_OUTPUT_SIZE``) broke thin lines into fragments (known issue Q1).
+        A failure keeps the previous file, is recorded for :meth:`status` and is
+        returned, never raised.
         """
         if not self.image_path or self.model.mask is None:
             return SkeletonSaveResult(False, error="No skeleton is open")
         out_path = self.files().correction_path
-        rendered = self.model.render_to_size(self.save_size or SKELETON_OUTPUT_SIZE)
+        h, w = self.model.mask.shape
+        rendered = self.model.render_to_size((w, h))
         try:
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             imwrite_unicode(out_path, rendered)

@@ -622,8 +622,8 @@ def test_re_entering_correct_after_a_skeleton_save_shows_the_saved_correction(
     make_window, tmp_path
 ):
     project = new_project(tmp_path)
-    # A generated skeleton at half size: the save re-renders at that size (Q1), so the
-    # correction read back differs from the raster in memory, as with today's editor.
+    # A generated skeleton at half size: the correction is saved at image resolution, so
+    # re-entry shows exactly the raster that was in memory (Q1 fixed).
     write_skeleton(project.generated(0), row=55, w=W // 2, h=H // 2)
     window, _project = in_correct(make_window, tmp_path, 0, project)
     editor = window.correct_editor
@@ -638,7 +638,7 @@ def test_re_entering_correct_after_a_skeleton_save_shows_the_saved_correction(
     fresh = SkeletonCorrectionModel()
     fresh.load_from_raster(saved, target_size=(W, H))
     assert np.array_equal(raster(editor), fresh.mask)
-    assert not np.array_equal(raster(editor), in_memory)
+    assert np.array_equal(raster(editor), in_memory)
     assert editor.layers[SKELETON].document.source == "corrected"
 
 

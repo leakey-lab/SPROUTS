@@ -1,7 +1,7 @@
 """SkeletonDocument: the skeleton of one image for the Correct workspace (Qt-free).
 
 Which file opens (the saved correction, else the generated skeleton, injected resolver
-first), the save (the loaded raster size, else SKELETON_OUTPUT_SIZE; atomic; a failure
+first), the save (at image resolution, so a save never fragments the skeleton; atomic; a failure
 is reported, never raised), Discard (re-read the start file), Load file, the status
 labels of today's skeleton editor and the pinned file stamps (plan contract C14).
 """
@@ -116,7 +116,7 @@ def test_nothing_on_disk_opens_an_empty_skeleton_at_image_size(project):
     assert doc.images_base_folder == str(root)  # the image's folder by default
 
 
-def test_a_generated_raster_is_resized_nearest_and_thinned_to_image_size(project):
+def test_a_generated_raster_is_upscaled_bilinearly_and_thinned_to_image_size(project):
     root, image = project
     raster = np.zeros((256, 341), np.uint8)
     cv2.line(raster, (20, 30), (320, 200), 191, 2)
@@ -124,9 +124,9 @@ def test_a_generated_raster_is_resized_nearest_and_thinned_to_image_size(project
     cv2.imwrite(_paths(root)[1], raster)
     doc = SkeletonDocument()
     doc.open(image, (640, 480), str(root))
-    _, binary = cv2.threshold(raster, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    upscaled = cv2.resize(binary, (640, 480), interpolation=cv2.INTER_NEAREST)
-    expected = skeletonize(upscaled > 0).astype(np.uint8) * 255
+    upscaled = cv2.resize(raster, (640, 480), interpolation=cv2.INTER_LINEAR)
+    _, binary = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    expected = skeletonize(binary > 0).astype(np.uint8) * 255
     assert doc.save_size == (341, 256)
     assert np.array_equal(doc.model.mask, expected)
 
@@ -237,7 +237,7 @@ def test_load_file_of_an_unreadable_file_changes_nothing(project):
 
 
 # ------------------------------------------------------------------ saving
-def test_save_writes_the_correction_at_the_loaded_raster_size(project):
+def test_save_writes_the_correction_at_image_resolution_not_the_loaded_size(project):
     root, image = project
     correction, generated = _paths(root)
     _write_skeleton(generated, row=30, size=(341, 256))
@@ -246,18 +246,75 @@ def test_save_writes_the_correction_at_the_loaded_raster_size(project):
     result = doc.save()
     assert result == SkeletonSaveResult(True, correction)
     written = cv2.imread(correction, cv2.IMREAD_GRAYSCALE)
-    assert written.shape == (256, 341)
+    assert written.shape == (H, W)  # the generated file was 341x256
     assert set(np.unique(written).tolist()) == {0, 255}
     assert doc.source == CORRECTED and not doc.is_dirty() and doc.save_error == ""
 
 
-def test_save_without_a_loaded_raster_uses_the_configured_output_size(project):
+def test_save_without_a_loaded_raster_writes_at_image_resolution(project):
     root, image = project
     doc = _opened(root, image)
     _draw(doc)
     assert doc.save().ok
     written = cv2.imread(_paths(root)[0], cv2.IMREAD_GRAYSCALE)
-    assert (written.shape[1], written.shape[0]) == tuple(SKELETON_OUTPUT_SIZE)
+    assert (written.shape[1], written.shape[0]) == (W, H)
+
+
+def _diagonal_generated(path, size):
+    """A generated-looking skeleton: 1 px diagonals and a curve at model resolution."""
+    w, h = size
+    raster = np.zeros((h, w), np.uint8)
+    cv2.line(raster, (5, 5), (w - 6, h - 6), 255, 1)
+    cv2.line(raster, (5, h - 6), (w // 2, 8), 255, 1)
+    cv2.ellipse(raster, (w // 2, h // 2), (w // 3, h // 4), 20, 0, 300, 255, 1)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    assert cv2.imwrite(str(path), raster)
+
+
+def _components(mask) -> int:
+    return cv2.connectedComponents((mask > 0).astype(np.uint8), connectivity=8)[0] - 1
+
+
+def test_save_then_reopen_gives_back_the_edited_skeleton_exactly(tmp_path):
+    """Q1: a correction is saved at image resolution, so saving never fragments it.
+
+    The generated file is small (SKELETON_OUTPUT_SIZE); saving used to shrink the edited
+    image-size raster back to it with nearest neighbour, which broke 1 px lines apart.
+    """
+    w, h = 640, 480
+    image = tmp_path / "a.png"
+    assert cv2.imwrite(str(image), np.full((h, w, 3), 90, np.uint8))
+    _diagonal_generated(tmp_path / "skeletons" / "a_fake.png", SKELETON_OUTPUT_SIZE)
+    doc = SkeletonDocument()
+    doc.open(str(image), (w, h), str(tmp_path))
+    doc.model.push_undo()
+    doc.model.erase_segment((320, 240), (320, 240), 2)  # a small eraser dab
+    doc.model.skeletonize()
+    edited = doc.model.mask.copy()
+    assert doc.save().ok
+
+    written = cv2.imread(str(tmp_path / "skeleton_corrections" / "a_skeleton.png"), 0)
+    assert (written.shape[1], written.shape[0]) == (w, h)
+    reopened = SkeletonDocument()
+    reopened.open(str(image), (w, h), str(tmp_path))
+    assert reopened.source == CORRECTED
+    assert np.array_equal(reopened.model.mask, edited)
+    assert _components(reopened.model.mask) == _components(edited)
+    assert not reopened.is_dirty()
+
+
+def test_an_old_small_correction_still_opens_at_image_size(tmp_path):
+    """Corrections saved before the fix are 341x256; they open upscaled, as before."""
+    w, h = 640, 480
+    image = tmp_path / "a.png"
+    assert cv2.imwrite(str(image), np.full((h, w, 3), 90, np.uint8))
+    _write_skeleton(
+        tmp_path / "skeleton_corrections" / "a_skeleton.png", row=100, size=SKELETON_OUTPUT_SIZE
+    )
+    doc = SkeletonDocument()
+    doc.open(str(image), (w, h), str(tmp_path))
+    assert doc.source == CORRECTED and doc.model.mask.shape == (h, w)
+    assert doc.model.mask.any()
 
 
 def test_a_failed_save_keeps_the_old_file_and_reports_until_the_next_edit(project, monkeypatch):

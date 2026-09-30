@@ -22,7 +22,11 @@ import numpy as np
 import pytest
 
 import app.gui.skeleton_graph_model as sgm
-from app.gui.skeleton_graph_model import SkeletonCorrectionModel, vectorize_skeleton
+from app.gui.skeleton_graph_model import (
+    SkeletonCorrectionModel,
+    _skeletonize_uint8,
+    vectorize_skeleton,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -615,3 +619,43 @@ def test_prewarm_loads_scikit_image_once_from_a_worker_thread():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["prewarmed", "True", "again", "0", "thin", "255", "True"]
+
+
+# ----------------------------------------------- opening a small generated file
+def _arc_px(mask: np.ndarray) -> float:
+    from app.inference.metrics import skeleton_arc_length_px
+
+    ox, oy, diag = skeleton_arc_length_px(mask > 0)
+    return ox + oy + diag * float(np.sqrt(2.0))
+
+
+def test_a_small_file_opens_upscaled_smoothly_as_one_line():
+    """The generated skeleton is small (SKELETON_OUTPUT_SIZE) with ~2 px lines. Opening it
+    at image size upscales the grey file bilinearly before thresholding, so the line keeps
+    its length (a nearest-neighbour staircase measured about 3 % long) and its connectivity.
+    """
+    small = np.zeros((128, 170), np.uint8)
+    cv2.line(small, (10, 10), (160, 118), 255, 2)
+    cv2.ellipse(small, (85, 64), (50, 35), 15, 0, 270, 255, 2)
+    model = SkeletonCorrectionModel()
+    model.load_from_raster(small, target_size=(320, 240))
+    mask = model.mask
+    assert mask.shape == (240, 320)
+    n_src, _ = cv2.connectedComponents(_skeletonize_uint8(small), connectivity=8)
+    n_new, _ = cv2.connectedComponents((mask > 0).astype(np.uint8), connectivity=8)
+    assert n_new == n_src
+    scale = (320 / 170 + 240 / 128) / 2
+    expected = _arc_px(_skeletonize_uint8(small)) * scale
+    assert abs(_arc_px(mask) / expected - 1.0) < 0.015
+
+
+def test_a_file_at_image_size_opens_unchanged():
+    """A correction saved at image resolution reopens pixel for pixel (no resize)."""
+    model = SkeletonCorrectionModel()
+    raster = np.zeros((60, 80), np.uint8)
+    cv2.line(raster, (5, 5), (70, 50), 255, 1)
+    cv2.line(raster, (5, 50), (40, 8), 255, 1)
+    model.load_from_raster(raster, target_size=(80, 60))
+    first = model.mask.copy()
+    model.load_from_raster(first, target_size=(80, 60))
+    assert np.array_equal(model.mask, first)

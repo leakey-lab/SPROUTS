@@ -403,16 +403,14 @@ def test_an_unwritable_corrections_folder_does_not_raise(layer, monkeypatch):
     assert layer.save().ok is False
 
 
-def test_save_without_a_loaded_raster_uses_the_configured_output_size(host, scene, project):
-    from app.config import SKELETON_OUTPUT_SIZE
-
+def test_save_writes_the_skeleton_at_image_resolution(host, scene, project):
     layer = _open(host, scene, project)  # nothing on disk: no raster size to keep
     _commit(layer, (50, 50), (200, 100))
 
     outcome = layer.save()
 
     saved = cv2.imread(outcome.path, cv2.IMREAD_GRAYSCALE)
-    assert (saved.shape[1], saved.shape[0]) == tuple(SKELETON_OUTPUT_SIZE)
+    assert saved.shape == layer.document.model.mask.shape
     assert set(np.unique(saved)) <= {0, 255}
 
 

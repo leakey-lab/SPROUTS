@@ -98,7 +98,7 @@ purple primary `#c39af6`, selection `#b794f6`.
 
 **Open items**: `docs/KNOWN_ISSUES.md` #5 (owner decisions: licence, FR-03
 corrected-skeleton measurement, tracked `checkpoints.zip`; remaining low-severity
-review items) and #6 (the Correct stage: skeleton save fragmentation Q1, follow-ups).
+review items) and #6 (the Correct stage follow-ups; Q1 skeleton save fragmentation resolved).
 The metrics bar shows measured values read-only from the Measure CSVs
 (`MeasurementIndex`) — **never fabricate values**. `CHANGELOG.md` has a
 "Scientific output changes" section: record anything that can change a CSV value

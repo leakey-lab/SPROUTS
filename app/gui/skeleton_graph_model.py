@@ -482,11 +482,21 @@ class SkeletonCorrectionModel:
         target_size: tuple[int, int],
         threshold: str = "otsu",
     ) -> None:
-        """Load skeleton from a grayscale raster image into `mask` at target_size."""
+        """Load a skeleton from a grayscale raster into ``mask`` at ``target_size``, 1 px thin.
+
+        A raster of another size (the generated skeleton is ``SKELETON_OUTPUT_SIZE``) is
+        upscaled bilinearly *before* thresholding, so thin lines come out as smooth,
+        connected 1 px lines of the right length instead of a nearest-neighbour
+        staircase. A raster already at ``target_size`` (a correction saved at image
+        resolution) is only thresholded and thinned, so it reopens unchanged.
+        """
         if raster_gray.ndim != 2:
             raise ValueError("Expected a grayscale image.")
 
         img = raster_gray
+        w_t, h_t = target_size
+        if (img.shape[1], img.shape[0]) != (w_t, h_t):
+            img = cv2.resize(img, (w_t, h_t), interpolation=cv2.INTER_LINEAR)
         if threshold == "otsu":
             _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         else:
@@ -495,10 +505,6 @@ class SkeletonCorrectionModel:
         # Ensure skeleton is foreground (white) by inverting if background dominates.
         if float(np.mean(binary)) > 127.0:
             binary = 255 - binary
-
-        w_t, h_t = target_size
-        if (binary.shape[1], binary.shape[0]) != (w_t, h_t):
-            binary = cv2.resize(binary, (w_t, h_t), interpolation=cv2.INTER_NEAREST)
 
         self._start_document(_skeletonize_uint8(binary))
 

@@ -106,13 +106,13 @@
      "colour_type": 0,
      "dtype": "uint8",
      "exists": true,
-     "file_sha256_informational": "47933c7dd694019e29239c369b267368c5c5a3d23f8cef8e6b20e00048452b97",
-     "length_mm_if_measured_informational": 10.67,
-     "on_count": 284,
-     "pixels_sha256": "c083702f3171e8a604738c248bf7199407344f9c53c59643b01b34f8ccde1352",
+     "file_sha256_informational": "11fbb8e92b7149971cdbeae126eea5f8ba68f532ed09a5fb19249196d23ef5a8",
+     "length_mm_if_measured_informational": 28.86,
+     "on_count": 939,
+     "pixels_sha256": "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99",
      "shape": [
-      256,
-      341
+      480,
+      640
      ],
      "values": [
       0,
@@ -139,13 +139,13 @@
      "colour_type": 0,
      "dtype": "uint8",
      "exists": true,
-     "file_sha256_informational": "eae43f5e5a07249afd7ca9950caa324806a8cd77cedbe362808a92d293dccc2f",
+     "file_sha256_informational": "45e945d98ded38001430be13601895981708846604f9db9184b3b6af1dd62402",
      "length_mm_if_measured_informational": 0.0,
      "on_count": 0,
-     "pixels_sha256": "49d903014a1450b3f380094af4d1c5daa2d5d98c7665ebe53906c7f75be0c81e",
+     "pixels_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
      "shape": [
-      256,
-      341
+      480,
+      640
      ],
      "values": [
       0
@@ -232,49 +232,49 @@
    },
    "skeleton": {
     "per_op_raster_sha256": [
-     "630325f83015d99e3b6227d6c9ebdec666f5b6b09aa2888c91e37f9b94bc7d66",
-     "630325f83015d99e3b6227d6c9ebdec666f5b6b09aa2888c91e37f9b94bc7d66",
-     "630325f83015d99e3b6227d6c9ebdec666f5b6b09aa2888c91e37f9b94bc7d66",
-     "630325f83015d99e3b6227d6c9ebdec666f5b6b09aa2888c91e37f9b94bc7d66",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "974aef5e90e9f085227806f0c36915d0babd5773762bf7ca96c813c7c2b1067c",
-     "bdda9046c81d3336394ceae2dc8f12075d38a05d26cf994af7bfb47ec4ce34e5",
-     "bdda9046c81d3336394ceae2dc8f12075d38a05d26cf994af7bfb47ec4ce34e5",
-     "bdda9046c81d3336394ceae2dc8f12075d38a05d26cf994af7bfb47ec4ce34e5",
-     "bdda9046c81d3336394ceae2dc8f12075d38a05d26cf994af7bfb47ec4ce34e5",
-     "1ca3f573f5e7a6da198e6e167abc66ad80e85ae33c6c845ee9e25f6ccee4e8c3",
-     "1ca3f573f5e7a6da198e6e167abc66ad80e85ae33c6c845ee9e25f6ccee4e8c3",
-     "f47830901d50fe6b4bb982c685a719c95e81e6feac83f3c1c371284eb251d747",
-     "f47830901d50fe6b4bb982c685a719c95e81e6feac83f3c1c371284eb251d747",
-     "f47830901d50fe6b4bb982c685a719c95e81e6feac83f3c1c371284eb251d747",
-     "55673fec0d5bc6471d9ed0a40c73cd96959f98251b12dc5e3da2165c56790046",
-     "55673fec0d5bc6471d9ed0a40c73cd96959f98251b12dc5e3da2165c56790046",
-     "55673fec0d5bc6471d9ed0a40c73cd96959f98251b12dc5e3da2165c56790046",
-     "55673fec0d5bc6471d9ed0a40c73cd96959f98251b12dc5e3da2165c56790046",
-     "bca153b51dd9dcc6116cad3c0b227a16a38d59f79d86217f19d923353c6d6006",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "171810a508b742c2f27fd67a14ce29212a214507489dcf9a8aaf1690e327f65e",
+     "171810a508b742c2f27fd67a14ce29212a214507489dcf9a8aaf1690e327f65e",
+     "23212b7d48a7c4dd686878543f8d710a64bff2cecb3c622a8ad05ff4a4fb51e1",
+     "23212b7d48a7c4dd686878543f8d710a64bff2cecb3c622a8ad05ff4a4fb51e1",
+     "23212b7d48a7c4dd686878543f8d710a64bff2cecb3c622a8ad05ff4a4fb51e1",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
      "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
-     "bca153b51dd9dcc6116cad3c0b227a16a38d59f79d86217f19d923353c6d6006",
-     "55673fec0d5bc6471d9ed0a40c73cd96959f98251b12dc5e3da2165c56790046",
-     "bca153b51dd9dcc6116cad3c0b227a16a38d59f79d86217f19d923353c6d6006",
-     "bca153b51dd9dcc6116cad3c0b227a16a38d59f79d86217f19d923353c6d6006"
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def"
     ],
     "save_returned": true,
     "saved": {
      "colour_type": 0,
      "dtype": "uint8",
      "exists": true,
-     "file_sha256_informational": "ddd1c3c047475a7e7b203f2cdea64bd738ba92b393f993fbcac6cdd543610de9",
-     "length_mm_if_measured_informational": 19.88,
-     "on_count": 490,
-     "pixels_sha256": "8c8ecadaa55b13a9b3cb0bd04fa9371ddbbd22ca768535f635addfb078ac256a",
+     "file_sha256_informational": "42cddc201e1ff2a9c919b95a1095d38cc2d9efd7ec7ad371dbab2205d5a80c5c",
+     "length_mm_if_measured_informational": 60.83,
+     "on_count": 1797,
+     "pixels_sha256": "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
      "shape": [
-      256,
-      341
+      480,
+      640
      ],
      "values": [
       0,
@@ -282,7 +282,7 @@
      ]
     },
     "start": {
-     "raster_sha256": "630325f83015d99e3b6227d6c9ebdec666f5b6b09aa2888c91e37f9b94bc7d66",
+     "raster_sha256": "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
      "raster_shape": [
       480,
       640
@@ -304,20 +304,20 @@
      "colour_type": 0,
      "dtype": "uint8",
      "exists": true,
-     "file_sha256_informational": "eae43f5e5a07249afd7ca9950caa324806a8cd77cedbe362808a92d293dccc2f",
+     "file_sha256_informational": "45e945d98ded38001430be13601895981708846604f9db9184b3b6af1dd62402",
      "length_mm_if_measured_informational": 0.0,
      "on_count": 0,
-     "pixels_sha256": "49d903014a1450b3f380094af4d1c5daa2d5d98c7665ebe53906c7f75be0c81e",
+     "pixels_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
      "shape": [
-      256,
-      341
+      480,
+      640
      ],
      "values": [
       0
      ]
     },
     "start": {
-     "raster_sha256": "630325f83015d99e3b6227d6c9ebdec666f5b6b09aa2888c91e37f9b94bc7d66",
+     "raster_sha256": "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
      "raster_shape": [
       480,
       640

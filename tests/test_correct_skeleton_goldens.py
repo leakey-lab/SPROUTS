@@ -2,8 +2,9 @@
 
 ``ops.skeleton`` and ``ops.skeleton_clear`` of ``tests/data/correct_goldens.json`` run on
 both committed synthetic projects through the layer API, with the C18 op semantics. The
-start state, the raster after every op and the saved correction must equal what the
-pre-merge skeleton editor produced for the same edits: saved pixels are unchanged.
+start state, the raster after every op and the saved correction must equal the recorded
+goldens. They were captured from the pre-merge skeleton editor and re-recorded once for
+Q1 (bilinear open, corrections saved at image resolution; CHANGELOG).
 """
 
 from __future__ import annotations

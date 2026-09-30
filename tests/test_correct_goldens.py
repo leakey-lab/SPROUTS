@@ -6,7 +6,8 @@ two synthetic projects: the plane or raster after every op of each script and th
 file. Here the scripts drive one ``CorrectEditor`` the way a user does: the rail's tool
 buttons, the dock's size sliders, the polyline prompt, Clear, Save, Undo / Redo and the
 canvas input (the router, or real mouse events through the view). Saved pixels must stay
-identical to today's:
+identical to the goldens (the skeleton entries were re-recorded once for Q1: bilinear
+open, corrections saved at image resolution; see CHANGELOG):
 
 - ``ops.mask`` then ``ops.skeleton`` in one page, each op and each save matching its golden
   (the skeleton's save never rewrites the clean mask);

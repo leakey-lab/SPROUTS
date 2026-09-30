@@ -90,12 +90,12 @@ and 20).
 
 Owner questions (science or product scope; nothing here blocks use):
 
-- **Q1 Skeleton save fragmentation.** Saving a skeleton re-renders the whole
-  image-resolution raster down to the loaded size (usually 341 x 256) with
-  nearest-neighbour and re-thins it: one 3 px erase + Save turned 13 components into 109,
-  and the dotted result comes back on reopen. Correct keeps this bit-compatible with the
-  old editor. A fix (edit at the native raster and display it scaled, or a
-  connectivity-preserving downscale) changes saved skeleton pixels and is linked to FR-03.
+- **Q1 Skeleton save fragmentation — RESOLVED (2026-09-29).** Corrections are now saved
+  at image resolution and reopen pixel for pixel; generated skeletons open with a
+  bilinear upscale (see CHANGELOG, Scientific output changes). Corrections saved before
+  the fix are still 341 x 256 and keep their lost fragments. Measuring corrections stays
+  an owner decision (FR-03); their lengths are now within a few percent of the generated
+  file's instead of 8-22 % of it.
 - **Q2 JPEG deblock.** A display-only "Smooth JPEG blocks" toggle (default off, never
   written to disk or used by inference)? The images are JPEG quality ~39: smooth zoom
   removes the renderer's pixel squares, but the 8 x 8 compression blocks only fade.

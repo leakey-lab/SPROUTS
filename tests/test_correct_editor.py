@@ -720,8 +720,8 @@ def test_another_image_opens_fitted(make_editor, project):
 
 
 def test_re_entry_after_our_own_skeleton_save_reloads_the_saved_correction(make_editor, project):
-    # A generated skeleton at half size: the save re-renders at that size (Q1), so the
-    # correction read back differs from the raster in memory, as it did with today's editor.
+    # A generated skeleton at half size: the correction is saved at image resolution, so
+    # re-entry reads back exactly the raster that was in memory (Q1 fixed).
     write_skeleton(project.generated(), row=55, w=W // 2, h=H // 2)
     editor = make_editor(project.a, project.folder)
     draw_line(editor)
@@ -734,7 +734,7 @@ def test_re_entry_after_our_own_skeleton_save_reloads_the_saved_correction(make_
     fresh = SkeletonCorrectionModel()
     fresh.load_from_raster(saved, target_size=(W, H))
     assert np.array_equal(raster(editor), fresh.mask)
-    assert not np.array_equal(raster(editor), in_memory)
+    assert np.array_equal(raster(editor), in_memory)
     assert editor.layers[SKELETON].document.source == "corrected"
 
 
@@ -1278,22 +1278,20 @@ def test_an_unwritable_folder_is_a_notice_not_a_crash(make_editor, project, monk
     assert [kind for _message, kind in notices] == ["danger"] and editor.has_unsaved_changes()
 
 
-def test_the_skeleton_saves_at_the_size_it_was_read_else_the_configured_size(make_editor, project):
-    from app.config import SKELETON_OUTPUT_SIZE
-
+def test_the_skeleton_saves_at_image_resolution_whatever_size_was_read(make_editor, project):
     write_skeleton(project.generated(), row=55, w=W // 2, h=H // 2)
     editor = make_editor(project.a, project.folder)
     draw_line(editor)
     assert editor.save()
     saved = cv2.imread(project.correction(), cv2.IMREAD_GRAYSCALE)
-    assert (saved.shape[1], saved.shape[0]) == (W // 2, H // 2)
+    assert (saved.shape[1], saved.shape[0]) == (W, H)
     assert set(np.unique(saved)) <= {0, 255}
 
-    editor.load_image(project.b, project.folder)  # nothing read: the configured size
+    editor.load_image(project.b, project.folder)  # nothing read: image size too
     draw_line(editor)
     assert editor.save()
     saved = cv2.imread(project.correction("b"), cv2.IMREAD_GRAYSCALE)
-    assert (saved.shape[1], saved.shape[0]) == tuple(SKELETON_OUTPUT_SIZE)
+    assert (saved.shape[1], saved.shape[0]) == (W, H)
 
 
 def test_an_emptied_mask_removes_its_file_on_save_and_reports_it_once(make_editor, project):

@@ -115,7 +115,7 @@ The top bar walks through the work in six stages, in this order (`F1` lists ever
 | `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error` |
 | `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
 | `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error` |
-| `skeleton_corrections/<stem>_skeleton.png` | skeleton corrected in *Correct* (1-pixel lines, at the size of the skeleton it was opened from, 341 x 256 by default); not measured |
+| `skeleton_corrections/<stem>_skeleton.png` | skeleton corrected in *Correct* (1-pixel lines at the photo's resolution, so a saved correction reopens unchanged); not measured |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
 | `mask/_sprouts_run.json`, `skeletons/_sprouts_run.json` | the latest generation run into that folder: model SHA-256, device and precision, parameters, failed inputs |
