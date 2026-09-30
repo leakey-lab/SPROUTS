@@ -401,7 +401,14 @@ def test_failed_add_error_clears_when_the_form_is_edited(app):
             dialog._set_add_color("#0a0b0c")
         assert dialog._error is None and _ok(dialog).isEnabled(), edit
         dialog._on_accept()
-        assert dialog.result_registry() is None, edit  # nothing was added
+        # OK adds a class still typed in the form (it used to drop it, G2 2026-09-30).
+        added = dialog.result_registry()
+        if edit == "name":
+            assert added is None, edit  # the form was abandoned: nothing to add
+        elif edit == "key":
+            assert added is None and dialog._error is not None, edit  # still the root's colour
+        else:
+            assert added is not None and "copy_root" in {c.key for c in added.classes}, edit
 
 
 def test_row_error_survives_add_form_edits(app):

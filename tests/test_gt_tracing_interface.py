@@ -334,14 +334,17 @@ def test_invalid_registry_blocks_every_edit(app, project):
     notices = []
     iface = _editor(app, image_path, notices)
 
-    def _refused():
+    def _refused(first=False):
+        # The first refusal on an image says why in a toast; from then on the chip says
+        # "Read-only" (each refused stroke used to stack another toast).
         danger = [msg for msg, kind in notices if kind == "danger"]
         notices.clear()
-        return len(danger) == 1 and "classes.json" in danger[0]
+        return len(danger) == 1 and "classes.json" in danger[0] if first else danger == []
 
     notices.clear()
+    assert "Read-only" in iface.state_label.text()
     _stroke(iface, (10, 10), (30, 10), size=6)  # brush
-    assert _refused()
+    assert _refused(first=True)
     iface.eraser_button.setChecked(True)
     _stroke(iface, (10, 10), (30, 10))  # eraser
     assert _refused()

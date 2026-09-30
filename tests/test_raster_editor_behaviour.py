@@ -611,14 +611,24 @@ def test_base_brush_ring_follows_the_pointer_and_hides_off_canvas(make, tmp_path
     assert not ring.is_visible()
 
 
-def test_base_discard_marks_clean_and_keeps_the_strokes(make, tmp_path, probe_cls, monkeypatch):
+def test_base_discard_reverts_to_the_saved_plane(make, tmp_path, probe_cls, monkeypatch):
+    """Discard goes back to the plane as last saved (or opened), like Correct (G1)."""
     iface = make(probe_cls, _image(tmp_path))
     _stroke(iface, (10, 10), (40, 10), size=6)
     seen = _answer(monkeypatch, _DISCARD)
     assert iface.maybe_save_changes() is True
     assert seen == ["Unsaved probe"]
     assert not iface.has_unsaved_changes() and iface.saved == []
-    assert _alpha(iface)[10, 25] > 0  # flag-based: Discard does not revert (Trace GT)
+    assert not _alpha(iface).any() and not iface.edits.plane.any()  # back to the opened state
+    assert len(iface.undo_stack) == 0 and len(iface.redo_stack) == 0
+
+    _stroke(iface, (10, 10), (40, 10), size=6)
+    assert iface.save_mask()
+    _stroke(iface, (10, 40), (40, 40), size=6)
+    _answer(monkeypatch, _DISCARD)
+    assert iface.maybe_save_changes() is True
+    assert _alpha(iface)[10, 25] > 0 and not _alpha(iface)[40, 25]  # the saved stroke stays
+    assert np.array_equal(iface.edits.plane, iface.saved[-1])
 
 
 def test_base_dirty_is_a_flag_set_by_every_edit_undo_and_redo(make, tmp_path, probe_cls):

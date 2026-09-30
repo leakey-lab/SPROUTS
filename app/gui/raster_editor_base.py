@@ -19,8 +19,9 @@ editor shares:
 
 The photo is decoded once per open, through the Enhance controls' source cache
 (``NormalizationControls.display_image``), so an enhancement sticks across images. Dirty is a
-flag, set by every edit, undo and redo and cleared by a save or by Discard, which keeps the
-edits on the canvas: Trace GT's semantics, unchanged.
+flag, set by every edit, undo and redo and cleared by a save or by Discard. Discard puts the
+document back as it was last saved (or opened) and clears the history, like the Correct
+editor's Discard: the editor keeps a copy of the plane each time it becomes clean.
 
 A subclass decides what the plane means and where it is stored: ``_open_document`` reads it,
 ``save_mask`` writes it, ``_plane_lut`` / ``_argb_to_plane`` / ``_fill_source`` map it to canvas
@@ -46,6 +47,7 @@ from . import editor_prompts, shortcuts
 from .brush_preview import BrushPreview
 from .canvas_layers.photo import PhotoLayerItem
 from .canvas_layers.raster import RasterLayerItem
+from .canvas_view import PIXEL_GRID_OFF, PIXEL_GRID_ON
 from .editor_canvas import EditorCanvasView
 from .editor_chrome import EditorChrome
 from .image_normalization_interface import NormalizationControls
@@ -58,6 +60,22 @@ __all__ = ["RasterEditorBase"]
 
 # B hold / tap: the key alone (a keypad B counts), never with Ctrl / Shift / Alt.
 _PLAIN = (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+
+
+def _file_stamp(path: str) -> tuple:
+    """``(path, mtime_ns, size)`` of a readable file, ``(path, None)`` otherwise."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return (path, None)
+    return (path, stat.st_mtime_ns, stat.st_size)
+
+
+def _same_file(a: str, b: str) -> bool:
+    """True when both are set and name the same file (case / separator-insensitive on Windows)."""
+    if not a or not b:
+        return False
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 class RasterEditorBase(QWidget):
@@ -89,12 +107,21 @@ class RasterEditorBase(QWidget):
     CLEARED_NOTICE = "Cleared. Ctrl+Z to undo."
     CLEAR_TIP = "Clear the canvas. Undo with Ctrl+Z."
     FILL_MISS_NOTICE = "Fill works inside a closed outline. Close the loop first."
+    # The status chip's hint line while no image is open.
+    EMPTY_HINT = "Select an image in the library to edit it."
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_image_path = ""
         # One entry per stroke / fill / clear; the committed plane lives here too.
         self.edits = PatchHistory(on_change=self._sync_history_buttons)
+        # The plane as last saved or opened (a copy): what Discard goes back to.
+        self._saved_plane: np.ndarray | None = None
+        # File stamps of the open photo and of its document files: re-selecting the open
+        # image reloads only what changed on disk.
+        self._photo_stamp: tuple = ()
+        self._document_stamps: tuple = ()
+        self._chip_shown: tuple | None = None  # what the status chip shows
         self.b_key_pressed = False
         self._b_wheel_used = False
         self.dirty = False
@@ -112,6 +139,7 @@ class RasterEditorBase(QWidget):
         self.graphics_view.refresh_cursor()
         self._style_brush_preview()
         self._sync_history_buttons()
+        self._sync_open_controls()
         self._update_status_chip()
 
     # ================================================================== UI
@@ -268,11 +296,17 @@ class RasterEditorBase(QWidget):
                 "zoom_100": lambda: view.set_zoom(1.0),
                 "zoom_in": lambda: view.zoom_step(1),
                 "zoom_out": lambda: view.zoom_step(-1),
+                "pixel_grid": self._toggle_pixel_grid,
             },
         )
         self._shortcuts = [sc for group in installed.values() for sc in group]
         # Keep the legacy attribute names.
         self.undo_shortcut, self.redo_shortcut = installed["undo"][0], installed["redo"][0]
+
+    def _toggle_pixel_grid(self) -> None:
+        """Flip the canvas pixel grid and say so (it only shows at 800 % and above)."""
+        on = self.graphics_view.toggle_pixel_grid()
+        self.notice.emit(PIXEL_GRID_ON if on else PIXEL_GRID_OFF, "info")
 
     # ================================================================ canvas input (InputSink)
     def canvas_size(self) -> QSize:
@@ -514,10 +548,38 @@ class RasterEditorBase(QWidget):
         self._update_status_chip()
 
     def _set_clean(self) -> None:
+        """The document is its saved state now (saved, opened unchanged or discarded)."""
+        self._remember_saved()
         if self.dirty:
             self.dirty = False
             self.dirty_changed.emit(False)
         self._update_status_chip()
+
+    def _remember_saved(self) -> None:
+        """Keep a copy of the plane as the saved state, the one Discard goes back to.
+
+        Subclasses extend it to keep the rest of their saved state.
+        """
+        plane = self.edits.plane
+        self._saved_plane = None if plane is None else plane.copy()
+
+    def _restore_saved(self) -> None:
+        """Hook: Discard put the saved plane back; restore the rest of the saved state."""
+
+    def revert_to_saved(self) -> None:
+        """Discard: back to the document as last saved (or opened); the history is cleared.
+
+        A stroke in progress is dropped with the rest. With nothing open it only marks
+        the editor clean.
+        """
+        saved = self._saved_plane
+        if saved is not None and self.edits.plane is not None:
+            self._drop_stroke()
+            # Adopted as the plane: _set_clean keeps a fresh copy as the saved state.
+            self.edits.reset(saved)
+            self.paint.rebuild()
+            self._restore_saved()
+        self._set_clean()
 
     def has_unsaved_changes(self) -> bool:
         """True when an open image has unsaved edits."""
@@ -527,36 +589,58 @@ class RasterEditorBase(QWidget):
         """``(state, label, tooltip)`` for the status chip (see :class:`StatusChip`)."""
         return ("dirty", None, "") if self.dirty else ("none", None, "")
 
+    def _hint(self) -> tuple[str, str]:
+        """``(text, tooltip)`` of the chip's hint line: what to do while no image is open."""
+        return ("", "") if self.current_image_path else (self.EMPTY_HINT, "")
+
     def _update_status_chip(self) -> None:
-        chip = self.status_chip
+        """Show the file name, the save state and the hint; only a change reaches the chip.
+
+        Every edit asks (twice), and each chip update re-places all the overlays.
+        """
         if not self.current_image_path:
-            chip.set_text("No image")
-            chip.set_state("none")
-            return
-        chip.set_text(os.path.basename(self.current_image_path))
-        state, label, tooltip = self._status()
-        chip.set_state(state, label, tooltip=tooltip)
+            shown = ("No image", ("none", None, ""), self._hint())
+        else:
+            name = os.path.basename(self.current_image_path)
+            shown = (name, self._status(), self._hint())
+        old = self._chip_shown or (None, None, None)
+        self._chip_shown = shown
+        chip = self.status_chip
+        if shown[0] != old[0]:
+            chip.set_text(shown[0])
+        if shown[1] != old[1]:
+            state, label, tooltip = shown[1]
+            chip.set_state(state, label, tooltip=tooltip)
+        if shown[2] != old[2]:
+            chip.set_hint(*shown[2])
+
+    def _sync_open_controls(self) -> None:
+        """Save and Clear act on the open image: off while none is open."""
+        is_open = bool(self.current_image_path)
+        for button in (self.save_button, self.clear_icon_button, self.clear_button):
+            button.setEnabled(is_open)
 
     def maybe_save_changes(self) -> bool:
         """Offer to save unsaved edits. Returns True when it is safe to move on.
 
-        True = saved, discarded (marked clean: the edits stay on the canvas), or nothing
-        to save. False = the user chose Cancel, or chose Save, the save failed (a notice
-        says why) and they chose "Keep editing": the caller must then stay on this image.
+        True = saved, discarded (the document goes back to its saved state, see
+        :meth:`revert_to_saved`), or nothing to save. False = the user chose Cancel, or
+        chose Save, the save failed (a notice says why) and they chose "Keep editing": the
+        caller must then stay on this image.
         """
         if not self.has_unsaved_changes():
             return True
         noun, name = self.EDITOR_NOUN, os.path.basename(self.current_image_path)
         choice = editor_prompts.ask_unsaved(self, noun, name)
         if choice == editor_prompts.DISCARD:
-            self._set_clean()
+            self.revert_to_saved()
             return True
         if choice != editor_prompts.SAVE:
             return False
         if self.save_mask():
             return True
         if editor_prompts.ask_after_failed_save(self, noun, name) == editor_prompts.DISCARD:
-            self._set_clean()
+            self.revert_to_saved()
             return True
         return False
 
@@ -568,12 +652,14 @@ class RasterEditorBase(QWidget):
         if not self.maybe_save_changes():
             return False
         self.current_image_path = ""
+        self._photo_stamp = self._document_stamps = ()
         self._drop_stroke()
         self.edits.reset(None)
         self.paint.rebuild()
         self.image_item.set_image(None)
         self.graphics_view.clear_content_rect()
         self._sync_brush_preview()
+        self._sync_open_controls()
         self._set_clean()
         return True
 
@@ -599,41 +685,68 @@ class RasterEditorBase(QWidget):
     def _document_opened(self) -> None:
         """Hook: a document was loaded into ``edits.plane``. No-op here."""
 
+    def _document_files(self) -> tuple[str, ...]:
+        """Hook: the files the open document was read from (a change on disk reloads it)."""
+        return ()
+
+    def _stamp_document(self) -> None:
+        """Remember the document files' stamps (after an open or a save of the document)."""
+        self._document_stamps = tuple(_file_stamp(path) for path in self._document_files())
+
+    def _document_changed(self) -> bool:
+        """True when a document file changed on disk since it was opened or saved here."""
+        return tuple(_file_stamp(path) for path in self._document_files()) != self._document_stamps
+
     def load_image(self, image_path: str) -> None:
         """Open ``image_path`` for editing, with its saved document if one exists.
 
-        Re-selecting the open image keeps unsaved edits; opening another one first offers
-        to save them and stays put when the user keeps editing. The photo is decoded once,
-        shown with the current enhancement, and fitted to the canvas.
+        Like the Correct editor: the open image again keeps unsaved edits; clean, it keeps
+        the document, its history and the view unless a file changed on disk (the document
+        reloads, same view; a changed photo opens fitted). Another image is decoded first
+        (unreadable: a notice, nothing changes), then unsaved edits are asked about (Cancel
+        or a failed save stays). The photo is decoded once, shown with the current
+        enhancement, and fitted to the canvas.
         """
-        if self.has_unsaved_changes():
-            if image_path == self.current_image_path:
+        if self.edits.plane is not None and _same_file(image_path, self.current_image_path):
+            if self.has_unsaved_changes():
                 return  # the open image was re-selected: keep editing, don't reload
-            if not self.maybe_save_changes():
-                return  # the user kept editing the open image
+            if _file_stamp(self.current_image_path) == self._photo_stamp:
+                if self._document_changed():
+                    self._open_plane(self.current_image_path, self.canvas_size())
+                return  # same photo: keep the view (and, unchanged, the document)
 
         image = self.norm_controls.display_image(image_path)
         if image is None:
             self.notice.emit(f"Could not open {os.path.basename(image_path)}", "danger")
             return
+        if not self.maybe_save_changes():
+            return  # the user kept editing the open image
         height, width = image.shape[:2]
-        plane, dirty_on_load = self._open_document(image_path, QSize(width, height))
-        self.current_image_path = image_path
-        self._drop_stroke()
-        self.edits.reset(plane)
-        self.paint.rebuild()
+        self._photo_stamp = _file_stamp(image_path)
+        self._open_plane(image_path, QSize(width, height))
         self.image_item.set_image(image)
-        self._document_opened()
 
         view = self.graphics_view
         view.set_content_rect(QRectF(0, 0, width, height))
         view.fit_to_view()
+        if self.isVisible():
+            view.setFocus()
+
+    def _open_plane(self, image_path: str, size: QSize) -> None:
+        """Read the document of ``image_path`` into the plane, with a new history."""
+        plane, dirty_on_load = self._open_document(image_path, size)
+        self.current_image_path = image_path
+        self._drop_stroke()
+        self.edits.reset(plane)
+        self.paint.rebuild()
+        self._document_opened()
+        self._stamp_document()
+        self._sync_open_controls()
         if dirty_on_load:
+            self._remember_saved()  # Discard goes back to the document as opened
             self.mark_dirty()
         else:
             self._set_clean()
-        if self.isVisible():
-            view.setFocus()
 
     def save_mask(self, save_path: str | None = None) -> bool:
         """Write the plane of the open image; True when saved. Subclasses implement it."""

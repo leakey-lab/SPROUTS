@@ -11,12 +11,16 @@ soon as that input is fixed, reverted or abandoned. The class rows scroll
 once there are many of them. :meth:`ClassEditorDialog.result_registry`
 returns the accepted registry, or ``None`` if the dialog was cancelled or the
 registry is unchanged from the one it was constructed with.
+
+Enter in the new-class form adds the class (the dialog stays open), and OK
+adds a class typed there but not added yet: a typed class is never dropped
+(an invalid one keeps the dialog open with its error).
 """
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QKeyEvent
 from PyQt6.QtWidgets import (
     QColorDialog,
     QDialog,
@@ -57,6 +61,9 @@ _ADD_SWATCH_PX = 22
 # Error sources for a refused one-off action: nothing stays pending, so they
 # never block OK and are cleared by the next successful edit.
 _TRANSIENT_SOURCES = ("color", "retire")
+# Said for a blank name instead of the registry's "Invalid class name: ''".
+_NAME_NEEDED = "A class needs a name."
+_ENTER_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
 
 
 def _swatch_qss(hex_color: str) -> str:
@@ -162,6 +169,9 @@ class ClassEditorDialog(QDialog):
         self._rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._rows_scroll.setMaximumHeight(_ROWS_MAX_HEIGHT)
+        # Not a Tab stop: the dialog opens in the new-class field, and Tab goes from the
+        # form to OK, Cancel and the rows (it used to open in the scroll area itself).
+        self._rows_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._rows_scroll.setWidget(self._rows_container)
         # Let the dialog background show through (setWidget turns filling on).
         self._rows_container.setAutoFillBackground(False)
@@ -271,6 +281,9 @@ class ClassEditorDialog(QDialog):
     def _on_add_clicked(self) -> None:
         name = self._add_name_edit.text().strip()
         key = self._add_key_edit.text().strip()
+        if not name:
+            self._set_error("add", _NAME_NEEDED)
+            return
         try:
             new_registry = self._candidate.add(key=key, name=name, color=self._add_color)
         except RegistryError as exc:
@@ -279,6 +292,16 @@ class ClassEditorDialog(QDialog):
         self._errors.pop("add", None)
         self._apply_candidate(new_registry)
         self._reset_add_form()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt override
+        """Enter in the new-class form adds the class typed there (OK would have dropped
+        it and closed); with nothing typed, Enter is OK as anywhere else."""
+        in_form = self.focusWidget() in (self._add_name_edit, self._add_key_edit)
+        if event.key() in _ENTER_KEYS and in_form and self._add_name_edit.text().strip():
+            self._on_add_clicked()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _reset_add_form(self) -> None:
         self._key_auto = True
@@ -328,6 +351,9 @@ class ClassEditorDialog(QDialog):
         new_name = row.name_edit.text().strip()
         if new_name == self._candidate.by_key(key).name:
             self._set_error(source, None)  # reverted to the current name
+            return
+        if not new_name:
+            self._set_error(source, _NAME_NEEDED)
             return
         try:
             new_registry = self._candidate.update(key=key, name=new_name)
@@ -417,6 +443,10 @@ class ClassEditorDialog(QDialog):
     def _on_accept(self) -> None:
         if self._error is not None:
             return
+        if self._add_name_edit.text().strip():
+            self._on_add_clicked()  # a class typed but not added yet is added, not dropped
+            if self._error is not None:
+                return  # it could not be added: its error shows, the dialog stays
         if self._candidate != self._original:
             self._accepted_registry = self._candidate
         else:

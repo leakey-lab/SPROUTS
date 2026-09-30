@@ -9,7 +9,8 @@ classes the annotator has reviewed, so a file is self-describing even before
 it is matched against the current registry (see
 ``docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`` §1).
 
-No Qt dependency: this module is pure I/O over Pillow + numpy, read/written
+No Qt dependency: this module is pure I/O over Pillow + numpy (OpenCV only to count
+ids), read/written
 through Python file handles (so non-ASCII Windows paths work), and writes go
 through :func:`app.io_utils.atomic_write_bytes` (temp file, fsync, then
 ``os.replace`` with a lock retry).
@@ -23,6 +24,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+import cv2
 import numpy as np
 from PIL import Image, PngImagePlugin
 
@@ -52,6 +54,18 @@ class Tracing:
     ids: np.ndarray  # (h, w) uint8
     reviewed: frozenset[str] = frozenset()
     file_classes: dict[int, str] = field(default_factory=dict)  # id -> key from the file
+
+
+def _present_ids(ids: np.ndarray) -> list[int]:
+    """The distinct values of uint8 ``ids``, ascending: a histogram instead of a sort.
+
+    ``cv2.calcHist`` counts in float32, but only "more than zero" is read here, which
+    float32 keeps at any count (about 25x faster than ``np.unique`` at 2048 x 1536).
+    """
+    if ids.size == 0:
+        return []
+    hist = cv2.calcHist([np.ascontiguousarray(ids, dtype=np.uint8)], [0], None, [256], [0, 256])
+    return np.flatnonzero(hist.ravel()).tolist()
 
 
 def _hex_to_rgb(color: str) -> list[int]:
@@ -90,7 +104,7 @@ def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
         raise GtFileError(f"GT ids must be 2-D, got shape {ids.shape}")
     palette = [0, 0, 0] * 256
     unknown = _hex_to_rgb(GT_UNKNOWN_COLOR)
-    for i in np.unique(ids).tolist():
+    for i in _present_ids(ids):
         if i != GT_BACKGROUND_ID:
             palette[3 * i : 3 * i + 3] = unknown
     for c in registry.classes:
@@ -155,7 +169,8 @@ def align_to_registry(tracing: Tracing, registry: Registry) -> tuple[Tracing, li
     warnings: list[str] = []
     lut = np.arange(256, dtype=np.uint8)
 
-    for old_id in np.unique(tracing.ids).tolist():
+    present = _present_ids(tracing.ids)
+    for old_id in present:
         if old_id == GT_BACKGROUND_ID:
             continue
         key = tracing.file_classes.get(old_id)
@@ -174,10 +189,12 @@ def align_to_registry(tracing: Tracing, registry: Registry) -> tuple[Tracing, li
                 "mapped to Ignore"
             )
 
-    new_ids = lut[tracing.ids]
-    changed = not np.array_equal(new_ids, tracing.ids)
+    # The ids change exactly where a present id maps elsewhere (a new array either way).
+    changed = any(int(lut[i]) != i for i in present)
+    ids = np.ascontiguousarray(tracing.ids, dtype=np.uint8)
+    new_ids = cv2.LUT(ids, lut) if changed else ids.copy()
     new_tracing = Tracing(
-        ids=new_ids.astype(np.uint8),
+        ids=new_ids,
         reviewed=tracing.reviewed,
         file_classes=tracing.file_classes,
     )
@@ -186,7 +203,7 @@ def align_to_registry(tracing: Tracing, registry: Registry) -> tuple[Tracing, li
 
 def present_keys(tracing: Tracing, registry: Registry) -> set[str]:
     """Keys of classes that have at least one pixel, Ignore excluded."""
-    present_ids = set(np.unique(tracing.ids).tolist())
+    present_ids = set(_present_ids(tracing.ids))
     return {c.key for c in registry.classes if not c.is_ignore and c.id in present_ids}
 
 

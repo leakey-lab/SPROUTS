@@ -8,9 +8,15 @@ skipped / errors, with the first failed images and why; the full list is in
 ``<out>/errors.txt``) when it finishes. Constructed by ``MainWindow``'s
 "Export dataset…" action bar button (Track E / Task 4); the constructor
 signature is frozen so that caller can rely on it.
+
+It says up front how many images have a GT tracing (none: why Export stays off).
+Enter starts the export (Export is the default button; Browse… and Cancel never
+are, so Enter in the folder field no longer opens the folder picker).
 """
 
 from __future__ import annotations
+
+import os
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
@@ -28,6 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.gt import gt_dir, gt_path
 from app.gt.export import ExportError, ExportOptions, ExportResult, export_dataset
 from app.gt.registry import Registry
 from app.gui.widgets import tokens
@@ -37,6 +44,30 @@ _MAX_LISTED_ERRORS = 10
 # The action button reads "Export" until an export succeeds, then "Close".
 _EXPORT_LABEL = "Export"
 _CLOSE_LABEL = "Close"
+_NOTHING_TRACED = (
+    "No image in this folder has a GT tracing yet. Trace some in the Trace GT stage first."
+)
+
+
+def count_traced(images: dict[str, str]) -> int:
+    """How many of ``images`` (stem -> image path) have a ``gt/<stem>.png``.
+
+    One listing of each ``gt/`` folder, not one file check per image (46k images).
+    """
+    listed: dict[str, set[str]] = {}
+    traced = 0
+    for path in images.values():
+        folder = gt_dir(os.path.dirname(path))
+        names = listed.get(folder)
+        if names is None:
+            try:
+                names = {os.path.normcase(name) for name in os.listdir(folder)}
+            except OSError:
+                names = set()
+            listed[folder] = names
+        if os.path.normcase(os.path.basename(gt_path(path))) in names:
+            traced += 1
+    return traced
 
 
 class ExportThread(QThread):
@@ -93,6 +124,7 @@ class ExportDatasetDialog(QDialog):
         self.registry = registry
         self.result_summary: ExportResult | None = None
         self.export_thread: ExportThread | None = None
+        self.traced = count_traced(images)
 
         self.setWindowTitle("Export dataset")
         self.setModal(True)
@@ -120,6 +152,17 @@ class ExportDatasetDialog(QDialog):
         subtitle.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 9pt; border: none;")
         layout.addWidget(subtitle)
 
+        # What there is to export, before choosing anything.
+        total = len(self.images)
+        noun = "image has" if total == 1 else "images have"
+        self.traced_label = QLabel(
+            f"{self.traced} of {total} {noun} a GT tracing." if self.traced else _NOTHING_TRACED
+        )
+        self.traced_label.setWordWrap(True)
+        color = tokens.TEXT if self.traced else tokens.WARN
+        self.traced_label.setStyleSheet(f"color: {color}; font-size: 9pt; border: none;")
+        layout.addWidget(self.traced_label)
+
         # --- Output folder ---
         out_row = QHBoxLayout()
         self.output_edit = QLineEdit()
@@ -142,10 +185,18 @@ class ExportDatasetDialog(QDialog):
         # --- Options ---
         self.group_by_tube_check = QCheckBox("Keep each tube in one split")
         self.group_by_tube_check.setChecked(True)
+        self.group_by_tube_check.setToolTip(
+            "All images of a tube go to the same split (train or validation), so the "
+            "validation images are not near copies of training images."
+        )
         layout.addWidget(self.group_by_tube_check)
 
         self.only_complete_check = QCheckBox("Only fully checked images")
         self.only_complete_check.setChecked(True)
+        self.only_complete_check.setToolTip(
+            "Skip images on which some class was never checked in the Trace GT class "
+            "panel (a class with pixels counts as checked)."
+        )
         layout.addWidget(self.only_complete_check)
 
         # --- Seed ---
@@ -182,6 +233,10 @@ class ExportDatasetDialog(QDialog):
         self.export_button = QPushButton(_EXPORT_LABEL)
         self.export_button.setObjectName("primaryButton")
         self.export_button.clicked.connect(self._on_export_button_clicked)
+        # Enter = Export (or Close once done); never Browse… or Cancel.
+        self.export_button.setDefault(True)
+        for button in (self.browse_button, self.cancel_button):
+            button.setAutoDefault(False)
         button_row.addWidget(self.cancel_button)
         button_row.addWidget(self.export_button)
         layout.addLayout(button_row)
@@ -189,7 +244,9 @@ class ExportDatasetDialog(QDialog):
     # --------------------------------------------------------------- logic
 
     def _on_browse(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Choose output folder")
+        # Start at the folder typed so far, else next to the images.
+        start = self._output_folder() or self.project_dir
+        path = QFileDialog.getExistingDirectory(self, "Choose output folder", start)
         if path:
             self.output_edit.setText(path)
 
@@ -203,12 +260,25 @@ class ExportDatasetDialog(QDialog):
         """An export finished: the action button now closes the dialog."""
         return self.export_button.text() == _CLOSE_LABEL
 
+    def _output_folder(self) -> str:
+        """The output folder as typed or chosen, absolute ("" when none).
+
+        Surrounding double quotes are dropped (Explorer's "Copy as path" adds them), and a
+        relative path is taken from the project folder, not from wherever the app was
+        started.
+        """
+        text = self.output_edit.text().strip().strip('"').strip()
+        if not text:
+            return ""
+        return os.path.normpath(os.path.join(self.project_dir, text))
+
     def _sync_export_enabled(self) -> None:
-        """Export needs an output folder; Close is always offered once an export is done."""
+        """Export needs an output folder and a traced image; Close is always offered once
+        an export is done."""
         if self._is_running():
             return  # every control stays disabled until the worker reports back
-        has_output = bool(self.output_edit.text().strip())
-        self.export_button.setEnabled(self._is_done() or has_output)
+        has_output = bool(self._output_folder())
+        self.export_button.setEnabled(self._is_done() or (has_output and self.traced > 0))
 
     def start_export(self) -> None:
         """Validate options and start the export ``QThread``.
@@ -218,11 +288,16 @@ class ExportDatasetDialog(QDialog):
         """
         if self._is_running():
             return
+        if not self.traced:
+            self.status_label.setText(_NOTHING_TRACED)
+            return
 
-        out_dir = self.output_edit.text().strip()
+        out_dir = self._output_folder()
         if not out_dir:
             self.status_label.setText("Choose an output folder")
             return
+        if out_dir != self.output_edit.text():
+            self.output_edit.setText(out_dir)  # where it goes, spelled out
 
         options = ExportOptions(
             out_dir=out_dir,

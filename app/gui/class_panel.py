@@ -11,13 +11,19 @@ the gear leaves focus on the canvas, so Space still pans and can never toggle
 a "checked" box (spec §3.4: a flipped review flag silently changes the
 dataset).
 
+Long class names are elided at the right (the full name is the name's tooltip), so
+the panel keeps a bounded width and the "checked" boxes never scroll out of sight;
+the rows scroll vertically only. A box locked checked because its class has pixels
+says so in its tooltip and shows a dimmer fill than a box ticked by hand.
+
 This module never touches ``app/gui/widgets/*`` — it only consumes the
 existing ``_FloatingPanel``/``IconButton``/``keep_canvas_focus`` primitives.
 """
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -37,6 +43,52 @@ from app.gui.widgets.overlays import _FloatingPanel
 _MARGIN = 14
 _MAX_HEIGHT_FRACTION = 0.6
 _REVIEWED_TOOLTIP = "Checked: this class was looked for on this image"
+_LOCKED_TOOLTIP = "Checked: this class has pixels on this image. Erase them to untick it."
+# A class name shows at most this wide (longer names are elided), and can shrink to
+# the minimum when the rows scroll and the scroll bar takes its share.
+_NAME_MAX_PX = 140
+_NAME_MIN_PX = 36
+
+
+def _locked_fill() -> str:
+    """The fill of a box locked checked: the checked colour, dimmed."""
+    color = QColor(tokens.SEL)
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, 0.45)"
+
+
+class _NameLabel(QLabel):
+    """A class name elided at the right to the label's width; the full name is the
+    tooltip while it is elided. ``text()`` is always the full name."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), _NAME_MAX_PX), hint.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(_NAME_MIN_PX, super().minimumSizeHint().height())
+
+    def is_elided(self) -> bool:
+        """True when the name does not fit the label's width."""
+        return self.fontMetrics().horizontalAdvance(self.text()) > self.contentsRect().width()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt override
+        super().setText(text)
+        self._sync_tooltip()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._sync_tooltip()
+
+    def _sync_tooltip(self) -> None:
+        self.setToolTip(self.text() if self.is_elided() else "")
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        rect = self.contentsRect()
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, rect.width())
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        painter.end()
 
 
 class _ClassRow(QFrame):
@@ -73,7 +125,7 @@ class _ClassRow(QFrame):
         self._swatch.setFixedSize(12, 12)
         row.addWidget(self._swatch)
 
-        self._name_label = QLabel()
+        self._name_label = _NameLabel()
         self._name_label.setStyleSheet(
             f"color: {tokens.TEXT}; font-size: 12.5px; background: transparent; border: none;"
         )
@@ -83,6 +135,12 @@ class _ClassRow(QFrame):
         if not class_def.is_ignore:
             self.checkbox = QCheckBox()
             self.checkbox.setToolTip(_REVIEWED_TOOLTIP)
+            # Locked checked (the class has pixels): a dimmer fill than a hand tick.
+            fill = _locked_fill()
+            self.checkbox.setStyleSheet(
+                f"QCheckBox::indicator:checked:disabled {{ background: {fill}; "
+                f"border-color: {fill}; }}"
+            )
             self.checkbox.toggled.connect(self._on_checkbox_toggled)
             row.addWidget(self.checkbox)
         # A click falls through to the nearest focusable ancestor, so the row
@@ -112,6 +170,7 @@ class _ClassRow(QFrame):
         self._suppress_toggle = True
         self.checkbox.setChecked(checked)
         self.checkbox.setEnabled(not locked)
+        self.checkbox.setToolTip(_LOCKED_TOOLTIP if locked else _REVIEWED_TOOLTIP)
         self._suppress_toggle = False
 
     def _apply_style(self) -> None:
@@ -167,6 +226,8 @@ class ClassPanel(_FloatingPanel):
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Names elide instead: a sideways scroll would hide the "checked" boxes.
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet("background: transparent; border: none;")
         self.add_widget(self._scroll)
 
@@ -247,6 +308,30 @@ class ClassPanel(_FloatingPanel):
         if 1 <= n <= len(labelled):
             return labelled[n - 1].key
         return None
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The width of the rows as they are now, plus the scroll bar's when they scroll.
+
+        ``QScrollArea.sizeHint`` keeps the rows' first measurement (see
+        :meth:`_content_height`), so after a registry change with longer names the panel
+        stayed as narrow as before and squeezed them.
+        """
+        hint = super().sizeHint()
+        header = self._header.sizeHint().width()
+        # Margins and frame: what the layout adds around its widest item.
+        chrome = hint.width() - max(header, self._scroll.sizeHint().width())
+        width = max(header, self._rows_container.sizeHint().width())
+        if self._will_scroll():
+            width += self._scroll.verticalScrollBar().sizeHint().width()
+        return QSize(chrome + width, hint.height())
+
+    def _will_scroll(self) -> bool:
+        """True when the rows are taller than the panel's cap in its host (they scroll)."""
+        parent = self.parent()
+        if parent is None:
+            return False
+        cap = int(parent.height() * _MAX_HEIGHT_FRACTION) - self._chrome_height()
+        return self._content_height() > cap
 
     def preferred_height(self, host_height: int) -> int:
         """Height showing every row, capped at 60% of ``host_height`` (then it scrolls)."""

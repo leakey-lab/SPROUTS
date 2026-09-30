@@ -23,15 +23,19 @@ then asks like any other unsaved change.
 Unsaved edits are never dropped behind the user's back: when a save fails,
 ``maybe_save_changes`` asks again (Discard / Keep editing) and returns False
 on "Keep editing", so the caller (next image, stage switch, window close,
-open folder) stays on this image. While ``gt/classes.json`` is invalid,
-saving is impossible, so every edit is refused up front.
+open folder) stays on this image. Discard puts the tracing back as last saved
+(or as opened: empty when there is no GT file), class ticks included, and
+clears the history. While ``gt/classes.json`` is invalid, saving is
+impossible, so every edit is refused up front.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 
+import cv2
 import numpy as np
 from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeySequence, QPixmap, QShortcut
@@ -47,7 +51,6 @@ from app.gt import (
     empty_tracing,
     gt_path,
     load_registry,
-    present_keys,
     read_tracing,
     registry_path,
     save_registry,
@@ -64,6 +67,12 @@ logger = logging.getLogger(__name__)
 
 _REGISTRY_NAME = f"{GT_DIRNAME}/{GT_CLASSES_FILENAME}"
 _N_IDS = 256  # class ids are uint8
+# cv2.calcHist counts in float32, exact up to 2**24 per value: arrays up to this many
+# pixels are counted by it (about 10x faster than np.bincount), larger ones by np.bincount.
+_EXACT_HIST_MAX = 1 << 24
+# A canvas word that never occurs (alpha 0 but a colour: a transparent pixel reads back as
+# 0): the expected word of committed ids no class owns, so they are always colour-matched.
+_NEVER_ON_CANVAS = 1
 
 
 def _bgra(color: str) -> tuple[int, int, int, int]:
@@ -75,6 +84,43 @@ def _bgra(color: str) -> tuple[int, int, int, int]:
 def _packed(bgra) -> int:
     """Pack a BGRA colour as ``B | G << 8 | R << 16 | A << 24`` (one canvas pixel word)."""
     return int(bgra[0]) | (int(bgra[1]) << 8) | (int(bgra[2]) << 16) | (int(bgra[3]) << 24)
+
+
+def _histogram(ids: np.ndarray) -> np.ndarray:
+    """Pixels per value (256 int64 counts) of a uint8 array of any shape; exact."""
+    if ids.size == 0:
+        return np.zeros(_N_IDS, np.int64)
+    if ids.size > _EXACT_HIST_MAX:
+        return np.bincount(ids.ravel(), minlength=_N_IDS).astype(np.int64)
+    if ids.ndim != 2:
+        ids = np.ascontiguousarray(ids).reshape(1, -1)
+    return cv2.calcHist([ids], [0], None, [_N_IDS], [0, _N_IDS]).ravel().astype(np.int64)
+
+
+@functools.lru_cache(maxsize=8)
+def _committed_words(registry: Registry) -> np.ndarray:
+    """The canvas word (as int32, for ``cv2.LUT``) that shows each committed class id.
+
+    0 (transparent) for background, the class colour for every class (retired included),
+    ``_NEVER_ON_CANVAS`` for ids no class owns. Read-only: shared by every call.
+    """
+    words = np.full(_N_IDS, _NEVER_ON_CANVAS, np.uint32)
+    for c in registry.classes:
+        words[c.id] = _packed(_bgra(c.color))
+    words[GT_BACKGROUND_ID] = 0
+    words = words.view(np.int32)
+    words.flags.writeable = False
+    return words
+
+
+def _match_colours(words: np.ndarray, ids: np.ndarray, registry: Registry) -> np.ndarray:
+    """Class ids of canvas ``words`` (1-D): transparent is background, a class colour is
+    its class, any other colour keeps its id in ``ids`` (the committed plane). A new array."""
+    ids = ids.copy()
+    ids[(words >> 24) == 0] = GT_BACKGROUND_ID
+    for c in registry.classes:  # colours are unique, retired included
+        ids[words == _packed(_bgra(c.color))] = c.id
+    return ids
 
 
 class GtTracingInterface(RasterEditorBase):
@@ -91,6 +137,8 @@ class GtTracingInterface(RasterEditorBase):
     SHORTCUT_SCOPE = shortcuts.TRACE_GT
     CLEARED_NOTICE = "Tracing cleared. Ctrl+Z to undo."
     CLEAR_TIP = "Clear the tracing. Undo with Ctrl+Z; Save writes an empty tracing."
+    EMPTY_HINT = "Select an image in the library to trace its ground truth."
+    READ_ONLY_HINT = f"{_REGISTRY_NAME} is invalid: editing is off. Fix it, then reopen the image."
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,12 +150,18 @@ class GtTracingInterface(RasterEditorBase):
         self._present: set[str] = set()  # classes with pixels on the canvas
         # Pixels per class id, kept up to date from each edit's patch (PE-13).
         self._counts = np.zeros(_N_IDS, np.int64)
+        # The ticks and counts of the saved tracing (with the base's saved plane): Discard.
+        self._saved_reviewed: frozenset[str] = frozenset()
+        self._saved_counts = self._counts.copy()
         self._brush_sizes: dict[str, int] = {}
         self._active_key: str | None = None
         # Warnings of a lossy remap on load (unknown classes -> Ignore); cleared on save.
         self._remap_warnings: list[str] = []
         # A GT file exists but could not be used (corrupt / wrong size).
         self._gt_unreadable = False
+        # An edit refused for an invalid registry said so once for this image (the chip
+        # says it from then on: every refused stroke stacked another toast).
+        self._refusal_shown = False
 
         self._retitle_controls()
 
@@ -160,11 +214,14 @@ class GtTracingInterface(RasterEditorBase):
     def _status(self) -> tuple[str, str | None, str]:
         """``● Saved · n/m checked`` / ``● Unsaved`` / ``● GT unreadable`` / ``● No GT``.
 
-        ``● Unsaved · remapped`` after a lossy class remap on load, until saved.
+        ``● Unsaved · remapped`` after a lossy class remap on load, until saved;
+        ``● Read-only`` while ``gt/classes.json`` is invalid (nothing can be saved).
         """
         registry = getattr(self, "registry", None)
         if registry is None:
             return super()._status()
+        if self._registry_error:
+            return "error", "Read-only", f"{_REGISTRY_NAME} is invalid: {self._registry_error}"
         if self.dirty:
             warnings = self._remap_warnings
             if warnings:
@@ -179,6 +236,12 @@ class GtTracingInterface(RasterEditorBase):
             tooltip = "The GT file could not be used; it is left as is unless you save."
             return "error", "GT unreadable", tooltip
         return "none", "No GT", ""
+
+    def _hint(self) -> tuple[str, str]:
+        """The base hint; with an invalid ``gt/classes.json``, how to get editing back."""
+        if self.current_image_path and getattr(self, "_registry_error", None):
+            return self.READ_ONLY_HINT, self._registry_error
+        return super()._hint()
 
     # ============================================================= classes
     def _default_key(self) -> str:
@@ -305,24 +368,28 @@ class GtTracingInterface(RasterEditorBase):
     def _ids_from_argb(
         arr: np.ndarray, registry: Registry, fallback: np.ndarray | None = None
     ) -> np.ndarray:
-        """Canvas pixels -> ``(h, w)`` uint8 class ids by exact colour match.
+        """Canvas pixels -> ``(h, w)`` uint8 class ids by exact colour match (a new array).
 
         Colours are unique across the registry (retired included), so each
         class colour maps back to one id. Transparent is background; a colour
         no class owns keeps its ``fallback`` id (the committed plane).
+
+        With a ``fallback``, a pixel that still shows its committed id's colour keeps that
+        id and only the others (the pixels a stroke changed) are colour-matched: the same
+        ids as matching every pixel, at a fraction of the cost on a long stroke's box.
         """
         arr = np.ascontiguousarray(arr)
         # Zero-copy view: one little-endian word per pixel, B | G<<8 | R<<16 | A<<24.
-        packed = arr.view("<u4")[:, :, 0]
-        ids = np.zeros(packed.shape, np.uint8)
-        known = arr[:, :, 3] == 0  # transparent = background
-        for c in registry.classes:
-            hit = packed == _packed(_bgra(c.color))
-            ids[hit] = c.id
-            known |= hit
-        other = ~known
-        if fallback is not None and other.any():
-            ids[other] = fallback[other]
+        words = arr.view("<u4")[:, :, 0].reshape(-1)
+        if fallback is None:
+            ids = np.zeros(words.shape, np.uint8)
+            return _match_colours(words, ids, registry).reshape(arr.shape[:2])
+        ids = np.array(fallback, np.uint8, order="C", copy=True)
+        flat = ids.reshape(-1)
+        shown = cv2.LUT(ids, _committed_words(registry)).reshape(-1).view(np.uint32)
+        changed = np.flatnonzero(words != shown)
+        if changed.size:
+            flat[changed] = _match_colours(words[changed], flat[changed], registry)
         return ids
 
     def _argb_to_plane(self, argb: np.ndarray, rect) -> np.ndarray:
@@ -346,12 +413,9 @@ class GtTracingInterface(RasterEditorBase):
 
     # ---------------------------------------------------- class presence
     def _refresh_present(self):
-        """Recount every class from the plane (on load)."""
+        """Recount every class from the plane (on load and on save)."""
         plane = self.edits.plane
-        if plane is None:
-            self._counts = np.zeros(_N_IDS, np.int64)
-        else:
-            self._counts = np.bincount(plane.ravel(), minlength=_N_IDS).astype(np.int64)
+        self._counts = np.zeros(_N_IDS, np.int64) if plane is None else _histogram(plane)
         self._present_from_counts()
 
     def _present_from_counts(self):
@@ -361,12 +425,15 @@ class GtTracingInterface(RasterEditorBase):
         }
 
     def _on_patch(self, patch: Patch, forward: bool) -> None:
-        """Update the class counts from the edited box only (no full-canvas scan)."""
+        """Update the class counts from the edited box only (no full-canvas scan).
+
+        The paint canvas reports a patch after the history wrote it, so the plane already
+        holds the new values of the box: only the old ones are unpacked.
+        """
         if patch.is_empty:
             return
-        old, new = (patch.before(), patch.after()) if forward else (patch.after(), patch.before())
-        self._counts -= np.bincount(old.ravel(), minlength=_N_IDS)
-        self._counts += np.bincount(new.ravel(), minlength=_N_IDS)
+        old = patch.before() if forward else patch.after()
+        self._counts += _histogram(self.edits.plane[patch.slices]) - _histogram(old)
         self._present_from_counts()
 
     # ============================================================= editing
@@ -377,14 +444,17 @@ class GtTracingInterface(RasterEditorBase):
         )
 
     def _edit_blocked(self) -> bool:
-        """True, with a danger notice, while an invalid registry makes saving impossible.
+        """True while an invalid registry makes saving impossible.
 
         Edits made then could never be saved, so they are refused up front
-        instead of being lost later.
+        instead of being lost later. The first refusal on an image says why (a
+        danger notice); the chip says it from then on.
         """
         if not self._registry_error:
             return False
-        self.notice.emit(self._registry_problem("Editing is off"), "danger")
+        if not self._refusal_shown:
+            self._refusal_shown = True
+            self.notice.emit(self._registry_problem("Editing is off"), "danger")
         return True
 
     def _after_stroke(self):
@@ -438,10 +508,11 @@ class GtTracingInterface(RasterEditorBase):
             self._registry_error = None
         except RegistryError as exc:
             registry = default_registry()
-            self._registry_error = str(exc)
+            # What is wrong, without the "Could not read registry <absolute path>" wrapper.
+            self._registry_error = str(exc.__cause__ or exc)
             self.notice.emit(
-                f"{_REGISTRY_NAME} is invalid ({exc}). Saving GT is off: fix the file, "
-                "then reopen the image.",
+                f"{_REGISTRY_NAME} is invalid ({self._registry_error}). Saving GT is off: "
+                "fix the file, then reopen the image.",
                 "danger",
             )
         self._set_registry(registry)
@@ -477,6 +548,7 @@ class GtTracingInterface(RasterEditorBase):
     def _open_document(self, image_path: str, size: QSize) -> tuple[np.ndarray, bool]:
         """The GT tracing (``gt/<stem>.png``) of ``image_path`` as class ids, or empty."""
         project_dir = os.path.dirname(image_path)
+        self._refusal_shown = False
         # New folder, or the registry was invalid: (re)read it, so a fixed
         # gt/classes.json takes effect on the next image load.
         if project_dir != self._project_dir or self._registry_error:
@@ -492,10 +564,32 @@ class GtTracingInterface(RasterEditorBase):
         self._gt_unreadable = status == "unreadable"
         self._reviewed = set(tracing.reviewed)
         self._has_saved_mask = status == "loaded"
-        return np.array(tracing.ids, np.uint8, copy=True), dirty_on_load
+        # Every tracing here holds a new array (read, remapped or empty): no second copy.
+        return np.ascontiguousarray(tracing.ids, np.uint8), dirty_on_load
 
     def _document_opened(self) -> None:
         self._refresh_present()
+        self._refresh_panel()
+
+    def _document_files(self) -> tuple[str, ...]:
+        """``gt/<stem>.png`` of the open image (``gt/classes.json`` is read once per folder)."""
+        return (gt_path(self.current_image_path),) if self.current_image_path else ()
+
+    def _document_changed(self) -> bool:
+        """The GT file changed on disk, or ``gt/classes.json`` is invalid (read it again)."""
+        return bool(self._registry_error) or super()._document_changed()
+
+    def _remember_saved(self) -> None:
+        """The saved plane (base), plus its class ticks and pixel counts."""
+        super()._remember_saved()
+        self._saved_reviewed = frozenset(self._reviewed)
+        self._saved_counts = self._counts.copy()
+
+    def _restore_saved(self) -> None:
+        """Discard: the ticks and the class counts go back with the plane."""
+        self._reviewed = set(self._saved_reviewed)
+        self._counts = self._saved_counts.copy()
+        self._present_from_counts()
         self._refresh_panel()
 
     def save_mask(self, save_path=None) -> bool:
@@ -511,15 +605,19 @@ class GtTracingInterface(RasterEditorBase):
             return False
 
         self._finish_stroke()
-        ids = self.edits.plane.copy()
-        reviewed = self._reviewed | present_keys(Tracing(ids), self.registry)
+        ids = self.edits.plane  # only read by the writer
+        # A fresh count of the plane (a histogram, not np.unique): the classes with pixels.
+        self._refresh_present()
+        reviewed = self._reviewed | self._present
         project_dir = os.path.dirname(self.current_image_path)
         try:
+            # The registry first: when it fails, the tracing file is left as it was
+            # (the save is reported as failed and the edits stay unsaved).
+            if not os.path.exists(registry_path(project_dir)):
+                save_registry(project_dir, self.registry)
             write_tracing(
                 gt_path(self.current_image_path), Tracing(ids, frozenset(reviewed)), self.registry
             )
-            if not os.path.exists(registry_path(project_dir)):
-                save_registry(project_dir, self.registry)
         except (OSError, GtFileError) as exc:
             self.notice.emit(f"Could not save GT: {exc}", "danger")
             return False
@@ -528,6 +626,7 @@ class GtTracingInterface(RasterEditorBase):
         self._has_saved_mask = True
         self._remap_warnings = []
         self._gt_unreadable = False
+        self._stamp_document()  # our own write: not a change on disk to reload
         self._set_clean()
         self._refresh_panel()
         self.gt_saved.emit(self.current_image_path)
