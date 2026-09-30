@@ -138,8 +138,11 @@ def ask_overwrite_policy(
     cancel = box.addButton(QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(keep)
     box.setEscapeButton(cancel)
-    box.exec()
-    clicked = box.clickedButton()
+    try:
+        box.exec()
+        clicked = box.clickedButton()  # read the answer before the box is freed
+    finally:
+        box.deleteLater()  # parented to the window: free it once answered (RB-16)
     if clicked is keep:
         return OverwritePolicy.KEEP_EXISTING
     if clicked is None or clicked is cancel:

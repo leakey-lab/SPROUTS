@@ -145,15 +145,40 @@ def test_state_changes_are_signalled(app):
     assert states == ["working", "error", "working", "idle"]
 
 
-def test_pending_hide_never_hides_the_next_task(app):
+_HIDE_MS = 40  # the patched hide delay: fast, and the control below proves it is used
+
+
+def _pump(ms: int) -> None:
     from PyQt6.QtCore import QEventLoop, QTimer
 
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+def _ended_task(end: str) -> TaskProgressWidget:
     tp = TaskProgressWidget()
     tp.start("first")
-    tp.finish("First done")  # schedules a hide in 1.5 s
+    if end == "finish":
+        tp.finish("First done")  # schedules a hide after FINISH_HIDE_MS
+    else:
+        tp.fail("First failed")  # schedules a hide after FAIL_HIDE_MS
+    return tp
+
+
+@pytest.mark.parametrize(("end", "delay"), [("finish", "FINISH_HIDE_MS"), ("fail", "FAIL_HIDE_MS")])
+def test_pending_hide_never_hides_the_next_task(app, monkeypatch, end, delay):
+    # RB-16: the hide is one member timer that start() stops, never an untracked
+    # singleShot that would hide the next task's row.
+    monkeypatch.setattr(f"app.gui.task_progress.{delay}", _HIDE_MS)
+    control = _ended_task(end)  # no next task: the row hides after the patched delay,
+    _pump(_HIDE_MS + 300)  # so the same pump below outlasts the pending hide
+    assert control.isHidden()
+    control.deleteLater()
+
+    tp = _ended_task(end)
     tp.start("second")
-    loop = QEventLoop()
-    QTimer.singleShot(1700, loop.quit)
-    loop.exec()
+    _pump(_HIDE_MS + 300)
     assert not tp.isHidden()
     assert tp.label.text().startswith("second")
+    tp.deleteLater()
