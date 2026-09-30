@@ -215,7 +215,11 @@ at least `val_fraction` of the images; the last group always stays in train.
 `root_lengths.csv.provenance.json` / `root_areas.csv.provenance.json`, the GT export
 `manifest.csv.provenance.json`. Mask and skeleton generation write one
 `_sprouts_run.json` per output folder (`app/inference/run_record.py`) with the same
-keys, describing the latest run into that folder.
+keys, describing the latest run into that folder that ran to its end (completed or
+cancelled, even with no outputs, for example a *Keep existing masks* run with nothing
+missing) or that stopped with an error after writing outputs (`outputs.status` is then
+`failed`). A run that stops with an error before writing anything leaves the previous
+record in place.
 
 | Key | Content |
 |---|---|
@@ -227,7 +231,7 @@ keys, describing the latest run into that folder.
 | `calibration` | `fov_width_mm`, `fov_height_mm` |
 | `runtime` | Python version and implementation, OS, versions of the libraries that were loaded, and (when PyTorch was used) its CUDA/cuDNN versions and precision flags |
 | `models` | per model: `path` (relative to the app folder), `sha256`, `size` in bytes; empty for the GT export |
-| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors` |
+| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors`. Generation (`_sprouts_run.json`): `inputs` = `folder`, `n_images`, `names_sha256`; `parameters` = the batch size and the model's input settings; `outputs` = `status` (`completed`: the run reached the end, even if every input failed; `cancelled`; `failed`: it stopped with an error), `error` (`null` or `"<ExceptionType>: <message>"`), `n_inputs`, `n_written`, `n_failed`, `n_skipped`, `cancelled`, `batch_size`, `effective_batch_size`, `elapsed_s`, `failed` (`input` + `reason` per input), `skipped` |
 
 Paths in records are relative to the app or project folder so a shared record does not
 reveal user or drive names. Loaders ignore these files.

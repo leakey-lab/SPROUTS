@@ -14,6 +14,8 @@ One loop for both models, so their failure, memory and cancel policies cannot dr
   image that still fails alone is recorded as failed.
 * PI-08 -- ``should_stop()`` is checked at every batch boundary; outputs already
   computed are still written, and the report says the run was cancelled.
+* R7 -- a caller's ``report`` is filled in place, also when a step raises: the
+  caller still knows which outputs reached disk and can describe the failed run.
 
 torch is imported lazily (only a running job needs it).
 """
@@ -53,6 +55,7 @@ class BatchReport:
     batch_size: int = 0  # requested
     effective_batch_size: int = 0  # after any out-of-memory backoff
     elapsed_s: float = 0.0
+    error: str | None = None  # (R7) "<ExceptionType>: <message>" when the run raised
 
     @property
     def failed_names(self) -> list[str]:
@@ -63,9 +66,25 @@ class BatchReport:
         """Inputs finished either way (written or failed)."""
         return len(self.written) + len(self.failed)
 
+    @property
+    def status(self) -> str:
+        """``"failed"`` (the run raised), ``"cancelled"`` or ``"completed"`` (R7).
+
+        "completed" means the run reached the end, even if every input failed.
+        """
+        if self.error is not None:
+            return "failed"
+        return "cancelled" if self.cancelled else "completed"
+
+    def mark_failed(self, exc: BaseException) -> None:
+        """Record the exception that ended the run: ``status`` becomes "failed" (R7)."""
+        self.error = _describe(exc)
+
     def summary(self) -> dict[str, Any]:
         """JSON-able counts + lists for a provenance record."""
         return {
+            "status": self.status,
+            "error": self.error,
             "n_inputs": self.total,
             "n_written": len(self.written),
             "n_failed": len(self.failed),
@@ -95,6 +114,8 @@ class BatchSpec:
 
 
 def _describe(exc: BaseException) -> str:
+    if isinstance(exc, ItemOutOfMemory):
+        return str(exc)  # (R5) already the original error's description: no second prefix
     text = str(exc).strip()
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
@@ -122,6 +143,9 @@ class OomBackoff:
 
     ``size`` starts at the requested batch size and only shrinks: once a size
     works, later batches are split to it up front instead of failing again.
+    A slice of more than one image that is at least as long as one that already
+    ran out of memory is split untried (R5); every shorter slice is tried as
+    before, so the slices that run are the plain halving's (outputs unchanged).
     """
 
     def __init__(
@@ -132,6 +156,7 @@ class OomBackoff:
         on_oom: Callable[[], None] = _free_cuda_cache,
     ) -> None:
         self.size = max(1, int(batch_size))
+        self._oom_len: float = float("inf")  # (R5) shortest slice split after out-of-memory
         self._is_oom = is_oom
         self._on_oom = on_oom
 
@@ -152,6 +177,12 @@ class OomBackoff:
         return results
 
     def _run_slice(self, step, batch, start: int, stop: int) -> list[tuple[slice, Any]]:
+        """Run ``batch[start:stop]``, halving it on out-of-memory (see the class docstring)."""
+        if stop - start > 1 and stop - start >= self._oom_len:
+            # (R5) At least as long as a slice that already ran out of memory (e.g. the
+            # sibling half): it would run out again, so split it untried. A single
+            # image is always tried; shorter slices are tried as before.
+            return self._split(step, batch, start, stop)
         try:
             return [(slice(start, stop), step(batch[start:stop]))]
         except Exception as exc:
@@ -165,9 +196,16 @@ class OomBackoff:
         if stop - start == 1:
             logger.error("Out of memory on a single image (index %d): %s", start, reason)
             return [(slice(start, stop), ItemOutOfMemory(reason))]
+        self._oom_len = min(self._oom_len, stop - start)  # (R5)
+        logger.warning(
+            "Out of memory at batch %d; retrying at %d", stop - start, (stop - start + 1) // 2
+        )
+        return self._split(step, batch, start, stop)
+
+    def _split(self, step, batch, start: int, stop: int) -> list[tuple[slice, Any]]:
+        """Run both halves (the first takes an odd item); ``size`` shrinks as before (R5)."""
         half = (stop - start + 1) // 2
         self.size = min(self.size, half)
-        logger.warning("Out of memory at batch %d; retrying at %d", stop - start, half)
         return self._run_slice(step, batch, start, start + half) + self._run_slice(
             step, batch, start + half, stop
         )
@@ -205,10 +243,18 @@ def run_batches(
     pin_memory: bool = False,
     progress: ProgressCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
+    report: BatchReport | None = None,
 ) -> BatchReport:
-    """Run ``spec`` over ``paths`` in fixed-size batches; see the module docstring."""
+    """Run ``spec`` over ``paths`` in fixed-size batches; see the module docstring.
+
+    ``report`` (R7): filled in place and returned when given, so a caller still
+    has the partial outcome (the outputs on disk) when a step raises.
+    """
     started = time.perf_counter()
-    report = BatchReport(total=len(paths), batch_size=batch_size, effective_batch_size=batch_size)
+    if report is None:
+        report = BatchReport()
+    report.total = len(paths)
+    report.batch_size = report.effective_batch_size = batch_size
     if not paths:
         return report
 
@@ -220,6 +266,7 @@ def run_batches(
     backoff = OomBackoff(batch_size)
     written: list[str] = []
     written_lock = threading.Lock()
+    writer: AsyncWriter | None = None
 
     def save_one(arr: Any, path: str) -> None:
         try:
@@ -252,34 +299,38 @@ def run_batches(
             x = torch.stack([t if err is None else torch.zeros_like(template) for t, err in loaded])
             return (x.pin_memory() if pin_memory else x), bad
 
-        with (
-            PrefetchIterator.map(
-                load_batch, batches, depth=2, workers=1, should_stop=should_stop
-            ) as prefetched,
-            AsyncWriter(io, max_pending=2 * batch_size) as writer,
-        ):
-            for batch_paths, (x, bad) in zip(
-                batches, prefetched, strict=False
-            ):  # cancel ends early
-                for i, reason in bad.items():
-                    record_failure(batch_paths[i], reason)
-                if x is None:
-                    continue
-                for chunk, result in backoff.run(spec.step, x):
-                    for offset, i in enumerate(range(chunk.start, chunk.stop)):
-                        if i in bad:
-                            continue  # zero-filled slot: never written
-                        if isinstance(result, BaseException):
-                            record_failure(batch_paths[i], _describe(result))
-                            continue
-                        writer.submit(batch_paths[i], save_one, result[offset], batch_paths[i])
-            writer.wait()
-            for key, exc in writer.errors():
-                report.failed.append((os.path.basename(str(key)), _describe(exc)))
-    report.written = sorted(written)
-    report.cancelled = bool(should_stop and should_stop()) and report.done < report.total
-    report.effective_batch_size = backoff.size
-    report.elapsed_s = time.perf_counter() - started
+        try:
+            with (
+                PrefetchIterator.map(
+                    load_batch, batches, depth=2, workers=1, should_stop=should_stop
+                ) as prefetched,
+                AsyncWriter(io, max_pending=2 * batch_size) as writer,
+            ):
+                for batch_paths, (x, bad) in zip(
+                    batches, prefetched, strict=False
+                ):  # cancel ends early
+                    for i, reason in bad.items():
+                        record_failure(batch_paths[i], reason)
+                    if x is None:
+                        continue
+                    for chunk, result in backoff.run(spec.step, x):
+                        for offset, i in enumerate(range(chunk.start, chunk.stop)):
+                            if i in bad:
+                                continue  # zero-filled slot: never written
+                            if isinstance(result, BaseException):
+                                record_failure(batch_paths[i], _describe(result))
+                                continue
+                            writer.submit(batch_paths[i], save_one, result[offset], batch_paths[i])
+        finally:
+            # (R7) Leaving the ``with`` drained the writer (``AsyncWriter.close`` waits
+            # for every queued save), so this is what is on disk even if a step raised.
+            if writer is not None:
+                for key, exc in writer.errors():
+                    report.failed.append((os.path.basename(str(key)), _describe(exc)))
+            report.written = sorted(written)
+            report.effective_batch_size = backoff.size
+            report.elapsed_s = time.perf_counter() - started
+            report.cancelled = bool(should_stop and should_stop()) and report.done < report.total
     return report
 
 

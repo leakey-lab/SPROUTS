@@ -94,8 +94,7 @@ def test_gt_path_multi_dot_and_unicode(tmp_path):
 def test_atomic_no_tmp_left(tmp_path):
     path = str(tmp_path / "gt" / "a.png")
     write_tracing(path, empty_tracing(8, 8), default_registry())
-    assert (tmp_path / "gt" / "a.png").exists()
-    assert not (tmp_path / "gt" / "a.png.tmp").exists()
+    assert os.listdir(tmp_path / "gt") == ["a.png"]  # no temp file, whatever its name
 
 
 def test_failed_write_removes_tmp_and_keeps_old_file(tmp_path, monkeypatch):
@@ -110,7 +109,7 @@ def test_failed_write_removes_tmp_and_keeps_old_file(tmp_path, monkeypatch):
     ids = np.ones((8, 8), np.uint8)
     with pytest.raises(OSError, match="disk full"):
         write_tracing(path, Tracing(ids=ids), default_registry())
-    assert not (tmp_path / "gt" / "a.png.tmp").exists()
+    assert os.listdir(tmp_path / "gt") == ["a.png"]
     assert open(path, "rb").read() == before
 
 

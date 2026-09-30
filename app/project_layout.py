@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from app.config import (
+    GT_CLASSES_FILENAME,
     GT_DIRNAME,
     IMAGE_EXTENSIONS,
     MASK_DIRNAME,
@@ -67,6 +68,9 @@ _LEGACY_SKELETON_DIRS = (
     ("output", "skeletonizer", _TEST_LATEST, "images"),
     ("skeletonizer", _TEST_LATEST, "images"),
 )
+# Before R8 the GT store and registry wrote "<path>.tmp" next to gt/<stem>.png and
+# gt/classes.json; a killed save left that file in gt/ for good.
+_LEGACY_GT_TEMP_SUFFIX = ".tmp"
 
 
 def _scan(directory: str, key_of: Callable[[str], _K | None]) -> Iterator[tuple[_K, str]]:
@@ -158,6 +162,31 @@ class ProjectLayout:
     def skeleton_dir_candidates(self) -> tuple[str, ...]:
         """Skeleton folders in Measure-length priority (``skeletons/``, then legacy)."""
         return (self.skeletons_dir, *(self._path(*parts) for parts in _LEGACY_SKELETON_DIRS))
+
+    @property
+    def output_dirs(self) -> tuple[str, ...]:
+        """Every folder the app writes into: where killed writes leave temp files (R8).
+
+        The mask and skeleton candidates (generation writes there, and Measure writes
+        its CSV and ``.provenance.json`` into the folder it measured),
+        ``skeleton_corrections/`` and ``gt/``. Not the image folder (nothing writes
+        there) and no legacy ``test_latest`` walk: nothing is read from disk.
+        """
+        return (
+            *self.mask_dir_candidates,
+            *self.skeleton_dir_candidates,
+            self.corrections_dir,
+            self.gt_dir,
+        )
+
+    @staticmethod
+    def is_legacy_gt_temp(name: str) -> bool:
+        """True for ``classes.json.tmp`` / ``<stem>.png.tmp``: what a killed GT save left
+        in :attr:`gt_dir` before R8, when the GT writers used ``<path>.tmp``."""
+        if not name.endswith(_LEGACY_GT_TEMP_SUFFIX):
+            return False
+        target = name[: -len(_LEGACY_GT_TEMP_SUFFIX)]
+        return target == GT_CLASSES_FILENAME or target.endswith(".png")
 
     # ------------------------------------------------------------------ images
     def scan_images(self) -> dict[str, str]:

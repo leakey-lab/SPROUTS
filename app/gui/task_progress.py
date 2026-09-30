@@ -36,6 +36,8 @@ Clock = Callable[[], float]
 
 ROW_HEIGHT = 22
 BAR_WIDTH = 140
+FINISH_HIDE_MS = 1500  # a finished task's message stays this long, then the row hides
+FAIL_HIDE_MS = 2500  # a failed task's message stays this long, then the row hides
 
 _LABEL_QSS = f"color: {tokens.TEXT}; font-size: 11.5px; font-weight: 600; background: transparent;"
 
@@ -248,7 +250,7 @@ class TaskProgressWidget(QWidget):
         self.state_changed.emit("idle")
         if message:
             self.label.setText(message)
-            self._hide_timer.start(1500)
+            self._hide_timer.start(FINISH_HIDE_MS)
         else:
             self._hide_and_reset()
 
@@ -257,7 +259,7 @@ class TaskProgressWidget(QWidget):
         self.cancel_button.hide()
         self.label.setText(message or "Failed")
         self.state_changed.emit("error")
-        self._hide_timer.start(2500)
+        self._hide_timer.start(FAIL_HIDE_MS)
 
     # ------------------------------------------------------------------
     # Internals

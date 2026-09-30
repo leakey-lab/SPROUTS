@@ -1,13 +1,12 @@
 """
 Crash-safe, Unicode-safe file writing and image I/O (Qt-free).
 
-Every file the app produces (metric CSVs, masks, skeletons, sidecars) should be
-written through this module so that:
+Every file the app produces (metric CSVs, masks, skeletons, GT files, sidecars)
+should be written through this module so that:
 
 * a crash, disk-full or network drop mid-write never destroys the previous
   complete file: data goes to a temp file in the same folder, is flushed and
-  (by default) fsync'ed, then atomically swapped in with ``os.replace`` (the
-  pattern the GT store already uses);
+  (by default) fsync'ed, then atomically swapped in with ``os.replace``;
 * a target held open by another program (Excel keeps a CSV locked) raises
   :class:`FileLockedError`, a ``PermissionError`` whose message tells the user
   what to do, instead of an opaque ``[WinError 5]``;
@@ -19,20 +18,26 @@ power cut; bulk writers of regenerable outputs (46k generated masks) may pass
 ``durable=False``: still never half-written, but skips the fsync, which costs
 0.6-4 ms per file on Windows.
 
+A process killed mid-write leaves its hidden temp file behind;
+:func:`sweep_stale_temp_files` removes such leftovers once they are old (R8).
+
 ``cv2`` and ``numpy`` are imported lazily so importing this module stays cheap.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import IO, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import numpy as np
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "REPLACE_RETRY_DELAYS",
@@ -42,6 +47,7 @@ __all__ = [
     "atomic_write_text",
     "imread_unicode",
     "imwrite_unicode",
+    "sweep_stale_temp_files",
 ]
 
 #: Windows errors meaning "another process has the file open":
@@ -54,6 +60,13 @@ _LOCK_WINERRORS = frozenset({5, 32, 33})
 REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.25)
 
 _WRITE_MODES = frozenset({"w", "wb", "wt"})
+
+# A temp file is ".<target name>.<token>.tmp", the token 8 lowercase hex digits.
+# _temp_path makes the name and _is_temp_name recognises it from the same parts,
+# so the stale-file sweep cannot drift from the writer (R8).
+_TEMP_TOKEN_BYTES = 4  # secrets.token_hex: two hex digits per byte
+_TEMP_SUFFIX = ".tmp"
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 class FileLockedError(PermissionError):
@@ -77,7 +90,16 @@ class FileLockedError(PermissionError):
 def _temp_path(target: str) -> str:
     """A unique sibling of ``target`` that no image/CSV scanner will pick up."""
     folder, name = os.path.split(target)
-    return os.path.join(folder, f".{name}.{secrets.token_hex(4)}.tmp")
+    token = secrets.token_hex(_TEMP_TOKEN_BYTES)
+    return os.path.join(folder, f".{name}.{token}{_TEMP_SUFFIX}")
+
+
+def _is_temp_name(name: str) -> bool:
+    """True for a file name :func:`_temp_path` makes (R8)."""
+    if not (name.startswith(".") and name.endswith(_TEMP_SUFFIX)):
+        return False
+    target, _, token = name[1 : -len(_TEMP_SUFFIX)].rpartition(".")
+    return bool(target) and len(token) == 2 * _TEMP_TOKEN_BYTES and _HEX_DIGITS.issuperset(token)
 
 
 def _remove_quietly(path: str) -> None:
@@ -164,6 +186,49 @@ def atomic_write_text(
     """Atomically write ``text`` to ``path``; ``newline`` works as in :func:`open`."""
     with atomic_open(path, "w", durable=durable, encoding=encoding, newline=newline) as fh:
         fh.write(text)
+
+
+def sweep_stale_temp_files(
+    folder: str | os.PathLike[str],
+    *,
+    older_than_s: float = 3600.0,
+    also: Callable[[str], bool] | None = None,
+) -> list[str]:
+    """Delete the temp files killed writes left in ``folder``; return their paths (R8).
+
+    A process killed between :func:`atomic_open` creating its temp file and the swap
+    leaves the hidden ``.<name>.<8 hex>.tmp`` behind for good. This deletes the
+    regular files named exactly so (or accepted by ``also``, e.g. a retired writer's
+    own temp names) whose mtime is more than ``older_than_s`` seconds old: a younger
+    one may belong to a write in progress. One ``os.scandir``, never recursive.
+
+    Never raises for I/O: a missing or unreadable folder gives ``[]``, and a file
+    that cannot be deleted is logged and skipped.
+    """
+    cutoff = time.time() - older_than_s
+    removed: list[str] = []
+    try:
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if not (_is_temp_name(entry.name) or (also is not None and also(entry.name))):
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                        continue  # young: may be a write in progress
+                    os.remove(entry.path)
+                except FileNotFoundError:
+                    continue  # already gone
+                except OSError as exc:
+                    logger.warning("Could not delete stale temp file %s: %s", entry.path, exc)
+                    continue
+                removed.append(entry.path)
+    except (FileNotFoundError, NotADirectoryError):
+        logger.debug("No folder %s to sweep for stale temp files", folder)
+    except OSError as exc:
+        logger.warning("Could not sweep %s for stale temp files: %s", folder, exc)
+    return removed
 
 
 def imread_unicode(path: str | os.PathLike[str], flags: int | None = None) -> np.ndarray | None:

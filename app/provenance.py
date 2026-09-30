@@ -162,7 +162,8 @@ def git_commit(root: str = PROJECT_ROOT) -> str | None:
         commit = _head_commit(git_dir) if git_dir else None
         if commit is None:
             commit = _build_info_commit(root)
-    except (OSError, ValueError, UnicodeDecodeError, AttributeError) as exc:
+    except (OSError, ValueError, UnicodeDecodeError, AttributeError, RecursionError) as exc:
+        # RecursionError: a build_info.json nested deeper than the recursion limit (R4).
         logger.debug("Could not read the git commit of %s: %s", root, exc)
     if commit is not None:
         with _cache_lock:

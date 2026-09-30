@@ -14,6 +14,7 @@ import os
 from functools import partial
 from typing import Any
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
@@ -184,20 +185,26 @@ class SkeletonHandler(HandlerDependencies):
         self.feedback.task_finished(f"{job_name(thread.spec)} cancelled; no CSV written")
 
     def _offer_retry(self, kind: str, message: str) -> None:
-        """Non-modal Retry/Cancel prompt; Retry re-saves the kept rows."""
+        """Non-modal Retry/Cancel prompt; Retry re-saves the kept rows.
+
+        The box deletes itself once answered (RB-16); ``_retry_box`` is the newest
+        open prompt, cleared only by that prompt's own answer.
+        """
         box = QMessageBox(self._parent())
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Could not save the results")
         box.setText(message)
         box.setInformativeText("The measurements are kept. Press Retry to save them again.")
         box.setStandardButtons(QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(QMessageBox.StandardButton.Retry)
-        box.finished.connect(partial(self._on_retry_answer, kind))
+        box.finished.connect(partial(self._on_retry_answer, kind, box))
         self._retry_box = box
         box.open()
 
-    def _on_retry_answer(self, kind: str, result: int) -> None:
-        self._retry_box = None
+    def _on_retry_answer(self, kind: str, box: QMessageBox, result: int) -> None:
+        if self._retry_box is box:  # an older prompt's answer keeps the newer box (RB-16)
+            self._retry_box = None
         if result == QMessageBox.StandardButton.Retry.value:
             self.retry_measure(kind)
         else:

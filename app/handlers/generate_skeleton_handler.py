@@ -19,7 +19,11 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from app.gui.feedback import UiFeedback
-from app.handlers.generation_base import GenerationHandlerBase, show_failure_report
+from app.handlers.generation_base import (
+    GenerationHandlerBase,
+    every_input_failed,
+    show_failure_report,
+)
 from app.handlers.job_registry import JobRegistry
 from app.handlers.worker_base import GuardedThread, JobCancelled
 from app.inference.batch_pipeline import progress_percent
@@ -33,10 +37,12 @@ class SkeletonGeneratorThread(GuardedThread):
     Signals (``finished``, ``error`` and ``progress`` keep their legacy payloads):
         progress(int): percent done.
         progress_counts(int, int): (done, total) inputs.
-        finished(str): the skeleton folder (only when the run completed).
+        finished(str): the skeleton folder (when the run ended without Cancel or an
+            error, also when every input failed; see ``completed``).
         error(str): user-facing message when the run failed (mirrors ``failed``).
     ``report`` holds the ``BatchReport`` once the run ended (completed or cancelled);
-    ``completed`` turns True only when the run finished without cancel or error.
+    ``completed`` turns True only when the run finished without cancel or error and
+    did not fail on every input it attempted (R6: such a run is a failure).
     """
 
     finished = pyqtSignal(str)
@@ -69,7 +75,9 @@ class SkeletonGeneratorThread(GuardedThread):
         if self.report.cancelled or self.is_cancelled():
             raise JobCancelled
         logger.info("SkeletonGeneratorThread complete: output=%s", self.output_dir)
-        self.completed = True
+        # When every input failed nothing was written: ``finished`` still reports
+        # it, but the run is a failure (R6).
+        self.completed = not every_input_failed(self.report)
         self.finished.emit(self.output_dir)
 
     def _report_progress(self, done: int, total: int) -> None:
@@ -134,6 +142,19 @@ class GenerateSkeletonHandler(GenerationHandlerBase):
     # ------------------------------------------------------------------ outcomes
     def _on_finished(self, thread: SkeletonGeneratorThread, results_dir: str) -> None:
         report = thread.report
+        if every_input_failed(report):  # a failure, and no results to load (R6)
+            failed = len(report.failed)
+            message = f"Skeleton generation failed: none of {failed:,} images could be processed"
+            logger.error(message)
+            self.feedback.task_failed(message)
+            self._report_box = show_failure_report(
+                self.parent_widget(),
+                "Skeleton generation",
+                results_dir,
+                report.failed,
+                nothing_written=True,
+            )
+            return
         self.feedback.task_finished(f"Generated {len(report.written):,} skeletons")
         if report.failed:
             self.feedback.notify(f"{len(report.failed):,} images could not be processed", "warn")

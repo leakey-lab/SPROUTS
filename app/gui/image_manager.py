@@ -8,20 +8,44 @@ generation run, so nothing on the GUI thread stats files per image.
 :class:`ImageLoaderThread` scans a folder off the GUI thread and also builds the library
 hierarchy there. Opening another folder never kills a scan: the old one is asked to stop
 and its late result is dropped by a generation token.
+
+Once a folder has loaded, its output folders are swept for the temp files of killed
+writes (:func:`sweep_project_temp_files`), on a daemon thread (R8).
 """
 
 import logging
 import os
+import threading
 from functools import partial
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog
 
 from app.gui.library_index import index_names
+from app.io_utils import sweep_stale_temp_files
 from app.naming import image_stem, parse_image_name
 from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
+
+# The sweep starts this long after a folder has loaded: it lists the same 46k-file folders
+# as the scan (+15 % scan time when both ran at once) and should not compete with the
+# first image either (R8).
+TEMP_SWEEP_DELAY_MS = 2000
+
+
+def sweep_project_temp_files(layout: ProjectLayout) -> list[str]:
+    """Delete the stale temp files of killed writes in ``layout``'s output folders (R8).
+
+    Every folder of :attr:`ProjectLayout.output_dirs`; ``gt/`` also loses the
+    ``<name>.tmp`` the GT writers used before R8. Returns the removed paths; never
+    raises for I/O (see :func:`app.io_utils.sweep_stale_temp_files`).
+    """
+    removed: list[str] = []
+    for folder in layout.output_dirs:
+        legacy = layout.is_legacy_gt_temp if folder == layout.gt_dir else None
+        removed += sweep_stale_temp_files(folder, also=legacy)
+    return removed
 
 
 class ImageLoaderThread(QThread):
@@ -143,6 +167,25 @@ class ImageManager:
         thread.failed.connect(partial(self._on_scan_failed, self._generation))
         thread.start()
 
+    @staticmethod
+    def _start_temp_sweep(folder_path) -> None:
+        """Sweep the project's output folders for stale temp files on a daemon thread (R8).
+
+        One scandir per folder (~70 ms for a 46k-file ``mask/``), which the GUI thread
+        must not pay; a failure is logged and never reaches the library.
+        """
+
+        def run() -> None:
+            try:
+                removed = sweep_project_temp_files(ProjectLayout(folder_path))
+            except Exception:  # housekeeping: never let it disturb opening the project
+                logger.exception("Stale temp-file sweep failed in %s", folder_path)
+                return
+            if removed:
+                logger.info("Removed %d stale temp file(s) in %s", len(removed), folder_path)
+
+        threading.Thread(target=run, name="stale-temp-sweep", daemon=True).start()
+
     def _retire_loader(self):
         """Ask a running scan to stop; keep it alive until its thread finishes."""
         old = self.loader_thread
@@ -174,6 +217,7 @@ class ImageManager:
             labels=thread.labels,
             skeleton_stems=thread.skeleton_stems,
         )
+        QTimer.singleShot(TEMP_SWEEP_DELAY_MS, partial(self._start_temp_sweep, folder))
 
     def _on_scan_failed(self, generation, message):
         if generation != self._generation:

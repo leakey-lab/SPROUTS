@@ -540,20 +540,15 @@ class MainWindow(QMainWindow):
             current_scope=shortcuts.scope_for_stage(self._current_stage()),
             on_about=self.show_about,
         )
-        try:
-            dialog.exec()
-        finally:
-            dialog.deleteLater()
+        # WA_DeleteOnClose: exec() deletes the dialog before it returns, so it must not
+        # be touched afterwards (a deleteLater() here raised on every close, RB-16).
+        dialog.exec()
 
     def show_about(self) -> None:
         """About SPROUTS: version, calibration, runtime, models and how to cite."""
         from app.gui.about_dialog import AboutDialog
 
-        dialog = AboutDialog(self)
-        try:
-            dialog.exec()
-        finally:
-            dialog.deleteLater()
+        AboutDialog(self).exec()  # WA_DeleteOnClose: exec() deletes it (RB-16)
 
     # ==================== Background jobs ====================
 

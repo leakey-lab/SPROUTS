@@ -25,6 +25,7 @@ import re
 from dataclasses import dataclass, replace
 
 from app.config import DEFAULT_GT_CLASSES, GT_CLASSES_FILENAME, GT_DIRNAME, GT_IGNORE_ID
+from app.io_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -304,8 +305,8 @@ def registry_path(project_dir: str) -> str:
 def load_registry(project_dir: str) -> Registry:
     """Load ``gt/classes.json``, or the defaults if it does not exist yet.
 
-    Every way the file can be bad (unreadable, not UTF-8, not JSON, wrong
-    shape, invalid classes) raises ``RegistryError``.
+    Every way the file can be bad (unreadable, not UTF-8, not JSON, nested too
+    deep, wrong shape, invalid classes) raises ``RegistryError``.
     """
     path = registry_path(project_dir)
     if not os.path.exists(path):
@@ -313,7 +314,8 @@ def load_registry(project_dir: str) -> Registry:
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError) as exc:  # ValueError: JSONDecodeError, UnicodeDecodeError
+    except (OSError, ValueError, RecursionError) as exc:
+        # ValueError: JSONDecodeError, UnicodeDecodeError. RecursionError: nested too deep (R4).
         raise RegistryError(f"Could not read registry {path}: {exc}") from exc
     return Registry.from_dict(data)
 
@@ -322,19 +324,7 @@ def save_registry(project_dir: str, registry: Registry) -> str:
     """Atomically write ``gt/classes.json`` (creates ``gt/`` if needed). Returns the path."""
     path = registry_path(project_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(registry.to_dict(), indent=2))
-        os.replace(tmp, path)
-    except BaseException:
-        _remove_quietly(tmp)  # never leave a half-written .tmp behind
-        raise
+    # Hand-made data: the shared durable writer, with its lock retry (R8). A file
+    # another program holds open raises FileLockedError, an OSError.
+    atomic_write_text(path, json.dumps(registry.to_dict(), indent=2), durable=True)
     return path
-
-
-def _remove_quietly(path: str) -> None:
-    try:
-        os.remove(path)
-    except OSError:
-        pass

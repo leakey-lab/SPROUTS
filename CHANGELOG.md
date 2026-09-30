@@ -55,6 +55,32 @@ Two passes, not yet released:
   every stage.
 - Toasts no longer nest graphics effects (seven QPainter warnings per repaint); the
   metrics bar elides long image names instead of forcing a 1058 px minimum window width.
+- Robustness fixes R4-R8 and RB-16 (branch `fix/batch-robustness`, 2026-09-29). None of them
+  changes a CSV value or an output pixel.
+  - A generation run that stops with an error after writing outputs replaces
+    `_sprouts_run.json` with a record of that run (`status` "failed", the error, the outputs
+    it wrote). The folder used to keep the previous run's record, which then described
+    outputs it had not produced. A run that fails before writing anything leaves the record
+    as it is. Every record now states `status` (completed, cancelled or failed) and `error`.
+  - A Generate run in which every image failed (for example out of GPU memory even on single
+    images) ends as a failure ("Mask generation failed: none of N images could be
+    processed") and does not start the skeleton pass; it used to report "Generated 0 masks".
+  - A JSON file nested deeper than Python's recursion limit (`gt/classes.json`, a GT file's
+    metadata, the Enhance defaults, `build_info.json`, the recent-projects list) is reported
+    like any other unreadable file instead of reaching the crash dialog.
+  - Temp files left by a killed write (`.<name>.<8 hex>.tmp`, older than one hour) are
+    removed from the project's output folders a moment after the project has loaded, on a
+    background thread. GT tracings and `gt/classes.json` are written through the shared
+    atomic writer (fsync, lock retry; a GT file held open by another program gets the usual
+    message).
+  - Out of GPU memory, a sub-batch at least as long as one that already ran out of memory is
+    split without being tried (saving one wasted forward per split). Under a steady memory
+    limit the sub-batches that run are the same as before; after a transient out-of-memory
+    they can differ, which does not change outputs (BatchNorm runs in eval mode). An image
+    that runs out of memory alone is reported once as "OutOfMemoryError: ...", not
+    "ItemOutOfMemory: OutOfMemoryError: ...".
+  - Closing the F1 shortcut sheet or the About dialog no longer raises "wrapped C/C++ object
+    ... has been deleted", and the Measure Retry prompt is freed once answered.
 
 ### Performance
 - Correct decodes an image once for the photo, Enhance and the zoom pyramid, and switching

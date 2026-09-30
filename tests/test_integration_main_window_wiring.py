@@ -280,6 +280,35 @@ def test_about_and_shortcut_sheet_open(mw, monkeypatch):
     assert opened == ["about", "keys"]
 
 
+def _reject_the_modal_dialog_soon():
+    from PyQt6.QtCore import QTimer
+
+    def attempt():
+        dialog = QApplication.activeModalWidget()
+        if dialog is None:
+            QTimer.singleShot(10, attempt)
+        else:
+            dialog.reject()
+
+    QTimer.singleShot(0, attempt)
+
+
+def test_about_and_shortcut_sheet_close_with_the_real_exec(mw):
+    # RB-16: both dialogs set WA_DeleteOnClose, so QDialog.exec() deletes them before it
+    # returns; a deleteLater() after it raised "wrapped C/C++ object ... has been deleted"
+    # on every close (the stubbed exec above cannot see that).
+    from PyQt6.QtCore import QCoreApplication, QEvent
+
+    from app.gui import about_dialog, main_window
+
+    for show in (mw.show_shortcuts, mw.show_about):
+        _reject_the_modal_dialog_soon()
+        show()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert mw.findChildren(main_window.ShortcutsDialog) == []
+    assert mw.findChildren(about_dialog.AboutDialog) == []
+
+
 # --------------------------------------------------------------------------- #
 #  Measured values in the metrics bar (AR-06 / UXS-03, KNOWN_ISSUES #3)
 # --------------------------------------------------------------------------- #
