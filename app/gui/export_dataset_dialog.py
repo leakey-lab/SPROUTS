@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.gt import gt_dir, gt_path
+from app.gt import gt_dir
 from app.gt.export import ExportError, ExportOptions, ExportResult, export_dataset
 from app.gt.registry import Registry
 from app.gui.widgets import tokens
@@ -52,22 +52,34 @@ _NOTHING_TRACED = (
 def count_traced(images: dict[str, str]) -> int:
     """How many of ``images`` (stem -> image path) have a ``gt/<stem>.png``.
 
-    One listing of each ``gt/`` folder, not one file check per image (46k images).
+    One listing of each ``gt/`` folder, not one file check per image, and per image only
+    string slicing: four ``os.path`` calls per image took 0.65 s at 46k images, on the GUI
+    thread while the dialog opened. The count is the one ``gt_path`` names give.
     """
+    sep, alt = os.sep, os.altsep or os.sep
     listed: dict[str, set[str]] = {}
     traced = 0
     for path in images.values():
-        folder = gt_dir(os.path.dirname(path))
-        names = listed.get(folder)
+        cut = max(path.rfind(sep), path.rfind(alt))
+        if cut < 0:  # a bare (or drive-relative) name: the general path functions
+            folder_key, name = os.path.split(path)
+        else:  # the folder as spelled, with its separator; the file name after it
+            folder_key, name = path[: cut + 1], path[cut + 1 :]
+        names = listed.get(folder_key)
         if names is None:
-            try:
-                names = {os.path.normcase(name) for name in os.listdir(folder)}
-            except OSError:
-                names = set()
-            listed[folder] = names
-        if os.path.normcase(os.path.basename(gt_path(path))) in names:
+            names = listed[folder_key] = _gt_names(os.path.dirname(path))
+        # gt_path's name: the image's stem + ".png" (case-insensitive where paths are).
+        if names and os.path.normcase(os.path.splitext(name)[0] + ".png") in names:
             traced += 1
     return traced
+
+
+def _gt_names(folder: str) -> set[str]:
+    """The case-normalised names in ``folder``'s ``gt/`` (none when it cannot be listed)."""
+    try:
+        return {os.path.normcase(name) for name in os.listdir(gt_dir(folder))}
+    except OSError:
+        return set()
 
 
 class ExportThread(QThread):

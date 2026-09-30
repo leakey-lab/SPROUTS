@@ -10,13 +10,15 @@ Runs under an offscreen QApplication (``QT_QPA_PLATFORM=offscreen``).
 
 from __future__ import annotations
 
+import gc
 import os
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6 import sip  # noqa: E402
+from PyQt6.QtCore import QEvent, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QPalette  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
@@ -39,10 +41,65 @@ def app():
     yield a
 
 
+def _delete_all(widgets: list) -> None:
+    """close() and deleteLater() each of ``widgets`` and forget them: no reference may stay
+    for the collection that follows (a held wrapper keeps its dead children's wrappers)."""
+    while widgets:
+        widget = widgets.pop()
+        if not sip.isdeleted(widget):
+            widget.close()
+            widget.deleteLater()
+
+
+def _flush_deleted() -> None:
+    """Delete what deleteLater() queued, then deliver the queued calls that free the signal
+    proxies of deleted widgets, and collect: three rounds, as one round can queue more."""
+    for _ in range(3):
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.sendPostedEvents()
+    gc.collect()
+
+
+_MADE: list[QWidget] = []  # the hosts and dialogs a test made: deleted after it
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _flush_earlier_tests(app):
+    """Dead wrappers that earlier test files left queued go first (see the fixture below)."""
+    _flush_deleted()
+
+
+@pytest.fixture(autouse=True)
+def _delete_test_widgets(app):
+    """Close and delete the test's hosts and dialogs, and drop every dead wrapper, before
+    the next test runs.
+
+    ``sendPostedEvents(None, DeferredDelete)`` alone deletes the widgets but not the signal
+    proxies of their lambdas: PyQt frees those through queued calls, which only a full
+    ``sendPostedEvents()`` delivers (and that one skips deleteLater() outside an event loop).
+    A lambda that captures a widget (``lambda: self.save_mask()``) so kept the dead wrapper
+    for the rest of the run, and with it the wrappers of its C++-made children (scroll
+    bars, viewports) in sip's address map; a later findChildren(QWidget) got one of those
+    back for a new object at the same address (a QBoxLayout typed as a QScrollBar in a new
+    ClassPanel) and the run ended in an access violation, about every other run of the GT
+    test files.
+    """
+    yield
+    _delete_all(_MADE)
+    _flush_deleted()
+
+
 def _host(w=400, h=600):
     host = QWidget()
+    _MADE.append(host)
     host.resize(w, h)
     return host
+
+
+def _dialog(registry):
+    dialog = ClassEditorDialog(registry)
+    _MADE.append(dialog)
+    return dialog
 
 
 def _registry_with_many_classes(n_labelled: int = 12):
@@ -247,7 +304,7 @@ def test_gear_button_emits_edit_requested(app):
 #  ClassEditorDialog
 # --------------------------------------------------------------------------- #
 def test_add_class_then_accept(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     dialog._add_name_edit.setText("Dead root")
     dialog._set_add_color("#111111")
     assert dialog._add_key_edit.text() == "dead_root"
@@ -264,7 +321,7 @@ def test_add_class_then_accept(app):
 
 
 def test_rename_nodule_reflected(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     row = dialog._rows["nodule"]
     row.name_edit.setText("Nodule X")
     row.name_edit.editingFinished.emit()
@@ -283,7 +340,7 @@ def test_retire_nodule_bypassing_confirm(app, monkeypatch):
         mod.QMessageBox, "question", lambda *a, **k: mod.QMessageBox.StandardButton.Yes
     )
 
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     dialog._on_retire_clicked("nodule")
     assert "nodule" not in dialog._rows
     assert dialog._candidate.by_key("nodule").retired is True
@@ -296,14 +353,14 @@ def test_retire_nodule_bypassing_confirm(app, monkeypatch):
 
 
 def test_ignore_row_has_no_retire_button(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     assert dialog._rows["ignore"].retire_button is None
     for key in ("root", "nodule", "root_tip"):
         assert dialog._rows[key].retire_button is not None
 
 
 def test_duplicate_colour_shows_inline_error_and_disables_ok(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     ok_button = dialog._button_box.button(QDialogButtonBox.StandardButton.Ok)
     assert ok_button.isEnabled()
 
@@ -326,7 +383,7 @@ def test_duplicate_colour_shows_inline_error_and_disables_ok(app):
 
 
 def test_cancel_returns_none(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     dialog._add_name_edit.setText("Dead root")
     dialog._set_add_color("#333333")
     dialog._on_add_clicked()
@@ -336,7 +393,7 @@ def test_cancel_returns_none(app):
 
 
 def test_unchanged_registry_returns_none(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     dialog._on_accept()
     assert dialog.result_registry() is None
 
@@ -373,7 +430,7 @@ def _ok(dialog):
 
 
 def test_restoring_a_blanked_name_clears_the_error(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     row = dialog._rows["nodule"]
     row.name_edit.setText("")
     row.name_edit.editingFinished.emit()
@@ -387,7 +444,7 @@ def test_restoring_a_blanked_name_clears_the_error(app):
 def test_failed_add_error_clears_when_the_form_is_edited(app):
     root_color = default_registry().by_key("root").color
     for edit in ("name", "key", "colour"):
-        dialog = ClassEditorDialog(default_registry())
+        dialog = _dialog(default_registry())
         dialog._add_name_edit.setText("Copy Root")
         dialog._set_add_color(root_color)
         dialog._on_add_clicked()
@@ -413,7 +470,7 @@ def test_failed_add_error_clears_when_the_form_is_edited(app):
 
 def test_row_error_survives_add_form_edits(app):
     """Editing the add form must not hide a still-invalid (blank) class name."""
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     row = dialog._rows["nodule"]
     row.name_edit.setText("")
     row.name_edit.editingFinished.emit()
@@ -424,7 +481,7 @@ def test_row_error_survives_add_form_edits(app):
 def test_default_add_colour_is_never_taken(app):
     retired = default_registry().add(key="old", name="Old", color="#4c9bd6").retire("old")
     for registry in (default_registry(), retired):
-        dialog = ClassEditorDialog(registry)
+        dialog = _dialog(registry)
         for name in ("First", "Second", "Third"):
             used = {c.color.lower() for c in dialog._candidate.classes}
             assert dialog._add_color.lower() not in used
@@ -436,7 +493,7 @@ def test_default_add_colour_is_never_taken(app):
 
 
 def test_default_add_colour_moves_off_a_colour_just_given_to_a_class(app):
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     dialog._apply_color("nodule", dialog._add_color)
     assert dialog._error is None
     dialog._add_name_edit.setText("New")
@@ -445,7 +502,7 @@ def test_default_add_colour_moves_off_a_colour_just_given_to_a_class(app):
 
 
 def test_editor_rows_scroll_when_there_are_many_classes(app):
-    dialog = ClassEditorDialog(_registry_with_many_classes(40))
+    dialog = _dialog(_registry_with_many_classes(40))
     scroll = dialog._rows_scroll
     assert isinstance(scroll, QScrollArea)
     assert scroll.widget() is dialog._rows_container
@@ -461,7 +518,7 @@ def test_retire_by_clicking_its_own_button(app, monkeypatch):
     monkeypatch.setattr(
         mod.QMessageBox, "question", lambda *a, **k: mod.QMessageBox.StandardButton.Yes
     )
-    dialog = ClassEditorDialog(default_registry())
+    dialog = _dialog(default_registry())
     dialog._rows["nodule"].retire_button.click()
     QApplication.processEvents()
     assert "nodule" not in dialog._rows

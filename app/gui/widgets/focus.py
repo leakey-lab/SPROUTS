@@ -23,6 +23,11 @@ def keep_canvas_focus(*widgets: QWidget, tab_reachable: bool = True) -> None:
     allowed = Qt.FocusPolicy.TabFocus if tab_reachable else Qt.FocusPolicy.NoFocus
     for root in widgets:
         for widget in (root, *root.findChildren(QWidget)):
+            # findChildren can hand back a stale wrapper typed as a widget for another object
+            # now at its address (a C++-made child of a widget whose dead Python wrapper is
+            # still held): touch widgets only.
+            if not widget.isWidgetType():
+                continue
             policy = widget.focusPolicy()
             restricted = Qt.FocusPolicy(policy & allowed)
             if restricted != policy:

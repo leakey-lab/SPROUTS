@@ -6,10 +6,12 @@ a number-key hint, a colour swatch, the class name and (for every class but
 Ignore) a "reviewed" checkbox. Clicking a row selects it as the active paint
 class; the gear button opens the class editor dialog.
 
-No part of the panel takes keyboard focus: a click on a row, checkbox or
-the gear leaves focus on the canvas, so Space still pans and can never toggle
-a "checked" box (spec §3.4: a flipped review flag silently changes the
-dataset).
+A click never takes keyboard focus: a click on a row, checkbox or the gear
+leaves focus on the canvas, so Space still pans and can never toggle a
+"checked" box (spec §3.4: a flipped review flag silently changes the dataset).
+Tab does reach the gear and then each "checked" box, in class order (also after
+the classes change); the focused box draws the theme's focus ring and Space
+ticks it (walkthrough W18: the boxes could be ticked only with the mouse).
 
 Long class names are elided at the right (the full name is the name's tooltip), so
 the panel keeps a bounded width and the "checked" boxes never scroll out of sight;
@@ -146,6 +148,9 @@ class _ClassRow(QFrame):
         # A click falls through to the nearest focusable ancestor, so the row
         # itself (not only the checkbox) must refuse focus.
         keep_canvas_focus(self, tab_reachable=False)
+        if self.checkbox is not None:
+            # Tab reaches the box (Space ticks it); a click still leaves the focus alone.
+            self.checkbox.setFocusPolicy(Qt.FocusPolicy.TabFocus)
 
         self._suppress_toggle = False
         self._active = False
@@ -242,6 +247,7 @@ class ClassPanel(_FloatingPanel):
         # A click falls through to the nearest focusable ancestor, so every
         # layer (not only the checkbox) must refuse focus.
         keep_canvas_focus(self, tab_reachable=False)
+        self._gear.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # Tab only, like the boxes
 
         self._registry: Registry | None = None
         self._rows: dict[str, _ClassRow] = {}
@@ -277,6 +283,14 @@ class ClassPanel(_FloatingPanel):
             self._rows_layout.insertWidget(self._rows_layout.count() - 1, row)
             self._rows[class_def.key] = row
 
+        # Tab: the gear, then each box in class order. New rows join the end of the
+        # window's focus chain: they came after the whole window once the classes changed.
+        previous = self._gear
+        for row in self._rows.values():
+            if row.checkbox is not None:
+                QWidget.setTabOrder(previous, row.checkbox)
+                previous = row.checkbox
+
         if self._active_key is not None and self._active_key in self._rows:
             self._rows[self._active_key].set_active(True)
 
@@ -297,6 +311,13 @@ class ClassPanel(_FloatingPanel):
         """Checkbox checked for keys in ``reviewed|locked``; disabled for ``locked``."""
         for key, row in self._rows.items():
             row.set_reviewed(key in reviewed or key in locked, key in locked)
+
+    def focused_key(self) -> str | None:
+        """The class whose "checked" box has the keyboard focus (reached by Tab), or None."""
+        for key, row in self._rows.items():
+            if row.checkbox is not None and row.checkbox.hasFocus():
+                return key
+        return None
 
     def key_for_shortcut(self, n: int) -> str | None:
         """``n=1..9`` -> n-th labelled class key; ``0`` -> ``"ignore"``."""

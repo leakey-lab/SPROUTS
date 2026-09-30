@@ -39,7 +39,7 @@ import os
 from collections.abc import Callable
 
 import numpy as np
-from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import QButtonGroup, QGraphicsScene, QVBoxLayout, QWidget
 
@@ -148,6 +148,7 @@ class RasterEditorBase(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.graphics_view = EditorCanvasView(sink=self, parent=self)
+        self.graphics_view.installEventFilter(self)  # focus-out ends the B / Space holds
         self.scene = QGraphicsScene(self)
         self.graphics_view.setScene(self.scene)
         layout.addWidget(self.graphics_view)
@@ -302,6 +303,18 @@ class RasterEditorBase(QWidget):
         self._shortcuts = [sc for group in installed.values() for sc in group]
         # Keep the legacy attribute names.
         self.undo_shortcut, self.redo_shortcut = installed["undo"][0], installed["redo"][0]
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt override
+        """The canvas lost the keyboard: a held B or Space will not see its release. The B
+        hold ends (not a tap: the tool stays), and so does a Space pan (as in Correct)."""
+        view = getattr(self, "graphics_view", None)
+        if view is not None and watched is view and event.type() == QEvent.Type.FocusOut:
+            if self.b_key_pressed:
+                self.b_key_pressed = False
+                self.b_key_status_changed.emit(False)
+            if view.space_pan:
+                view.set_space_pan(False)
+        return super().eventFilter(watched, event)
 
     def _toggle_pixel_grid(self) -> None:
         """Flip the canvas pixel grid and say so (it only shows at 800 % and above)."""
@@ -705,14 +718,17 @@ class RasterEditorBase(QWidget):
         reloads, same view; a changed photo opens fitted). Another image is decoded first
         (unreadable: a notice, nothing changes), then unsaved edits are asked about (Cancel
         or a failed save stays). The photo is decoded once, shown with the current
-        enhancement, and fitted to the canvas.
+        enhancement, and fitted to the canvas. Either way a shown editor's canvas takes the
+        keys (a click on the image's library row had moved them to the tree).
         """
         if self.edits.plane is not None and _same_file(image_path, self.current_image_path):
             if self.has_unsaved_changes():
+                self._canvas_takes_keys()
                 return  # the open image was re-selected: keep editing, don't reload
             if _file_stamp(self.current_image_path) == self._photo_stamp:
                 if self._document_changed():
                     self._open_plane(self.current_image_path, self.canvas_size())
+                self._canvas_takes_keys()
                 return  # same photo: keep the view (and, unchanged, the document)
 
         image = self.norm_controls.display_image(image_path)
@@ -729,8 +745,12 @@ class RasterEditorBase(QWidget):
         view = self.graphics_view
         view.set_content_rect(QRectF(0, 0, width, height))
         view.fit_to_view()
+        self._canvas_takes_keys()
+
+    def _canvas_takes_keys(self) -> None:
+        """The canvas takes the keyboard focus, while the editor is on screen."""
         if self.isVisible():
-            view.setFocus()
+            self.graphics_view.setFocus()
 
     def _open_plane(self, image_path: str, size: QSize) -> None:
         """Read the document of ``image_path`` into the plane, with a new history."""

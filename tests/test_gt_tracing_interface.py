@@ -5,6 +5,7 @@ image and a full-white ``mask/plot_001.png``: the GT editor must never read
 (or write) ``mask/``, so every test starts from an empty tracing.
 """
 
+import gc
 import os
 import sys
 import types
@@ -15,7 +16,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPoint, Qt  # noqa: E402
+from PyQt6 import sip  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMessageBox  # noqa: E402
 
@@ -41,6 +43,54 @@ def app():
     yield a
 
 
+def _delete_all(widgets: list) -> None:
+    """close() and deleteLater() each of ``widgets`` and forget them: no reference may stay
+    for the collection that follows (a held wrapper keeps its dead children's wrappers)."""
+    while widgets:
+        widget = widgets.pop()
+        if not sip.isdeleted(widget):
+            widget.close()
+            widget.deleteLater()
+
+
+def _flush_deleted() -> None:
+    """Delete what deleteLater() queued, then deliver the queued calls that free the signal
+    proxies of deleted widgets, and collect: three rounds, as one round can queue more."""
+    for _ in range(3):
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.sendPostedEvents()
+    gc.collect()
+
+
+_MADE: list[GtTracingInterface] = []  # the editors a test made: deleted after it
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _flush_earlier_tests(app):
+    """Dead wrappers that earlier test files left queued go first (see the fixture below)."""
+    _flush_deleted()
+
+
+@pytest.fixture(autouse=True)
+def _delete_test_editors(app):
+    """Close and delete the test's editors, and drop every dead wrapper, before the next
+    test runs.
+
+    ``sendPostedEvents(None, DeferredDelete)`` alone deletes the widgets but not the signal
+    proxies of their lambdas: PyQt frees those through queued calls, which only a full
+    ``sendPostedEvents()`` delivers (and that one skips deleteLater() outside an event loop).
+    A lambda that captures a widget (``lambda: self.save_mask()``) so kept the dead wrapper
+    for the rest of the run, and with it the wrappers of its C++-made children (scroll
+    bars, viewports) in sip's address map; a later findChildren(QWidget) got one of those
+    back for a new object at the same address (a QBoxLayout typed as a QScrollBar in a new
+    ClassPanel) and the run ended in an access violation, about every other run of the GT
+    test files.
+    """
+    yield
+    _delete_all(_MADE)
+    _flush_deleted()
+
+
 @pytest.fixture(autouse=True)
 def no_modal_prompts(monkeypatch):
     """Fail loudly instead of blocking if any code path opens a modal box."""
@@ -61,6 +111,7 @@ def project(tmp_path):
 
 def _editor(app, image_path=None, notices=None):
     iface = GtTracingInterface()
+    _MADE.append(iface)
     iface.resize(900, 700)
     if notices is not None:
         iface.notice.connect(lambda msg, kind: notices.append((msg, kind)))
@@ -475,7 +526,10 @@ def test_panel_clicks_keep_canvas_focus_for_space(app, project):
         QTest.keyRelease(focus, Qt.Key.Key_Space)
         assert not iface.graphics_view.space_pan
         assert box.isChecked() and iface._reviewed == {"nodule"}
+        # No click takes the focus; only Tab reaches the gear and the boxes (W18).
         for w in [box, panel._rows["nodule"], panel._gear, panel._scroll, panel]:
+            assert not w.focusPolicy() & Qt.FocusPolicy.ClickFocus, w
+        for w in [panel._rows["nodule"], panel._scroll, panel]:
             assert w.focusPolicy() == Qt.FocusPolicy.NoFocus, w
     finally:
         iface.close()
@@ -593,7 +647,6 @@ def test_status_chip_flags_an_unreadable_gt_file(app, project, kind):
 
 def test_class_editor_dialog_is_deleted_after_use(app, project, monkeypatch):
     from PyQt6 import sip
-    from PyQt6.QtCore import QEvent
 
     from app.gui.class_editor_dialog import ClassEditorDialog
 

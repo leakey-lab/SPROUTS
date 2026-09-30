@@ -170,9 +170,10 @@ class GtTracingInterface(RasterEditorBase):
         self.class_panel.active_changed.connect(self.set_active_class)
         self.class_panel.reviewed_changed.connect(self._on_reviewed_changed)
         self.class_panel.edit_requested.connect(self.edit_classes)
-        # Panel clicks never keep keyboard focus (Space must pan, not tick a box).
+        # Panel clicks never keep keyboard focus (Space must pan, not tick a box); a box
+        # ticked from the keyboard keeps it for the next box.
         self.class_panel.active_changed.connect(self._focus_canvas)
-        self.class_panel.reviewed_changed.connect(self._focus_canvas)
+        self.class_panel.reviewed_changed.connect(self._after_tick)
         self.overlay_layout.register(side_panel=self.class_panel)
 
         self.set_active_class(self._default_key())
@@ -282,12 +283,25 @@ class GtTracingInterface(RasterEditorBase):
         QTimer.singleShot(0, self.class_panel.reposition)
 
     def _refresh_panel(self):
-        """Checked boxes = ticked by hand or has pixels; boxes of painted classes are locked."""
+        """Checked boxes = ticked by hand or has pixels; boxes of painted classes are locked.
+
+        A box about to lock under the keyboard focus hands the keys to the canvas first:
+        Qt would pass them on to the next box, where a Space would tick it.
+        """
+        focused = self.class_panel.focused_key()
+        if focused is not None and focused in self._present:
+            self._focus_canvas()
         self.class_panel.set_reviewed(set(self._reviewed), set(self._present))
 
     def _focus_canvas(self, *_args):
         """Give keyboard focus back to the canvas after a class-panel click."""
         self.graphics_view.setFocus()
+
+    def _after_tick(self, key: str, _checked: bool) -> None:
+        """A box ticked by a click hands the keys back to the canvas; one ticked from the
+        keyboard (Tab to it, then Space) keeps them, so Tab goes on to the next box."""
+        if self.class_panel.focused_key() != key:
+            self._focus_canvas()
 
     def _on_reviewed_changed(self, key: str, checked: bool):
         if not self.current_image_path or key in self._present:

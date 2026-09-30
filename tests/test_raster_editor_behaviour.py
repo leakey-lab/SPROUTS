@@ -12,6 +12,7 @@ Findings PE-04, PE-06, PE-13, UI-03, UXE-02/RB-05, UXE-03, UXE-07, UXE-08/09, AR
 of the UI/perf audit; plan package P3 of the unified Correct editor.
 """
 
+import gc
 import os
 
 import pytest
@@ -71,7 +72,13 @@ def make(app):
     for iface in made:
         iface.close()
         iface.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    made.clear()
+    # Several rounds free the slot proxies too; dead wrappers left behind can make stale sip
+    # entries that crash a later test inside findChildren.
+    for _ in range(3):
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.sendPostedEvents()
+    gc.collect()
 
 
 @pytest.fixture(scope="module")
