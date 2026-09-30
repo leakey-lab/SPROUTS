@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.gui import shortcuts
+from app.gui.library_index import count_label
 from app.gui.panels import Panel
 from app.gui.task_progress import TaskProgressWidget
 from app.gui.widgets import SegmentedControl, tokens
@@ -321,8 +322,10 @@ class ShellTopbar(QFrame):
         elif key == "Correct":
             if index != Panel.CORRECT:
                 mw.toggle_correct()
-        elif key == "Visualize" and self._viz_kind is not None:
-            self._show_visualization(self._viz_kind)
+        elif key == "Visualize":
+            # The highlighted dashboard opens (or its page says what to run first), never
+            # the Library photo under a highlighted segment (W5).
+            self._show_visualization(self.visualize_kind())
         else:
             mw.switch_right_panel(Panel.DISPLAY)
 
@@ -428,11 +431,23 @@ class ShellTopbar(QFrame):
 
     # ------------------------------------------------------- visualization
     def _show_visualization(self, kind: str) -> None:
-        """Show (build or bring forward) the ``kind`` dashboard; never toggles."""
+        """Show (build or bring forward) the ``kind`` dashboard; never toggles.
+
+        Through ``mw.show_dashboard`` when the window has it (without its CSV the stage
+        page names the next step instead), else the window's ``show_root_<kind>_…``.
+        """
         self._viz_kind = kind
         if self.viz_seg.value() != kind:
             self.viz_seg.setValue(kind, emit=False)
-        getattr(self._mw, f"show_root_{kind}_visualization")()
+        show = getattr(self._mw, "show_dashboard", None)
+        if callable(show):
+            show(kind)
+        else:
+            getattr(self._mw, f"show_root_{kind}_visualization")()
+
+    def visualize_kind(self) -> str:
+        """The dashboard Visualize opens: the one chosen last, else the highlighted one."""
+        return self._viz_kind or self.viz_seg.value() or "length"
 
     def reset_visualize_selection(self) -> None:
         """Forget the chosen dashboard (e.g. after another folder is opened)."""
@@ -544,10 +559,14 @@ class ShellTopbar(QFrame):
         self.wordmark.setVisible(not compact)
         self.updateGeometry()
 
-    def _on_stage_toggled(self, _button, checked: bool) -> None:
+    def _on_stage_toggled(self, button, checked: bool) -> None:
         if checked:
             self._apply_density()  # the checked stage keeps its name in compact mode
             self._update_density()
+            key = next((k for k, b in self.stage_buttons.items() if b is button), None)
+            changed = getattr(self._mw, "on_stage_changed", None)
+            if key is not None and callable(changed):
+                changed(key)  # every change of the highlighted stage, whatever its path
 
 
 def _page(*widgets: QWidget | None) -> QWidget:
@@ -767,9 +786,16 @@ class StatusLine(QFrame):
 
 
 def _idle_text_for(mw) -> Callable[[], str]:
+    """``Ready · 40 images``; on Generate / Measure, what a run would work on
+    (``mw.stage_summary()``, W12)."""
+
     def _text() -> str:
         images = getattr(getattr(mw, "image_manager", None), "images", None) or {}
-        return f"Ready · {len(images):,} images" if images else "Ready"
+        if not images:
+            return "Ready"
+        summary = getattr(mw, "stage_summary", None)
+        text = summary() if callable(summary) else None
+        return f"Ready · {text or count_label(len(images))}"
 
     return _text
 

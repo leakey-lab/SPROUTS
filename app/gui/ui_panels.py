@@ -352,9 +352,26 @@ def create_left_panel(main_window) -> QWidget:
     for _c in range(1, main_window.file_list.columnCount()):
         _hdr.setSectionResizeMode(_c, QHeaderView.ResizeMode.ResizeToContents)
 
-    # Token-styled tree: zebra striping is dropped (hover + selection + stripes
-    # is three competing row treatments in a ~240px panel).
-    main_window.file_list.setStyleSheet(f"""
+    main_window.file_list.setStyleSheet(library_tree_qss())
+    # Per-window index: O(1) lookup/navigation, fast filter, status badges.
+    file_tree_manager.library_index_for(main_window)
+
+    layout.addWidget(main_window.file_list, 1)
+
+    return left_widget
+
+
+def library_tree_qss() -> str:
+    """The library tree's own stylesheet (over the app's).
+
+    Token-styled; zebra striping is dropped (hover + selection + stripes is three
+    competing row treatments in a ~240px panel). The selected row's accent bar (a 3 px
+    left border) takes the place of 3 px of left padding that every other row has, so a
+    row does not move 3 px, or switch to a shorter label, when it is selected (W10). (A
+    transparent border instead would cut a seam into the hover fill.)
+    """
+    bar = 3
+    return f"""
         QTreeWidget {{
             background-color: {tokens.BG_1};
             color: {tokens.TEXT};
@@ -364,11 +381,17 @@ def create_left_panel(main_window) -> QWidget:
             font-size: 9pt;
             outline: none;
         }}
-        QTreeWidget::item {{ padding: 4px; border-radius: 5px; }}
+        QTreeWidget::item {{
+            padding: 4px;
+            padding-left: {4 + bar}px;
+            border-radius: 5px;
+        }}
         QTreeWidget::item:hover {{ background-color: {tokens.BG_2}; }}
         QTreeWidget::item:selected {{
             background-color: {tokens.SEL_SOFT};
             color: {tokens.TEXT};
+            border-left: {bar}px solid {tokens.SEL};
+            padding-left: 4px;
         }}
         QHeaderView::section {{
             background-color: {tokens.BG_1};
@@ -380,13 +403,7 @@ def create_left_panel(main_window) -> QWidget:
             font-weight: 600;
         }}
         {tokens.focus_rule("QTreeWidget")}
-    """)
-    # Per-window index: O(1) lookup/navigation, fast filter, status badges.
-    file_tree_manager.library_index_for(main_window)
-
-    layout.addWidget(main_window.file_list, 1)
-
-    return left_widget
+    """
 
 
 def filter_file_list(main_window, query: str) -> int:

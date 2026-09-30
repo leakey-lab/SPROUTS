@@ -236,20 +236,25 @@ def viz_calls(mw, monkeypatch):
         "close_root_area_visualization",
     ):
         monkeypatch.setattr(mw, name, lambda n=name: calls.append(n), raising=False)
+    # No folder is open here: let the dashboards decide instead of the "No images" page.
+    monkeypatch.setattr(mw, "_missing_dashboard_data", lambda kind: None)
     mw.ribbon.reset_visualize_selection()
     return calls
 
 
-def test_first_length_click_shows_the_length_dashboard(mw, app, viz_calls):
+def test_entering_visualize_shows_the_highlighted_dashboard(mw, app, viz_calls):
+    # W5: entering opens the highlighted segment's dashboard (it used to show the
+    # Library photo until the highlighted segment was clicked again).
     _enter(mw, app, "Visualize")
-    assert viz_calls == []  # nothing chosen yet: entering does not build a dashboard
-    mw.action_bar_viz_seg.button("length").click()
     assert viz_calls == ["show:length"]
+    mw.action_bar_viz_seg.button("length").click()  # a re-click shows it again, never closes
+    assert viz_calls == ["show:length", "show:length"]
     _enter(mw, app, "Library")
 
 
 def test_segments_select_and_never_close(mw, app, viz_calls):
     _enter(mw, app, "Visualize")
+    viz_calls.clear()  # entering showed the highlighted one (W5)
     seg = mw.action_bar_viz_seg
     for kind in ("area", "length", "area", "area"):
         seg.button(kind).click()

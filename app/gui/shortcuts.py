@@ -18,10 +18,15 @@ Kinds:
 * ``gesture`` — mouse or wheel gestures, documentation only.
 
 Scopes: :data:`GLOBAL` shortcuts are window-wide and therefore overlap every
-other scope; the editor scopes (:data:`TRACE_GT`, :data:`CORRECT`) are
-``WidgetWithChildrenShortcut`` on their own page, so only the visible editor's
-keys are active and editors never collide. Stage accelerators are
-``Alt+1 … Alt+6``, one per ribbon stage (not ``Ctrl+digit``: ``Ctrl+0`` /
+other scope. The page scopes (:data:`LIBRARY` on the display canvas, :data:`TRACE_GT`
+and :data:`CORRECT` on their editor page) are window-wide too, but Qt ignores the
+shortcuts of a hidden widget, so only the page on screen has live keys: they work
+wherever the keyboard is in the window (the library tree keeps it while the arrow keys
+browse), the pages never collide, and a text field still gets its typing (it takes the
+key first, through ``ShortcutOverride``). PgDn / PgUp are the exception: every owner
+binds them ``WidgetWithChildrenShortcut`` (MainWindow on the library, the chrome and
+the display; each editor on its own page), so exactly one is live. Stage accelerators
+are ``Alt+1 … Alt+6``, one per ribbon stage (not ``Ctrl+digit``: ``Ctrl+0`` /
 ``Ctrl+1`` are the canvas fit / 100 % keys and a window-level ``Ctrl+1`` would
 make them ambiguous).
 
@@ -106,15 +111,34 @@ def _history_rows() -> list[tuple]:
     ]
 
 
-def _canvas_rows(kind: Kind) -> list[tuple]:
-    """Zoom / pan keys every canvas has (CanvasViewMixin handles them as view keys)."""
+def _zoom_rows(kind: Kind) -> list[tuple]:
+    """Zoom keys every canvas has (CanvasViewMixin also handles them as view keys)."""
     return [
         ("fit", ("Ctrl+0",), "Fit the image to the window", kind),
         ("zoom_100", ("Ctrl+1",), "Zoom to 100 %", kind),
         ("zoom_in", ("Ctrl+=", "Ctrl++"), "Zoom in", kind),
         ("zoom_out", ("Ctrl+-",), "Zoom out", kind),
+    ]
+
+
+def _canvas_rows(kind: Kind) -> list[tuple]:
+    """Zoom / pan keys of an editor canvas."""
+    return [
+        *_zoom_rows(kind),
         ("pixel_grid", ("Ctrl+'",), "Show or hide the pixel grid (at 800 % and above)", kind),
         ("pan", ("Space",), "Hold and drag to pan (middle-drag also pans)", KEY, "Space (hold)"),
+        ("zoom_wheel", ("Ctrl+wheel",), "Zoom about the cursor", GESTURE),
+    ]
+
+
+def _library_rows() -> list[tuple]:
+    """The Library: browse the tree, and the display canvas' zoom keys (its shortcuts
+    work wherever the keyboard is, the tree included)."""
+    return [
+        ("select_adjacent", ("Up", "Down"), "Select the previous / next image", KEY),
+        ("expand", ("Left", "Right"), "Collapse / expand a folder", KEY),
+        *_zoom_rows(SHORTCUT),
+        ("pan", ("Drag",), "Drag to pan (middle-drag too)", GESTURE),
         ("zoom_wheel", ("Ctrl+wheel",), "Zoom about the cursor", GESTURE),
     ]
 
@@ -185,13 +209,7 @@ REGISTRY: tuple[ShortcutSpec, ...] = (
             ("previous_image", ("PgUp",), "Previous image"),
         ],
     ),
-    *_rows(
-        LIBRARY,
-        [
-            ("select_adjacent", ("Up", "Down"), "Select the previous / next image", KEY),
-            ("expand", ("Left", "Right"), "Collapse / expand a folder", KEY),
-        ],
-    ),
+    *_rows(LIBRARY, _library_rows()),
     *_rows(
         TRACE_GT,
         [
@@ -275,17 +293,19 @@ def install_shortcuts(
     A handler is one callable for every key of the action, or a sequence with
     one callable per key (``go_to_stage``: Alt+1 … Alt+6).
 
-    ``context`` defaults to ``WidgetWithChildrenShortcut`` (editor pages); pass
-    ``Qt.ShortcutContext.WindowShortcut`` for :data:`GLOBAL`. Raises
-    ``KeyError`` for an action without a row in ``scope`` and ``ValueError`` for
-    a row that is not a ``shortcut`` (those are handled in key events).
-    Returns ``{action: [QShortcut, ...]}`` in key order.
+    ``context`` defaults to ``WindowShortcut``: the keys work wherever the keyboard is
+    in ``widget``'s window while ``widget`` is on screen (Qt ignores the shortcuts of a
+    hidden widget, so a page's keys die with its page, and pages never collide). Keys
+    that several owners bind (PgDn / PgUp) pass ``WidgetWithChildrenShortcut``, so only
+    the owner holding the keyboard has them. Raises ``KeyError`` for an action without a
+    row in ``scope`` and ``ValueError`` for a row that is not a ``shortcut`` (those are
+    handled in key events). Returns ``{action: [QShortcut, ...]}`` in key order.
     """
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QKeySequence, QShortcut
 
     if context is None:
-        context = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        context = Qt.ShortcutContext.WindowShortcut
     installed: dict[str, list[QShortcut]] = {}
     for action, slot in handlers.items():
         spec = find_spec(action, scope)

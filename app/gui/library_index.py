@@ -28,8 +28,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from itertools import accumulate
 
-from PyQt6.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
     QLabel,
@@ -179,8 +179,11 @@ StatusOf = Callable[[str], tuple[bool, bool]]
 _BADGE = QSize(22, 12)
 
 
-def _badge_pixmap(has_mask: bool, has_skeleton: bool, dpr: float = 2.0) -> QPixmap:
-    """Two dots: mask (left) and skeleton (right). Filled = present, ring = absent.
+def _badge_pixmap(
+    has_mask: bool, has_skeleton: bool, corrected: bool = False, dpr: float = 2.0
+) -> QPixmap:
+    """Two marks: mask (left) and skeleton (right). Filled = present, ring = absent; a
+    corrected skeleton is a filled diamond (display only: Measure reads the generated one).
 
     Shape carries the state as well as colour, so it reads without colour vision.
     """
@@ -191,7 +194,21 @@ def _badge_pixmap(has_mask: bool, has_skeleton: bool, dpr: float = 2.0) -> QPixm
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     for x, present, colour in ((1.5, has_mask, tokens.MASK), (11.5, has_skeleton, tokens.SKEL)):
         rect = QRectF(x, 1.5, 9, 9)
-        if present:
+        if corrected and colour == tokens.SKEL:
+            c = rect.center()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(colour))
+            painter.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(c.x(), rect.top() - 0.5),
+                        QPointF(rect.right() + 0.5, c.y()),
+                        QPointF(c.x(), rect.bottom() + 0.5),
+                        QPointF(rect.left() - 0.5, c.y()),
+                    ]
+                )
+            )
+        elif present:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(colour))
             painter.drawEllipse(rect)
@@ -203,10 +220,13 @@ def _badge_pixmap(has_mask: bool, has_skeleton: bool, dpr: float = 2.0) -> QPixm
     return pixmap
 
 
-def status_text(has_mask: bool, has_skeleton: bool) -> str:
+def status_text(has_mask: bool, has_skeleton: bool, corrected: bool = False) -> str:
     """Words for the badge (tooltip / accessibility)."""
     mask = "Mask saved" if has_mask else "No mask"
-    skeleton = "skeleton ready" if has_skeleton else "no skeleton"
+    if corrected:
+        skeleton = "skeleton corrected (the generated one is measured)"
+    else:
+        skeleton = "skeleton ready" if has_skeleton else "no skeleton"
     return f"{mask} · {skeleton}"
 
 
@@ -219,24 +239,39 @@ class LibraryItemDelegate(QStyledItemDelegate):
     unchanged); a shortened group row shows its full text as tooltip.
     """
 
-    def __init__(self, status_of: StatusOf, tooltip_of: Callable[[str], str], parent=None):
+    def __init__(
+        self,
+        status_of: StatusOf,
+        tooltip_of: Callable[[str], str],
+        parent=None,
+        *,
+        corrected_of: Callable[[str], bool] | None = None,
+    ):
         super().__init__(parent)
         self._status_of = status_of
         self._tooltip_of = tooltip_of
-        self._icons: dict[tuple[bool, bool], QIcon] = {}
+        self._corrected_of = corrected_of or (lambda _name: False)
+        self._icons: dict[tuple[bool, bool, bool], QIcon] = {}
 
-    def status_icon(self, has_mask: bool, has_skeleton: bool) -> QIcon:
-        key = (has_mask, has_skeleton)
+    def status_icon(self, has_mask: bool, has_skeleton: bool, corrected: bool = False) -> QIcon:
+        """The badge, the same in every icon mode: Qt tints a Selected-mode pixmap it has to
+        make itself with the highlight colour (W10), so the badge brings its own."""
+        key = (has_mask, has_skeleton, corrected)
         icon = self._icons.get(key)
         if icon is None:
-            icon = self._icons[key] = QIcon(_badge_pixmap(has_mask, has_skeleton))
+            pixmap = _badge_pixmap(has_mask, has_skeleton, corrected)
+            icon = QIcon()
+            for mode in (QIcon.Mode.Normal, QIcon.Mode.Selected, QIcon.Mode.Active):
+                icon.addPixmap(pixmap, mode)
+            self._icons[key] = icon
         return icon
 
     def initStyleOption(self, option: QStyleOptionViewItem, index) -> None:  # noqa: N802
         super().initStyleOption(option, index)
         name = index.data(USER_ROLE)
         if name:
-            option.icon = self.status_icon(*self._status_of(name))
+            corrected = bool(self._corrected_of(name))
+            option.icon = self.status_icon(*self._status_of(name), corrected)
             option.decorationSize = _BADGE
             option.features |= QStyleOptionViewItem.ViewItemFeature.HasDecoration
         self._fit_text(option)
@@ -296,12 +331,16 @@ class LibraryIndex:
         path_of: Callable[[str], str | None] | None = None,
         has_mask: Callable[[str], bool] | None = None,
         has_skeleton: Callable[[str], bool] | None = None,
+        has_correction: Callable[[str], bool] | None = None,
     ) -> None:
         self._tree = tree
         self._path_of = path_of or (lambda _name: None)
         self._has_mask = has_mask or (lambda _name: False)
         self._has_skeleton = has_skeleton or (lambda _name: False)
-        self._delegate = LibraryItemDelegate(self.status_of, self.tooltip_for, tree)
+        self._has_correction = has_correction or (lambda _name: False)
+        self._delegate = LibraryItemDelegate(
+            self.status_of, self.tooltip_for, tree, corrected_of=self.corrected_of
+        )
         tree.setItemDelegate(self._delegate)
 
         self._leaves: list[QTreeWidgetItem] = []
@@ -536,9 +575,13 @@ class LibraryIndex:
         """(has mask, has skeleton) of image ``name``, from the injected providers."""
         return bool(self._has_mask(name)), bool(self._has_skeleton(name))
 
+    def corrected_of(self, name: str) -> bool:
+        """True when image ``name`` has a skeleton correction (display only, FR-03)."""
+        return bool(self._has_correction(name))
+
     def tooltip_for(self, name: str) -> str:
         """Full stem, status in words, and the image path."""
-        lines = [name, status_text(*self.status_of(name))]
+        lines = [name, status_text(*self.status_of(name), self.corrected_of(name))]
         path = self._path_of(name)
         if path:
             lines.append(path)

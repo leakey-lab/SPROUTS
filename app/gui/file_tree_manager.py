@@ -28,6 +28,7 @@ def library_index_for(main_window) -> LibraryIndex:
             path_of=getattr(manager, "get_image_path", None),
             has_mask=getattr(manager, "has_mask", None),
             has_skeleton=getattr(manager, "has_skeleton", None),
+            has_correction=getattr(manager, "has_correction", None),
         )
         main_window.library_index = index
         main_window.file_list.library_index = index  # for find_tree_item_by_image_name

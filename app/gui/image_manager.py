@@ -58,8 +58,8 @@ class ImageLoaderThread(QThread):
         failed(str): the folder is missing or unreadable (``finished`` is not emitted).
 
     An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
-    ``hierarchy``, ``labels`` (library row texts) and ``skeleton_stems`` hold the
-    extra results.
+    ``hierarchy``, ``labels`` (library row texts), ``skeleton_stems`` and
+    ``corrected_stems`` (images with a skeleton correction) hold the extra results.
     """
 
     progress = pyqtSignal(int)
@@ -72,6 +72,7 @@ class ImageLoaderThread(QThread):
         self.hierarchy = None
         self.labels: dict[str, str] = {}
         self.skeleton_stems: set[str] = set()
+        self.corrected_stems: set[str] = set()
 
     def run(self):
         if not os.path.isdir(self.folder_path):
@@ -86,6 +87,7 @@ class ImageLoaderThread(QThread):
             if self._stop(70):
                 return
             self.skeleton_stems = layout.scan_skeleton_stems()
+            self.corrected_stems = layout.scan_corrected_stems()
             if self._stop(85):
                 return
             self.hierarchy, self.labels = index_names(images)
@@ -128,6 +130,9 @@ class ImageManager:
         self.fake_images = {}
         self.masks = {}
         self.skeleton_stems: set[str] = set()
+        # Images with a skeleton correction (display only: Measure reads the generated
+        # skeleton, FR-03).
+        self.corrected_stems: set[str] = set()
         self.has_fake_real_pairs = False
         self.original_folder = None
         self.loader_thread = None
@@ -216,6 +221,7 @@ class ImageManager:
             hierarchy=thread.hierarchy,
             labels=thread.labels,
             skeleton_stems=thread.skeleton_stems,
+            corrected_stems=thread.corrected_stems,
         )
         QTimer.singleShot(TEMP_SWEEP_DELAY_MS, partial(self._start_temp_sweep, folder))
 
@@ -236,11 +242,13 @@ class ImageManager:
         hierarchy=None,
         labels=None,
         skeleton_stems=None,
+        corrected_stems=None,
     ):
         """Adopt a scan result as the library (``original_folder`` is already set).
 
-        ``hierarchy`` / ``labels`` / ``skeleton_stems`` come precomputed from the loader
-        thread; without them they are computed here (the first two lazily).
+        ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``corrected_stems`` come
+        precomputed from the loader thread; without them they are computed here (the
+        first two lazily).
         """
         self._clear_images()
         self.images = images
@@ -253,6 +261,10 @@ class ImageManager:
             self.skeleton_stems = set(skeleton_stems)
         elif self.original_folder:
             self.skeleton_stems = self._layout().scan_skeleton_stems()
+        if corrected_stems is not None:
+            self.corrected_stems = set(corrected_stems)
+        elif self.original_folder:
+            self.corrected_stems = self._layout().scan_corrected_stems()
         if self.main_window:
             self.main_window.on_loading_finished(
                 images, self.fake_images, masks, self.has_fake_real_pairs
@@ -264,6 +276,7 @@ class ImageManager:
         self.has_fake_real_pairs = False
         self.masks = {}
         self.skeleton_stems = set()
+        self.corrected_stems = set()
         self.processed_base_path = None
         # Invalidate cache
         self._hierarchy_cache = None
@@ -322,6 +335,25 @@ class ImageManager:
 
     def has_skeleton(self, name) -> bool:
         return name in self.skeleton_stems
+
+    def has_correction(self, name) -> bool:
+        """True when a skeleton correction of ``name`` was found (display only, FR-03)."""
+        return name in self.corrected_stems
+
+    def set_correction(self, name, present: bool) -> None:
+        """Record whether ``name`` (stem or image path) has a skeleton correction."""
+        stem = image_stem(name)
+        if present:
+            self.corrected_stems.add(stem)
+        else:
+            self.corrected_stems.discard(stem)
+
+    def corrected_skeleton_path(self, name) -> str | None:
+        """``skeleton_corrections/<stem>_skeleton.png`` of ``name`` when one was found."""
+        stem = image_stem(name)
+        if stem not in self.corrected_stems or not self.original_folder:
+            return None
+        return self._layout().corrected_skeleton_path(stem)
 
     # ------------------------------------------------------------ view / lookup
     def get_fake_image_path(self, name):

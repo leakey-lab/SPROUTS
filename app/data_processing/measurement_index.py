@@ -17,6 +17,10 @@ Contract:
 * Qt-free and thread-safe: :meth:`MeasurementIndex.prewarm` is meant for a
   worker thread; ``lookup(stem, load=False)`` never parses and never blocks,
   which is what the GUI thread should call.
+* The GUI thread's calls (``lookup(load=False)``, ``needs_load``, ``outdated``) look
+  for a CSV only where Measure writes it today (a few stats). The legacy
+  ``test_latest`` search walks the project folders and their parents (about 60 ms
+  at 46k images), so only the worker's :meth:`MeasurementIndex.prewarm` runs it.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from functools import partial
 from typing import NamedTuple
 
 from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN
@@ -95,9 +100,11 @@ def _read_metric_csv(path: str, value_column: str) -> dict[str, _Row]:
 class MetricTable:
     """One metric CSV, located lazily and re-parsed only when it changes.
 
-    ``locate`` returns the CSV path (or ``None``). A path that was found is
-    re-used until it disappears; a failed search is retried at most every
-    ``relocate_after_s`` seconds (the legacy locator may walk folders).
+    ``locate`` returns the CSV path (or ``None``); ``locate_fast`` (default: ``locate``)
+    is the search the GUI thread's calls (``get(load=False)``, :meth:`needs_load`) use,
+    while :meth:`load` and ``get(load=True)`` (a worker's) use ``locate``, which may walk
+    folders. A path that was found is re-used until it disappears; a failed search is
+    retried at most every ``relocate_after_s`` seconds.
     """
 
     def __init__(
@@ -105,16 +112,19 @@ class MetricTable:
         value_column: str,
         locate: Callable[[], str | None],
         *,
+        locate_fast: Callable[[], str | None] | None = None,
         relocate_after_s: float = 2.0,
         clock: Callable[[], float] = time.monotonic,
     ):
         self.value_column = value_column
         self._locate = locate
+        self._locate_fast = locate_fast or locate
         self._relocate_after_s = relocate_after_s
         self._clock = clock
         self._lock = threading.Lock()
         self._path: str | None = None
-        self._searched_at: float | None = None
+        self._searched_at: float | None = None  # the last search (either kind)
+        self._searched_full_at: float | None = None  # the last full search
         self._loaded_sig: _Signature | None = None
         self._rows: dict[str, _Row] = {}
 
@@ -126,21 +136,25 @@ class MetricTable:
     def invalidate(self) -> None:
         """Forget the located path and the parsed rows (e.g. after a Measure run)."""
         with self._lock:
-            self._path, self._searched_at = None, None
+            self._path, self._searched_at, self._searched_full_at = None, None, None
             self._loaded_sig, self._rows = None, {}
 
-    def _resolve(self) -> tuple[str, _Signature] | None:
+    def _resolve(self, full: bool) -> tuple[str, _Signature] | None:
+        """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
         if self._path is not None:
             sig = _signature(self._path)
             if sig is not None:
                 return self._path, sig
             self._path = None  # moved or deleted: search again now
-            self._searched_at = None
+            self._searched_at = self._searched_full_at = None
         now = self._clock()
-        if self._searched_at is not None and now - self._searched_at < self._relocate_after_s:
+        last = self._searched_full_at if full else self._searched_at
+        if last is not None and now - last < self._relocate_after_s:
             return None
         self._searched_at = now
-        path = self._locate()
+        if full:
+            self._searched_full_at = now
+        path = (self._locate if full else self._locate_fast)()
         sig = _signature(path) if path else None
         if sig is None:
             return None
@@ -148,8 +162,10 @@ class MetricTable:
         return self._path, sig
 
     def _current(self, load: bool) -> dict[str, _Row] | None:
-        """Rows matching the CSV on disk, or ``None`` (absent, or cold with ``load=False``)."""
-        found = self._resolve()
+        """Rows matching the CSV on disk, or ``None`` (absent, or cold with ``load=False``).
+
+        ``load=False`` (the GUI thread) searches with ``locate_fast`` only."""
+        found = self._resolve(full=load)
         if found is None:
             self._loaded_sig, self._rows = None, {}
             return None
@@ -172,9 +188,10 @@ class MetricTable:
             self._lock.release()
 
     def needs_load(self) -> bool:
-        """True when a CSV exists whose current contents are not parsed yet."""
+        """True when a CSV exists whose current contents are not parsed yet (looked for
+        with ``locate_fast``: a GUI-thread call)."""
         with self._lock:
-            found = self._resolve()
+            found = self._resolve(full=False)
             return found is not None and found[1] != self._loaded_sig
 
     def load(self) -> None:
@@ -198,7 +215,12 @@ class MeasurementIndex:
     ):
         self.layout = ProjectLayout(project_root)
         opts = {"relocate_after_s": relocate_after_s, "clock": clock}
-        self._length = MetricTable(LENGTH_VALUE_COLUMN, self.layout.find_lengths_csv, **opts)
+        self._length = MetricTable(
+            LENGTH_VALUE_COLUMN,
+            self.layout.find_lengths_csv,  # with the legacy test_latest walk: workers only
+            locate_fast=partial(self.layout.find_lengths_csv, search_test_latest=False),
+            **opts,
+        )
         self._area = MetricTable(AREA_VALUE_COLUMN, self.layout.find_areas_csv, **opts)
 
     @property
@@ -229,7 +251,8 @@ class MeasurementIndex:
         return self._length.needs_load() or self._area.needs_load()
 
     def prewarm(self) -> None:
-        """Parse any new or changed CSV (≈90–360 ms for 46k rows: run off the GUI thread)."""
+        """Look for the CSVs everywhere (legacy folders too) and parse any new or changed
+        one (≈90–360 ms for 46k rows, plus the legacy search: run off the GUI thread)."""
         self._length.load()
         self._area.load()
 
@@ -242,25 +265,31 @@ class MeasurementIndex:
         """``{"length": csv path | None, "area": csv path | None}`` currently in use."""
         return {"length": self._length.path, "area": self._area.path}
 
-    def is_outdated(self, stem: str) -> bool:
-        """True when the input measured for ``stem`` changed after its CSV was written.
+    def outdated(self, stem: str) -> dict[str, bool]:
+        """``{"length": bool, "area": bool}``: whether the input each value of ``stem`` was
+        measured from changed after its CSV was written.
 
-        Length reads ``<csv dir>/<stem>_fake.png``, area ``<csv dir>/<stem>.png``
-        (the handlers write each CSV next to the files they measured). mtime
-        based, so a copied folder may report ``True`` spuriously; it never
-        changes a value.
+        Each metric against its own input: length against the generated skeleton
+        ``<csv dir>/<stem>_fake.png``, area against the mask ``<csv dir>/<stem>.png`` (the
+        handlers write each CSV next to the files they measured), so a saved mask never
+        outdates the length. A metric without a row for ``stem`` is never outdated. mtime
+        based, so a copied folder may report ``True`` spuriously; it never changes a value.
         """
         stem = _key(stem)
-        checks = (
-            (self._length, stem + SKELETON_SUFFIX),
-            (self._area, stem + ".png"),
-        )
-        for table, file_name in checks:
-            csv_path = table.path
-            if csv_path is None or table.get(stem, load=False) is None:
-                continue
-            csv_sig = _signature(csv_path)
-            src_sig = _signature(os.path.join(os.path.dirname(csv_path), file_name))
-            if csv_sig is not None and src_sig is not None and src_sig[0] > csv_sig[0]:
-                return True
-        return False
+        return {
+            "length": self._table_outdated(self._length, stem, stem + SKELETON_SUFFIX),
+            "area": self._table_outdated(self._area, stem, stem + ".png"),
+        }
+
+    def is_outdated(self, stem: str) -> bool:
+        """True when either value of ``stem`` is outdated (see :meth:`outdated`)."""
+        return any(self.outdated(stem).values())
+
+    @staticmethod
+    def _table_outdated(table: MetricTable, stem: str, file_name: str) -> bool:
+        csv_path = table.path
+        if csv_path is None or table.get(stem, load=False) is None:
+            return False
+        csv_sig = _signature(csv_path)
+        src_sig = _signature(os.path.join(os.path.dirname(csv_path), file_name))
+        return csv_sig is not None and src_sig is not None and src_sig[0] > csv_sig[0]

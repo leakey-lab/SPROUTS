@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app import APP_NAME
+from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
 from app.data_processing.measurement_index import Measurement, MeasurementIndex
 from app.gt import RegistryError, load_registry
 from app.handlers.job_registry import JobRegistry
@@ -35,6 +36,7 @@ from . import (
     ui_panels,
     visualization_manager,
 )
+from .canvas_key_relay import CanvasKeyRelay
 from .correct.editor import CorrectEditor
 from .device_check import DeviceCheck
 from .display_controller import DisplayController
@@ -44,9 +46,11 @@ from .image_manager import ImageManager, project_layout_of
 from .library_index import count_label
 from .panels import Panel
 from .recent_projects import RecentProjectsStore
+from .stage_status import StageStatus
 from .task_progress import TaskProgressWidget
 from .toast_clearance import FLOATING_GAP, ToastClearance
 from .ui_feedback import QtUiFeedback
+from .visualize_empty_state import VisualizeEmptyState
 from .window_state import WindowStateStore
 
 logger = logging.getLogger(__name__)
@@ -70,8 +74,24 @@ JOB_BUTTONS = (
     "calculate_area_button",
 )
 
+#: The LENGTH tooltip's line for an image with a skeleton correction (FR-03).
+CORRECTION_NOT_MEASURED = (
+    "A corrected skeleton exists (skeleton_corrections/); it is not measured: "
+    "Measure reads the generated skeleton."
+)
+#: The STATUS tooltip of an image with a skeleton correction (W17, display only).
+CORRECTED_STATUS_TIP = (
+    "Overlay and Side by side draw the corrected skeleton (skeleton_corrections/); "
+    "Measure reads the generated skeleton (skeletons/), so root length is the generated one's."
+)
+
+#: The one toast of a folder load (loaded / empty / failed): a newer load replaces it.
+_LOAD_TOAST = "project-load"
+
 #: The editors' floating overlays in the bottom row, under the toast column.
 _EDITOR_CHROME = ("dock", "zoom_cluster")
+#: The editors' side panels (Correct's Layers, Trace GT's Classes), right of the toast column.
+_EDITOR_SIDE_CHROME = ("layer_panel", "class_panel")
 # Closing with a running job: first wait (window visible, "Stopping…"), then a
 # longer wait with the window hidden; a job still running after both is logged.
 _CLOSE_WAIT_MS = 5000
@@ -144,6 +164,9 @@ class MainWindow(QMainWindow):
         self._measurements_loading = False
         self._measurement_signals = _MeasurementSignals()
         self._measurement_signals.ready.connect(self._on_measurements_ready)
+        # What Generate / Measure would work on (the status line's idle text, W12).
+        self.stage_status = StageStatus(self)
+        self.stage_status.changed.connect(self._refresh_idle_text)
         self._job_button_tooltips: dict[str, str] = {}
         if detect_device is None:
             detect_device = QApplication.platformName() != "offscreen"
@@ -179,7 +202,7 @@ class MainWindow(QMainWindow):
         # unsaved edits -> the title's modified marker; PgDn / PgUp after a save.
         for editor in self._editors().values():
             editor.notice.connect(self.notify)
-            editor.dirty_changed.connect(self._sync_window_modified)
+            editor.dirty_changed.connect(self._on_editor_dirty_changed)
             editor.navigate_requested.connect(self.navigate_image)
         # The Correct page reports every mask it writes or removes, on every save path
         # (Ctrl+S, PgDn, the prompt's Save). Connected once, here. Its skeleton_saved
@@ -202,8 +225,13 @@ class MainWindow(QMainWindow):
         self._tree_load_timer.timeout.connect(self._load_current_tree_item)
 
         self.init_ui()
+        self.display_area.zoom_changed.connect(self.metrics_bar.set_zoom)  # the ZOOM cell
         self._install_image_paging_shortcuts()
+        self._install_library_shortcuts()
         self._install_global_shortcuts()
+        # Hold B / Space (and Correct's S, Enter, Esc, Delete) reach the editor canvas
+        # while the library tree keeps the keyboard for arrow browsing.
+        self._canvas_key_relay = CanvasKeyRelay(self.file_list, self._editor_canvas)
         self._wire_library_order()
 
         if self._persist_window_state:
@@ -216,7 +244,9 @@ class MainWindow(QMainWindow):
         # start-up nor the first Correct open waits for it.
         QTimer.singleShot(0, self._prewarm_skeletonize)
         # The device chip: resolved in the pool once the window shows (torch loads there).
-        self.device_check = DeviceCheck(self, self.statusline) if detect_device else None
+        self.device_check = (
+            DeviceCheck(self, self.statusline, settings=settings) if detect_device else None
+        )
 
     def _prewarm_skeletonize(self) -> None:
         """Start the scikit-image import in the thread pool (never on the GUI thread)."""
@@ -304,9 +334,44 @@ class MainWindow(QMainWindow):
             Panel.GT_TRACING: self.gt_tracing_interface,
         }
 
+    def _editor_canvas(self):
+        """``(canvas, shortcut scope)`` of the editor page on screen, else None."""
+        editor = self._editors().get(self.right_panel.currentIndex())
+        view = getattr(editor, "graphics_view", None)
+        scope = getattr(editor, "SHORTCUT_SCOPE", None)
+        return (view, scope) if view is not None and scope else None
+
     def _sync_window_modified(self, *_args) -> None:
         """Title marker ``*`` while any editor holds unsaved edits."""
         self.setWindowModified(any(e.has_unsaved_changes() for e in self._editors().values()))
+
+    def _on_editor_dirty_changed(self, *_args) -> None:
+        """An editor's unsaved state changed: the title marker follows, and a save in
+        Correct may have written the open image's skeleton correction."""
+        self._sync_window_modified()
+        self._sync_open_correction()
+
+    def _sync_open_correction(self) -> None:
+        """Keep the Library's "corrected" state of the image open in Correct in step with
+        the disk (W17, display only: Measure reads the generated skeleton, FR-03).
+
+        Correct's ``skeleton_saved`` stays unconnected (FR-03), so this runs when the
+        editor's unsaved state changes (a save) and whenever another image is selected:
+        one ``os.path.isfile`` of that image's correction.
+        """
+        manager = self.image_manager
+        path = getattr(self.correct_editor, "current_image_path", "")
+        set_correction = getattr(manager, "set_correction", None)
+        if not path or not callable(set_correction):
+            return
+        stem = image_stem(path)
+        layout = project_layout_of(manager)
+        if layout is None or manager.get_image_path(stem) is None:
+            return
+        present = os.path.isfile(layout.corrected_skeleton_path(stem))
+        if present != manager.has_correction(stem):
+            set_correction(stem, present)
+            self.library_index.refresh_status(stem)
 
     def _generated_skeleton_for(self, image_path: str) -> str | None:
         """The skeleton the last generation run wrote for ``image_path`` (None: editor default)."""
@@ -351,7 +416,10 @@ class MainWindow(QMainWindow):
         self.right_panel = QStackedWidget()
         self.right_panel.addWidget(ui_panels.create_right_panel(self))  # Panel.DISPLAY
         self.right_panel.addWidget(self.correct_editor)  # Panel.CORRECT
-        self.visualization_widget = QWidget()  # Panel.VISUALIZATION (placeholder)
+        # Panel.VISUALIZATION: shown while a dashboard opens, or when it has no CSV yet
+        # (then it names the next step, with a button to that stage).
+        self.visualization_widget = VisualizeEmptyState()
+        self.visualization_widget.stage_requested.connect(self._go_to_stage)
         self.right_panel.addWidget(self.visualization_widget)
         self.right_panel.addWidget(self.gt_tracing_interface)  # Panel.GT_TRACING
         splitter.addWidget(self.right_panel)
@@ -367,7 +435,24 @@ class MainWindow(QMainWindow):
         # (ribbon switch, toggle, close) is covered.
         self._pre_viz_splitter_sizes = None
         self.right_panel.currentChanged.connect(self._sync_library_for_panel)
+        self.right_panel.currentChanged.connect(self._show_selection_on_display)
         return body
+
+    def _show_selection_on_display(self, index: int) -> None:
+        """The display page is back on screen (a stage left an editor or a dashboard): it
+        shows the library's selection with its metrics. The editors move the selection on
+        while it is hidden (PgDn, a clicked row), and may have saved a correction, so its
+        last image could sit under another image's name and values."""
+        if index != Panel.DISPLAY:
+            return
+        item = self.file_list.currentItem()
+        name = item.data(0, USER_ROLE) if item is not None else None
+        if not name or self.image_manager.get_image_path(name) is None:
+            return  # nothing selected, or a row of the folder being replaced
+        self._shown_leaf_name = name
+        self._sync_open_correction()  # a correction saved in Correct shows in the overlay
+        self.display_controller.display_selected_image_by_name(name)
+        self._refresh_metrics_bar(name)
 
     def _current_widget_is_viz(self) -> bool:
         cur = self.right_panel.currentWidget()
@@ -470,11 +555,17 @@ class MainWindow(QMainWindow):
         self.toasts = ToastManager(self)
         # The stack keeps clear of the bottom chrome and moves when that chrome does (a
         # page switch shows the metrics bar, an editor lifts its zoom cluster).
-        self.toast_clearance = ToastClearance(self, self.toasts, self._bottom_chrome)
+        self.toast_clearance = ToastClearance(
+            self, self.toasts, self._bottom_chrome, side=self._side_chrome
+        )
         self.toast_clearance.watch(
             self.statusline,
             self.metrics_bar,
-            *(getattr(e, name, None) for e in self._editors().values() for name in _EDITOR_CHROME),
+            *(
+                getattr(e, name, None)
+                for e in self._editors().values()
+                for name in (*_EDITOR_CHROME, *_EDITOR_SIDE_CHROME)
+            ),
         )
 
         shell_chrome.install_status_surface(self)
@@ -486,11 +577,14 @@ class MainWindow(QMainWindow):
             on_task_end=self.statusline.refresh_runtime,
         )
 
-    def notify(self, message: str, kind: str = "success", timeout: int = 3200) -> None:
-        """Show a transient toast. ``kind`` in success/info/warn/danger."""
+    def notify(
+        self, message: str, kind: str = "success", timeout: int = 3200, *, key: str | None = None
+    ) -> None:
+        """Show a transient toast. ``kind`` in success/info/warn/danger; a ``key`` updates the
+        live toast of that key instead of stacking another."""
         toasts = getattr(self, "toasts", None)
         if toasts is not None:
-            toasts.show(message, kind=kind, timeout=timeout)
+            toasts.show(message, kind=kind, timeout=timeout, key=key)
 
     def _toast_bottom_offset(self) -> int:
         """Pixels the toast stack keeps above the window's bottom edge (see
@@ -509,6 +603,15 @@ class MainWindow(QMainWindow):
         for name in _EDITOR_CHROME:
             chrome.append((getattr(editor, name, None), FLOATING_GAP))
         return chrome
+
+    def _side_chrome(self) -> list[tuple]:
+        """``(widget, gap)`` of the current editor's side panel: the toasts keep their corner
+        while they fit below it, else they move to its left."""
+        right_panel = getattr(self, "right_panel", None)
+        editor = None
+        if right_panel is not None:
+            editor = self._editors().get(right_panel.currentIndex())
+        return [(getattr(editor, name, None), FLOATING_GAP) for name in _EDITOR_SIDE_CHROME]
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -607,6 +710,14 @@ class MainWindow(QMainWindow):
             # A Measure run may have rewritten the CSVs: re-locate and re-read them.
             self._measurements.invalidate()
             self._refresh_metrics_bar(self._current_image_name())
+        if not busy and self._current_stage() == "Measure":
+            self._check_freshness()  # a Measure run rewrote a CSV
+        page = getattr(self, "visualization_widget", None)
+        if not busy and page is not None and page.is_blocked():
+            # Visualize said why its dashboard could not open, and a run just ended (it may
+            # have written the CSV, or it was the run it waited for): try again.
+            if self.right_panel.currentIndex() == Panel.VISUALIZATION:
+                self.show_dashboard(self.ribbon.visualize_kind())
 
     # ==================== File Tree Methods (delegated) ====================
 
@@ -662,6 +773,92 @@ class MainWindow(QMainWindow):
         """Efficiently search for 'test_latest' directory."""
         return visualization_manager.find_test_latest_dir(start_path, max_depth)
 
+    def show_dashboard(self, kind: str) -> None:
+        """The Visualize stage: the ``kind`` dashboard ("length" / "area").
+
+        Without its CSV (nothing measured yet) the stage page names the next step, with a
+        button to it, instead of a message box (W5); otherwise the dashboard is built or
+        brought forward (see :mod:`app.gui.visualization_manager`).
+        """
+        missing = self._missing_dashboard_data(kind)
+        if missing is not None:
+            title, body, detail, stage = missing
+            if self.switch_right_panel(Panel.VISUALIZATION):
+                self.visualization_widget.show_missing(
+                    title, body, detail, stage=stage, action=f"Go to {stage}" if stage else ""
+                )
+            return
+        self.visualization_widget.show_opening()
+        getattr(self, f"show_root_{kind}_visualization")()
+
+    def _missing_dashboard_data(self, kind: str) -> tuple[str, str, str, str | None] | None:
+        """``(title, next step, expected CSV, stage)`` when the ``kind`` dashboard cannot open
+        yet (no images, a run rewriting its data, or no CSV); None when it can, or is open
+        already (the dashboard controller then decides)."""
+        spec = getattr(visualization_manager, "SPECS", {}).get(kind)
+        if spec is None or getattr(self, spec.attr, None) is not None:
+            return None
+        layout = project_layout_of(self.image_manager)
+        if layout is None or not self.image_manager.images:
+            return "No images loaded", "Open a folder of root images first (Ctrl+O).", "", None
+        noun = "root length" if kind == "length" else "root area"
+        is_busy = getattr(getattr(self, "skeleton_handler", None), "is_busy", None)
+        if callable(is_busy) and is_busy(kind):  # a run rewrites what it would chart
+            running = self.jobs.running_name() or "A run"
+            return f"{running} is running", f"The {noun} dashboard opens when it ends.", "", None
+        try:
+            if spec.find_csv(layout).path:
+                return None
+        except Exception:  # noqa: BLE001 - the dashboard controller reports it then
+            logger.exception("Could not look for the %s CSV", kind)
+            return None
+        manager = self.image_manager
+        if kind == "length":
+            inputs, made = manager.skeleton_stems, "skeletons"
+            button, csv_path = "Root Length", os.path.join(layout.skeletons_dir, ROOT_LENGTHS_CSV)
+        else:
+            inputs, made = manager.masks, "masks"
+            masks_dir = layout.resolve_masks_dir() or layout.mask_dir
+            button, csv_path = "Root Area", os.path.join(masks_dir, ROOT_AREAS_CSV)
+        if inputs:
+            stage, step = "Measure", f"Run Measure → {button} to chart the {noun} of this trial."
+        else:
+            stage, step = "Generate", f"Generate {made} first, then run Measure → {button}."
+        return f"No {noun} measurements yet", step, f"Looked for {csv_path}", stage
+
+    def on_stage_changed(self, key: str) -> None:
+        """The highlighted stage changed (any path): the status line says what Generate or
+        Measure would work on (W12), and the dashboards are told, when they want to know
+        (they are released a while after Visualize is left)."""
+        if key == "Measure":
+            self._check_freshness()
+        self._refresh_idle_text()
+        changed = getattr(visualization_manager, "stage_changed", None)
+        if callable(changed):
+            try:
+                changed(self, key)
+            except Exception:  # noqa: BLE001 - a stage switch must never fail on this
+                logger.exception("The dashboards could not follow the stage %r", key)
+
+    def stage_summary(self) -> str | None:
+        """What a run of the stage on screen would work on: the status line's idle text on
+        Generate and Measure (see :class:`~app.gui.stage_status.StageStatus`); None on the
+        other stages (W12)."""
+        return self.stage_status.text(self._current_stage(), self.image_manager)
+
+    def _check_freshness(self) -> None:
+        """Count Measure's inputs written after each CSV, in the thread pool (W12)."""
+        self.stage_status.check(
+            self._measurements,
+            project_layout_of(self.image_manager),
+            locate=not self._measurements_loading,  # never wait for a parse in the pool
+        )
+
+    def _refresh_idle_text(self) -> None:
+        line = getattr(self, "statusline", None)
+        if line is not None:
+            line.refresh_idle()
+
     def on_visualization_server_closed(self):
         """Handle root length visualization server closed event."""
         if self.root_length_viz:
@@ -694,7 +891,7 @@ class MainWindow(QMainWindow):
         if not dir_name:
             return
         if not os.path.isdir(dir_name):
-            self.notify(f"Folder not found: {dir_name}", "danger")
+            self.notify(f"Folder not found: {dir_name}", "danger", key=_LOAD_TOAST)
             self._refresh_recents()
             return
         # Pending edits: save or discard first; an editor the user keeps editing
@@ -737,13 +934,10 @@ class MainWindow(QMainWindow):
     def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
         """Show a freshly scanned folder: build the library, then drop the overlay."""
         self._shown_leaf_name = None
-        # The dashboards chart the previous project's CSVs: release them (servers,
-        # pages, the OpenGL hold) and leave the Visualize stage if one was on screen.
-        if visualization_manager.release_all_visualizations(self):
-            self._go_to_stage("Library")
         layout = project_layout_of(self.image_manager)
         folder = layout.root if layout is not None else getattr(self, "_last_loaded_dir", None)
         self._measurements = MeasurementIndex(folder) if folder else None
+        self.stage_status.reset()  # the previous project's counts
         if folder:  # the title bar and the taskbar name the open project
             project = os.path.basename(os.path.normpath(folder)) or folder
             self.setWindowTitle(f"{project} — {APP_NAME}[*]")
@@ -751,6 +945,13 @@ class MainWindow(QMainWindow):
         reset = getattr(self.display_controller, "reset", None)
         if callable(reset):
             reset()  # never keep showing the previous folder's image
+        # The dashboards chart the previous project's CSVs: release them (servers,
+        # pages, the OpenGL hold) and leave the Visualize stage if one was on screen (or
+        # its page said what the previous project had to run first). After the new tree is
+        # built: switching the canvases back to OpenGL processes events (queued tree slots).
+        released = visualization_manager.release_all_visualizations(self)
+        if released or self.right_panel.currentIndex() == Panel.VISUALIZATION:
+            self._go_to_stage("Library")
         self._refresh_metrics_bar(None)
         if getattr(self, "loading_overlay", None) is not None:
             self.loading_overlay.hide()
@@ -758,17 +959,21 @@ class MainWindow(QMainWindow):
         message = f"Loaded {count_label(len(images))}"
         self.task_progress.finish(message)
         self.statusline.refresh_idle()  # "Ready · N images" names this folder's count
-        self.notify(message)
+        self.notify(message, key=_LOAD_TOAST)  # opening again updates it, never stacks
 
         # Swap the index-0 display page from the empty state to the real display
         # area now that images exist.
         if images and getattr(self, "display_page_stack", None) is not None:
             self.display_page_stack.setCurrentIndex(0)
+        if images:
+            # The library has the keyboard: the arrows browse at once (it went to the first
+            # stage button when the Welcome screen hid, leaving a second highlighted stage).
+            self.file_list.setFocus(Qt.FocusReason.OtherFocusReason)
 
         # Persist a recent-projects entry for the Welcome screen (FIX2).
         if images:
             self._record_recent_project(len(images))
-        self._prewarm_measurements()  # parse the CSVs before the first selection
+        self._prewarm_measurements(locate=True)  # find and parse the CSVs before a selection
         self._prewarm_dashboards()
 
     def _prewarm_dashboards(self) -> None:
@@ -798,7 +1003,7 @@ class MainWindow(QMainWindow):
             self.task_progress.fail(message)
         else:
             self.task_progress.finish(message)
-        self.notify(message, kind)
+        self.notify(message, kind, key=_LOAD_TOAST)
         if not self.image_manager.images and getattr(self, "app_stack", None) is not None:
             self.app_stack.setCurrentIndex(0)  # nothing to show: back to Welcome
 
@@ -840,6 +1045,11 @@ class MainWindow(QMainWindow):
         """Return True if a processed ``<name>_fake.png`` skeleton is known for the image."""
         return self.image_manager.has_skeleton(stored_name)
 
+    def _image_has_correction(self, stored_name) -> bool:
+        """True when a skeleton correction of the image is known (display only, FR-03)."""
+        has_correction = getattr(self.image_manager, "has_correction", None)
+        return bool(stored_name and callable(has_correction) and has_correction(stored_name))
+
     def _current_image_name(self) -> str | None:
         """Stem of the image selected in the library (else the one on the display)."""
         file_list = getattr(self, "file_list", None)
@@ -860,24 +1070,31 @@ class MainWindow(QMainWindow):
             return
 
         status = None
+        corrected = self._image_has_correction(stored_name)
         if stored_name:
-            if self._image_has_skeleton(stored_name):
+            if corrected:
+                status = "Skeleton corrected"
+            elif self._image_has_skeleton(stored_name):
                 status = "Skeleton ready"
             elif self._image_has_mask(stored_name):
                 status = "Mask ready"
             else:
                 status = "No mask"
 
-        measured, stale, source = Measurement(None, None, None), False, None
+        measured = Measurement(None, None, None)
+        outdated: dict[str, bool] = {}
+        sources: dict[str, str | None] = {}
         index = self._measurements
         if stored_name and index is not None:
             try:
                 measured = index.lookup(stored_name, load=False)
-                if index.needs_load():
+                # needs_load() waits for the CSV lock: never while a worker parses (its
+                # ready signal refreshes the bar).
+                if not self._measurements_loading and index.needs_load():
                     self._prewarm_measurements()
-                stale = index.is_outdated(stored_name)
+                # Each value against its own input: a saved mask outdates AREA, never LENGTH.
+                outdated = index.outdated(stored_name)
                 sources = index.sources()
-                source = sources.get("length") or sources.get("area")
             except Exception:
                 logger.exception("Could not read the measured values of %s", stored_name)
 
@@ -887,14 +1104,23 @@ class MainWindow(QMainWindow):
             status=status,
             name=stored_name,
             error=measured.error,
-            stale=stale,
-            source=source,
+            stale=outdated.get("length", False),
+            source=sources.get("length"),
+            area_stale=outdated.get("area", False),
+            area_source=sources.get("area"),
+            length_note=CORRECTION_NOT_MEASURED if corrected else None,
+            status_tip=CORRECTED_STATUS_TIP if corrected else None,
         )
 
-    def _prewarm_measurements(self) -> None:
-        """Parse new / changed measurement CSVs in the thread pool (once at a time)."""
+    def _prewarm_measurements(self, *, locate: bool = False) -> None:
+        """Parse new / changed measurement CSVs in the thread pool (once at a time).
+
+        ``locate``: run even when no CSV is known yet: the pool job also looks in the
+        legacy folders, which the GUI thread never walks (once per opened project)."""
         index = self._measurements
-        if index is None or self._measurements_loading or not index.needs_load():
+        if index is None or self._measurements_loading:
+            return
+        if not locate and not index.needs_load():
             return
         self._measurements_loading = True
         signals = self._measurement_signals
@@ -915,6 +1141,8 @@ class MainWindow(QMainWindow):
         self._measurements_loading = False
         if index is self._measurements:
             self._refresh_metrics_bar(self._current_image_name())
+            if self._current_stage() == "Measure":
+                self._check_freshness()  # a CSV may have been found or re-read
 
     def generate_all(self):
         """Generate masks, then skeletons, as one user-visible operation.
@@ -953,6 +1181,7 @@ class MainWindow(QMainWindow):
         if image_path is None:
             return
         self._shown_leaf_name = image_name
+        self._sync_open_correction()  # the image Correct had open may have been corrected
 
         current = self.right_panel.currentWidget()
         if current is self.correct_editor:
@@ -1012,6 +1241,7 @@ class MainWindow(QMainWindow):
         controller.update_display()
         file_tree_manager.update_file_list_mask_status(self)
         self._refresh_metrics_bar(self._current_image_name())
+        self.statusline.refresh_idle()  # the Generate / Measure counts changed
         # The Correct page's read-ahead holds masks / skeletons the run may have rewritten.
         discard = getattr(self.correct_editor, "discard_read_ahead", None)
         if callable(discard):
@@ -1042,6 +1272,8 @@ class MainWindow(QMainWindow):
         target = panel if self.right_panel.currentIndex() != panel else Panel.DISPLAY
         if not self.switch_right_panel(target):
             return  # the editor being left kept unsaved edits: stay there
+        if target == Panel.DISPLAY:
+            return  # the display page shows the selection itself (_show_selection_on_display)
         current_item = self.file_list.currentItem()
         if current_item:
             self.on_image_selected(current_item)
@@ -1153,8 +1385,29 @@ class MainWindow(QMainWindow):
                     "next_image": lambda: self._page_image(1),
                     "previous_image": lambda: self._page_image(-1),
                 },
+                context=Qt.ShortcutContext.WidgetWithChildrenShortcut,  # one owner has them
             )
             self._paging_shortcuts += installed["next_image"] + installed["previous_image"]
+
+    def _install_library_shortcuts(self) -> None:
+        """The Library canvas' zoom keys (registry: Library), live while the display canvas
+        is on screen wherever the keyboard is: the tree keeps it while the arrows browse."""
+        view = self.display_area
+
+        def on_image(zoom):  # a message ("Select an image …") is never zoomed
+            return lambda: None if view.content_rect().isEmpty() else zoom()
+
+        installed = shortcuts.install_shortcuts(
+            view,
+            shortcuts.LIBRARY,
+            {
+                "fit": on_image(lambda: view.fit_to_view()),
+                "zoom_100": on_image(lambda: view.set_zoom(1.0)),
+                "zoom_in": on_image(lambda: view.zoom_step(1)),
+                "zoom_out": on_image(lambda: view.zoom_step(-1)),
+            },
+        )
+        self._library_shortcuts = [s for group in installed.values() for s in group]
 
     def _page_image(self, delta: int) -> None:
         editor = self._editors().get(self.right_panel.currentIndex())

@@ -24,6 +24,7 @@ unaffected.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 from PyQt6.QtCore import QSize, Qt
@@ -36,7 +37,11 @@ from app.gui.widgets import tokens
 
 _DASH = "—"
 _FAILED = "failed"
-_OUTDATED_TIP = "Edited after this measurement — run Measure again for a current value."
+#: The input a value was measured from changed after the Measure run (``{}``: which one).
+_OUTDATED_TIP = "{} changed after this measurement — run Measure again for a current value."
+_LENGTH_INPUT = "The generated skeleton"
+_ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
+_AREA_INPUT = "The mask"
 
 
 def fov_text() -> str:
@@ -136,6 +141,8 @@ class MetricsBar(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
+        # The bar's minimum is minimumSizeHint() (without the ZOOM cell), not its layout's.
+        row.setSizeConstraint(QHBoxLayout.SizeConstraint.SetNoConstraint)
 
         # A long image name falls back to its tube, depth, date and time (stem_forms).
         self._name_cell, self._name_value = self._add_cell(row, None, first=True, elide=True)
@@ -148,12 +155,17 @@ class MetricsBar(QWidget):
         self._fov_value.setText(fov_text())
         self._fov_cell.setToolTip("Calibrated field of view (app.config.CALIBRATION)")
         self._status_cell, self._status_value = self._add_cell(row, "STATUS")
+        # The Library display's zoom (the editors show theirs in their zoom cluster).
+        self._zoom_cell, self._zoom_value = self._add_cell(row, "ZOOM")
+        self._zoom_cell.setToolTip(_ZOOM_TIP)
+        self._zoom: float | None = None
         self._cells = (
             self._name_cell,
             self._length_cell,
             self._area_cell,
             self._fov_cell,
             self._status_cell,
+            self._zoom_cell,
         )
 
         row.addStretch(1)
@@ -207,25 +219,93 @@ class MetricsBar(QWidget):
         error: str | None = None,
         stale: bool = False,
         source: str | None = None,
+        area_stale: bool | None = None,
+        area_source: str | None = None,
+        length_note: str | None = None,
+        status_tip: str | None = None,
     ) -> None:
         """Update the displayed values (read-only). Empty cells are hidden.
 
         ``error`` (a failed Measure row) is shown as ``failed`` in the first
         metric cell that has no value, with the message as its tooltip.
-        ``stale`` flags values whose inputs changed after they were measured;
-        ``source`` names the CSV the values were read from (tooltip).
+        ``stale`` flags a value whose input changed after it was measured and ``source``
+        names the CSV it was read from (tooltip): the LENGTH value's, and the AREA
+        value's too unless ``area_stale`` / ``area_source`` give AREA its own.
+        ``length_note`` is one more line for the LENGTH tooltip (e.g. that a corrected
+        skeleton exists and is not what was measured); ``status_tip`` is the STATUS
+        cell's tooltip.
         """
         length_error = error if error and length is None else None
         area_error = error if error and length is not None and area is None else None
+        if area_stale is None:
+            area_stale = stale
+        if area_source is None:
+            area_source = source
         self._show_metric(
-            self._length_cell, self._length_value, length, "mm", length_error, stale, source
+            self._length_cell,
+            self._length_value,
+            length,
+            "mm",
+            length_error,
+            stale,
+            source,
+            changed=_LENGTH_INPUT,
+            note=length_note,
         )
-        self._show_metric(self._area_cell, self._area_value, area, "mm²", area_error, stale, source)
+        self._show_metric(
+            self._area_cell,
+            self._area_value,
+            area,
+            "mm²",
+            area_error,
+            area_stale,
+            area_source,
+            changed=_AREA_INPUT,
+        )
         self._status_value.setText(status if status else _DASH)
         self._name_value.setText(name if name else _DASH)
+        self._status_cell.setToolTip(status_tip if status and status_tip else "")
         self._status_cell.setVisible(bool(status))
         self._name_cell.setVisible(bool(name))
         self._sync_separators()
+        self._fit_zoom()
+
+    def set_zoom(self, factor: float | None) -> None:
+        """Show the display's zoom (``1.0`` = 100 %), while an image is named; ``None``
+        (or a factor that is not a positive number) hides it."""
+        if factor is None or not math.isfinite(factor) or factor <= 0:
+            self._zoom = None
+        else:
+            self._zoom = float(factor)
+            percent = self._zoom * 100
+            self._zoom_value.setText(f"{percent:.0f} %" if percent >= 10 else f"{percent:.1f} %")
+        self._fit_zoom()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The cells' minimum without the ZOOM cell: it never widens the window."""
+        hint = self.layout().minimumSize()
+        if not self._zoom_cell.isHidden():
+            hint.setWidth(max(0, hint.width() - self._zoom_cell.minimumSizeHint().width()))
+        return hint
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._fit_zoom()
+
+    def _fit_zoom(self) -> None:
+        """Show the ZOOM cell while there is a zoom to report (an image is named) and room
+        for it next to the other cells: on a narrow window it is the first to go."""
+        cell = self._zoom_cell
+        wanted = self._zoom is not None and not self._name_cell.isHidden()
+        if wanted:
+            others = self.layout().minimumSize().width()
+            if not cell.isHidden():
+                others -= cell.minimumSizeHint().width()
+            wanted = self.width() >= others + cell.minimumSizeHint().width()
+        if wanted != (not cell.isHidden()):
+            cell.setVisible(wanted)
+            self._sync_separators()
+            self.updateGeometry()
 
     def _sync_separators(self) -> None:
         """A separator in front of every shown cell but the first one shown."""
@@ -253,15 +333,21 @@ class MetricsBar(QWidget):
         error: str | None,
         stale: bool,
         source: str | None,
+        *,
+        changed: str = "Its input",
+        note: str | None = None,
     ) -> None:
-        """Fill one metric cell: a value, ``failed`` + message, or hidden."""
+        """Fill one metric cell: a value, ``failed`` + message, or hidden. ``changed`` names
+        the input an outdated value was measured from; ``note`` is one more tooltip line."""
         if value is not None:
             label.setText(f"{value:.2f} {unit}")
             outdated = bool(stale)
             color = tokens.WARN if outdated else label.property("baseColor")
             tips = [f"Measured value from {source}" if source else "Measured value"]
             if outdated:
-                tips.append(_OUTDATED_TIP)
+                tips.append(_OUTDATED_TIP.format(changed))
+            if note:
+                tips.append(note)
         elif error:
             label.setText(_FAILED)
             outdated = False
