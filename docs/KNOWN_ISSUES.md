@@ -70,18 +70,36 @@ Remaining low-severity review items:
 - (Resolved 2026-09-29) CQ-10 for `app/handlers/mask_handler.py`: deleted with the old
   mask editor. CQ-11: `RasterEditorBase` now lives in `app/gui/raster_editor_base.py`
   (Trace GT's editor, built on the shared canvas parts).
-- A deeply nested `gt/classes.json` raises `RecursionError` instead of `RegistryError`
-  (R4); the OOM backoff retries the sibling half at the old batch size (R5); a run where
-  every input failed is reported as success (R6); a non-OOM failure mid-run leaves no run
-  manifest (R7); a killed process can leave hidden `.tmp` files (R8).
+- (Resolved 2026-09-29, branch `fix/batch-robustness`) R4: a deeply nested JSON file
+  (`gt/classes.json`, a GT metadata chunk, the Enhance defaults, `build_info.json`, the
+  recent-projects list) is reported like any other unreadable file. R5: out of GPU memory,
+  a sub-batch at least as long as one that already ran out is split untried (under a steady
+  memory limit the sub-batches that run are unchanged). R6: a run in which every input
+  failed ends as a failure and does not chain the skeleton pass. R7: a run that raises
+  after writing outputs replaces `_sprouts_run.json` (`status` "failed", the error); one
+  that raises before writing anything leaves it. R8: stale `.<name>.<hex>.tmp` files (older
+  than 1 h) are swept from the output folders a moment after a project has loaded, and GT
+  files are written through `app.io_utils`.
+- Robustness leftovers found while fixing R4-R8: `app/gt/export.py` writes the split files,
+  `classes.json`, `manifest.csv` and `errors.txt` without the atomic writer; after a sticky
+  CUDA error, `runtime.release_cuda_cache()` in the generation `finally` can replace the
+  run's own error; a progress callback that raises after a save counts that input as both
+  written and failed (`batch_engine.run_batches`); the per-user settings folder (Enhance
+  defaults) is not swept for stale temp files; a run whose provenance record cannot be
+  built (logged, the run still succeeds) leaves the previous `_sprouts_run.json` in place.
+  Owner decision: a run that completes without writing or failing anything (a *Keep
+  existing masks* run with nothing missing, an empty folder) still replaces
+  `_sprouts_run.json`, so the record of the run that made the existing outputs is lost;
+  leaving the record alone in that case would keep it.
 - Toasts can cover the metrics bar on the display page; the status line says "Device not
   detected yet" until the first inference; library labels truncate at laptop widths.
 - (Resolved 2026-09-29) `skimage.morphology` is no longer imported at startup: it is
   imported lazily and prewarmed on a worker thread once the window shows.
-- Dialogs created per prompt outside the editors (in `MainWindow`, the F1
-  `ShortcutsDialog`) are not freed, and one progress-hide timer is never cancelled
-  (RB-16). The editors' unsaved-changes prompts are freed after each answer
-  (`app/gui/editor_prompts.py`).
+- (Resolved 2026-09-29, branch `fix/batch-robustness`) RB-16: the Measure Retry prompt
+  deletes itself once answered and the Generate overwrite prompt is freed; the F1 sheet and
+  the About dialog no longer raise "wrapped C/C++ object ... has been deleted" when they
+  close (`QDialog.exec()` already deletes a `WA_DeleteOnClose` dialog). The progress-hide
+  timer is a tracked member timer, pinned by a regression test.
 
 ## 6. Open after the unified Correct editor (branch `feat/unified-correct-editor`, 2026-09-29)
 
