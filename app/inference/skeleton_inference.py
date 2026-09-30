@@ -32,7 +32,7 @@ from PIL import Image
 from app import config
 from app.config import SKELETONIZER_DIR
 from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
-from app.inference.run_record import write_run_manifest
+from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
@@ -566,7 +566,9 @@ def run_skeleton_generation(
 
     Unreadable images are recorded in ``report.failed`` (the run continues);
     out-of-memory batches are split and retried; ``should_stop`` cancels at the
-    next batch boundary. Writes the run manifest and releases the CUDA cache once.
+    next batch boundary. Writes the run manifest and releases the CUDA cache once;
+    a run that raises after writing skeletons still replaces the manifest
+    (``status`` "failed", R7) and its error then propagates unchanged.
 
     Args:
         batch_size: default: auto-sized from free VRAM once the model is loaded;
@@ -579,6 +581,25 @@ def run_skeleton_generation(
 
     os.makedirs(output_dir, exist_ok=True)
     image_paths = make_dataset(input_dir)
+    # (R7) Filled in place by run_batches, so a run that raises still knows what it wrote.
+    report = BatchReport()
+
+    def write_manifest() -> None:
+        write_run_manifest(
+            RUN_KIND,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            input_names=[os.path.basename(p) for p in image_paths],
+            report=report,
+            models={"skeleton": runtime.skeleton_weights_path()},
+            parameters={
+                "batch_size": batch_size,
+                "load_size": LOAD_SIZE,
+                "aspect_ratio": ASPECT_RATIO,
+                "output_size_wh": list(config.SKELETON_OUTPUT_SIZE),
+            },
+        )
+
     try:
         rt = runtime.get_runtime()
         if model is None and image_paths:
@@ -593,7 +614,7 @@ def run_skeleton_generation(
             batch_size,
         )
         if image_paths:
-            report = run_batches(
+            run_batches(
                 image_paths,
                 make_skeleton_spec(model, output_dir),
                 batch_size=batch_size,
@@ -601,26 +622,17 @@ def run_skeleton_generation(
                 pin_memory=rt.pin_memory,
                 progress=progress,
                 should_stop=should_stop,
+                report=report,
             )
         else:
             logger.warning("No images found in input directory: %s", input_dir)
-            report = BatchReport(batch_size=batch_size, effective_batch_size=batch_size)
+            report.batch_size = report.effective_batch_size = batch_size
+    except BaseException as exc:
+        record_failed_run(report, exc, write_manifest)
+        raise
     finally:
         runtime.release_cuda_cache()
-    write_run_manifest(
-        RUN_KIND,
-        input_dir=input_dir,
-        output_dir=output_dir,
-        input_names=[os.path.basename(p) for p in image_paths],
-        report=report,
-        models={"skeleton": runtime.skeleton_weights_path()},
-        parameters={
-            "batch_size": batch_size,
-            "load_size": LOAD_SIZE,
-            "aspect_ratio": ASPECT_RATIO,
-            "output_size_wh": list(config.SKELETON_OUTPUT_SIZE),
-        },
-    )
+    write_manifest()
     if report.failed:
         logger.warning(
             "Skeleton generation: %d input(s) failed: %s", len(report.failed), report.failed

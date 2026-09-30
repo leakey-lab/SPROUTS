@@ -25,7 +25,7 @@ from typing import Any
 from app import config
 from app.inference import runtime
 from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
-from app.inference.run_record import write_run_manifest
+from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
@@ -131,10 +131,32 @@ def generate_masks(
             honoured within a second or two.
         policy: the overwrite choice, recorded in the manifest.
         on_stage: called with ``STAGE_LOADING`` / ``STAGE_RUNNING``.
+
+    A run that raises after writing masks still replaces the run manifest
+    (``status`` "failed", R7); its error then propagates unchanged.
     """
     batch_size = batch_size or default_mask_batch_size()
     os.makedirs(output_dir, exist_ok=True)
     names, todo, skipped = list_inputs(input_dir, skip_stems)
+    # (R7) Filled in place by run_batches, so a run that raises still knows what it wrote.
+    report = BatchReport(batch_size=batch_size, effective_batch_size=batch_size, skipped=skipped)
+
+    def write_manifest() -> None:
+        write_run_manifest(
+            RUN_KIND,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            input_names=names,
+            report=report,
+            models={"mask": runtime.mask_weights_path()},
+            parameters={
+                "mask_threshold": config.MASK_THRESHOLD,
+                "batch_size": batch_size,
+                "input_size_hw": list(MASK_INPUT_SIZE),
+                "overwrite_policy": policy,
+            },
+        )
+
     try:
         if todo:
             if model is None:
@@ -146,7 +168,7 @@ def generate_masks(
             on_stage(STAGE_RUNNING)
         if todo:
             rt = runtime.get_runtime()
-            report = run_batches(
+            run_batches(
                 todo,
                 make_mask_spec(model, output_dir),
                 batch_size=batch_size,
@@ -154,26 +176,14 @@ def generate_masks(
                 pin_memory=rt.pin_memory,
                 progress=progress,
                 should_stop=should_stop,
+                report=report,
             )
-        else:
-            report = BatchReport(batch_size=batch_size, effective_batch_size=batch_size)
+    except BaseException as exc:
+        record_failed_run(report, exc, write_manifest)
+        raise
     finally:
         runtime.release_cuda_cache()
-    report.skipped = skipped
-    write_run_manifest(
-        RUN_KIND,
-        input_dir=input_dir,
-        output_dir=output_dir,
-        input_names=names,
-        report=report,
-        models={"mask": runtime.mask_weights_path()},
-        parameters={
-            "mask_threshold": config.MASK_THRESHOLD,
-            "batch_size": batch_size,
-            "input_size_hw": list(MASK_INPUT_SIZE),
-            "overwrite_policy": policy,
-        },
-    )
+    write_manifest()
     if report.failed:
         logger.warning("Mask generation: %d input(s) failed: %s", len(report.failed), report.failed)
     return report
