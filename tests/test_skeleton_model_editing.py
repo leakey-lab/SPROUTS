@@ -530,10 +530,10 @@ UNKNOWN_AFTER = {
         np.eye(40, 60, dtype=np.uint8) * 255, target_size=(60, 40)
     ),
     "mask_setter": lambda m: setattr(m, "mask", np.zeros((40, 60), np.uint8)),
-    "undo": lambda m: m.undo(),
-    "redo": lambda m: (m.undo(), m.take_changed_box(), m.redo()),
     "full_frame_skeletonize": lambda m: m.skeletonize(),  # no snapshot to start from
 }
+# Undo and redo report the box they wrote back (patch history, S1):
+# tests/test_skeleton_patch_history.py::test_undo_and_redo_report_the_box_they_changed.
 
 
 @pytest.mark.parametrize("name", sorted(UNKNOWN_AFTER))
@@ -541,10 +541,6 @@ def test_take_changed_box_is_unknown_after_whole_mask_changes(name):
     model = SkeletonCorrectionModel()
     model.set_empty((60, 40))
     model.draw_polyline([(5, 20), (50, 20)], thickness=3)  # not thin yet
-    if name in ("undo", "redo"):
-        model.skeletonize()
-        model.push_undo()
-        model.erase_circle((20, 20), 3)
     _drained(model)
     UNKNOWN_AFTER[name](model)
     assert model.take_changed_box() is None

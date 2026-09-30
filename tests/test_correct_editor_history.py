@@ -4,7 +4,7 @@ One timeline: Ctrl+Z undoes the newest action of either layer without switching 
 tools; an action of the other layer says so (a toast, its Layers row flashes) and is shown
 if hidden; a new action ends every redo branch; Ctrl+Z is ignored mid-drag and first pops a
 polyline draft point. The long test drives 60 mixed actions on the real layers, more than the
-skeleton's 25 snapshots hold, and undoes and redoes them all exactly.
+skeleton's history holds (its depth set to 25 there), and undoes and redoes them all exactly.
 
 Gestures in progress (the mid-gesture rule): a key that saves, pages, switches the layer or
 the tool, hides the layers or cancels, pressed in the middle of a mask stroke made of real
@@ -26,6 +26,7 @@ import numpy as np  # noqa: E402
 from PyQt6.QtCore import QEvent, QPoint, Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 
+from app.gui import skeleton_graph_model  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
 from app.gui.correct.mask_tools import mask_lut  # noqa: E402
 from app.gui.correct.skeleton_layer import DraftState  # noqa: E402
@@ -354,7 +355,7 @@ def act(editor, rng, kind: str, memo: dict) -> str:
 
 
 def action_kinds(rng) -> list[str]:
-    """60 actions: 32 on the skeleton (more than its 25 snapshots), 28 on the mask."""
+    """60 actions: 32 on the skeleton (more than the 25 the long test keeps), 28 on the mask."""
     skeleton = ["polyline"] * 12 + ["eraser"] * 10 + ["connect"] * 10
     mask = ["stroke"] * 16 + ["clear"] * 4 + ["outline+fill"] * 4
     order = [*skeleton, *mask]
@@ -374,7 +375,11 @@ def assert_state(editor, expected: dict[str, np.ndarray], where) -> None:
     assert np.array_equal(raster(editor), expected[SKELETON]), where
 
 
-def test_sixty_mixed_actions_undo_and_redo_exactly_across_both_layers(make_editor, tmp_path):
+def test_sixty_mixed_actions_undo_and_redo_exactly_across_both_layers(
+    make_editor, tmp_path, monkeypatch
+):
+    # The skeleton keeps 100 actions; 25 here, fewer than its 32, so evictions are replayed.
+    monkeypatch.setattr(skeleton_graph_model, "UNDO_DEPTH", 25)
     rng = np.random.default_rng(2026)
     editor = make_editor(history_project(tmp_path), size=(1000, 760))
     journal = editor.session.journal

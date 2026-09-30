@@ -2,18 +2,16 @@
 
 An ``EditLayer`` over the Qt-free ``SkeletonDocument``, drawn by a ``SkeletonLayerItem`` at
 z 1.5 under every decoration (preview and Connect line 2, markers and handles 3, highlight
-3.5), and the ``ToolHost`` of the unchanged ``app.gui.skeleton_tools`` (today's editor glue,
-moved). The item gets ``model.take_changed_box()`` (its only caller); eraser drags repaint
-once per ``RENDER_INTERVAL_MS``; ``layer_changed`` fires only when what the host reads of
-the layer changed. A drag belongs to the tool that began it: transitions finish it first and
-the rest of it reaches no tool. The reference layer is dimmed, its markers and previews hidden.
+3.5), and the ``ToolHost`` of ``app.gui.skeleton_tools``. The item gets the model's changed
+boxes (``take_changed_box``'s only caller); eraser drags repaint once per RENDER_INTERVAL_MS;
+``layer_changed`` fires only when what the host reads changed. A drag belongs to the tool that
+began it (transitions finish it first). The reference layer is dimmed, markers hidden.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPoint, Qt, QTimer
@@ -23,13 +21,21 @@ from PyQt6.QtWidgets import QGraphicsScene
 from app.gui.brush_preview import BrushPreview
 from app.gui.canvas_layers.skeleton import SkeletonLayerItem
 from app.gui.correct.layer import REFERENCE_DIM, SKELETON, SaveOutcome, SizeSpec, ToolSpec
-from app.gui.correct.skeleton_document import GeneratedResolver, SkeletonDocument
+from app.gui.correct.skeleton_document import GeneratedResolver, SkeletonDocument, SkeletonRead
 from app.gui.skeleton_overlay import SkeletonDecorations
-from app.gui.skeleton_tools import CONNECT, ERASER, POLYLINE, SELECT, PolylineDraft, build_tools
+from app.gui.skeleton_tools import (
+    CONNECT,
+    ERASER,
+    POLYLINE,
+    SELECT,
+    DraftState,
+    PolylineDraft,
+    build_tools,
+)
 from app.gui.widgets import tokens
 
 if TYPE_CHECKING:  # pragma: no cover
-    from app.gui.correct.layer import LayerHost, Notice
+    from app.gui.correct.layer import LayerHost, LayerStatus, Notice
     from app.gui.skeleton_tools import SkeletonTool
 
 __all__ = ["DraftState", "SkeletonLayer"]
@@ -43,15 +49,6 @@ _EMPTY_HINT = (
 _MOD = Qt.KeyboardModifier
 _NO_KEY_MODS = _MOD.ControlModifier | _MOD.AltModifier | _MOD.MetaModifier  # S is not Smooth
 _STEP = 0.12  # [ and ]: the eraser grows or shrinks by 12 %, at least 1 px
-
-
-@dataclass(frozen=True)
-class DraftState:
-    """What the polyline prompt shows: the Polyline tool, its draft points and Smooth."""
-
-    in_polyline: bool
-    points: int
-    smooth: bool
 
 
 class SkeletonLayer:
@@ -84,9 +81,11 @@ class SkeletonLayer:
         self.document = doc = SkeletonDocument(resolver)
         self.model = doc.model  # ToolHost; one object for the document's whole life
         self.model.on_action = lambda: host.layer_edited(SKELETON)
-        # Calls the document or the host answer as they are (EditLayer, ToolHost, C14).
-        self.is_open, self.is_dirty, self.status = doc.is_open, doc.is_dirty, doc.status
+        # Calls the document, the model or the host answer as they are (EditLayer, ToolHost).
+        self.is_open = doc.is_open
+        self.can_undo, self.can_redo = (lambda: doc.model.can_undo), (lambda: doc.model.can_redo)
         self.file_stamps, self.set_resolver = doc.file_stamps, doc.set_resolver
+        self.read_ahead = doc.plan_read  # ReadAheadLayer: a worker reader of a document
         self.notify = host.notify
         self.item = SkeletonLayerItem()
         self.item.setZValue(self.Z)
@@ -140,7 +139,7 @@ class SkeletonLayer:
         """Show the model (its changed box only); ``full``: markers too, host told (ToolHost)."""
         self.item.set_mask(self.model.mask, changed=self.model.take_changed_box())
         if full:
-            self.decorations.set_endpoints(self.model.endpoints())
+            self.decorations.set_endpoints(self.model.endpoint_array())
             self.decorations.set_endpoints_visible(self._shown)
             self._changed()
 
@@ -172,11 +171,10 @@ class SkeletonLayer:
 
     hover = show_eraser_ring  # EditLayer: the ring is the layer's only hover feedback
 
-    def open(
-        self, image_path: str, size: tuple[int, int], images_base_folder: str | None
-    ) -> list[Notice]:
+    def open(self, image_path, size, images_base_folder, ahead=None) -> list[Notice]:
         """Open the skeleton of ``image_path``: the correction, else the generated file."""
-        return self._reload(self.document.open, image_path, size, images_base_folder)
+        read = ahead if isinstance(ahead, SkeletonRead) else None  # a read_ahead payload
+        return self._reload(self.document.open, image_path, size, images_base_folder, read)
 
     def close(self) -> None:
         """Forget the image (a drag in progress is finished first)."""
@@ -208,9 +206,19 @@ class SkeletonLayer:
         if dropped:
             self.notify(self.DRAFT_DISCARDED_NOTICE, "info")
 
+    def is_dirty(self) -> bool:
+        """The skeleton differs from its file, or a polyline draft is pending (S5)."""
+        return self.document.is_dirty() or self.draft.pending()
+
+    def status(self) -> LayerStatus:
+        """The document's save state; a pending polyline draft reads as unsaved (S5)."""
+        return self.document.status(pending_edit=self.draft.pending())
+
     def save(self) -> SaveOutcome:
-        """Write the correction (a drag is finished first; a polyline draft is kept)."""
+        """Write the correction; a drag is finished and a pending draft committed first."""
         self.finish_gesture()
+        if self.draft.pending():  # Save keeps what the user drew (S5)
+            self._tools[POLYLINE].commit()
         result = self.document.save()
         self._changed()
         if result.ok:
@@ -230,14 +238,6 @@ class SkeletonLayer:
         self.render_skeleton()
         self.notify(self.CLEARED_NOTICE, "info")
         return True
-
-    def can_undo(self) -> bool:
-        """True when the skeleton's own history has a step to undo."""
-        return self.model.can_undo
-
-    def can_redo(self) -> bool:
-        """True when the skeleton's own history has a step to redo."""
-        return self.model.can_redo
 
     def undo(self) -> bool:
         """Undo one snapshot; False only when there is none. A polyline draft is dropped."""

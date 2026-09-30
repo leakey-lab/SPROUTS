@@ -7,7 +7,9 @@ protocol, and keep their own transient state; the polyline being drawn or edited
 :class:`PolylineDraft` shared with the editor (the Select tool fills it, the Polyline
 tool edits and commits it).
 
-Positions are image pixels (``QPoint``), already clamped by the view.
+Positions are image pixels (``QPoint``), already clamped by the view. Grab and snap
+distances (``*_HIT_PX``) are screen px, turned into image px at the canvas zoom by
+:func:`reach`, so they match the markers at every zoom.
 """
 
 from __future__ import annotations
@@ -38,16 +40,38 @@ CONNECT = "connect"
 TOOL_KEYS: dict[str, str] = {SELECT: "V", ERASER: "E", POLYLINE: "P", CONNECT: "C"}
 SMOOTH_KEY = "S"
 
-HANDLE_HIT_PX = 8  # grab a polyline point
+HANDLE_HIT_PX = 8  # grab a polyline point (screen px, see reach)
 BEND_HIT_PX = 8  # Ctrl+click a segment to add a bend
 MOVE_HIT_PX = 10  # Shift+drag a segment to move the line
 PICK_HIT_PX = 12  # Select: pick a skeleton branch
 ENDPOINT_HIT_PX = 10  # Connect: grab an endpoint
+REACH_MIN_PX = 1.0  # image px: the pointer is floored to a pixel
+REACH_MAX_SCALE = 4.0  # image px: at most four times the distance at 100 %
 SMOOTH_STEP_PX = 0.75
 
 
 def _xy(p: QPoint) -> tuple[int, int]:
     return (p.x(), p.y())
+
+
+def reach(host: ToolHost, screen_px: float) -> float:
+    """Image px that ``screen_px`` screen px cover at the canvas zoom (S4).
+
+    A grab or snap distance then stays the same on screen, as the markers do, clamped to
+    REACH_MIN_PX .. REACH_MAX_SCALE x ``screen_px`` image px. At 100 %, and without a view,
+    it is ``screen_px`` itself: the tools' image px distances of before.
+    """
+    scale = host.decorations.view_scale()
+    return min(max(screen_px / scale, REACH_MIN_PX), screen_px * REACH_MAX_SCALE)
+
+
+@dataclass(frozen=True)
+class DraftState:
+    """What the polyline prompt shows: the Polyline tool, its draft points and Smooth."""
+
+    in_polyline: bool
+    points: int
+    smooth: bool
 
 
 @dataclass
@@ -81,6 +105,14 @@ class PolylineDraft:
 
     def xy(self) -> list[tuple[int, int]]:
         return [_xy(p) for p in self.points]
+
+    def pending(self) -> bool:
+        """Two or more points that a commit would draw: a new line, or a picked branch
+        whose points moved (a branch left as it was changes nothing). Unsaved work (S5)."""
+        if len(self.points) < 2:
+            return False
+        original = self.edit_original
+        return original is None or len(original) != len(self.points) or self.xy() != original
 
     def raster_points(self, bounds: tuple[int, int]) -> list[tuple[int, int]]:
         """Pixels to draw: the straight polyline, or the sampled curve when smooth."""
@@ -149,7 +181,7 @@ class SelectTool(SkeletonTool):
     def press(self, pos, modifiers):
         host = self.host
         topo = host.model.topology(simplify_epsilon=1.5)
-        i = nearest_polyline_index(topo.polylines, _xy(pos), PICK_HIT_PX)
+        i = nearest_polyline_index(topo.polylines, _xy(pos), reach(host, PICK_HIT_PX))
         if i is None:
             host.refresh_hint()
             return
@@ -228,19 +260,19 @@ class PolylineTool(SkeletonTool):
     def press(self, pos, modifiers):
         host, draft = self.host, self.host.draft
         pts = draft.xy()
-        hit = nearest_vertex_index(pts, _xy(pos), HANDLE_HIT_PX)
+        hit = nearest_vertex_index(pts, _xy(pos), reach(host, HANDLE_HIT_PX))
         if hit is not None:
             draft.end_drag()
             draft.drag_index = hit
             return
         if modifiers & Qt.KeyboardModifier.ControlModifier and len(pts) >= 2:
-            seg = nearest_segment_index(pts, _xy(pos), BEND_HIT_PX)
+            seg = nearest_segment_index(pts, _xy(pos), reach(host, BEND_HIT_PX))
             if seg is not None:
                 draft.points.insert(seg + 1, QPoint(pos))
                 host.refresh_draft(pos)
                 return
         if modifiers & Qt.KeyboardModifier.ShiftModifier and len(pts) >= 2:
-            if nearest_segment_index(pts, _xy(pos), MOVE_HIT_PX) is not None:
+            if nearest_segment_index(pts, _xy(pos), reach(host, MOVE_HIT_PX)) is not None:
                 draft.end_drag()
                 draft.translating = True
                 draft.anchor = QPoint(pos)
@@ -362,7 +394,7 @@ class ConnectTool(SkeletonTool):
 
     def _nearest_endpoint(self, pos: QPoint) -> QPoint | None:
         eps = self.host.model.endpoints()
-        i = nearest_vertex_index(eps, _xy(pos), ENDPOINT_HIT_PX)
+        i = nearest_vertex_index(eps, _xy(pos), reach(self.host, ENDPOINT_HIT_PX))
         return None if i is None else QPoint(*eps[i])
 
     def press(self, pos, modifiers):

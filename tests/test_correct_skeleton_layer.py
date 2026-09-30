@@ -530,7 +530,7 @@ def test_select_hands_the_picked_branch_to_polyline_keeping_the_draft(layer, hos
     assert ("layer_changed", "skeleton") in host.calls
     path = layer.decorations.polyline_item.path()  # the click's release reached Polyline,
     assert path.elementCount() == 3  # as today: a rubber band from the branch to the pointer
-    assert (path.elementAt(2).x, path.elementAt(2).y) == (300.0, 242.0)
+    assert (path.elementAt(2).x, path.elementAt(2).y) == (300.5, 242.5)  # its pixel centre
 
 
 def test_the_tool_host_geometry_follows_the_open_skeleton(layer, host, scene):
@@ -550,7 +550,7 @@ def test_hover_moves_reach_the_current_tool(layer):
 
     path = layer.decorations.polyline_item.path()
     assert path.elementCount() == 2
-    assert (path.elementAt(1).x, path.elementAt(1).y) == (120.0, 90.0)
+    assert (path.elementAt(1).x, path.elementAt(1).y) == (120.5, 90.5)  # the pixel's centre
 
 
 # ----------------------------------------------------------------------------- eraser
@@ -1291,8 +1291,8 @@ def test_a_new_press_first_finishes_a_drag_whose_release_was_lost(gap_layer, hos
 def test_a_polyline_draft_paints_above_the_skeleton_line_at_800_percent(host, scene, project):
     layer = _open(host, scene, project, [(100, 300, 100)])
     layer.item.EXTRACT_BUDGET_MS = float("inf")  # extract every tile in the first paint
-    source = QRectF(180, 80, 40, 40)  # the crossing (200, 100.5) at (160, 164) of the render
-    before = QColor(_render(scene, source, 8).pixel(160, 164))
+    source = QRectF(180, 80, 40, 40)  # the crossing (200.5, 100.5) at (164, 164) of the render
+    before = QColor(_render(scene, source, 8).pixel(164, 164))
     assert layer.item.mode_painted() == "vector"
     assert before.red() > before.blue()  # the skeleton colour: the line alone
 
@@ -1301,7 +1301,7 @@ def test_a_polyline_draft_paints_above_the_skeleton_line_at_800_percent(host, sc
     _click(layer, 200, 140)
     image = _render(scene, source, 8)
 
-    assert QColor(image.pixel(160, 164)) == QColor(tokens.ACCENT)  # the preview is on top
+    assert QColor(image.pixel(164, 164)) == QColor(tokens.ACCENT)  # the preview is on top
     beside = QColor(image.pixel(240, 164))  # x = 210: the line only
     assert beside.red() > beside.blue()
     layer.cancel_scheduled_render()
@@ -1349,9 +1349,9 @@ def test_the_item_is_updated_with_the_models_changed_boxes(layer, monkeypatch):
     assert x <= 290 and y <= 230 and x + w >= 311 and y + h >= 251
 
     layer.release(QPoint(300, 240))
-    layer.undo()  # an undo swaps the array: the model cannot tell a box
+    layer.undo()  # an undo writes the action's box back in place: the item gets that box
 
-    assert given[-1] == (True, None)
+    assert given[-1] == (True, taken[-1]) and taken[-1] not in (None, (0, 0, 0, 0))
     assert len(given) == len(taken)
 
 

@@ -10,8 +10,9 @@ item's own ``scale``):
   not minified, so a 1 px line never breaks into dashes.
 * ``1 <= s < 2``, "raster": that overlay at level 0 in 256 px tiles, drawn nearest.
 * ``s >= 2``, "vector": m-adjacency links between pixel centres, a 2 px cosmetic line over
-  a 4 px halo, antialiased; "vector-thin" (1 px) or back to "raster" when the visible
-  segments exceed the paint engine's budget.
+  a 4 px halo composited once (joints do not darken), antialiased; "vector-thin" (1 px) or
+  back to "raster" when the visible segments exceed the paint engine's budget. Idle time
+  extracts the tiles ahead of the first vector frame.
 * ``vectors=False`` (the Library's generated file, lines about 2 px wide): "raster-lod"
   below 1, else "raster-smooth", the overlay drawn bilinear (soft edges, no pixel blocks).
 
@@ -26,8 +27,8 @@ import time
 
 import numpy as np
 from PyQt6 import sip
-from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QImage, QPaintEngine, QPainter, QPen, QTransform
+from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer
+from PyQt6.QtGui import QColor, QImage, QPaintEngine, QPainter, QPainterPath, QPen, QTransform
 from PyQt6.QtWidgets import QGraphicsItem, QStyleOptionGraphicsItem, QWidget
 
 from app.gui.canvas_layers import device_scale
@@ -191,7 +192,7 @@ class _TileVectors:
     """The merged links of one tile in pixel-centre coordinates: lines ``(n, 4)`` with
     their bounds, and dots ``(m, 2)`` (a zero-length line would draw nothing)."""
 
-    __slots__ = ("revision", "lines", "lo", "hi", "dots", "reach")
+    __slots__ = ("revision", "lines", "lo", "hi", "dots", "reach", "_path")
 
     def __init__(self, revision: int, links: np.ndarray, reach: tuple[float, ...]) -> None:
         self.revision = revision
@@ -202,6 +203,17 @@ class _TileVectors:
         self.lo = np.minimum(self.lines[:, :2], self.lines[:, 2:])
         self.hi = np.maximum(self.lines[:, :2], self.lines[:, 2:])
         self.reach = reach  # (x0, y0, x1, y1) holding every line and dot of the tile
+        self._path: QPainterPath | None = None
+
+    def path(self) -> QPainterPath:
+        """Every line of the tile as one path, a move and a line each (built once)."""
+        if self._path is None:
+            path = QPainterPath()
+            for x0, y0, x1, y1 in self.lines.tolist():
+                path.moveTo(x0, y0)
+                path.lineTo(x1, y1)
+            self._path = path
+        return self._path
 
     def visible(self, rect: tuple[float, ...]) -> tuple[np.ndarray, np.ndarray]:
         """The lines and dots whose bounds meet ``rect`` (left, top, right, bottom)."""
@@ -242,9 +254,12 @@ class SkeletonLayerItem(QGraphicsItem):
     VECTOR_MIN_SCALE = 2.0
     TILE = 256  # vector extraction tile, image px
     EXTRACT_BUDGET_MS = 4.0  # vector extraction per paint
+    WARM_DELAY_MS = 150  # idle time after the last set_mask before tiles are warmed
+    WARM_SLICE_MS = 2.0  # vector extraction per warm-up slice (one event-loop turn)
     GL_SEGMENT_BUDGET = 6000
     RASTER_HALO_BUDGET = 400
     RASTER_THIN_BUDGET = 2500
+    HALO_LAYER_MAX_PX = 4096 * 4096  # a larger raster halo layer draws the halo directly
 
     def __init__(
         self,
@@ -265,6 +280,7 @@ class SkeletonLayerItem(QGraphicsItem):
         self._line_pen = _cosmetic_pen(line, 2.0)
         self._thin_pen = _cosmetic_pen(line, 1.0)
         self._halo_pen = _cosmetic_pen(dark, 4.0) if halo else None
+        self._halo_solid = _cosmetic_pen(QColor(tokens.BG_0), 4.0)  # a halo layer, blended once
         self._mask: np.ndarray | None = None
         self._indices: np.ndarray | None = None  # overlay_indices of the mask
         self._width = self._height = 0
@@ -278,6 +294,7 @@ class SkeletonLayerItem(QGraphicsItem):
         self._full_image: QImage | None = None  # vectors=False: one image, bilinear
         self._pyramid: ImagePyramid | None = None  # max-pool pyramid of the mask
         self._level_images: dict[int, QImage] = {}
+        self._warm_timer: QTimer | None = None  # idle vector extraction (see _warm_later)
 
     # ------------------------------------------------------------------ public API
     def set_mask(
@@ -292,11 +309,13 @@ class SkeletonLayerItem(QGraphicsItem):
         ``changed`` is the ``(x, y, w, h)`` box of the pixels that may differ from the
         previous mask (None: everything changed). ``scale`` is the item transform, e.g.
         image size / skeleton size for a skeleton raster smaller than the photo. Never
-        extracts vectors: the next paint does, lazily.
+        extracts vectors: a paint does, lazily, and idle time does once the changes
+        settle (:meth:`_warm_later`).
         """
         self._revision += 1
         self._set_scale(scale)
         previous, self._mask = self._mask, mask
+        self._warm_later()
         if mask is None:
             self._indices = None
             self._resize(0, 0)
@@ -426,18 +445,72 @@ class SkeletonLayerItem(QGraphicsItem):
         if pending:
             self.update(seen)  # extract the rest in the next frames
         drawn = _edges(exposed, reach)
-        line_parts, dot_parts = [], []
-        for key in self._tiles_in(drawn):
-            tile = self._tile_vectors.get(key)
-            if tile is not None:
-                lines, dots = tile.visible(drawn)
-                line_parts.append(lines)
-                dot_parts.append(dots)
+        tiles = [self._tile_vectors.get(key) for key in self._tiles_in(drawn)]
+        tiles = [tile for tile in tiles if tile is not None]
         thin = not gl and count > self.RASTER_HALO_BUDGET
-        if line_parts:
-            pens = [self._thin_pen] if thin else [self._halo_pen, self._line_pen]
-            self._stroke(painter, pens, line_parts, dot_parts)
-        return "vector-thin" if thin else "vector"
+        if not tiles:
+            return "vector-thin" if thin else "vector"
+        parts = [tile.visible(drawn) for tile in tiles]
+        line_rows = np.concatenate([part[0] for part in parts])
+        dot_rows = np.concatenate([part[1] for part in parts])
+        lines, dots = _qt_array(QLineF, line_rows, 4), _qt_array(QPointF, dot_rows, 2)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if thin:
+            _draw(painter, self._thin_pen, lines, dots)
+            return "vector-thin"
+        if self._halo_pen is not None and gl:
+            self._halo_path(painter, tiles, dots)
+        elif self._halo_pen is not None:
+            area = _extent(line_rows, dot_rows, reach).intersected(
+                exposed.adjusted(-reach, -reach, reach, reach)
+            )
+            self._halo_layer(painter, area, lines, dots)
+        _draw(painter, self._line_pen, lines, dots)
+        return "vector"
+
+    def _halo_path(self, painter: QPainter, tiles: list[_TileVectors], dots) -> None:
+        """OpenGL: the halo of the visible tiles as one stroked path (S6). The engine
+        covers a translucent stroke once, so joints do not stack alpha (drawLines strokes
+        16 lines per call and did); it is also 2.7x faster than drawLines."""
+        path = QPainterPath()
+        for tile in tiles:
+            path.addPath(tile.path())
+        painter.setPen(self._halo_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        if len(dots):
+            painter.drawPoints(dots)  # isolated pixels: their halos never overlap
+
+    def _halo_layer(self, painter: QPainter, area: QRectF, lines, dots) -> None:
+        """Raster engine: the halo drawn opaque into its own image over ``area`` (item px),
+        blended once at HALO_ALPHA (S6): joints do not stack alpha. (A stroked path is
+        8x slower than drawLines on this engine.)"""
+        world = painter.worldTransform()
+        rect = world.mapRect(area).toAlignedRect()
+        if rect.isEmpty():
+            return
+        device = painter.device()
+        ratio = device.devicePixelRatioF() if device is not None else 1.0
+        if rect.width() * rect.height() * ratio * ratio > self.HALO_LAYER_MAX_PX:
+            _draw(painter, self._halo_pen, lines, dots)  # a huge render: memory first
+            return
+        layer = QImage(
+            max(1, math.ceil(rect.width() * ratio)),
+            max(1, math.ceil(rect.height() * ratio)),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        layer.setDevicePixelRatio(ratio)
+        layer.fill(0)
+        inner = QPainter(layer)
+        inner.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        inner.setTransform(world * QTransform.fromTranslate(-rect.x(), -rect.y()))
+        _draw(inner, self._halo_solid, lines, dots)
+        inner.end()
+        painter.save()
+        painter.resetTransform()
+        painter.setOpacity(painter.opacity() * HALO_ALPHA / 255.0)
+        painter.drawImage(QPointF(rect.x(), rect.y()), layer)
+        painter.restore()
 
     def _count_on_screen(self, rect: Edges, limit: int) -> tuple[int, bool]:
         """Segments meeting ``rect`` and whether on-screen tiles are still pending.
@@ -479,25 +552,62 @@ class SkeletonLayerItem(QGraphicsItem):
         seen = inverse.mapRect(QRectF(widget.rect())).intersected(self.boundingRect())
         return seen.united(exposed)
 
-    @staticmethod
-    def _stroke(
-        painter: QPainter,
-        pens: list[QPen | None],
-        line_parts: list[np.ndarray],
-        dot_parts: list[np.ndarray],
-    ) -> None:
-        """Every line and dot with each pen in turn (None: skipped), antialiased."""
-        lines = _qt_array(QLineF, np.concatenate(line_parts), 4)
-        dots = _qt_array(QPointF, np.concatenate(dot_parts), 2)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        for pen in pens:
-            if pen is None:
-                continue
-            painter.setPen(pen)
-            if len(lines):
-                painter.drawLines(lines)
-            if len(dots):
-                painter.drawPoints(dots)
+    # ------------------------------------------------------------------ warm-up
+    def _warm_later(self) -> None:
+        """Extract every vector tile in idle slices once the changes settle (Q5).
+
+        The first frame of a zoom into the vector tier (200 % and up) then finds its tiles
+        ready instead of drawing pixel tiles and extracting under EXTRACT_BUDGET_MS. Each
+        set_mask restarts the WARM_DELAY_MS wait, so a drag never warms tiles it is about
+        to change; only an item shown in a view warms (renders alone stay lazy).
+        """
+        timer = self._warm_timer
+        if timer is not None and sip.isdeleted(timer):  # its scene went
+            timer = self._warm_timer = None
+        if not self._vectors or self._mask is None:
+            if timer is not None:
+                timer.stop()
+            return
+        if timer is None:  # parented like the layer's timers: nothing fires once it is gone
+            timer = self._warm_timer = QTimer(self.scene())
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._warm_slice)
+        timer.start(self.WARM_DELAY_MS)
+
+    def _warm_slice(self) -> None:
+        """Extract missing tiles for WARM_SLICE_MS, nearest the view first; then yield."""
+        if sip.isdeleted(self) or self._mask is None or not self._vectors:
+            return
+        scene = self.scene()
+        views = scene.views() if scene is not None else []
+        if not views:
+            return
+        t = self.TILE
+        cols, rows = math.ceil(self._width / t), math.ceil(self._height / t)
+        missing = [
+            (tx, ty)
+            for ty in range(rows)
+            for tx in range(cols)
+            if (tx, ty) not in self._tile_vectors
+        ]
+        if not missing:
+            return
+        view = views[0]
+        centre = self.mapFromScene(view.mapToScene(view.viewport().rect().center()))
+        missing.sort(
+            key=lambda k: (
+                (k[0] * t + t / 2 - centre.x()) ** 2 + (k[1] * t + t / 2 - centre.y()) ** 2
+            )
+        )
+        budget = self.WARM_SLICE_MS / 1000.0
+        start = time.perf_counter()
+        for done, key in enumerate(missing, 1):
+            self._extract(key)
+            if time.perf_counter() - start >= budget:
+                timer = self._warm_timer
+                if done < len(missing) and timer is not None and not sip.isdeleted(timer):
+                    timer.start(0)  # the rest after the pending events
+                return
 
     # ------------------------------------------------------------------ caches
     def _extract(self, key: TileKey) -> _TileVectors:
@@ -610,6 +720,25 @@ def _snapped(transform: QTransform, x0: float, y0: float, x1: float, y1: float) 
     left, right = round(sx * x0 + dx), round(sx * x1 + dx)
     top, bottom = round(sy * y0 + dy), round(sy * y1 + dy)
     return QRectF((left - dx) / sx, (top - dy) / sy, (right - left) / sx, (bottom - top) / sy)
+
+
+def _extent(lines: np.ndarray, dots: np.ndarray, grow: float) -> QRectF:
+    """The rect holding every line ``(n, 4)`` and dot ``(m, 2)`` (item px), grown by ``grow``."""
+    xs = np.concatenate((lines[:, 0], lines[:, 2], dots[:, 0]))
+    ys = np.concatenate((lines[:, 1], lines[:, 3], dots[:, 1]))
+    if not len(xs):
+        return QRectF()
+    x0, y0, x1, y1 = xs.min() - grow, ys.min() - grow, xs.max() + grow, ys.max() + grow
+    return QRectF(float(x0), float(y0), float(x1 - x0), float(y1 - y0))
+
+
+def _draw(painter: QPainter, pen: QPen, lines, dots) -> None:
+    """Every line and dot (``_qt_array`` rows) with ``pen``."""
+    painter.setPen(pen)
+    if len(lines):
+        painter.drawLines(lines)
+    if len(dots):
+        painter.drawPoints(dots)
 
 
 def _is_gl(painter: QPainter) -> bool:

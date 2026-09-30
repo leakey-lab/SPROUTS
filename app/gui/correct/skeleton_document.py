@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
+import numpy as np
 
 from app.gui.correct.layer import LayerStatus, Notice
 from app.gui.skeleton_document import CORRECTED, GENERATED, GeneratedResolver, SkeletonFiles
-from app.gui.skeleton_graph_model import SkeletonCorrectionModel
+from app.gui.skeleton_graph_model import SkeletonCorrectionModel, skeleton_tips, thin_raster
 from app.io_utils import imread_unicode, imwrite_unicode
 
 __all__ = [
@@ -34,6 +36,7 @@ __all__ = [
     "LOADED",
     "GeneratedResolver",
     "SkeletonDocument",
+    "SkeletonRead",
     "SkeletonSaveResult",
 ]
 
@@ -53,6 +56,32 @@ class SkeletonSaveResult:
     ok: bool
     path: str | None = None
     error: str = ""
+
+
+@dataclass(frozen=True)
+class SkeletonRead:
+    """The start file of one image's skeleton, read and thinned ahead on a worker thread.
+
+    ``stamps`` are the ``file_stamps()`` when the read was planned; ``path`` / ``kind`` the
+    start file (None: nothing to read); ``mask`` the thinned skeleton at ``size`` and ``tips``
+    its endpoints (``skeleton_tips``); ``mask`` None with a ``path``: unreadable, the open
+    reads it again (and says so).
+    """
+
+    image_path: str
+    size: tuple[int, int]
+    stamps: tuple
+    path: str | None
+    kind: str | None
+    save_size: tuple[int, int] | None = None
+    mask: np.ndarray | None = None
+    tips: np.ndarray | None = None
+
+    @property
+    def nbytes(self) -> int:
+        """Bytes held (the read-ahead cache counts them)."""
+        held = (self.mask, self.tips)
+        return sum(int(array.nbytes) for array in held if array is not None)
 
 
 class SkeletonDocument:
@@ -89,20 +118,69 @@ class SkeletonDocument:
         return SkeletonFiles(self.image_path, root, self._resolver)
 
     # ------------------------------------------------------------------ lifecycle
+    def plan_read(
+        self, image_path: str, images_base_folder: str | None
+    ) -> Callable[[tuple[int, int]], SkeletonRead]:
+        """A reader of ``image_path``'s start file for a worker thread (``reader((w, h))``).
+
+        Runs on the GUI thread: the files are looked up here (the resolver is asked now);
+        the reader only reads, thins and finds the tips, touching no document.
+        """
+        root = images_base_folder or os.path.dirname(image_path)
+        files = SkeletonFiles(image_path, root, self._resolver)
+        path, kind = files.start_file()
+        stamps = _stamps_of(files)
+
+        def reader(size: tuple[int, int]) -> SkeletonRead:
+            size = (max(1, int(size[0])), max(1, int(size[1])))
+            gray = imread_unicode(path, cv2.IMREAD_GRAYSCALE) if path else None
+            if gray is None:
+                return SkeletonRead(image_path, size, stamps, path, kind)
+            mask = thin_raster(gray, size)
+            save_size = (int(gray.shape[1]), int(gray.shape[0]))
+            return SkeletonRead(
+                image_path, size, stamps, path, kind, save_size, mask, skeleton_tips(mask)
+            )
+
+        return reader
+
     def open(
-        self, image_path: str, size: tuple[int, int], images_base_folder: str | None
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        images_base_folder: str | None,
+        read: SkeletonRead | None = None,
     ) -> list[Notice]:
         """Open the skeleton of ``image_path`` (an image of ``size`` ``(w, h)``).
 
         The project root is ``images_base_folder``, else the image's folder. Reads the
         start file (the correction, else the generated skeleton); nothing to read opens
-        an empty skeleton. Returns the notices to show.
+        an empty skeleton. Returns the notices to show. ``read`` (a :meth:`plan_read`
+        reader's result) is adopted while the files are still the ones it read.
         """
         self.image_path = image_path
         self.images_base_folder = images_base_folder or os.path.dirname(image_path)
         w, h = size
         self._size = (max(1, int(w)), max(1, int(h)))
-        return self.reopen()
+        if read is None or not self._current(read):
+            return self.reopen()
+        self.save_error = ""
+        if read.mask is None:  # nothing to read: an empty skeleton
+            self.model.set_empty(self._size)
+            self.save_size, self.source = None, None
+        else:
+            self.model.load_thinned(read.mask, read.tips)
+            self.save_size, self.source = read.save_size, read.kind
+        return []
+
+    def _current(self, read: SkeletonRead) -> bool:
+        """True when ``read`` was made for the open image, its size and today's files."""
+        if (read.image_path, tuple(read.size)) != (self.image_path, self._size):
+            return False
+        files = self.files()
+        if read.stamps != _stamps_of(files) or (read.path, read.kind) != files.start_file():
+            return False
+        return read.path is None or read.mask is not None  # unreadable: read it again
 
     def reopen(self) -> list[Notice]:
         """Re-read the start file (Discard): the document is clean, its history empty."""
@@ -201,13 +279,17 @@ class SkeletonDocument:
         return SkeletonSaveResult(True, out_path)
 
     # ------------------------------------------------------------------ state
-    def status(self) -> LayerStatus:
-        """The save state today's skeleton editor showed on its chip."""
+    def status(self, *, pending_edit: bool = False) -> LayerStatus:
+        """The save state today's skeleton editor showed on its chip.
+
+        ``pending_edit``: an edit that is not in the model yet (the layer's polyline draft)
+        reads as unsaved, like an edit in the model.
+        """
         if not self.image_path:
             return LayerStatus("none")
         if self.save_error and self.model.revision == self.error_revision:
             return LayerStatus("error", "Not saved", self.save_error)
-        if self.is_dirty():
+        if pending_edit or self.is_dirty():
             return LayerStatus("dirty")
         if self.source == CORRECTED:
             return LayerStatus("clean", "Saved", self.files().correction_path)
@@ -230,9 +312,14 @@ class SkeletonDocument:
         """
         if not self.image_path:
             return ()
-        files = self.files()
-        generated = files.generated_path() or files.layout.skeleton_path(files.stem)
-        return (_stamp(files.correction_path), _stamp(generated))
+        return _stamps_of(self.files())
+
+
+def _stamps_of(files: SkeletonFiles) -> tuple:
+    """``(correction, generated)`` stamps; the generated path is the resolver's file when it
+    finds one, else ``skeletons/<stem>_fake.png``."""
+    generated = files.generated_path() or files.layout.skeleton_path(files.stem)
+    return (_stamp(files.correction_path), _stamp(generated))
 
 
 def _stamp(path: str) -> tuple:
