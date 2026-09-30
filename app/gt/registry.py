@@ -304,8 +304,8 @@ def registry_path(project_dir: str) -> str:
 def load_registry(project_dir: str) -> Registry:
     """Load ``gt/classes.json``, or the defaults if it does not exist yet.
 
-    Every way the file can be bad (unreadable, not UTF-8, not JSON, wrong
-    shape, invalid classes) raises ``RegistryError``.
+    Every way the file can be bad (unreadable, not UTF-8, not JSON, nested too
+    deep, wrong shape, invalid classes) raises ``RegistryError``.
     """
     path = registry_path(project_dir)
     if not os.path.exists(path):
@@ -313,7 +313,8 @@ def load_registry(project_dir: str) -> Registry:
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError) as exc:  # ValueError: JSONDecodeError, UnicodeDecodeError
+    except (OSError, ValueError, RecursionError) as exc:
+        # ValueError: JSONDecodeError, UnicodeDecodeError. RecursionError: nested too deep (R4).
         raise RegistryError(f"Could not read registry {path}: {exc}") from exc
     return Registry.from_dict(data)
 

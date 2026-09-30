@@ -264,7 +264,8 @@ def _read_json(path: str) -> Any | None:
             return json.load(fh)
     except FileNotFoundError:
         return None
-    except (OSError, ValueError) as exc:  # ValueError covers JSONDecodeError / bad UTF-8
+    except (OSError, ValueError, RecursionError) as exc:
+        # ValueError covers JSONDecodeError / bad UTF-8; RecursionError, JSON nested too deep (R4).
         logger.warning("Ignoring unreadable normalization defaults %s: %s", path, exc)
         return None
 

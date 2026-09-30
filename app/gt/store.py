@@ -141,7 +141,8 @@ def read_tracing(path: str) -> Tracing | None:
         raw_classes = meta.get("classes", {})
         file_classes = {int(k): str(v) for k, v in raw_classes.items()}
         reviewed = frozenset(str(k) for k in meta.get("reviewed", []))
-    except (json.JSONDecodeError, ValueError, AttributeError, TypeError) as exc:
+    except (json.JSONDecodeError, ValueError, AttributeError, TypeError, RecursionError) as exc:
+        # RecursionError: JSON nested deeper than the recursion limit (R4).
         raise GtFileError(f"Bad GT metadata chunk in {path}: {exc}") from exc
 
     return Tracing(ids=ids, reviewed=reviewed, file_classes=file_classes)
