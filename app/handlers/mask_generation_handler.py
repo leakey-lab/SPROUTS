@@ -25,7 +25,11 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
-from app.handlers.generation_base import GenerationHandlerBase, show_failure_report
+from app.handlers.generation_base import (
+    GenerationHandlerBase,
+    every_input_failed,
+    show_failure_report,
+)
 from app.handlers.job_registry import JobRegistry
 from app.handlers.worker_base import GuardedThread, JobCancelled
 from app.inference import runtime
@@ -46,10 +50,13 @@ class MaskGenerationThread(GuardedThread):
         progress_counts(int, int): (done, total) inputs.
         stage(str): "Loading mask model" / "Generating masks".
         finished(str, list): output folder and the names of failed inputs
-            (emitted only when the run completed; not after Cancel or an error).
+            (emitted when the run ended without Cancel or an error, also when
+            every input failed; see ``completed``).
         error(str): user-facing message when the run failed (mirrors ``failed``).
     ``report`` holds the ``BatchReport`` once the run ended (completed or cancelled);
-    ``completed`` turns True only when the run finished without cancel or error.
+    ``completed`` turns True only when the run finished without cancel or error and
+    did not fail on every input it attempted (R6: such a run is a failure, so
+    nothing chains on it).
     """
 
     progress = pyqtSignal(int)
@@ -94,7 +101,9 @@ class MaskGenerationThread(GuardedThread):
         # image was done); it is still a cancel, so nothing chains (wf2 R1).
         if self.report.cancelled or self.is_cancelled():
             raise JobCancelled
-        self.completed = True
+        # When every input failed (e.g. out of memory even on single images) nothing
+        # was written: ``finished`` still reports it, but nothing chains (R6).
+        self.completed = not every_input_failed(self.report)
         self.finished.emit(self.output_dir, self.report.failed_names)
 
     def _report_progress(self, done: int, total: int) -> None:
@@ -167,7 +176,9 @@ class MaskGenerationHandler(GenerationHandlerBase):
     def generation_thread(self) -> MaskGenerationThread | None:
         """The worker started by the latest ``generate_masks()`` call, else None.
 
-        ``main_window.generate_all`` chains the skeleton pass on its ``finished``.
+        ``main_window.generate_all`` chains the skeleton pass through
+        ``generate_masks(on_success=...)``, which runs only when this worker
+        ``completed`` (not on its ``finished``, also emitted when every input failed).
         """
         return self._started
 
@@ -238,6 +249,20 @@ class MaskGenerationHandler(GenerationHandlerBase):
 
     def _on_finished(self, thread: MaskGenerationThread, output_dir: str, _failed: list) -> None:
         report = thread.report
+        if every_input_failed(report):  # a failure, not "Generated 0 masks" (R6)
+            failed = len(report.failed)
+            message = f"Mask generation failed: none of {failed:,} images could be processed"
+            logger.error(message)
+            self.feedback.task_failed(message)
+            self._report_box = show_failure_report(
+                self.parent_widget(),
+                "Mask generation",
+                output_dir,
+                report.failed,
+                nothing_written=True,
+            )
+            self.outputs_changed()
+            return
         written, kept = len(report.written), len(report.skipped)
         message = f"Generated {written:,} masks"
         if kept:

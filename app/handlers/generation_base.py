@@ -6,14 +6,16 @@ the project folder lookup (``ImageManager.project_layout``), starting a
 worker as a named job (RB-07: refused politely while another job runs) and
 wiring its Cancel button (PI-08). ``show_failure_report`` lists the inputs that
 produced no output in ONE non-modal dialog, so a long unattended Generate
-(masks, then skeletons) never stalls on a modal box (UXS-02).
+(masks, then skeletons) never stalls on a modal box (UXS-02). A run in which
+every input failed (:func:`every_input_failed`) ends as a failure, so nothing
+chains on it (R6).
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import QMessageBox, QWidget
@@ -23,6 +25,9 @@ from app.gui.image_manager import project_layout_of
 from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
 from app.handlers.worker_base import GuardedThread
+
+if TYPE_CHECKING:
+    from app.inference.batch_engine import BatchReport
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +88,8 @@ class GenerationHandlerBase(HandlerDependencies):
         ``on_success`` runs once the thread has completed (``thread.completed``)
         AND fully finished -- after the job registry released the job, so a
         chained job (Generate: masks, then skeletons) can start. It never runs
-        after a cancel (even one that landed during the last batch) or a failure.
+        after a cancel (even one that landed during the last batch) or a failure,
+        including a run in which every input failed (R6).
         """
         if self.refuse_if_busy():
             thread.deleteLater()
@@ -108,7 +114,8 @@ class GenerationHandlerBase(HandlerDependencies):
         def fire() -> None:
             # ``completed`` stays False after any Cancel, including one that landed
             # during the last batch (the worker checks is_cancelled() itself; Qt
-            # clears the interruption flag once the thread has finished).
+            # clears the interruption flag once the thread has finished), and after
+            # a run in which every input failed (R6: every_input_failed).
             if getattr(thread, "completed", False):
                 QTimer.singleShot(0, on_success)
 
@@ -119,10 +126,32 @@ class GenerationHandlerBase(HandlerDependencies):
         self.feedback.task_started(label, cancelable=True, on_cancel=thread.cancel)
 
 
+def every_input_failed(report: BatchReport) -> bool:
+    """True when the run attempted inputs and every input failed: none has an output (R6).
+
+    Such a run is a failure, not a success with 0 outputs: its worker leaves
+    ``completed`` False (nothing chains) and its handler ends the task with
+    ``task_failed``. A run with nothing to do (no inputs, or every input kept by
+    the overwrite policy) is not one, nor is a run that kept some existing outputs:
+    those inputs did not fail, and Generate still chains the skeleton pass, which
+    reads the images, not the masks.
+    """
+    return bool(report.failed) and not report.written and not report.skipped
+
+
 def show_failure_report(
-    parent: QWidget | None, title: str, output_dir: str, failed: list[tuple[str, str]]
+    parent: QWidget | None,
+    title: str,
+    output_dir: str,
+    failed: list[tuple[str, str]],
+    *,
+    nothing_written: bool = False,
 ) -> QMessageBox:
-    """One non-modal warning listing the inputs that got no output (and why)."""
+    """One non-modal warning listing the inputs that got no output (and why).
+
+    ``nothing_written``: no input of the run got an output (R6), so the text
+    mentions no other outputs.
+    """
     names = [name for name, _ in failed]
     preview = "\n".join(names[:_REPORT_PREVIEW])
     if len(names) > _REPORT_PREVIEW:
@@ -131,10 +160,16 @@ def show_failure_report(
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle(title)
     box.setText(f"{len(names):,} image(s) could not be processed and have no output.")
-    box.setInformativeText(
-        f"{preview}\n\nOther outputs were saved to:\n{output_dir}\n"
-        "The run manifest (_sprouts_run.json) there lists every failure."
-    )
+    if nothing_written:
+        box.setInformativeText(
+            f"{preview}\n\nNo output was written. The run manifest (_sprouts_run.json) in\n"
+            f"{output_dir}\nlists every failure."
+        )
+    else:
+        box.setInformativeText(
+            f"{preview}\n\nOther outputs were saved to:\n{output_dir}\n"
+            "The run manifest (_sprouts_run.json) there lists every failure."
+        )
     box.setDetailedText("\n".join(f"{name}: {reason}" for name, reason in failed))
     box.setModal(False)
     box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -142,4 +177,4 @@ def show_failure_report(
     return box
 
 
-__all__ = ["GenerationHandlerBase", "show_failure_report"]
+__all__ = ["GenerationHandlerBase", "every_input_failed", "show_failure_report"]
