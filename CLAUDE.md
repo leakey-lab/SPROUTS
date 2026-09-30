@@ -5,11 +5,12 @@ from minirhizotron images. Two model branches, both from the ORIGINAL image
 (the skeletonizer never reads masks, so mask corrections change area only):
 
 ```
-image → ResNet mask     → Correct Mask     → root area (mm²)   ┐
-image → Pix2Pix skeleton → Correct Skeleton → root length (mm) ┴→ CSV (+ provenance) → Dash/Plotly viz
+image → ResNet mask      → Correct (mask layer)     → root area (mm²)   ┐
+image → Pix2Pix skeleton → Correct (skeleton layer) → root length (mm) ┴→ CSV (+ provenance) → Dash/Plotly viz
 ```
-(Measure currently reads the generated skeletons only; corrected skeletons are
-not measured — owner decision FR-03, see `docs/KNOWN_ISSUES.md` #5.)
+(Correct is ONE stage that edits both layers of an image on one canvas. Measure
+currently reads the generated skeletons only; corrected skeletons are not
+measured — owner decision FR-03, see `docs/KNOWN_ISSUES.md` #5.)
 
 See `README.md` for the user-facing overview and calibration math. This file is
 the agent contract: how to run things, where things live, and the conventions to
@@ -65,19 +66,19 @@ the SPROUTS dark palette, opens `MainWindow`.
 | Area | Path | Notes |
 |---|---|---|
 | Config | `app/config.py` | **Single source of truth**: `Calibration` (FOV 18×13 mm), ports, paths, folder names, batch sizes. Change FOV here only. Must not import torch (lazy `SKELETON_BATCH_SIZE`). |
-| Qt-free core | `app/project_layout.py`, `naming.py`, `io_utils.py`, `provenance.py`, `models.py`, `user_paths.py`, `design/tokens.py`, `editing/`, `masks/`, `enhancement.py` | Project folder conventions, the one file-name parser, atomic + unicode-safe I/O, provenance sidecars, model SHA-256 registry, per-user dirs, design tokens, undo history/geometry, mask store. Unit-testable; no PyQt6/torch at import. |
+| Qt-free core | `app/project_layout.py`, `naming.py`, `io_utils.py`, `provenance.py`, `models.py`, `user_paths.py`, `design/tokens.py`, `editing/`, `imaging/`, `masks/`, `enhancement.py` | Project folder conventions, the one file-name parser, atomic + unicode-safe I/O, provenance sidecars, model SHA-256 registry, per-user dirs, design tokens, undo history + the cross-layer `EditJournal` (stdlib only), the image pyramid of smooth zoom, mask store. Unit-testable; no PyQt6/torch at import. |
 | Inference | `app/inference/` | `metrics.py` = shared length+area primitives (de-duplicated); `skeleton_inference.py` = Pix2Pix; ResNet mask inference; `runtime.py` = shared GPU auto-tuner (device/autocast/channels_last) + singleton skeleton-model cache. |
 | Handlers | `app/handlers/` | Batch orchestration: threads subclass `GuardedThread` (`app/workers.py` via `worker_base.py`: error boundary + cancel); `JobRegistry` (`main_window.jobs`) runs one batch job at a time; progress goes through `main_window.feedback` (`UiFeedback`, `app/feedback.py`). Generation never overwrites hand-traced masks without asking. |
-| GUI | `app/gui/` | PyQt6 widgets. `MainWindow` orchestrates and **delegates** to `library_index` (O(1) tree index, search, navigation), `ui_panels`, `visualization_manager`, `shell_chrome` (`ShellTopbar`, `StatusLine`), `shortcuts` (single key registry → F1 sheet), `window_state`, `about_dialog`, `recent_projects`. Panel indices: `app/gui/panels.Panel`. |
-| Editors | `app/gui/` | Views share `canvas_view.CanvasViewMixin` (zoom/pan/fit/OpenGL). Mask + GT editors share `RasterEditorBase` (`CanvasPixmapItem` dirty-rect painting, `PatchHistory` undo, `MaskStore`); `SkeletonCorrectionInterface` uses tool classes (`skeleton_tools.py`) over `SkeletonCorrectionModel`. Overlays: `widgets/overlay_layout.OverlayLayout`, `ZoomCluster`, `StatusChip`. Every editor has `maybe_save_changes()` (False = stay). |
+| GUI | `app/gui/` | PyQt6 widgets. `MainWindow` orchestrates and **delegates** to `library_index` (O(1) tree index, search, navigation), `ui_panels`, `visualization_manager`, `shell_chrome` (`ShellTopbar`, `StatusLine`; six stages Library · Trace GT · Generate · Correct · Measure · Visualize, `Alt+1`…`Alt+6`), `shortcuts` (single key registry → F1 sheet; scopes Global, Library, Trace GT, Correct), `window_state`, `about_dialog`, `recent_projects`. Panel indices: `app/gui/panels.Panel` — `DISPLAY 0`, `CORRECT 1`, `VISUALIZATION 2`, `GT_TRACING 3` (dashboards appended after); use the members, never int literals or the removed keys `"mask_tracing"` / `"skeleton_correction"` (`tests/test_right_panel_contract.py`). |
+| Editors | `app/gui/` | Views share `canvas_view.CanvasViewMixin` (zoom/pan/fit/OpenGL, `ZOOM_STOPS` ladder). Both editors are built from the same parts: `editor_canvas.EditorCanvasView` (tool input to an `InputSink`), `editor_chrome.EditorChrome` (rail, dock, Enhance popover, status chip, zoom cluster on one `widgets/overlay_layout.OverlayLayout`), `paint_canvas.PaintCanvas` (QImage canvas over `PatchHistory`) and `editor_prompts` (Save / Discard / Cancel). **Correct** = `app/gui/correct/`: `CorrectEditor` (`editor.py`) only composes — `CorrectSession` (Qt-free: open / close, dirty, save reports, the one prompt, one undo timeline over `app/editing/journal.EditJournal`), `ToolRouter` (input), two `EditLayer`s (`MaskLayer` + `mask_tools.py` over the Qt-free `MaskDocument`; `SkeletonLayer` over the Qt-free `SkeletonDocument` / `SkeletonCorrectionModel`, tools in `skeleton_tools.py`), `CorrectControls`, `LayerPanel`; contract in `correct/layer.py`, every `correct/*.py` ≤ 450 lines (ratchet test). **Trace GT** = `GtTracingInterface` on `raster_editor_base.RasterEditorBase`. Render items `canvas_layers/` (thresholds use the device scale = zoom × devicePixelRatio): `PhotoLayerItem` (area pyramid `app/imaging/pyramid.py`, bilinear), `RasterLayerItem` (exact pixels at scale ≥ 1, area coverage below, 256 px tiles), `SkeletonLayerItem` (a line at every zoom; `vectors=False` in the Library). Every editor has `maybe_save_changes()` (False = stay). |
 | Visualization | `app/visualization/` | Dash/Plotly length + area dashboards (`dash_shell.py` shared layout, offline assets in `app/assets/`), `DataProcessor` / `DataCache` / `FigureMemo`, embedded via `QWebEngineView` through one `viz_window.DashVizWindow` base. |
 | Mask model | `app/mask_model/` | ResNet segmentation (`EnhancedResnetGenerator`, SE/`DualAttention` blocks). |
-| GT tracing | `app/gt/` + `app/gui/gt_tracing_interface.py` | Multi-class **ground truth** for segmentation datasets ("Trace GT" stage, right_panel index 4). Qt-free core: `registry.py` (`gt/classes.json`), `store.py` (`gt/<stem>.png` 8-bit palette, id 255 = Ignore), `export.py` (dataset export). **Independent of every ML model**: never reads/writes `mask/` or `skeletons/`, never measures. Spec: `docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`. |
+| GT tracing | `app/gt/` + `app/gui/gt_tracing_interface.py` | Multi-class **ground truth** for segmentation datasets ("Trace GT" stage, right_panel index 3 = `Panel.GT_TRACING`). Qt-free core: `registry.py` (`gt/classes.json`), `store.py` (`gt/<stem>.png` 8-bit palette, id 255 = Ignore), `export.py` (dataset export). **Independent of every ML model**: never reads/writes `mask/` or `skeletons/`, never measures. Spec: `docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`. |
 
-**God nodes** (most-connected core abstractions, from the graph — touch with
-care): `SkeletonCorrectionInterface` (85 edges), `MainWindow` (72),
-`MaskTracingInterface` (47), `NormalizationControls` (34),
-`SkeletonCorrectionModel` (34).
+**God nodes** (most-connected core abstractions — touch with care): the list is
+refreshed by `graphify update .`; the one recorded before the Correct swap named
+the two editors it deleted, so read the current list from
+`graphify-out/GRAPH_REPORT.md`.
 
 **Other single-source files:** `app/inference/runtime.py` (how inference runs),
 `resources/themes/dark_theme.qss` + `app/gui/widgets/tokens.py` (SPROUTS design
@@ -93,14 +94,16 @@ purple primary `#c39af6`, selection `#b794f6`.
 - `docs/BUILD_EXECUTABLE.md` — PyInstaller packaging (CUDA build notes).
 - `docs/SPROUTS_DASH_THEME.md` — Dash theme + design-token reference.
 - `docs/superpowers/{plans,specs}/` — implementation plans + specs (viz redesign,
-  ribbon/metrics, SPROUTS shell).
+  ribbon/metrics, SPROUTS shell, multi-class GT, unified Correct editor).
 
 **Open items**: `docs/KNOWN_ISSUES.md` #5 (owner decisions: licence, FR-03
 corrected-skeleton measurement, tracked `checkpoints.zip`; remaining low-severity
-review items). The metrics bar shows measured values read-only from the Measure
-CSVs (`MeasurementIndex`) — **never fabricate values**. `CHANGELOG.md` has a
+review items) and #6 (the Correct stage: skeleton save fragmentation Q1, follow-ups).
+The metrics bar shows measured values read-only from the Measure CSVs
+(`MeasurementIndex`) — **never fabricate values**. `CHANGELOG.md` has a
 "Scientific output changes" section: record anything that can change a CSV value
-or an output pixel there.
+or an output pixel there. Saved mask and skeleton pixels are pinned by golden tests
+(`tests/data/correct_goldens.json`): editor changes must keep them identical.
 
 ---
 
