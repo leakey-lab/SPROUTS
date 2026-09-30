@@ -185,7 +185,7 @@ class SkeletonLayer:
         return self._reload(self.document.reopen)
 
     def load_file(self, path: str) -> list[Notice]:
-        """Open another skeleton file (its history forgotten); unreadable: nothing changes."""
+        """Open another skeleton file, unsaved (history forgotten); unreadable: no change."""
         self.finish_gesture()
         notices = self.document.load_file(path)
         if self.document.last_load_ok:

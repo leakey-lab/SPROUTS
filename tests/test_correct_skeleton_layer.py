@@ -433,7 +433,7 @@ def test_load_file_replaces_the_skeleton_and_forgets_its_history(layer, project)
 
     mask = layer.document.model.mask
     assert mask[400, 30:90].all() and not mask[240].any()
-    assert not layer.can_undo() and not layer.is_dirty()
+    assert not layer.can_undo() and layer.is_dirty()  # unsaved until saved (E1)
     assert layer.document.source == "loaded" and layer.document.last_load_ok is True
 
 

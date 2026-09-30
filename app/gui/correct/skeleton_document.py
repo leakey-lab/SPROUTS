@@ -199,15 +199,17 @@ class SkeletonDocument:
     def load_file(self, path: str) -> list[Notice]:
         """Open another skeleton file for this image (the Load button); history cleared.
 
-        ``source`` becomes ``CORRECTED`` or ``GENERATED`` when ``path`` is one of those
-        files, else ``LOADED``. An unreadable file changes nothing; ``last_load_ok`` says
-        which of the two happened.
+        The loaded skeleton is an unsaved edit while it differs from the skeleton opened or
+        last saved: Save writes it as the correction, Discard (:meth:`reopen`) reads the
+        start file again. ``source`` becomes ``CORRECTED`` or ``GENERATED`` when ``path`` is
+        one of those files, else ``LOADED``. An unreadable file changes nothing;
+        ``last_load_ok`` says which of the two happened.
         """
         self.last_load_ok = False
         if not self.image_path:
             return [Notice("Open an image first", "warn")]
         notices: list[Notice] = []
-        self.last_load_ok = self._read(path, notices)
+        self.last_load_ok = self._read(path, notices, saved=False)
         if self.last_load_ok:
             files = self.files()
             generated = files.generated_path()
@@ -219,14 +221,15 @@ class SkeletonDocument:
                 self.source = LOADED
         return notices
 
-    def _read(self, path: str, notices: list[Notice]) -> bool:
-        """Load ``path`` into the model at image size (resized nearest, then thinned)."""
+    def _read(self, path: str, notices: list[Notice], *, saved: bool = True) -> bool:
+        """Load ``path`` into the model at image size (resized, then thinned); ``saved``
+        False keeps the saved baseline (Load: an unsaved edit)."""
         gray = imread_unicode(path, cv2.IMREAD_GRAYSCALE)
         if gray is None:
             notices.append(Notice(f"Could not read skeleton {os.path.basename(path)}", "danger"))
             return False
         self.save_size = (int(gray.shape[1]), int(gray.shape[0]))
-        self.model.load_from_raster(gray, target_size=self._size)
+        self.model.load_from_raster(gray, target_size=self._size, saved=saved)
         return True
 
     def close(self) -> None:

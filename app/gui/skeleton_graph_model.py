@@ -784,10 +784,16 @@ class SkeletonCorrectionModel:
         *,
         target_size: tuple[int, int],
         threshold: str = "otsu",
+        saved: bool = True,
     ) -> None:
         """Load a skeleton from a grayscale raster into ``mask`` at ``target_size``, 1 px thin
-        (:func:`thin_raster`)."""
-        self._start_document(thin_raster(raster_gray, target_size, threshold))
+        (:func:`thin_raster`); the history is emptied.
+
+        ``saved=False`` loads it as an unsaved edit (the Load button): the saved baseline
+        stays the last opened or saved skeleton, so the loaded one is unsaved while it
+        differs from it.
+        """
+        self._start_document(thin_raster(raster_gray, target_size, threshold), saved=saved)
 
     def load_thinned(self, mask: np.ndarray, tips: np.ndarray | None = None) -> None:
         """Adopt ``mask``, a :func:`thin_raster` result made ahead (on a worker thread), as
@@ -798,14 +804,16 @@ class SkeletonCorrectionModel:
             self._tips, self._tips_shape = tips, mask.shape
             self._tips_revision, self._tips_dirty = self._revision, _NO_CHANGE
 
-    def _start_document(self, mask: np.ndarray) -> None:
-        """Adopt a freshly loaded, thinned (or empty) mask: empty history, nothing unsaved."""
+    def _start_document(self, mask: np.ndarray, *, saved: bool = True) -> None:
+        """Adopt a freshly loaded, thinned (or empty) mask: empty history; nothing unsaved,
+        unless ``saved`` is False (the saved baseline is kept, see load_from_raster)."""
         self._mask = mask
         self.clear_history()
         self._fixed_point = True
         self._changed = self._tips_dirty = None
         self._touch()
-        self.mark_saved()
+        if saved:
+            self.mark_saved()
 
     # -------------------- edits --------------------
     def erase_circle(self, center: Point, radius: int) -> None:

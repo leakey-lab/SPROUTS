@@ -371,6 +371,11 @@ def test_status_labels_follow_the_source(project):
     doc.save()
     assert doc.status() == LayerStatus("clean", "Saved", correction)
     doc.load_file(_write_skeleton(root / "other.png", row=20))
+    assert doc.status() == LayerStatus("dirty")  # a loaded file is unsaved until saved (E1)
+    doc.reopen()
+    copy = root / "copy.png"
+    copy.write_bytes(Path(correction).read_bytes())
+    doc.load_file(str(copy))  # the saved skeleton, from another file: nothing to save
     assert doc.status() == LayerStatus("none", "Loaded file")
 
 
