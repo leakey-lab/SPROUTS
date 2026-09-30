@@ -10,12 +10,14 @@ it is matched against the current registry (see
 ``docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`` §1).
 
 No Qt dependency: this module is pure I/O over Pillow + numpy, read/written
-through Python file handles (so non-ASCII Windows paths work), and writes are
-atomic (``<path>.tmp`` then ``os.replace``).
+through Python file handles (so non-ASCII Windows paths work), and writes go
+through :func:`app.io_utils.atomic_write_bytes` (temp file, fsync, then
+``os.replace`` with a lock retry).
 """
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -26,6 +28,7 @@ from PIL import Image, PngImagePlugin
 
 from app.config import GT_BACKGROUND_ID, GT_DIRNAME, GT_IGNORE_ID, GT_META_CHUNK, GT_UNKNOWN_COLOR
 from app.gt.registry import Registry
+from app.io_utils import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +82,8 @@ def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
     painted but unknown to ``registry`` get ``GT_UNKNOWN_COLOR``); background
     (0) is the transparent entry. The ``GT_META_CHUNK`` text chunk records the
     id -> key map and the reviewed keys. Raises ``GtFileError`` for non 2-D ids
-    and ``OSError`` if the file cannot be written (any old file is kept).
+    and ``OSError`` if the file cannot be written (any old file is kept), e.g.
+    :class:`app.io_utils.FileLockedError` while another program holds it open.
     """
     ids = np.ascontiguousarray(tracing.ids, dtype=np.uint8)
     if ids.ndim != 2:
@@ -100,19 +104,11 @@ def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
     }
     info = PngImagePlugin.PngInfo()
     info.add_text(GT_META_CHUNK, json.dumps(meta))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG", pnginfo=info, transparency=GT_BACKGROUND_ID)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "wb") as fh:
-            image.save(fh, format="PNG", pnginfo=info, transparency=GT_BACKGROUND_ID)
-        os.replace(tmp, path)
-    except BaseException:
-        # Never leave a half-written .tmp behind; the old file (if any) is intact.
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+    # Hand-made data: the shared durable writer, with its lock retry (R8).
+    atomic_write_bytes(path, buf.getvalue(), durable=True)
 
 
 def read_tracing(path: str) -> Tracing | None:

@@ -205,8 +205,8 @@ def test_save_registry_then_load_registry_round_trips(tmp_path):
 def test_save_registry_leaves_no_tmp_file(tmp_path):
     project_dir = str(tmp_path)
     save_registry(project_dir, default_registry())
-    assert not (tmp_path / "gt" / "classes.json.tmp").exists()
-    assert (tmp_path / "gt" / "classes.json").exists()
+    # No temp file, whatever its name.
+    assert [p.name for p in (tmp_path / "gt").iterdir()] == ["classes.json"]
 
 
 def test_load_registry_invalid_json_raises_registry_error(tmp_path):
@@ -358,5 +358,4 @@ def test_save_registry_failure_leaves_no_tmp_file(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", _boom)
     with pytest.raises(OSError, match="disk full"):
         save_registry(str(tmp_path), default_registry())
-    assert not (tmp_path / "gt" / "classes.json.tmp").exists()
-    assert not (tmp_path / "gt" / "classes.json").exists()
+    assert os.listdir(tmp_path / "gt") == []

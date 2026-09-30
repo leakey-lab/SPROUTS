@@ -25,6 +25,7 @@ import re
 from dataclasses import dataclass, replace
 
 from app.config import DEFAULT_GT_CLASSES, GT_CLASSES_FILENAME, GT_DIRNAME, GT_IGNORE_ID
+from app.io_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -323,19 +324,7 @@ def save_registry(project_dir: str, registry: Registry) -> str:
     """Atomically write ``gt/classes.json`` (creates ``gt/`` if needed). Returns the path."""
     path = registry_path(project_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(registry.to_dict(), indent=2))
-        os.replace(tmp, path)
-    except BaseException:
-        _remove_quietly(tmp)  # never leave a half-written .tmp behind
-        raise
+    # Hand-made data: the shared durable writer, with its lock retry (R8). A file
+    # another program holds open raises FileLockedError, an OSError.
+    atomic_write_text(path, json.dumps(registry.to_dict(), indent=2), durable=True)
     return path
-
-
-def _remove_quietly(path: str) -> None:
-    try:
-        os.remove(path)
-    except OSError:
-        pass
