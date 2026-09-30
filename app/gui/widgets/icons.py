@@ -10,6 +10,12 @@ size Qt asks for (``px`` logical pixels x the screen scale, rounded like Qt's
 ``qRound``) and tagged with that ratio, so icons stay crisp at 125 / 150 % Windows
 scaling instead of being upscaled from a 1x bitmap. Rasters are cached per
 (name, colour, px, ratio); the recoloured SVG source per (name, colour).
+
+Theme images: the QSS (``resources/themes/dark_theme.qss``) names its images
+``url(sprouts-theme:<file>)``; importing this module registers that search path
+(:data:`THEME_SEARCH_PREFIX` -> ``resources/icons``), so they resolve against the
+project, never the working directory. Those files carry their token colours literally
+(QSS images get no ``currentColor`` substitution).
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ import logging
 import os
 from functools import lru_cache
 
-from PyQt6.QtCore import QByteArray, QRectF, Qt
+from PyQt6.QtCore import QByteArray, QDir, QRectF, Qt
 from PyQt6.QtGui import QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
@@ -29,6 +35,24 @@ from . import tokens
 logger = logging.getLogger(__name__)
 
 _ICON_DIR = resource_path("resources", "icons", "sprouts")
+
+#: ``url(sprouts-theme:<file>)`` in the QSS finds ``resources/icons/<file>``.
+THEME_SEARCH_PREFIX = "sprouts-theme"
+_THEME_IMAGE_DIR = resource_path("resources", "icons")
+
+
+def register_theme_search_path() -> None:
+    """Let the stylesheet's ``url(sprouts-theme:<file>)`` images resolve (idempotent).
+
+    Must run before the first styled widget is polished: Qt resolves QSS images once per
+    rule and caches a miss. Importing this module does it.
+    """
+    known = {os.path.normcase(os.path.normpath(p)) for p in QDir.searchPaths(THEME_SEARCH_PREFIX)}
+    if os.path.normcase(_THEME_IMAGE_DIR) not in known:
+        QDir.addSearchPath(THEME_SEARCH_PREFIX, _THEME_IMAGE_DIR)
+
+
+register_theme_search_path()
 
 # Ratios every icon is rendered at besides the attached screens' own: 1x for plain
 # screens, 2x as a sharp downscale source for a screen that appears later (a monitor

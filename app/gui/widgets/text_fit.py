@@ -8,9 +8,45 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QPainter
 from PyQt6.QtWidgets import QLabel
 
 QWIDGETSIZE_MAX = 16777215  # Qt's QWIDGETSIZE_MAX: "no maximum width"
+
+
+class ElidedLabel(QLabel):
+    """One line of text, elided to the label's width when painted (middle by default).
+
+    ``text()`` keeps the whole text (callers put it in the tooltip too) and
+    :meth:`elided_text` is what shows. The minimum width is 0, so a long text, e.g. a
+    folder name, never widens the layout around it or cuts a letter in half.
+    """
+
+    def __init__(
+        self,
+        text: str = "",
+        parent=None,
+        *,
+        mode: Qt.TextElideMode = Qt.TextElideMode.ElideMiddle,
+    ):
+        super().__init__(text, parent)
+        self._mode = mode
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
+
+    def elided_text(self) -> str:
+        """The text as painted at the current width."""
+        return self.fontMetrics().elidedText(self.text(), self._mode, self.contentsRect().width())
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.contentsRect(), int(self.alignment()), self.elided_text())
+        painter.end()
 
 
 def elide_long_words(text: str, fits: Callable[[str], bool], elide: Callable[[str], str]) -> str:

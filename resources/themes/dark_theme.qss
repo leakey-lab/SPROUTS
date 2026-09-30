@@ -405,6 +405,19 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {
     background: #c39af6;
     border-color: #c39af6;
 }
+/* The checked state is a mark, not only a colour (a checked box used to look like a
+   class swatch). "sprouts-theme:" is a Qt search path onto resources/icons, registered
+   by app/gui/widgets/icons.py, so the images never resolve against the working
+   directory. The SVGs hold the inks: accent-ink #1a1322 (8.0:1 on the accent) and
+   accent-disabled-ink #8a7fa6 on accent-disabled. */
+QCheckBox::indicator:checked {
+    image: url(sprouts-theme:checkbox-check.svg);
+}
+QCheckBox::indicator:checked:disabled {
+    background: #3a3050;                  /* --accent-disabled */
+    border-color: #3a3050;
+    image: url(sprouts-theme:checkbox-check-disabled.svg);
+}
 QCheckBox::indicator:focus, QRadioButton::indicator:focus {
     border-color: #eceef5;                /* --focus-on-fill: visible on the checked fill too */
 }

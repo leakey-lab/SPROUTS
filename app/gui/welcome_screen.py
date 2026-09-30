@@ -12,9 +12,9 @@ Presentation-only landing page shown at ``app_stack`` index 0.
   most four rows, so eight entries no longer raise the window's minimum height.
   Folders that no longer exist are checked off the GUI thread (network paths
   can block), dimmed with "Folder not found" and can be removed.
-* Stage chips are the ribbon's stages (``app.gui.shell_chrome.STAGES``) and
-  the footer shows ``app.__version__`` and the model files — no hardcoded
-  device or version claims.
+* The stage line names the ribbon's stages (``app.gui.shell_chrome.STAGES``) as
+  plain text (not controls), and the footer shows ``app.__version__`` and the
+  model files — no hardcoded device or version claims.
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ import os
 import threading
 from collections.abc import Callable, Sequence
 
-from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -131,6 +132,48 @@ class _ElidedLabel(QLabel):
         painter.drawText(rect, int(self.alignment()), text)
 
 
+class _ContentButton(QPushButton):
+    """A push button as tall as the layout inside it.
+
+    QPushButton's own size hints count only its text and icon, so a row that sized the
+    button by them squeezed the labels laid out inside it and cut off their descenders
+    and underscores (walkthrough W8: "dataset_46k" read "dataset 46k"). The theme's
+    ``QPushButton { min-height }`` also becomes an explicit minimum height, which a layout
+    prefers to any size hint: it is raised to the content's once the labels have their
+    stylesheet fonts (polish) and whenever the content's layout changes.
+    """
+
+    _REFIT = frozenset({QEvent.Type.Polish, QEvent.Type.LayoutRequest, QEvent.Type.StyleChange})
+
+    def event(self, event: QEvent) -> bool:
+        handled = super().event(event)
+        if event.type() in self._REFIT:
+            self._fit_content()
+        return handled
+
+    def _fit_content(self) -> None:
+        layout = self.layout()
+        if layout is None:
+            return
+        need = layout.totalMinimumSize().height()
+        if self.minimumHeight() < need:
+            self.setMinimumHeight(need)  # also tells the row's layout (updateGeometry)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        layout = self.layout()
+        hint = super().sizeHint()
+        if layout is None:
+            return hint
+        return QSize(hint.width(), max(hint.height(), layout.totalSizeHint().height()))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        layout = self.layout()
+        hint = super().minimumSizeHint()
+        if layout is None:
+            return hint
+        return QSize(hint.width(), max(hint.height(), layout.totalMinimumSize().height()))
+
+
 class RecentRow(QFrame):
     """One recent project: an open button plus a remove (×) button."""
 
@@ -154,7 +197,7 @@ class RecentRow(QFrame):
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(4)
 
-        self.open_button = QPushButton()
+        self.open_button = _ContentButton()
         self.open_button.setObjectName("recentOpen")
         self.open_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_button.setIcon(load_icon("folder", tokens.TEXT_MUTED, 15))
@@ -315,7 +358,7 @@ class WelcomeWidget(QWidget):
         self.recent_section = self._build_recent_section()
         outer.addWidget(self.recent_section)
 
-        outer.addWidget(self._build_stage_chips(), 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(self._build_stage_line(), 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addStretch(1)
         outer.addLayout(self._build_footer(on_about))
 
@@ -376,27 +419,16 @@ class WelcomeWidget(QWidget):
         col.addWidget(self._recent_scroll)
         return wrap
 
-    def _build_stage_chips(self) -> QWidget:
-        wrap = QWidget()
-        row = QHBoxLayout(wrap)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        for stage in self._stage_labels:
-            chip = QLabel(stage)
-            chip.setObjectName("stageChip")
-            chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chip.setStyleSheet(f"""
-                QLabel {{
-                    background-color: {tokens.BG_2};
-                    color: {tokens.TEXT_MUTED};
-                    border: 1px solid {tokens.BORDER};
-                    border-radius: 12px;
-                    padding: 4px 12px;
-                    font-size: 11.5px;
-                }}
-            """)
-            row.addWidget(chip)
-        return wrap
+    def _build_stage_line(self) -> QLabel:
+        """The stages as one line of plain text: a preview of the top bar, not controls.
+
+        They used to be bordered pills, which read as buttons but did nothing (W15)."""
+        line = QLabel("  ·  ".join(self._stage_labels))
+        line.setObjectName("stageLine")
+        line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        line.setAccessibleName("Stages: " + ", ".join(self._stage_labels))
+        line.setStyleSheet(f"color: {tokens.TEXT_FAINT}; font-size: 11.5px;")
+        return line
 
     def _build_footer(self, on_about: Callable[[], None] | None) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -423,7 +455,7 @@ class WelcomeWidget(QWidget):
         return list(self._rows)
 
     def stage_labels(self) -> list[str]:
-        """The stage chip labels, in order."""
+        """The stage names of the stage line, in order."""
         return list(self._stage_labels)
 
     def refresh_recents(self) -> None:
@@ -487,8 +519,22 @@ class WelcomeWidget(QWidget):
             self._on_open_recent(path)
 
     def _handle_remove_recent(self, path: str) -> None:
+        index = next((i for i, row in enumerate(self._rows) if row.entry.path == path), -1)
+        focus = QApplication.focusWidget()
+        had_focus = index >= 0 and focus is not None and self._rows[index].isAncestorOf(focus)
         self._store.remove(path)
         self._populate_recents()
+        if had_focus:  # removed from the keyboard: keep its place in the Tab order
+            self._focus_row_near(index)
+
+    def _focus_row_near(self, index: int) -> None:
+        """Focus the × of the row now at ``index`` (the last row's when the list got shorter,
+        Browse when it is empty): the rebuild deleted the focused button."""
+        reason = Qt.FocusReason.TabFocusReason
+        if self._rows:
+            self._rows[min(index, len(self._rows) - 1)].remove_button.setFocus(reason)
+        else:
+            self.browse_button.setFocus(reason)
 
     def _handle_drop(self, folder: str) -> None:
         if callable(self._on_open_recent):

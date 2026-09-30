@@ -63,6 +63,9 @@ class EmptyStateWidget(QWidget):
     TITLE = "No images loaded"
     SUBTITLE = "Load a folder of root images to begin."
     LOADING_TITLE = "Loading images…"
+    #: A loading folder's name is elided beyond this width: an unbreakable long name set
+    #: the page's minimum width, and the window's with it (the tooltip keeps the name).
+    NAME_MAX_PX = 420
 
     def __init__(self, on_load: Callable[[], None], parent: QWidget | None = None):
         super().__init__(parent)
@@ -119,7 +122,16 @@ class EmptyStateWidget(QWidget):
         goes back to the invitation to load a folder."""
         loading = bool(folder)
         self.title_label.setText(self.LOADING_TITLE if loading else self.TITLE)
-        self.subtitle_label.setText(folder if loading else self.SUBTITLE)
+        if loading:
+            self.subtitle_label.ensurePolished()  # its QSS font sets the metrics
+            metrics = self.subtitle_label.fontMetrics()
+            self.subtitle_label.setText(
+                metrics.elidedText(folder, Qt.TextElideMode.ElideMiddle, self.NAME_MAX_PX)
+            )
+            self.subtitle_label.setToolTip(folder)
+        else:
+            self.subtitle_label.setText(self.SUBTITLE)
+            self.subtitle_label.setToolTip("")
         self.load_button.setVisible(not loading)
 
     def _handle_load(self) -> None:

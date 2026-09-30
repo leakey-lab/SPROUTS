@@ -18,8 +18,9 @@ API (``app.gui.ui_feedback.QtUiFeedback`` adapts ``UiFeedback`` onto it):
 It is hidden by default; ``start`` shows it, ``finish``/``fail`` hide it after a
 short confirmation. ``state_changed`` reports "working" / "idle" / "error" for
 the statusline's state dot; a failure goes back to "idle" when its row hides (the
-failure's toast keeps the message). The remaining time comes from :class:`EtaEstimator`
-(pure Python, injectable clock).
+failure's toast keeps the message). After Cancel the row says "Cancelling <operation>…"
+until ``finish`` / ``fail`` (the batch in flight still moves the bar). The remaining time
+comes from :class:`EtaEstimator` (pure Python, injectable clock).
 """
 
 from __future__ import annotations
@@ -161,6 +162,7 @@ class TaskProgressWidget(QWidget):
         super().__init__(parent)
         self._operation = ""
         self._on_cancel: Callable[[], None] | None = None
+        self._cancelling = False  # Cancel clicked, the job has not ended yet
         self._state = "idle"
         self._eta = EtaEstimator(clock)
         # One timer, so a pending hide from the previous task never hides a new one.
@@ -206,13 +208,21 @@ class TaskProgressWidget(QWidget):
         cancelable: bool = False,
         on_cancel: Callable[[], None] | None = None,
     ) -> None:
-        """Begin an operation at 0%; show Cancel when ``cancelable`` or ``on_cancel``."""
+        """Begin an operation at 0%; show Cancel when ``cancelable`` or ``on_cancel``.
+
+        A job that reports a new stage after its Cancel was clicked (the same ``on_cancel``)
+        stays "Cancelling …" with Cancel greyed out.
+        """
+        same_cancelled_job = (
+            self._cancelling and on_cancel is not None and on_cancel == self._on_cancel
+        )
         self._hide_timer.stop()
         self._operation = operation or ""
         self._on_cancel = on_cancel
+        self._cancelling = same_cancelled_job
         self._eta.reset()
         self.bar.setValue(0)
-        self.cancel_button.setEnabled(True)
+        self.cancel_button.setEnabled(not same_cancelled_job)
         self.cancel_button.setVisible(bool(cancelable or on_cancel is not None))
         self._render("0%")
         self.show()
@@ -249,6 +259,7 @@ class TaskProgressWidget(QWidget):
         """
         self.bar.setValue(100)
         self.cancel_button.hide()
+        self._cancelling = False
         self._set_state("idle")
         if message:
             self.label.setText(message)
@@ -259,6 +270,7 @@ class TaskProgressWidget(QWidget):
     def fail(self, message: str) -> None:
         """Mark the operation as failed: show ``message`` briefly, then hide."""
         self.cancel_button.hide()
+        self._cancelling = False
         self.label.setText(message or "Failed")
         self._set_state("error")
         self._hide_timer.start(FAIL_HIDE_MS)
@@ -275,14 +287,17 @@ class TaskProgressWidget(QWidget):
         self._render(progress_text + suffix)
 
     def _render(self, progress_text: str) -> None:
-        if self._operation:
+        if self._cancelling:  # the batch in flight still reports: keep saying so
+            self.label.setText(f"Cancelling {self._operation or 'task'}…")
+        elif self._operation:
             self.label.setText(f"{self._operation} — {progress_text}")
         else:
             self.label.setText(progress_text)
 
     def _cancel(self) -> None:
         self.cancel_button.setEnabled(False)
-        self.label.setText(f"Cancelling {self._operation or 'task'}…")
+        self._cancelling = True
+        self._render("")
         if self._on_cancel is not None:
             self._on_cancel()
         self.canceled.emit()
@@ -298,5 +313,6 @@ class TaskProgressWidget(QWidget):
         self.label.setText("")
         self._operation = ""
         self._on_cancel = None
+        self._cancelling = False
         if self._state == "error":
             self._set_state("idle")  # the failure's toast keeps the message

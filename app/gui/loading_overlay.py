@@ -2,9 +2,10 @@
 
 Thin subclass of the design-system :class:`ProgressOverlay` that adds optional
 ``set_filename`` / ``set_count`` detail lines (hidden while empty, so the card has no
-blank area) and keeps the card ``top_offset()`` px below its parent's top edge (the
-main window passes its top bar's height, so the card never covers the stages).
-``start`` / ``set_progress`` / ``hide`` are inherited.
+blank area; a long file name is elided in the middle) and keeps the card
+``top_offset()`` px below its parent's top edge (the main window passes its top bar's
+height, so the card never covers the stages). ``start`` / ``set_progress`` / ``hide``
+are inherited.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from app.gui.widgets import tokens
 from app.gui.widgets.overlays import ProgressOverlay
+from app.gui.widgets.text_fit import ElidedLabel
 
 
 class LoadingOverlay(ProgressOverlay):
@@ -34,11 +36,15 @@ class LoadingOverlay(ProgressOverlay):
         detail = QVBoxLayout()
         detail.setContentsMargins(16, 0, 16, 12)
         detail.setSpacing(2)
-        self._filename_label = QLabel("")
+        # A long folder name is elided in the middle (the card is 360 px wide); the
+        # caller's tooltip keeps the full path.
+        self._filename_label = ElidedLabel("")
         self._filename_label.setStyleSheet(
             f"color: {tokens.TEXT_MUTED}; background: transparent; font-size: 11px;"
         )
-        self._filename_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._filename_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self._count_label = QLabel("")
         self._count_label.setStyleSheet(
             f"color: {tokens.TEXT_FAINT}; background: transparent; "

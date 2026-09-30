@@ -1,4 +1,4 @@
-"""Keep the toast stack clear of a window's bottom chrome (KNOWN_ISSUES #5).
+"""Keep the toast stack clear of a window's bottom and side chrome (KNOWN_ISSUES #5).
 
 Toasts stack bottom-right (:class:`~app.gui.widgets.toasts.ToastManager`). They used to
 keep clear only of the status line and a Correct dock, so on the Library page they
@@ -7,13 +7,18 @@ covered the metrics bar, and in an editor they could cover the zoom cluster.
 screen under the toast column, and repositions the stack whenever that chrome moves,
 resizes, shows or hides (a page switch shows the metrics bar; an editor places its
 overlays a moment after it was resized), not only when the window resizes.
+
+Lifting the stack above an editor's dock and zoom cluster moves it up the right edge,
+where the editor's side panel sits (Correct's Layers, Trace GT's Classes). The optional
+``side`` chrome keeps the stack in its corner while it fits below such a panel and moves
+it to the panel's left when it does not (more toasts, longer ones, a shorter window).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from PyQt6.QtCore import QEvent, QObject, QPoint, QTimer
+from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, QTimer
 from PyQt6.QtWidgets import QWidget
 
 from .widgets.toasts import ToastManager
@@ -28,40 +33,63 @@ ChromeProvider = Callable[[], Iterable[tuple["QWidget | None", int]]]
 
 
 class ToastClearance(QObject):
-    """The bottom offset of ``toasts`` in ``window``, from the chrome ``chrome()`` names.
+    """The bottom (and right) offset of ``toasts`` in ``window``, from the chrome
+    ``chrome()`` (bottom) and ``side()`` (right-hand panels) name.
 
-    ``offset()`` is what :meth:`ToastManager.set_bottom_offset` reads on every
-    reposition; :meth:`watch` makes the stack follow the given widgets.
+    ``offset()`` / ``right_offset()`` are what :meth:`ToastManager.set_bottom_offset` /
+    :meth:`ToastManager.set_right_offset` read on every reposition; :meth:`watch` makes
+    the stack follow the given widgets.
     """
 
     _EVENTS = frozenset({QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.Hide})
 
-    def __init__(self, window: QWidget, toasts: ToastManager, chrome: ChromeProvider) -> None:
+    def __init__(
+        self,
+        window: QWidget,
+        toasts: ToastManager,
+        chrome: ChromeProvider,
+        *,
+        side: ChromeProvider | None = None,
+    ) -> None:
         super().__init__(window)
         self._window = window
         self._toasts = toasts
         self._chrome = chrome
+        self._side = side
         # One reposition per event-loop turn, after the layouts placed the chrome.
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(0)
         self._timer.timeout.connect(toasts.reposition)
         toasts.set_bottom_offset(self.offset)
+        if side is not None:
+            toasts.set_right_offset(self.right_offset)
 
     def offset(self) -> int:
         """Pixels the stack keeps above the window's bottom edge: above every visible
         piece of chrome that reaches into the toast column (plus its gap)."""
-        window = self._window
-        column_left = self._toasts.column_left()
-        offset = 0
-        for widget, gap in self._chrome():
+        return self._bottom_offset(self.right_offset())
+
+    def right_offset(self) -> int:
+        """Pixels the stack keeps left of its corner: 0 while it clears every visible side
+        panel in its column (it fits below or above it), else enough to pass its left edge."""
+        if self._side is None:
+            return 0
+        window, toasts = self._window, self._toasts
+        margin = toasts.margin()
+        column = QRect(0, 0, 0, 0)
+        column.setLeft(toasts.column_left(0))
+        column.setRight(window.width() - margin - 1)
+        column.setBottom(window.height() - margin - self._bottom_offset(0) - 1)
+        column.setTop(column.bottom() + 1 - toasts.stack_height())
+        right = 0
+        for widget, gap in self._side():
             if widget is None or not widget.isVisible():
                 continue
-            top_left = widget.mapTo(window, QPoint(0, 0))
-            if top_left.x() + widget.width() <= column_left:
-                continue  # entirely left of the toasts
-            offset = max(offset, window.height() - top_left.y() + gap)
-        return offset
+            box = QRect(widget.mapTo(window, QPoint(0, 0)), widget.size())
+            if column.intersects(box.adjusted(-gap, -gap, gap, gap)):
+                right = max(right, window.width() - margin - box.left() + gap)
+        return right
 
     def watch(self, *widgets: QWidget | None) -> None:
         """Reposition the stack after any of ``widgets`` moved, resized, showed or hid."""
@@ -73,3 +101,18 @@ class ToastClearance(QObject):
         if event.type() in self._EVENTS:
             self._timer.start()
         return False
+
+    def _bottom_offset(self, right_offset: int) -> int:
+        """The bottom offset for the column ``right_offset`` px left of the corner."""
+        window = self._window
+        column_left = self._toasts.column_left(right_offset)
+        column_right = window.width() - self._toasts.margin() - right_offset
+        offset = 0
+        for widget, gap in self._chrome():
+            if widget is None or not widget.isVisible():
+                continue
+            top_left = widget.mapTo(window, QPoint(0, 0))
+            if top_left.x() + widget.width() <= column_left or top_left.x() >= column_right:
+                continue  # entirely left or right of the toasts
+            offset = max(offset, window.height() - top_left.y() + gap)
+        return offset

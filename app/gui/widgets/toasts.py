@@ -9,8 +9,10 @@
 - Lifetimes by kind: success / info expire (3.2 s by default), warn lasts at least 6 s,
   danger stays until closed. Warn and danger toasts have a close button; a click on any
   toast dismisses it.
-- ``set_bottom_offset`` keeps the stack above bottom chrome (status bars, a dock);
-  :meth:`ToastManager.column_left` tells the host which chrome is under the stack.
+- ``set_bottom_offset`` keeps the stack above bottom chrome (status bars, a dock) and
+  ``set_right_offset`` left of right-hand chrome (an editor's side panel);
+  :meth:`ToastManager.column_left` / :meth:`ToastManager.stack_height` tell the host which
+  chrome the stack would cover.
 """
 
 from __future__ import annotations
@@ -250,6 +252,7 @@ class ToastManager:
         self._toasts: list[Toast] = []
         self._keys: dict[str, Toast] = {}
         self._bottom_offset: Callable[[], int] = lambda: 0
+        self._right_offset: Callable[[], int] = lambda: 0
 
     def show(
         self,
@@ -292,9 +295,20 @@ class ToastManager:
         """The live toasts, oldest first."""
         return list(self._toasts)
 
-    def column_left(self) -> int:
-        """x (host coordinates) of the left edge of the column the widest toast can take."""
-        return self._host.width() - self._margin - self._max_width()
+    def margin(self) -> int:
+        """Gap between the stack and the host's edges (before any offset)."""
+        return self._margin
+
+    def column_left(self, right_offset: int = 0) -> int:
+        """x (host coordinates) of the left edge of the column the widest toast can take,
+        with the stack ``right_offset`` px left of its corner."""
+        right = max(0, int(right_offset))
+        return self._host.width() - self._margin - right - self._max_width(right)
+
+    def stack_height(self) -> int:
+        """Height of the live stack as laid out now (toasts and the gaps between them)."""
+        heights = [toast.height() for toast in self._toasts]
+        return sum(heights) + self._gap * max(0, len(heights) - 1)
 
     def set_bottom_offset(self, offset: int | Callable[[], int]) -> None:
         """Keep the stack ``offset`` px (or ``offset()`` px, read on every reposition)
@@ -302,18 +316,25 @@ class ToastManager:
         self._bottom_offset = offset if callable(offset) else (lambda: int(offset))
         self.reposition()
 
+    def set_right_offset(self, offset: int | Callable[[], int]) -> None:
+        """Keep the stack ``offset`` px (or ``offset()`` px, read on every reposition)
+        further left than its corner, e.g. left of an editor's side panel."""
+        self._right_offset = offset if callable(offset) else (lambda: int(offset))
+        self.reposition()
+
     def reposition(self):
         width, height = self._host.width(), self._host.height()
+        right = max(0, int(self._right_offset()))
         y = height - self._margin - max(0, int(self._bottom_offset()))
         for toast in reversed(self._toasts):
-            toast.set_max_width(self._max_width())
+            toast.set_max_width(self._max_width(right))
             y -= toast.height()
-            toast.move(width - toast.width() - self._margin, y)
+            toast.move(width - toast.width() - self._margin - right, y)
             y -= self._gap
 
     # ------------------------------------------------------------- internals
-    def _max_width(self) -> int:
-        return min(MAX_TOAST_WIDTH, self._host.width() - 2 * self._margin)
+    def _max_width(self, right_offset: int = 0) -> int:
+        return min(MAX_TOAST_WIDTH, self._host.width() - 2 * self._margin - right_offset)
 
     def _evict(self) -> None:
         """Keep ``max_visible`` toasts. The newest always stays; of the older ones the

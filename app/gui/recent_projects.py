@@ -72,7 +72,9 @@ class RecentProjectsStore:
         self.max_entries = max_entries
 
     def entries(self) -> list[RecentProject]:
-        """Valid entries, most recent first (malformed items are skipped)."""
+        """Valid entries, most recent first: malformed items are skipped, a folder stored
+        twice is listed once, and at most ``max_entries`` are read (the cap used to apply
+        only when writing, so a long stored list built a row per entry at start-up)."""
         raw = self.settings.value(SETTINGS_KEY, "[]")
         try:
             items = json.loads(raw) if isinstance(raw, str) else list(raw or [])
@@ -83,9 +85,13 @@ class RecentProjectsStore:
             return []
         out = []
         for item in items:
+            if len(out) >= self.max_entries:
+                break
             if not isinstance(item, dict) or not item.get("path"):
                 continue
             path = str(item["path"])
+            if any(_same_path(path, seen.path) for seen in out):
+                continue  # the newer entry of that folder is already listed
             count = item.get("count")
             # JSON may hold NaN / Infinity, which int() refuses: such a count is dropped.
             finite = isinstance(count, (int, float)) and math.isfinite(count)
