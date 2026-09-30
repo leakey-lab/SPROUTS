@@ -642,7 +642,7 @@ def test_the_prompt_reads_finish_cancel_and_smooth(make_page):
     assert controls.finish_button.text() == "Finish line (Enter)"
     assert controls.cancel_button.text() == "Cancel (Esc)"
     assert drawn_in(controls.cancel_button, tokens.DANGER)
-    assert controls.smooth_button.text() == "Smooth" and controls.smooth_button.isCheckable()
+    assert controls.smooth_button.text() == "Smooth (S)" and controls.smooth_button.isCheckable()
     for button in (controls.finish_button, controls.cancel_button, controls.smooth_button):
         assert controls.prompt.isAncestorOf(button)
 

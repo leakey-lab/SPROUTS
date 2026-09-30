@@ -57,7 +57,8 @@ _CLEAR_TEXTS = {
     MASK: ("Clear mask", "Clear the mask. Undo with Ctrl+Z; Save removes the file."),
     SKELETON: ("Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
 }
-# The Smooth toggle shows its word beside the icon (the prompt reads "... Cancel (Esc) Smooth").
+# The Smooth toggle shows its word and key beside the icon, as Finish and Cancel show theirs
+# (the prompt reads "... Cancel (Esc) Smooth (S)").
 _SMOOTH_QSS = f"""
 QToolButton#iconBtn {{ padding: 0 10px 0 6px; color: {tokens.TEXT_MUTED}; font-size: 12.5px; }}
 QToolButton#iconBtn:checked {{ color: {tokens.TEXT}; }}
@@ -104,12 +105,12 @@ def _steady(slider: DockSlider) -> DockSlider:
 
 
 def _smooth_toggle() -> IconButton:
-    """The prompt's Smooth toggle: icon and word, checked in the skeleton colour."""
+    """The prompt's Smooth toggle: icon, word and key, checked in the skeleton colour."""
     tip = shortcuts.tooltip("Smooth the polyline", "smooth", shortcuts.CORRECT)
     button = IconButton(
         "smooth", f"{tip} · {_SMOOTH_TIP}", size=32, checkable=True, on_color=tokens.SKEL
     )
-    button.setText("Smooth")
+    button.setText(shortcuts.tooltip("Smooth", "smooth", shortcuts.CORRECT))
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     button.setStyleSheet(button.styleSheet() + _SMOOTH_QSS)
     button.ensurePolished()

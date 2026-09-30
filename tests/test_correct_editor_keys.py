@@ -10,6 +10,7 @@ both. Every test presses real keys on the shown, active page.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 
@@ -322,6 +323,35 @@ def test_the_smooth_key_toggles_only_in_the_polyline_tool(page):
     press(page, Key.Key_P)
     press(page, Key.Key_S)
     assert skeleton.draft_state().smooth
+
+
+def label_key(button) -> Qt.Key:
+    """The key a button's label names in brackets: "Cancel (Esc)" -> Key_Escape."""
+    match = re.search(r"\((.+)\)$", button.text())
+    assert match, f"no key in the label {button.text()!r}"
+    return QKeySequence(match.group(1))[0].key()
+
+
+@pytest.mark.parametrize(
+    "button, draft, undo",
+    [
+        ("finish_button", DraftState(True, 0, False), (SKELETON,)),
+        ("cancel_button", DraftState(True, 0, False), ()),
+        ("smooth_button", DraftState(True, 3, True), ()),
+    ],
+    ids=["finish", "cancel", "smooth"],
+)
+def test_each_prompt_button_names_a_key_that_does_its_job(page, button, draft, undo):
+    """Every button of the polyline prompt shows its key in its label, and that key pressed
+    on the canvas does what the button does."""
+    press(page, Key.Key_P)
+    for point in ((40, 125), (70, 140), (100, 130)):
+        click(page, point)
+
+    press(page, label_key(getattr(page.controls, button)))
+
+    assert page.layers[SKELETON].draft_state() == draft
+    assert page.session.journal.undo_entries == undo
 
 
 def test_esc_drops_the_skeleton_draft(page):

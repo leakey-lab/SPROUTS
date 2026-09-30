@@ -163,8 +163,8 @@ class SelectTool(SkeletonTool):
     def hint(self):
         return (
             "Select · click a skeleton line to edit it",
-            "Click near a skeleton line to pick it: drag its points, toggle Smooth and "
-            "press Enter to commit, or press Delete to remove the whole branch.",
+            f"Click near a skeleton line to pick it: drag its points, press {SMOOTH_KEY} to "
+            "smooth it and Enter to commit, or press Delete to remove the whole branch.",
         )
 
 
@@ -332,10 +332,14 @@ class PolylineTool(SkeletonTool):
         help_text = (
             "Click to place points. Drag points to adjust. Ctrl+click a segment to add a "
             "bend. Shift+drag a segment to move the whole line. Enter or double-click "
-            "finishes the line, Esc cancels it. Smooth needs 3+ points."
+            f"finishes the line, Esc cancels it, {SMOOTH_KEY} smooths it into a curve "
+            "(3+ points)."
         )
         if draft.edit_original:
-            text = "Editing branch · Enter commits · Delete removes it · Esc cancels"
+            text = (
+                f"Editing branch · {SMOOTH_KEY} smooths · Enter commits · Delete removes it · "
+                "Esc cancels"
+            )
         elif n == 0:
             text = "Polyline · click to place points · Ctrl+click a segment adds a bend"
         elif n == 1:

@@ -110,7 +110,7 @@ matter for large images.
 
 ```
 +--------------------------------------------------------------------------------------+
-| [name.jpg * Unsaved]           [Finish line (Enter)] [Cancel (Esc)] [Smooth]          |  chip + polyline prompt
+| [name.jpg * Unsaved]           [Finish line (Enter)] [Cancel (Esc)] [Smooth (S)]      |  chip + polyline prompt
 | * Skeleton . Polyline . 3 points . drag points to adjust            [Enhance popover] |  hint line
 | +-------+                                                     +--------------------+  |
 | | Brush |  mask group                                         | 1 [] Mask    (eye) |  |  Layers panel

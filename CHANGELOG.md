@@ -128,6 +128,10 @@ Two passes, not yet released:
   stay and say "Finish the line (Enter) or cancel it (Esc) first". A draft dropped by
   opening another image, *Discard*, *Load* or a new folder is announced ("Polyline draft
   discarded").
+- The polyline prompt names the Smooth key as it names the others: *Finish line (Enter)*,
+  *Cancel (Esc)*, *Smooth (S)*. `S` toggles Smooth (a curve through the points, 3+ points)
+  while the Polyline tool is active, also on a branch picked with Select; the Select and
+  Polyline help texts and the branch-editing hint name `S` too.
 - Holding `B` and scrolling from the skeleton (or from Fill) switches to the mask brush on
   the first notch, so the dock's slider and the ring show the size being set.
 - The rail dims the tools of the layer that is not edited more clearly, and the two erasers'
