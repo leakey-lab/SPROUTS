@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable, Iterator
+from functools import partial
 
 import cv2
 import numpy as np
@@ -84,6 +85,10 @@ class TiledLevels:
     px of its neighbours and is drawn whole but clipped to its own cell, so bilinear
     filtering reads true neighbours at every tile edge. The caller sets the painter's
     hints (smoothing, no antialiasing) before :meth:`draw`.
+
+    ``make`` must not hold the item that keeps these levels (a bound method of it would):
+    that reference cycle keeps a removed item, its pyramid and its tile pixmaps allocated
+    until a cyclic-GC pass frees them, in a pause of whichever thread runs it.
     """
 
     def __init__(self, make: MakeTile, *, tile: int, margin: int, single_pixels: int) -> None:
@@ -272,6 +277,11 @@ def _draw_area(
     painter.drawPixmap(target, pixmap, source)
 
 
+def _pyramid_tile(pyramid: ImagePyramid, level: int, x0: int, y0: int, x1: int, y1: int) -> QPixmap:
+    """Level pixels ``[x0, x1) x [y0, y1)`` of ``pyramid`` level ``level`` as a pixmap."""
+    return array_to_pixmap(pyramid.level(level)[y0:y1, x0:x1])
+
+
 class PhotoLayerItem(QGraphicsItem):
     """The photo, smooth at every zoom: an area-averaged pyramid level chosen from the
     device scale, drawn with bilinear filtering (exposed rect only)."""
@@ -331,8 +341,13 @@ class PhotoLayerItem(QGraphicsItem):
             self._warm_timer.stop()
         if image is not None:
             single = (4 * self.TILE) ** 2
+            # Tiles made from the pyramid, not through this item: no reference cycle, so
+            # the item and its pixmaps go as soon as its scene lets it go.
             self._levels = TiledLevels(
-                self._make_tile, tile=self.TILE, margin=self.MARGIN, single_pixels=single
+                partial(_pyramid_tile, self._pyramid),
+                tile=self.TILE,
+                margin=self.MARGIN,
+                single_pixels=single,
             )
         self._full = None
         width, height = (0, 0) if image is None else (int(image.shape[1]), int(image.shape[0]))
@@ -444,9 +459,6 @@ class PhotoLayerItem(QGraphicsItem):
         return min(1.0, weight)
 
     # ------------------------------------------------------------- internals
-    def _make_tile(self, level: int, x0: int, y0: int, x1: int, y1: int) -> QPixmap:
-        return array_to_pixmap(self._pyramid.level(level)[y0:y1, x0:x1])
-
     def _levels_at(self, scale: float) -> tuple[int, ...]:
         """The pyramid levels a paint at device ``scale`` draws."""
         count = self._pyramid.count

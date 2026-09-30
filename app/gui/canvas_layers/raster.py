@@ -112,16 +112,20 @@ def _snapped_rect(x: int, y: int, w: int, h: int, dev) -> QRectF:
 
 
 class _Coverage:
-    """Area-averaged levels (1, 2, ...) of the canvas, for device scales up to 0.5.
+    """Area-averaged levels (1, 2, ...) of the canvas, for device scales up to 0.5, and
+    the coverage tiles made from them (:meth:`make_tile`).
 
     Level 1 is ``area_half`` of the canvas, deeper levels come from an ``ImagePyramid``
-    over it. Dirty canvas rects are folded in lazily, when a level is next read.
+    over it. Dirty canvas rects are folded in lazily, when a level is next read. It never
+    refers to the item: the coverage tiles make their tiles through it, so there is no
+    reference cycle (a removed item goes at once, not in a cyclic-GC pass).
     """
 
     MIN_SIDE = 32
 
     def __init__(self) -> None:
         """Nothing built yet: the levels are made at the first minified paint."""
+        self.drawing: QImage | None = None  # the canvas, during a paint or warm-up only
         self.reset()
 
     def reset(self) -> None:
@@ -142,6 +146,17 @@ class _Coverage:
         ceil, ``level`` times; the count: :func:`_coverage_count`)."""
         self._sync(canvas)
         return self._levels.level(level - 1)
+
+    def make_tile(self, level: int, x0: int, y0: int, x1: int, y1: int) -> QPixmap:
+        """Pixels ``[x0, x1) x [y0, y1)`` of coverage ``level`` of the canvas being drawn
+        (:attr:`drawing`) as a premultiplied pixmap; level 0 is the canvas itself."""
+        canvas = self.drawing
+        if level == 0:
+            image = canvas.copy(QRect(x0, y0, x1 - x0, y1 - y0))
+            if image.format() != _PREMULTIPLIED:
+                image = image.convertToFormat(_PREMULTIPLIED)
+            return QPixmap.fromImage(image)
+        return _array_pixmap(self.level(canvas, level)[y0:y1, x0:x1])
 
     def _sync(self, canvas: QImage) -> None:
         w, h = canvas.width(), canvas.height()
@@ -198,7 +213,6 @@ class RasterLayerItem(QGraphicsItem):
         self._cover_drawn: int | None = None
         self._cover_keep: frozenset[int] = frozenset()  # levels to keep (drawn + planned)
         self._cover_kept: frozenset[int] = frozenset()  # what the tiles were last cut to
-        self._drawing: QImage | None = None  # the canvas, during a paint or warm-up only
         self._warm_plan: list[tuple[int, QRectF]] = []  # (_EXACT or coverage level, area)
         self._warm_gl = False  # the last paint was on OpenGL: uploads follow the warm-up
         self._warm_exact_first = True  # a step in shows exact tiles: upload them first
@@ -266,7 +280,7 @@ class RasterLayerItem(QGraphicsItem):
         deadline = time.perf_counter() + budget_ms / 1000.0
         self._keep_covers()
         size = (image.width(), image.height())
-        self._drawing = image
+        self._coverage.drawing = image
         try:
             while self._warm_plan:
                 kind, area = self._warm_plan[0]
@@ -279,7 +293,7 @@ class RasterLayerItem(QGraphicsItem):
                     return True
                 self._warm_plan.pop(0)
         finally:
-            self._drawing = None  # never keep the canvas: it would detach on paint
+            self._coverage.drawing = None  # never keep the canvas: it would detach on paint
         return False
 
     def pending_uploads(self) -> int:
@@ -314,11 +328,11 @@ class RasterLayerItem(QGraphicsItem):
         if scale >= 1.0:
             self._paint_tiles(painter, image, exposed)
         else:
-            self._drawing = image
+            self._coverage.drawing = image
             try:
                 self._paint_coverage(painter, image, exposed, scale)
             finally:
-                self._drawing = None  # never keep the canvas: it would detach on paint
+                self._coverage.drawing = None  # never keep the canvas: it would detach on paint
         painter.restore()
         self._plan_warm(painter, widget, exposed, scale)
         if self._upload(painter) and self._warm_timer is not None:
@@ -346,11 +360,12 @@ class RasterLayerItem(QGraphicsItem):
         return ImagePyramid.level_for_scale(scale, count)
 
     def _covers(self) -> TiledLevels:
-        """The coverage tiles (made at their first use)."""
+        """The coverage tiles (made at their first use), made by the coverage, not through
+        this item (no reference cycle)."""
         if self._cover is None:
             t = self.COVER_TILE
             self._cover = TiledLevels(
-                self._make_cover_tile, tile=t, margin=self.MARGIN, single_pixels=(2 * t) ** 2
+                self._coverage.make_tile, tile=t, margin=self.MARGIN, single_pixels=(2 * t) ** 2
             )
         return self._cover
 
@@ -386,15 +401,6 @@ class RasterLayerItem(QGraphicsItem):
         size = (image.width(), image.height())
         self._covers().draw(painter, level, self._level_size(level), size, exposed)
         self._cover_drawn = level
-
-    def _make_cover_tile(self, level: int, x0: int, y0: int, x1: int, y1: int) -> QPixmap:
-        canvas = self._drawing
-        if level == 0:
-            image = canvas.copy(QRect(x0, y0, x1 - x0, y1 - y0))
-            if image.format() != _PREMULTIPLIED:
-                image = image.convertToFormat(_PREMULTIPLIED)
-            return QPixmap.fromImage(image)
-        return _array_pixmap(self._coverage.level(canvas, level)[y0:y1, x0:x1])
 
     # ------------------------------------------------------------- idle warm-up
     def _warm_kind(self, scale: float) -> int:
