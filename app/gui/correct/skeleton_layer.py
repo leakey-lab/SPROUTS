@@ -20,14 +20,17 @@ from PyQt6.QtWidgets import QGraphicsScene
 
 from app.gui.brush_preview import BrushPreview
 from app.gui.canvas_layers.skeleton import SkeletonLayerItem
-from app.gui.correct.layer import REFERENCE_DIM, SKELETON, SaveOutcome, SizeSpec, ToolSpec
+from app.gui.correct.layer import REFERENCE_DIM, SKELETON, SaveOutcome, SizeSpec
 from app.gui.correct.skeleton_document import GeneratedResolver, SkeletonDocument, SkeletonRead
 from app.gui.skeleton_overlay import SkeletonDecorations
 from app.gui.skeleton_tools import (
+    CLOSED_HINT,
     CONNECT,
+    EMPTY_HINT,
     ERASER,
     POLYLINE,
     SELECT,
+    TOOL_SPECS,
     DraftState,
     PolylineDraft,
     build_tools,
@@ -40,12 +43,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = ["DraftState", "SkeletonLayer"]
 
-_CLOSED_HINT = ("Select an image to correct its skeleton.", "")
-_EMPTY_HINT = (
-    "No skeleton yet · Generate, Load one, or draw with Polyline (P)",
-    "Generate skeletons first, open a file with Load (dock), or draw the roots with the "
-    "Polyline tool.",
-)
 _MOD = Qt.KeyboardModifier
 _NO_KEY_MODS = _MOD.ControlModifier | _MOD.AltModifier | _MOD.MetaModifier  # S is not Smooth
 _STEP = 0.12  # [ and ]: the eraser grows or shrinks by 12 %, at least 1 px
@@ -57,12 +54,7 @@ class SkeletonLayer:
     layer_id = SKELETON
     noun = "skeleton"
     color = tokens.SKEL
-    tools = (
-        ToolSpec("select", "cursor", "Select", "V", "pick a branch, Delete removes it", False),
-        ToolSpec("eraser", "erase", "Eraser", "E", "[ and ] resize", True),
-        ToolSpec("polyline", "polyline", "Polyline", "P", "Enter finish · Esc cancel", False),
-        ToolSpec("connect", "link", "Connect endpoints", "C", "drag from an endpoint", False),
-    )
+    tools = TOOL_SPECS  # Select, Eraser (sized), Polyline, Connect endpoints
     DEFAULT_ERASER = 20
     ERASER_RANGE = (1, 80)
     DEFAULT_OPACITY = 0.85
@@ -85,7 +77,8 @@ class SkeletonLayer:
         self.is_open = doc.is_open
         self.can_undo, self.can_redo = (lambda: doc.model.can_undo), (lambda: doc.model.can_redo)
         self.file_stamps, self.set_resolver = doc.file_stamps, doc.set_resolver
-        self.read_ahead = doc.plan_read  # ReadAheadLayer: a worker reader of a document
+        # ReadAheadLayer: a worker reader of a document; the document handed back (paging).
+        self.read_ahead, self.read_back = doc.plan_read, doc.read_back
         self.notify = host.notify
         self.item = SkeletonLayerItem()
         self.item.setZValue(self.Z)
@@ -181,8 +174,13 @@ class SkeletonLayer:
         self._reload(self.document.close)
 
     def revert(self) -> list[Notice]:
-        """Discard: re-read the start file; the history and the draft are cleared."""
-        return self._reload(self.document.reopen)
+        """Discard: re-read the start file; the history and the draft are cleared. A skeleton
+        as saved, with only a polyline draft pending, loses the draft and keeps its history."""
+        self.finish_gesture()  # an eraser drag in progress is an edit of the skeleton
+        if not self.draft.pending() or self.document.is_dirty():
+            return self._reload(self.document.reopen)
+        self._drop_transient()
+        return []
 
     def load_file(self, path: str) -> list[Notice]:
         """Open another skeleton file, unsaved (history forgotten); unreadable: no change."""
@@ -201,7 +199,7 @@ class SkeletonLayer:
         return notices
 
     def _drop_transient(self) -> None:  # the document is replaced: a lost draft is told
-        dropped = bool(self.draft.points)
+        dropped = self.draft.holds_work()  # a plain pick loses nothing
         self.cancel_transient()
         if dropped:
             self.notify(self.DRAFT_DISCARDED_NOTICE, "info")
@@ -250,7 +248,7 @@ class SkeletonLayer:
     def _step(self, step: Callable[[], bool]) -> bool:
         # Today's _step_history; a draft it drops while out of sight is announced.
         self.finish_gesture()
-        hidden_draft = bool(self.draft.points) and not self._shown
+        hidden_draft = self.draft.holds_work() and not self._shown
         if not step():
             return False
         self.cancel_transient()
@@ -312,9 +310,9 @@ class SkeletonLayer:
         """``(hint, tooltip)`` for the chip: today's texts, the empty-skeleton hint included."""
         mask = self.model.mask
         if not self.is_open() or mask is None:
-            return _CLOSED_HINT
+            return CLOSED_HINT
         if not self.draft.points and self.current_tool != POLYLINE and not mask.any():
-            return _EMPTY_HINT
+            return EMPTY_HINT
         return self._tools[self.current_tool].hint()
 
     def size_spec(self) -> SizeSpec | None:

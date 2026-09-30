@@ -13,7 +13,9 @@ Rules (the same as the Correct page's read-ahead):
 - a few photos are kept, bounded by count and by bytes, oldest dropped first;
 - a read still queued when its photo is asked for is dropped (the caller decodes it
   itself); one already running is waited for, since it is partly done;
-- decoded arrays are made read-only: they are shared with the photo item.
+- decoded arrays are made read-only: they are shared with the photo item, and with the
+  Correct page, which takes the photos it opens or reads ahead (:meth:`DisplayReadAhead.take`
+  hands one over and forgets it, never waiting), so this cache empties while it is shown.
 
 Only the GUI thread calls the object; the worker runs the decode jobs and touches
 nothing else.
@@ -124,6 +126,31 @@ class DisplayReadAhead:
         self._entries.move_to_end(key)
         self._trim()  # after the move: the photo handed over is the newest, which stays
         return entry.image
+
+    def take(self, path: str) -> tuple[tuple, np.ndarray] | None:
+        """Hand over the photo of ``path`` with its stamp and forget it (another page holds
+        it now); None when there is none, its file changed or its decode has not finished
+        (never waits: that decode is forgotten too)."""
+        entry = self._entries.pop(_key(path), None)
+        if entry is None:
+            return None
+        future = entry.future
+        if future is not None:
+            if not future.done():
+                future.cancel()  # a decode already running ends on its own; it is dropped
+                return None
+            try:
+                entry.stamp, entry.image = future.result()
+            except CancelledError:
+                return None
+        stamp = entry.stamp
+        if entry.image is None or stamp is None or not _readable(stamp):
+            return None
+        return (stamp, entry.image) if file_stamp(path)[1:] == stamp[1:] else None
+
+    def holds(self, path: str) -> bool:
+        """True when ``path``'s photo is kept or being decoded (never waits)."""
+        return _key(path) in self._entries
 
     def is_ready(self, path: str) -> bool:
         """True when a decode of ``path`` has finished (a test hook; never waits)."""

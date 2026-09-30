@@ -90,9 +90,9 @@ class SkeletonDocument:
     ``model`` is one object for the document's whole life: opening, Discard, Load
     and close reset it in place, so hooks set on it (``on_action``) stay connected.
     ``source`` is ``CORRECTED``, ``GENERATED``, ``LOADED`` or None (nothing was read).
-    ``save_size`` is the ``(w, h)`` of the raster read (informational; saves are at
-    image resolution). ``save_error`` and ``error_revision`` describe the last failed save,
-    which :meth:`status` reports until the next edit.
+    ``save_size`` is the ``(w, h)`` of the raster read, or of the correction last written
+    (informational; saves are at image resolution). ``save_error`` and ``error_revision``
+    describe the last failed save, which :meth:`status` reports until the next edit.
     """
 
     def __init__(self, resolver: GeneratedResolver | None = None) -> None:
@@ -172,6 +172,29 @@ class SkeletonDocument:
             self.model.load_thinned(read.mask, read.tips)
             self.save_size, self.source = read.save_size, read.kind
         return []
+
+    def read_back(self, stamps: tuple) -> SkeletonRead | None:
+        """The open skeleton as a :meth:`plan_read` reader would read it again: its payload
+        for the read-ahead when the page leaves the image (``app.gui.correct.read_back``).
+
+        ``stamps`` are the files' stamps at open or at the last save. None unless the
+        skeleton is as saved and shows today's start file (a loaded file, or a start file it
+        could not read, is read again). The mask is handed over, not copied: the next open
+        replaces it here.
+        """
+        mask = self.model.mask
+        if not self.image_path or mask is None or self.is_dirty():
+            return None
+        path, kind = self.files().start_file()
+        if kind != self.source:
+            return None
+        if path is None:  # no skeleton file: an empty skeleton
+            return SkeletonRead(self.image_path, self._size, tuple(stamps), None, None)
+        tips = self.model.endpoint_array()  # (x, y), row-major: flat indices ascending
+        flat = tips[:, 1] * mask.shape[1] + tips[:, 0]
+        return SkeletonRead(
+            self.image_path, self._size, tuple(stamps), path, kind, self.save_size, mask, flat
+        )
 
     def _current(self, read: SkeletonRead) -> bool:
         """True when ``read`` was made for the open image, its size and today's files."""
@@ -278,6 +301,7 @@ class SkeletonDocument:
             return SkeletonSaveResult(False, error=self.save_error)
         self.model.mark_saved()
         self.source = CORRECTED
+        self.save_size = (w, h)  # the start file is now the correction just written
         self.save_error = ""
         return SkeletonSaveResult(True, out_path)
 

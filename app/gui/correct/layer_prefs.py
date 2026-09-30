@@ -4,9 +4,11 @@ Each layer's user opacity (0..1) and visibility are stored as ``correct/<layer i
 and ``correct/<layer id>/visible`` in the app's QSettings (``QSettings("LeakeyLab",
 "SPROUTS")``, next to the window state and the recent projects). The page restores them
 when it is built and stores them when it is hidden, which is also what quitting the app
-does to it. A value that cannot be read leaves the layer's default. On the ``offscreen``
-platform (tests, scripts) nothing is kept unless a QSettings is given, as for the window
-state.
+does to it: only the values that differ from what the settings hold (as read at restore,
+or last written) are written, and the settings are flushed only after a write, so a stage
+switch that changed nothing writes nothing (a flush of an INI file took 22-58 ms). A value
+that cannot be read leaves the layer's default. On the ``offscreen`` platform (tests,
+scripts) nothing is kept unless a QSettings is given, as for the window state.
 """
 
 from __future__ import annotations
@@ -50,6 +52,9 @@ class LayerPrefs:
 
     def __init__(self, settings: QSettings | None) -> None:
         self.settings = settings
+        # What the settings hold, by key: as read at restore (None: nothing readable) or as
+        # last written. A key missing here is written by the next store.
+        self._held: dict[str, float | bool | None] = {}
 
     @classmethod
     def for_app(cls, settings: QSettings | None) -> LayerPrefs:
@@ -70,15 +75,24 @@ class LayerPrefs:
             visible = _flag(self.settings.value(f"{key}/visible"))
             if visible is not None:
                 layer.set_visible(visible)
+            self._held.update({f"{key}/opacity": opacity, f"{key}/visible": visible})
 
     def store(self, layers: Iterable[EditLayer]) -> None:
-        """Write each layer's opacity and visibility (flushed at once)."""
+        """Write each layer's opacity and visibility that differs from what the settings
+        hold, then flush them once; nothing changed: nothing is written or flushed."""
         if self.settings is None:
             return
+        values: dict[str, float | bool] = {}
         for layer in layers:
             key = f"{_GROUP}/{layer.layer_id}"
-            self.settings.setValue(f"{key}/opacity", float(layer.opacity()))
-            self.settings.setValue(f"{key}/visible", bool(layer.is_visible()))
+            values[f"{key}/opacity"] = float(layer.opacity())
+            values[f"{key}/visible"] = bool(layer.is_visible())
+        changed = {key: value for key, value in values.items() if self._held.get(key) != value}
+        if not changed:
+            return
+        for key, value in changed.items():
+            self.settings.setValue(key, value)
+        self._held.update(changed)
         self.settings.sync()
         if self.settings.status() != QSettings.Status.NoError:
             logger.warning("Could not store the Correct layers' opacity and visibility")

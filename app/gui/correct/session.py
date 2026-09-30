@@ -198,6 +198,15 @@ class CorrectSession:
         """True when the image file's stamp differs from the one at open."""
         return bool(self.image_path) and _file_stamp(self.image_path) != self._image_stamp
 
+    def saved_stamps(self) -> dict[str, tuple] | None:
+        """Each layer's file stamps at open or at its last save, while every layer is clean
+        and its files are still those: the documents hold what is on disk (the page hands
+        the image back to its read-ahead when it leaves it). None otherwise."""
+        if not self.image_path or self.is_dirty():
+            return None
+        stamps = {layer_id: layer.file_stamps() for layer_id, layer in self.layers.items()}
+        return stamps if stamps == self._stamps else None
+
     def _open_layers(self, ahead: Mapping[str, object] | None = None) -> None:
         args = (self.image_path, self._size, self._images_base_folder)
         for layer_id, layer in self.layers.items():
@@ -319,10 +328,11 @@ class CorrectSession:
         """The one unsaved-changes prompt; True when it is safe to move on.
 
         Asks about the dirty layers among ``layer_ids`` (all when None), naming them and
-        the image. Discard reverts them and forgets their timeline entries; Cancel
-        stays; Save saves them (each attempt reported) and, if one fails, asks about the
-        failed layers only: Discard reverts them, Keep editing stays. Nothing to ask, or
-        Cancel, changes nothing and refreshes nothing.
+        the image. Discard reverts them and forgets the timeline entries of each layer
+        whose history the revert cleared; Cancel stays; Save saves them (each attempt
+        reported) and, if one fails, asks about the failed layers only: Discard reverts
+        them, Keep editing stays. Nothing to ask, or Cancel, changes nothing and refreshes
+        nothing.
         """
         with self._quiet:
             self.finish_gestures()
@@ -358,8 +368,10 @@ class CorrectSession:
     def _revert(self, layer_ids: Sequence[str]) -> None:
         self._stale = True  # inside a batch: its end refreshes the page
         for layer_id in layer_ids:
-            self._forward(self.layers[layer_id].revert())
-            self.journal.forget(layer_id)
+            layer = self.layers[layer_id]
+            self._forward(layer.revert())
+            if not (layer.can_undo() or layer.can_redo()):  # its history was cleared
+                self.journal.forget(layer_id)  # (a skeleton that only lost a draft keeps it)
 
     def _forward(self, notices: Iterable[Notice]) -> None:
         for notice in notices:

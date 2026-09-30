@@ -31,6 +31,11 @@ neighbour provider MainWindow sets from the library order) are decoded on a work
 thread, and the photo shown is kept (:class:`~app.gui.display_read_ahead.DisplayReadAhead`):
 stepping on or back, or switching the view mode, shows a photo without decoding it on
 the GUI thread, and never a stale one (a read is used only while its file is unchanged).
+
+One decode per photo across the Library and the Correct page (MainWindow wires them):
+the Correct page takes the photos it opens and reads ahead from this cache
+(:meth:`DisplayController.take_photo`, which forgets them), and back in the Library a photo
+the Correct page holds (``set_photo_source``) is shown and kept instead of decoded again.
 """
 
 import html
@@ -39,6 +44,7 @@ import os
 from collections.abc import Callable, Sequence
 
 import cv2
+import numpy as np
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QPainter
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QVBoxLayout
@@ -57,6 +63,8 @@ logger = logging.getLogger(__name__)
 
 #: ``provider(path)``: the images the user would open next from ``path``, nearest first.
 NeighbourProvider = Callable[[str], Sequence[str]]
+#: ``source(path)``: another page's decoded photo of ``path`` with its stamp, or None.
+PhotoSource = Callable[[str], "tuple[tuple, np.ndarray] | None"]
 
 #: Neighbours decoded ahead: the next image and the previous one.
 READ_AHEAD_COUNT = 2
@@ -135,6 +143,7 @@ class DisplayController:
         self.current_fake_image: str | None = None
         self.read_ahead = DisplayReadAhead(_decode_photo)
         self._neighbours: NeighbourProvider | None = None
+        self._photo_source: PhotoSource | None = None
 
     def set_neighbour_provider(self, provider: NeighbourProvider | None) -> None:
         """``provider(path)``: the images the user would open next, nearest first; the
@@ -142,6 +151,16 @@ class DisplayController:
         self._neighbours = provider
         if provider is None:
             self.read_ahead.clear()
+
+    def set_photo_source(self, source: PhotoSource | None) -> None:
+        """``source(path)``: the Correct page's decoded photo of ``path`` with its stamp
+        (shared, read-only), shown and kept instead of decoding it again (None: decode)."""
+        self._photo_source = source
+
+    def take_photo(self, path: str) -> tuple[tuple, np.ndarray] | None:
+        """The decoded photo of ``path`` with its stamp, handed over to the Correct page and
+        forgotten here (it holds the photo now); None when there is none. Never waits."""
+        return self.read_ahead.take(path)
 
     def setup_display_area(self, parent) -> MagnifyingGraphicsView:
         """Put the canvas into ``parent``, showing the placeholder, and return it."""
@@ -180,6 +199,9 @@ class DisplayController:
             logger.exception("The neighbours of %s are unknown", current)
             return
         self.read_ahead.retain([current, *paths])
+        for path in paths:
+            if not self.read_ahead.holds(path):
+                self._shared_photo(path)  # the Correct page read it: kept, not decoded
         self.read_ahead.request(paths)
 
     def update_display_mode(self):
@@ -245,11 +267,13 @@ class DisplayController:
         """The selected image as a photo item (Unicode-safe decode, RB-06); if it cannot be
         decoded, say so on the canvas and in a toast and return None.
 
-        A photo decoded ahead (or kept since it was shown) is used while its file is
-        unchanged; otherwise it is decoded here and kept.
+        A photo decoded ahead (or kept since it was shown), or one the Correct page holds,
+        is used while its file is unchanged; otherwise it is decoded here and kept.
         """
         path = self.current_image
         image = self.read_ahead.get(path)
+        if image is None:
+            image = self._shared_photo(path)
         if image is None:
             stamp = file_stamp(path)
             image = imread_unicode(path, DECODE_FLAGS)
@@ -263,6 +287,23 @@ class DisplayController:
         self.clear_magnifying_view(message)
         self._notify(message, "danger")
         return None
+
+    def _shared_photo(self, path: str):
+        """The photo of ``path`` the Correct page holds (then kept here too), while its file
+        is the one decoded; None otherwise."""
+        source = self._photo_source
+        if source is None:
+            return None
+        try:
+            found = source(path)
+        except Exception:  # noqa: BLE001 - the display decodes the photo itself
+            logger.exception("The Correct page's photo of %s is unavailable", path)
+            return None
+        stamp = file_stamp(path)
+        if found is None or stamp[1:] == (None,) or tuple(found[0][1:]) != stamp[1:]:
+            return None
+        self.read_ahead.keep(path, stamp, found[1])
+        return found[1]
 
     def _current_skeleton_path(self) -> str | None:
         """Path of the skeleton drawn for the current image, looked up for this image only:

@@ -26,6 +26,7 @@ from app.editing.geometry import (
     nearest_vertex_index,
     sample_catmull_rom,
 )
+from app.gui.correct.layer import ToolSpec
 
 if TYPE_CHECKING:
     from app.gui.skeleton_graph_model import SkeletonCorrectionModel
@@ -39,6 +40,22 @@ CONNECT = "connect"
 # Single-letter tool keys (QuPath / napari style), shown in the rail tooltips.
 TOOL_KEYS: dict[str, str] = {SELECT: "V", ERASER: "E", POLYLINE: "P", CONNECT: "C"}
 SMOOTH_KEY = "S"
+
+#: The tools as the Correct page's rail shows them (``SkeletonLayer.tools``); only the
+#: eraser has a size.
+TOOL_SPECS: tuple[ToolSpec, ...] = (
+    ToolSpec(SELECT, "cursor", "Select", "V", "pick a branch, Delete removes it", False),
+    ToolSpec(ERASER, "erase", "Eraser", "E", "[ and ] resize", True),
+    ToolSpec(POLYLINE, "polyline", "Polyline", "P", "Enter finish · Esc cancel", False),
+    ToolSpec(CONNECT, "link", "Connect endpoints", "C", "drag from an endpoint", False),
+)
+#: The chip's ``(hint, tooltip)`` with no image open, and with an empty skeleton.
+CLOSED_HINT = ("Select an image to correct its skeleton.", "")
+EMPTY_HINT = (
+    "No skeleton yet · Generate, Load one, or draw with Polyline (P)",
+    "Generate skeletons first, open a file with Load (dock), or draw the roots with the "
+    "Polyline tool.",
+)
 
 HANDLE_HIT_PX = 8  # grab a polyline point (screen px, see reach)
 BEND_HIT_PX = 8  # Ctrl+click a segment to add a bend
@@ -113,6 +130,15 @@ class PolylineDraft:
             return False
         original = self.edit_original
         return original is None or len(original) != len(self.points) or self.xy() != original
+
+    def plain_pick(self) -> bool:
+        """A branch picked with Select and left as it was: dropping it loses nothing."""
+        return self.edit_original is not None and not self.pending()
+
+    def holds_work(self) -> bool:
+        """Points that dropping the draft loses (a new line's, or a picked branch's that
+        moved): a dropped draft is announced only then."""
+        return bool(self.points) and not self.plain_pick()
 
     def raster_points(self, bounds: tuple[int, int]) -> list[tuple[int, int]]:
         """Pixels to draw: the straight polyline, or the sampled curve when smooth."""

@@ -22,7 +22,11 @@ Modules (consumers import the submodules; this package imports nothing):
 - ``chip``: what the status chip shows (file name, worst layer state, library position,
   hint).
 - ``read_ahead``: ``ReadAhead``, the next images read on a worker thread. Qt-free.
-- ``paging``: ``Neighbours``, the library position and the neighbour read-ahead.
+- ``paging``: ``Neighbours``, the library position, the neighbour read-ahead and the
+  photos shared with the Library display; ``PagingApi``, the page's read-ahead API for
+  MainWindow.
+- ``read_back``: the image the page leaves, handed back to the read-ahead as it is in
+  memory (``closed_image``). Qt-free.
 - ``layer_prefs``: ``LayerPrefs``, the layers' opacity and visibility across restarts.
 - ``keys``: the page's shortcuts (the registry's Correct rows, PgDn / PgUp).
 - ``editor``: ``CorrectEditor``, the page ``MainWindow`` shows; it only composes the

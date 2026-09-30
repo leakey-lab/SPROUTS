@@ -33,7 +33,7 @@ from app.gui.correct.layer import MASK, SKELETON, LayerStatus, SaveOutcome
 from app.gui.correct.layer_panel import LayerPanel
 from app.gui.correct.layer_prefs import LayerPrefs
 from app.gui.correct.mask_layer import MaskLayer
-from app.gui.correct.paging import Neighbours
+from app.gui.correct.paging import Neighbours, PagingApi
 from app.gui.correct.session import CorrectSession
 from app.gui.correct.skeleton_layer import SkeletonLayer
 from app.gui.correct.tool_router import ToolRouter
@@ -45,7 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
 
     from app.gui.correct.layer import EditLayer
-    from app.gui.correct.paging import NeighbourProvider, PositionProvider
+    from app.gui.correct.paging import PositionProvider
     from app.gui.skeleton_document import GeneratedResolver
 
 __all__ = ["CorrectEditor"]
@@ -57,7 +57,7 @@ def _same_file(a: str, b: str) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
-class CorrectEditor(QWidget):
+class CorrectEditor(PagingApi, QWidget):
     """The Correct stage's page: the mask (root area) and the skeleton (root length) of one
     image on one canvas, one of them edited at a time. The parts are attributes by name
     (``layers``, ``session``, ``router``, ``chrome``, ``controls``, ``layer_panel``, ...)."""
@@ -200,8 +200,9 @@ class CorrectEditor(QWidget):
         The open image again keeps unsaved edits; clean, it keeps documents, history and view
         unless a file changed on disk (the documents reload, same view; a changed photo opens
         fitted). Another image is decoded first (unreadable: a toast, nothing changes), then
-        unsaved edits are asked about (Cancel stays). A neighbour read ahead is adopted
-        instead of decoding again (``set_neighbour_provider``).
+        unsaved edits are asked about (Cancel stays). A neighbour read ahead, or the photo
+        the Library decoded, is adopted instead of decoding again (``set_neighbour_provider``,
+        ``set_photo_source``); the image left is kept as read (``paging``).
         """
         session = self.session
         self._end_drag()
@@ -212,24 +213,25 @@ class CorrectEditor(QWidget):
                 if session.files_changed():
                     session.reload_documents()
                 return self.paging.opened(image_path, images_base_folder)  # read ahead again
-        ahead = self.paging.take(image_path)
-        photo = ahead.photo if ahead is not None else self.norm_controls.source_image(image_path)
-        if photo is None:
+        ahead = self.paging.photo_for(image_path, self.norm_controls.source_image)
+        if ahead is None:
             self.notice.emit(f"Could not open {os.path.basename(image_path)}", "danger")
             return
         if not session.release():
             self.paging.put_back(ahead)  # the user kept editing the open image
             return
+        self.paging.leaving(session)  # kept as read: going back to it reads nothing again
+        photo = ahead.photo
         height, width = photo.shape[:2]
         self._size, self._photo = QSize(width, height), photo
-        session.open(image_path, (width, height), images_base_folder, ahead and ahead.layers)
+        session.open(image_path, (width, height), images_base_folder, ahead.layers)
         self.photo_item.set_image(self.norm_controls.apply_to(photo))
         view = self.graphics_view
         view.set_content_rect(QRectF(0, 0, width, height))
         view.fit_to_view()
         if self.isVisible():
             view.setFocus()
-        self.paging.opened(image_path, images_base_folder)
+        self.paging.opened(image_path, images_base_folder, ahead)
 
     def has_unsaved_changes(self) -> bool:
         """True when a layer of the open image differs from its saved state."""
@@ -254,12 +256,16 @@ class CorrectEditor(QWidget):
     def navigate(self, delta: int) -> None:
         """PgDn / PgUp: save the unsaved layers (no prompt), then ask for the next image. A
         polyline draft that could be finished is never saved: the page stays and says so, with
-        the skeleton edited and shown, so the Enter / Esc it names reach the draft."""
+        the skeleton edited and shown, so the Enter / Esc it names reach the draft. A branch
+        picked with Select and left as it was is dropped (nothing to keep)."""
         self._end_drag()
-        if self._skeleton.draft_state().points >= 2:
+        draft = self._skeleton.draft
+        if draft.pending():
             self.set_active_layer(SKELETON)
             self.set_layer_visible(SKELETON, True)
             return self.notice.emit(self.FINISH_LINE_FIRST, "warn")
+        if draft.plain_pick():
+            self._skeleton.cancel_polyline()
         if self.session.save_dirty().ok:  # a failed save stays (its toast says why)
             self.navigate_requested.emit(delta)
 
@@ -267,21 +273,12 @@ class CorrectEditor(QWidget):
         """Where the skeleton layer finds an image's generated skeleton (None: skeletons/)."""
         self._skeleton.set_resolver(resolver)
 
-    def set_neighbour_provider(self, provider: NeighbourProvider | None) -> None:
-        """``provider(path)``: the images PgDn / PgUp would open next, nearest first; the
-        page reads them ahead on a worker thread (None: nothing is read ahead)."""
-        self.paging.set_neighbour_provider(provider)
-
     def set_position_provider(self, provider: PositionProvider | None) -> None:
         """``provider(path)``: ``(index, count)`` of the image in the library (1-based) or
         None, for the chip's "Image 12 / 40"."""
         self.paging.set_position_provider(provider)
         self._placed = (None, None)  # asked again
         self._refresh()
-
-    def discard_read_ahead(self) -> None:
-        """Files changed on disk (a Generate run): forget every image read ahead."""
-        self.paging.forget()
 
     def save(self) -> bool:
         """Ctrl+S: save the unsaved layers (none unsaved: the edited one); True when all did."""
