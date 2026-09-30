@@ -114,6 +114,8 @@ class BatchSpec:
 
 
 def _describe(exc: BaseException) -> str:
+    if isinstance(exc, ItemOutOfMemory):
+        return str(exc)  # (R5) already the original error's description: no second prefix
     text = str(exc).strip()
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
@@ -141,6 +143,9 @@ class OomBackoff:
 
     ``size`` starts at the requested batch size and only shrinks: once a size
     works, later batches are split to it up front instead of failing again.
+    A slice of more than one image that is at least as long as one that already
+    ran out of memory is split untried (R5); every shorter slice is tried as
+    before, so the slices that run are the plain halving's (outputs unchanged).
     """
 
     def __init__(
@@ -151,6 +156,7 @@ class OomBackoff:
         on_oom: Callable[[], None] = _free_cuda_cache,
     ) -> None:
         self.size = max(1, int(batch_size))
+        self._oom_len: float = float("inf")  # (R5) shortest slice split after out-of-memory
         self._is_oom = is_oom
         self._on_oom = on_oom
 
@@ -171,6 +177,12 @@ class OomBackoff:
         return results
 
     def _run_slice(self, step, batch, start: int, stop: int) -> list[tuple[slice, Any]]:
+        """Run ``batch[start:stop]``, halving it on out-of-memory (see the class docstring)."""
+        if stop - start > 1 and stop - start >= self._oom_len:
+            # (R5) At least as long as a slice that already ran out of memory (e.g. the
+            # sibling half): it would run out again, so split it untried. A single
+            # image is always tried; shorter slices are tried as before.
+            return self._split(step, batch, start, stop)
         try:
             return [(slice(start, stop), step(batch[start:stop]))]
         except Exception as exc:
@@ -184,9 +196,16 @@ class OomBackoff:
         if stop - start == 1:
             logger.error("Out of memory on a single image (index %d): %s", start, reason)
             return [(slice(start, stop), ItemOutOfMemory(reason))]
+        self._oom_len = min(self._oom_len, stop - start)  # (R5)
+        logger.warning(
+            "Out of memory at batch %d; retrying at %d", stop - start, (stop - start + 1) // 2
+        )
+        return self._split(step, batch, start, stop)
+
+    def _split(self, step, batch, start: int, stop: int) -> list[tuple[slice, Any]]:
+        """Run both halves (the first takes an odd item); ``size`` shrinks as before (R5)."""
         half = (stop - start + 1) // 2
         self.size = min(self.size, half)
-        logger.warning("Out of memory at batch %d; retrying at %d", stop - start, half)
         return self._run_slice(step, batch, start, start + half) + self._run_slice(
             step, batch, start + half, stop
         )
