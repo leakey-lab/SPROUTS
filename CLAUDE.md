@@ -94,7 +94,8 @@ purple primary `#c39af6`, selection `#b794f6`.
 - `docs/BUILD_EXECUTABLE.md` — PyInstaller packaging (CUDA build notes).
 - `docs/SPROUTS_DASH_THEME.md` — Dash theme + design-token reference.
 - `docs/superpowers/{plans,specs}/` — implementation plans + specs (viz redesign,
-  ribbon/metrics, SPROUTS shell, multi-class GT, unified Correct editor).
+  ribbon/metrics, SPROUTS shell, multi-class GT, unified Correct editor; the
+  MainWindow / length-dashboard split is planned, not yet run).
 
 **Open items**: `docs/KNOWN_ISSUES.md` #5 (owner decisions: licence, FR-03
 corrected-skeleton measurement, tracked `checkpoints.zip`; remaining low-severity

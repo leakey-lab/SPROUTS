@@ -63,9 +63,10 @@ Owner decisions (not made by the tooling):
 Remaining low-severity review items:
 
 - `MainWindow` is still over 1,000 lines; split it into a library navigator, project
-  loader and metrics controller (review CQ-07; planned after the Correct swap, which
-  already replaced its two editor toggles with one and dropped the editor-signal
-  connect / disconnect bookkeeping). The compat shims `app/gui/widgets/tokens.py`
+  loader and metrics controller (review CQ-07; the Correct swap already replaced its two
+  editor toggles with one and dropped the editor-signal connect / disconnect bookkeeping).
+  Plan: `docs/superpowers/plans/2026-09-29-modularise-four-large-files.md` (Track A;
+  Track B splits `app/visualization/dash_app.py`). The compat shims `app/gui/widgets/tokens.py`
   (token re-export) and `shell_chrome.build_ribbon` have no deprecation plan (CQ-10).
 - (Resolved 2026-09-29) CQ-10 for `app/handlers/mask_handler.py`: deleted with the old
   mask editor. CQ-11: `RasterEditorBase` now lives in `app/gui/raster_editor_base.py`
