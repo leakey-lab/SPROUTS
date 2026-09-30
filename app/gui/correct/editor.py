@@ -211,7 +211,7 @@ class CorrectEditor(QWidget):
             if not session.image_changed():
                 if session.files_changed():
                     session.reload_documents()
-                return
+                return self.paging.opened(image_path, images_base_folder)  # read ahead again
         ahead = self.paging.take(image_path)
         photo = ahead.photo if ahead is not None else self.norm_controls.source_image(image_path)
         if photo is None:
@@ -253,9 +253,12 @@ class CorrectEditor(QWidget):
 
     def navigate(self, delta: int) -> None:
         """PgDn / PgUp: save the unsaved layers (no prompt), then ask for the next image. A
-        polyline draft that could be finished is never saved: the page stays and says so."""
+        polyline draft that could be finished is never saved: the page stays and says so, with
+        the skeleton edited and shown, so the Enter / Esc it names reach the draft."""
         self._end_drag()
         if self._skeleton.draft_state().points >= 2:
+            self.set_active_layer(SKELETON)
+            self.set_layer_visible(SKELETON, True)
             return self.notice.emit(self.FINISH_LINE_FIRST, "warn")
         if self.session.save_dirty().ok:  # a failed save stays (its toast says why)
             self.navigate_requested.emit(delta)

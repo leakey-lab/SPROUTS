@@ -967,12 +967,14 @@ def test_clicking_any_control_leaves_the_keys_on_the_canvas(app, make_page):
     assert controls.clear_button.focusPolicy() in (Qt.FocusPolicy.TabFocus, Qt.FocusPolicy.NoFocus)
 
 
-def test_the_panel_and_its_buttons_never_take_the_focus(make_page):
+def test_a_click_never_gives_the_panel_the_focus_but_tab_reaches_rows_and_eyes(make_page):
+    """W18: the rows and their eyes are Tab stops (TabFocus); nothing takes click focus."""
     panel = make_page(show=False).panel
+    tab_stops = {w for row in panel.rows.values() for w in (row, row.eye_button)}
 
-    assert {w.focusPolicy() for w in (panel, *panel.findChildren(QWidget))} == {
-        Qt.FocusPolicy.NoFocus
-    }
+    for widget in (panel, *panel.findChildren(QWidget)):
+        wanted = Qt.FocusPolicy.TabFocus if widget in tab_stops else Qt.FocusPolicy.NoFocus
+        assert widget.focusPolicy() == wanted, widget
 
 
 @pytest.mark.parametrize("shown", [MASK, SKELETON])

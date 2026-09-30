@@ -10,7 +10,9 @@ flashes the other layer's row when Ctrl+Z undoes one of that layer's actions).
 A pure view: a click on a row asks for that layer (:attr:`LayerPanel.activate_requested`)
 and a click on an eye for the other visibility (:attr:`LayerPanel.visibility_toggled`); the
 editor answers with :meth:`LayerPanel.set_active` and :meth:`LayerPanel.set_visible_state`.
-Nothing in the panel takes the keyboard focus, so the canvas keeps its hold keys (Space, B).
+A click never takes the keyboard focus, so the canvas keeps its hold keys (Space, B); Tab
+reaches each row and then its eye (W18), the focused one drawn with the focus ring: Space or
+Enter on a row asks for its layer, Space on an eye toggles it, the page's keys still work.
 The editor's ``OverlayLayout`` places it in the ``side_panel`` role (right edge) through
 :meth:`LayerPanel.preferred_height` and :meth:`LayerPanel.fit_height`. It follows the GT
 class panel's look (``app.gui.class_panel``).
@@ -48,7 +50,10 @@ QToolButton#iconBtn {{
     border-radius: 6px;
 }}
 QToolButton#iconBtn:hover {{ background-color: {tokens.BG_3}; }}
+{tokens.focus_rule("QToolButton#iconBtn")}
 """
+# Keys that ask for the focused row's layer, as a click does (a button's Space / Enter).
+_ACTIVATE_KEYS = (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Select)
 
 
 @lru_cache(maxsize=4)
@@ -112,8 +117,9 @@ class LayerRow(QFrame):
     """One row of the Layers panel: key, swatch, name and eye; the save state below the name.
 
     ``key_label``, ``swatch``, ``name_label``, ``eye_button``, ``state_dot`` and
-    ``state_label`` are its parts. The active fill, its bar and the flash are painted rather
-    than styled, so a layer switch or a flash re-polishes nothing.
+    ``state_label`` are its parts. The active fill, its bar, the flash and the focus ring are
+    painted rather than styled, so a layer switch or a flash re-polishes nothing. Tab (never a
+    click) focuses the row; Space or Enter then asks for its layer.
     """
 
     FLASH_MS = 300
@@ -129,7 +135,9 @@ class LayerRow(QFrame):
         self._flash.setAlphaF(_FLASH_ALPHA)
         self._active = self._flashing = False
         self._state_colour = ""
+        self._ring = QColor(tokens.FOCUS)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # Tab only: a click keeps the canvas keys
         action = f"{layer.layer_id}_layer"  # the registry's layer keys: 1 = mask, 2 = skeleton
         self.setToolTip(shortcuts.tooltip(f"Edit the {layer.noun}", action, shortcuts.CORRECT))
 
@@ -143,6 +151,7 @@ class LayerRow(QFrame):
             f"background-color: {layer.color}; border-radius: 2px; border: none;"
         )
         name = f"{layer.noun[:1].upper()}{layer.noun[1:]}"
+        self.setAccessibleName(f"{name} layer")
         self.name_label = _label(name, f"color: {tokens.TEXT}; font-size: 12.5px;")
         self.eye_button = _EyeButton(layer.noun)
         self.eye_button.clicked.connect(self._eye_clicked)
@@ -189,6 +198,7 @@ class LayerRow(QFrame):
         if changed:
             self.state_label.setText(text)
             self.state_dot.setText(_DOT if text else "")
+            self.setAccessibleDescription(text)  # what a screen reader adds to the row's name
             # The label only invalidates this row's layout; the panel's would read the row's
             # old size hint until a posted LayoutRequest. Tell it now, so it can re-measure.
             self.updateGeometry()
@@ -229,8 +239,10 @@ class LayerRow(QFrame):
         self.visibility_toggled.emit(self.layer_id, shown)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
-        """The active fill and bar, and the flash tint, under the row's labels."""
-        if not (self._active or self._flashing):
+        """The active fill and bar, the flash tint and the focus ring, under the row's labels
+        (Qt repaints the row when it takes or loses the focus)."""
+        focused = self.hasFocus()
+        if not (self._active or self._flashing or focused):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -241,8 +253,16 @@ class LayerRow(QFrame):
         if self._flashing:
             painter.fillPath(shape, self._flash)
         if self._active:
+            painter.save()
             painter.setClipPath(shape)
             painter.fillRect(QRectF(0.0, 0.0, _BAR, float(self.height())), self._bar)
+            painter.restore()
+        if focused:  # 1 px inside the edge, as the focus_rule borders of the other controls
+            painter.setPen(QPen(self._ring, 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), _RADIUS, _RADIUS
+            )
         painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -253,6 +273,14 @@ class LayerRow(QFrame):
             return
         super().mousePressEvent(event)
 
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Space or Enter on the focused row asks for its layer, as a click does."""
+        if event.key() in _ACTIVATE_KEYS:
+            self.activated.emit(self.layer_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 def _panel_order(layer: EditLayer) -> int:
     """Rows follow LAYER_IDS (mask on top); other layers come after, in the given order."""
@@ -261,7 +289,7 @@ def _panel_order(layer: EditLayer) -> int:
 
 class LayerPanel(_FloatingPanel):
     """The Layers panel (OverlayLayout role side_panel): one row per layer, mask on top.
-    Never takes focus.
+    A click never takes the focus; Tab reaches each row, then its eye.
 
     ``rows`` maps each layer id to its :class:`LayerRow`, top to bottom. The panel is at
     least ``MIN_WIDTH`` px wide and grows when a state label needs more room.
@@ -282,7 +310,7 @@ class LayerPanel(_FloatingPanel):
             row.visibility_toggled.connect(self.visibility_toggled)
             self.add_widget(row)
             self.rows[layer.layer_id] = row
-        keep_canvas_focus(self, tab_reachable=False)  # rows, eyes: a click keeps the canvas keys
+        keep_canvas_focus(self)  # rows, eyes: Tab reaches them, a click keeps the canvas keys
         if self.rows:
             self.set_active(next(iter(self.rows)))
 

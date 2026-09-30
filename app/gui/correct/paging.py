@@ -68,8 +68,15 @@ class Neighbours(QObject):
             self.destroyed.connect(self._ahead.close)  # the page goes: its worker ends too
 
     def set_position_provider(self, provider: PositionProvider | None) -> None:
-        """Ask ``provider(path)`` for the image's ``(index, count)`` (None: no position)."""
+        """Ask ``provider(path)`` for the image's ``(index, count)`` (None: no position).
+
+        MainWindow hands it again when a library search changes the order, so the open
+        image's neighbours are read again too (a read that is still current is kept); while
+        the page is hidden that waits for the image to be shown again (``opened``)."""
         self._position = provider
+        shown = getattr(self.parent(), "isVisible", lambda: True)()  # the page: while shown
+        if self._path and self._ahead is not None and shown:
+            self._timer.start()
 
     def position(self, path: str) -> tuple[int, int] | None:
         """``(index, count)`` of ``path`` in the library (1-based), or None."""
