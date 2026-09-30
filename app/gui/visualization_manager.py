@@ -10,7 +10,8 @@ runs their shared lifecycle:
   CSV changed on disk, or when it failed, and otherwise brings the live one
   forward. Showing one dashboard hides the other; it never closes it.
 * ``close`` removes a dashboard exactly once, and ``toggle`` keeps the legacy
-  open/close meaning for the old buttons.
+  open/close meaning for the old buttons. ``release_all`` closes both when
+  another project is opened (they chart the previous project's CSVs).
 * OpenGL canvas viewports stay off while any dashboard embeds a browser (Qt6
   cannot composite a QWebEngineView in a window holding a QOpenGLWidget) and
   come back when the last one closes, but only if they were on before.
@@ -32,7 +33,7 @@ from dataclasses import dataclass
 # Qt6 only lets QtWebEngineWidgets load before the QApplication exists. The
 # dashboard modules that use it are imported lazily, so import it here.
 from PyQt6 import QtWebEngineWidgets  # noqa: F401
-from PyQt6.QtCore import QEventLoop
+from PyQt6.QtCore import QEventLoop, QThreadPool
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
@@ -54,6 +55,8 @@ __all__ = [
     "close_visualization",
     "controller_for",
     "find_test_latest_dir",
+    "prewarm_dashboards",
+    "release_all_visualizations",
     "show_root_area_visualization",
     "show_root_length_visualization",
     "show_visualization",
@@ -322,6 +325,29 @@ class DashboardController:
         else:
             self.show(spec)
 
+    def release_all(self) -> bool:
+        """Close every dashboard because another project was opened.
+
+        They chart the previous project's CSVs; kept, they held a server, a
+        browser page and the OpenGL suspension, and the one on screen stayed there
+        under the new library. Unlike :meth:`close`, no image is re-shown: the
+        caller shows the new project. Returns True when a dashboard was on screen
+        (the display page is shown instead).
+        """
+        mw = self._mw
+        current = mw.right_panel.currentWidget()
+        shown = False
+        for spec in SPECS.values():
+            dashboard = self.dashboard(spec)
+            if dashboard is None:
+                continue
+            if dashboard is current:
+                shown = True
+                mw.switch_right_panel("display")
+            self._set_button_text(spec, spec.open_text)
+            self._discard(spec, dashboard)
+        return shown
+
     # ------------------------------------------------------------------ show
     def _show(self, spec: DashboardSpec) -> None:
         mw = self._mw
@@ -512,6 +538,48 @@ def toggle_visualization(main_window, kind: str) -> None:
 def visible_kind(main_window) -> str | None:
     """ "length" or "area" when that dashboard is the right panel's page, else None."""
     return controller_for(main_window).visible_kind()
+
+
+def _prewarm_imports_logged() -> None:
+    """Import the dashboard stack (a thread-pool job); a failure is only logged.
+
+    The first dashboard's build worker imports it anyway, so a failure here costs
+    nothing but the head start; an exception must never leave the pool thread.
+    """
+    try:
+        importlib.import_module("app.visualization.viz_window").prewarm_imports()
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not prewarm the dashboard imports")
+
+
+def prewarm_dashboards(*, web_engine: bool = True) -> None:
+    """Start what the first dashboard open of a session waits for; call it at a quiet moment.
+
+    dash, plotly and pandas are imported on a pool thread (0.7-1 s of the first
+    open, ~100 MiB). With ``web_engine``, QtWebEngine is started on the calling
+    (GUI) thread: ~0.4 s during which the GUI does not respond, ~95 MiB. Measured
+    on a 46k-row trial, both together took the first open of a session from 3.16 s
+    to 1.77 s to its first chart (median of 5) and its GUI freeze from 439 ms to 52 ms.
+    """
+    QThreadPool.globalInstance().start(_prewarm_imports_logged)
+    if web_engine:
+        importlib.import_module("app.visualization.viz_window").prewarm_web_engine()
+
+
+def release_all_visualizations(main_window) -> bool:
+    """Close both dashboards because another project was opened.
+
+    Returns True when one of them was on screen (the display page is shown
+    instead; the caller moves the stage bar off Visualize).
+    """
+    controller = _controllers.get(main_window)
+    if controller is None:
+        return False  # no dashboard was ever opened in this window
+    try:
+        return controller.release_all()
+    except Exception:  # noqa: BLE001 -- opening the project must not fail on this
+        logger.exception("Error releasing the dashboards of the previous project")
+        return False
 
 
 def toggle_root_length_visualization(main_window) -> None:

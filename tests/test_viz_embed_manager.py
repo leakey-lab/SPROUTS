@@ -474,3 +474,112 @@ def test_opengl_is_not_forced_on_when_it_was_off_before(env):
     vm.close_root_length_visualization(mw)
 
     assert True not in mw.gl_calls
+
+
+# --------------------------------------------------------------------------- #
+#  Another project was opened (PKG-VIZ, V3)
+# --------------------------------------------------------------------------- #
+def test_opening_another_project_releases_both_dashboards(env_gl):
+    # Before, both dashboards kept charting the previous project's CSVs (and their
+    # servers, pages and the OpenGL hold) until they were shown again; the one on
+    # screen stayed on screen under the new project's library.
+    mw = env_gl.mw
+    vm.show_root_length_visualization(mw)
+    vm.show_root_area_visualization(mw)  # on screen
+    length, area = mw.root_length_viz, mw.root_area_viz
+
+    shown = vm.release_all_visualizations(mw)
+
+    assert shown is True
+    assert mw.root_length_viz is None and mw.root_area_viz is None
+    assert (length.cleanups, area.cleanups) == (1, 1)
+    assert mw.right_panel.indexOf(length) == -1 and mw.right_panel.indexOf(area) == -1
+    assert mw.right_panel.currentIndex() == _PANELS["display"]
+    assert mw.gl_calls == [False, True]  # the canvases get OpenGL back
+    assert mw.refreshed == []  # the old project's image is not shown again
+    assert "Close" not in mw.visualize_root_length_button.text()
+
+
+def test_releasing_hidden_dashboards_keeps_the_current_page(env):
+    mw = env.mw
+    vm.show_root_length_visualization(mw)
+    mw.switch_right_panel("display")
+
+    assert vm.release_all_visualizations(mw) is False
+    assert mw.root_length_viz is None
+    assert mw.right_panel.currentIndex() == _PANELS["display"]
+
+
+def test_releasing_without_any_dashboard_does_nothing(env):
+    assert vm.release_all_visualizations(env.mw) is False
+    assert env.mw.gl_calls == []
+
+
+def test_a_dashboard_opened_after_the_release_reads_the_new_project(env, tmp_path_factory):
+    mw = env.mw
+    vm.show_root_length_visualization(mw)
+    other = tmp_path_factory.mktemp("other_project")
+    (other / "skeletons").mkdir()
+    (other / "skeletons" / "root_lengths.csv").write_text(
+        "Image,Length (mm)\nimg_002,2.5\n", encoding="utf-8"
+    )
+    mw.image_manager = FakeImageManager(other)
+
+    vm.release_all_visualizations(mw)
+    vm.show_root_length_visualization(mw)
+
+    assert len(StubLength.made) == 2
+    expected = other / "skeletons" / "root_lengths.csv"
+    assert os.path.normcase(mw.root_length_viz.csv_path) == os.path.normcase(str(expected))
+
+
+# --------------------------------------------------------------------------- #
+#  Prewarm (PKG-VIZ, V2)
+# --------------------------------------------------------------------------- #
+def test_prewarm_dashboards_imports_off_the_gui_thread(qapp, monkeypatch):
+    import threading
+
+    import app.visualization.viz_window as vw
+
+    threads, engine = [], []
+    done = threading.Event()
+
+    def imports():
+        threads.append(threading.current_thread())
+        done.set()
+
+    monkeypatch.setattr(vw, "prewarm_imports", imports)
+    monkeypatch.setattr(vw, "prewarm_web_engine", lambda: engine.append(1) or True)
+
+    vm.prewarm_dashboards(web_engine=False)
+
+    assert done.wait(5)
+    assert threads[0] is not threading.main_thread()
+    assert engine == []
+
+    done.clear()
+    vm.prewarm_dashboards()
+    assert done.wait(5)
+    assert engine == [1]  # the engine starts on the calling (GUI) thread
+
+
+def test_a_failing_import_prewarm_is_only_logged(qapp, monkeypatch, caplog):
+    import threading
+
+    import app.visualization.viz_window as vw
+
+    done = threading.Event()
+
+    def broken():
+        done.set()
+        raise ImportError("dash is not installed")
+
+    monkeypatch.setattr(vw, "prewarm_imports", broken)
+
+    vm.prewarm_dashboards(web_engine=False)
+
+    assert done.wait(5)
+    from PyQt6.QtCore import QThreadPool
+
+    QThreadPool.globalInstance().waitForDone(5000)
+    assert "dash is not installed" in caplog.text

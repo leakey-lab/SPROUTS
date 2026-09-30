@@ -3,8 +3,9 @@ Image utilities for the Growth-Lines hover panel of the length dashboard.
 
 * :class:`ImageIndex` maps ``(tube, position, "YYYY.MM.DD")`` to an image path. It
   snapshots the image manager's names when the dashboard opens but parses them
-  (with the shared :func:`app.naming.parse_image_name`) only on first use, so
-  opening a dashboard no longer pays for 46k name parses (PV-17).
+  (with the shared :func:`app.naming.parse_image_name`) on first use or on a
+  background thread, so opening a dashboard never waits for 46k name parses
+  (PV-17); the dashboard parses them while its page loads.
 * :class:`ThumbnailCache` encodes each hovered image once as a small JPEG and keeps
   a bounded LRU of the results (PV-09: base64 PNGs of ~75 KiB each were resent on
   every hover and never evicted).
@@ -151,6 +152,18 @@ class ImageIndex(Mapping[ImageKey, str]):
                     self._paths = self._parse(self._names)
                 paths = self._paths
         return paths
+
+    def parse_in_background(self) -> threading.Thread:
+        """Parse the names on a daemon thread now instead of on first use.
+
+        A dashboard calls this once it is built: the names are parsed while its
+        page loads (the Python side is idle then) and the first Growth Lines view
+        no longer waits for them (~95 ms for 47k names). A lookup meanwhile waits
+        for the same parse (one lock), never runs a second one.
+        """
+        thread = threading.Thread(target=self._index, name="image-index", daemon=True)
+        thread.start()
+        return thread
 
     @staticmethod
     def _parse(names: Mapping[str, str]) -> dict[ImageKey, str]:

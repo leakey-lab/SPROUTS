@@ -191,19 +191,19 @@ class DashAppArea:
     def _stacked_bar_figure(self) -> go.Figure:
         cache = self.data_cache
         tubes = list(cache.tubes)
-        pivot = cache.tube_date_groups.unstack("Date").reindex(index=tubes).fillna(0)
+        # NaN (no bar, left out of the hover) where a tube was not measured.
+        pivot = cache.tube_date_groups.unstack("Date").reindex(index=tubes, columns=cache.dates)
         labels = [f"Tube {int(tube)}" for tube in tubes]
         traces = []
         for date in cache.dates:
-            values = pivot[date].to_numpy() if date in pivot.columns else [0.0] * len(tubes)
+            values = pivot[date].to_numpy()
             day = date.strftime("%Y-%m-%d")
             traces.append(
                 go.Bar(
                     name=day,
                     x=labels,
                     y=values,
-                    text=[f"{v:.2f}" for v in values],
-                    textposition="auto",
+                    **theme.bar_labels(theme.value_labels(values), len(tubes)),
                     hovertemplate=theme.hover("%{x}", [("Date", day), ("Area", "%{y:.2f} mm²")]),
                 )
             )
@@ -227,6 +227,9 @@ class DashAppArea:
     def _area_profile_figure(self, tube) -> go.Figure:
         means = dash_export.position_means(self.data_cache, tube)
         value = f"Mean {self.data_cache.value_column}"
+        positions = sorted(means["Position"].unique())
+        # grouped: every date's bar of a position stands side by side
+        bars = len(positions) * means["Date"].nunique()
         fig = go.Figure()
         for index, (day, rows) in enumerate(means.groupby("Date", sort=True)):
             fig.add_trace(
@@ -235,8 +238,7 @@ class DashAppArea:
                     y=rows[value],
                     name=day,
                     marker_color=theme.color(index),
-                    text=rows[value].round(2),
-                    textposition="auto",
+                    **theme.bar_labels(rows[value].round(2), bars),
                     hovertemplate=theme.hover(
                         "Position: %{x}", [("Area", "%{y:.2f} mm²"), ("Date", day)]
                     ),
@@ -249,6 +251,9 @@ class DashAppArea:
             legend_title_text="Measurement Dates",
             barmode="group",
         )
+        # Shallow to deep. Plotly's default category order is first appearance, so
+        # a later date that starts higher (L5 after L10...) put L5 at the deep end.
+        fig.update_xaxes(categoryorder="array", categoryarray=[f"L{int(p)}" for p in positions])
         return fig
 
     def show_growth_over_time(self) -> go.Figure:

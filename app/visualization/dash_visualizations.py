@@ -350,11 +350,10 @@ class DashVisualizations:
         x = [f"Tube {int(tube)}" for tube in tubes]
         traces = []
         if tubes and dates:
-            # tube x date totals in one pivot (0 where a tube was not measured)
-            grid = (
-                self.data_cache.tube_date_groups.unstack("Date")
-                .reindex(index=tubes, columns=dates)
-                .fillna(0)
+            # tube x date totals in one pivot. NaN (no bar, left out of the hover)
+            # where a tube was not measured: a 0.00 read as "no roots that day".
+            grid = self.data_cache.tube_date_groups.unstack("Date").reindex(
+                index=tubes, columns=dates
             )
             for date in dates:
                 values = grid[date].tolist()
@@ -363,8 +362,7 @@ class DashVisualizations:
                         name=date.strftime("%Y-%m-%d"),
                         x=x,
                         y=values,
-                        text=[f"{v:.2f}" for v in values],
-                        textposition="auto",
+                        **theme.bar_labels(theme.value_labels(values), len(tubes)),
                         hovertemplate=theme.hover(
                             "%{x}",
                             [

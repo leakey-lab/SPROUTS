@@ -8,7 +8,8 @@ A dashboard opens in three steps, none of which blocks the GUI thread:
 2. a server thread serves the app on ``DASH_HOST`` (its preferred port, or any
    free one) and reports the port it bound;
 3. the web view loads ``http://DASH_HOST:port/`` at once (the socket already
-   listens) and replaces the status text when the page has loaded.
+   listens) under the status text, which is removed when the page has loaded;
+   the page lays out and draws at its real size meanwhile.
 
 A failure at any step replaces the page with a message and sets ``failed``;
 the panel stays open so the message can be read. Subclasses only state what
@@ -26,9 +27,9 @@ from enum import Enum, auto
 
 from PyQt6.QtCore import QObject, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor
-from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest
+from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QMainWindow, QStackedLayout, QWidget
 
 from app.design import tokens
 
@@ -43,10 +44,49 @@ Builder = Callable[[], tuple[object, object]]
 _SERVER_JOIN_MS = 2000
 
 
+# True once this session's QtWebEngine is up (see prewarm_web_engine).
+_web_engine_warm = False
+
+
+def prewarm_web_engine(page_factory: Callable[[], QObject] | None = None) -> bool:
+    """Start QtWebEngine now, on the GUI thread; once per session.
+
+    The first browser page of a session starts QtWebEngine: ~0.4 s during which
+    the GUI thread holds the GIL, so neither the GUI nor a dashboard's build
+    worker runs. The first dashboard open used to pay it; call this at a quiet
+    moment instead. The engine outlives the throwaway page (a later page takes
+    ~1 ms). Returns True when this call started the engine; a failure is logged
+    and left to the first dashboard, which reports it.
+    """
+    global _web_engine_warm
+    if _web_engine_warm:
+        return False
+    try:
+        page = (page_factory or QWebEnginePage)()
+    except Exception:  # noqa: BLE001 -- a prewarm must never break the caller
+        logger.exception("Could not start Qt WebEngine ahead of the dashboards")
+        return False
+    _web_engine_warm = True
+    page.deleteLater()
+    return True
+
+
+def prewarm_imports() -> None:
+    """Import the dashboard stack (dash, plotly, pandas; 0.7-1 s): run it off the GUI thread.
+
+    A dashboard's build worker imports these on the first open of a session.
+    """
+    import app.data_processing.data_processor  # noqa: F401
+    import app.data_processing.data_processor_area  # noqa: F401
+
+    from . import dash_app, dash_app_area  # noqa: F401
+
+
 def require_rows(processor):
-    """Return *processor*, or raise when its CSV has no usable rows."""
+    """Return *processor*; raise with the processor's reason when its CSV has no usable rows."""
     if processor.df.empty:
-        raise ValueError("No data found in CSV file")
+        reason = getattr(processor, "empty_reason", None)
+        raise ValueError((reason() if callable(reason) else None) or "No data found in CSV file")
     return processor
 
 
@@ -163,9 +203,13 @@ class DashVizWindow(QMainWindow):
     # ------------------------------------------------------------------ ui
     def _init_ui(self) -> None:
         central = QWidget(self)
-        layout = QVBoxLayout(central)
+        # The status label is stacked over the web view (both fill the window), so
+        # the page lays out and draws its first chart at its real size while it
+        # loads. A hidden view kept QWidget's default 640x480: the first chart was
+        # drawn at 640x262, then everything again once the view was shown.
+        layout = QStackedLayout(central)
+        layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
         self.setCentralWidget(central)
 
         self.loading_label = QLabel(central)
@@ -174,29 +218,35 @@ class DashVizWindow(QMainWindow):
         self.loading_label.setTextFormat(Qt.TextFormat.PlainText)
         self.loading_label.setWordWrap(True)
         self.loading_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.loading_label)
         self._set_status("Loading data…")
 
         try:
             view = self._create_web_view()
         except Exception as exc:  # noqa: BLE001 -- WebEngine can fail to start (GPU, sandbox)
             logger.exception("Qt WebEngine could not start")
+            layout.addWidget(self.loading_label)
             self._fail(f"The embedded browser (Qt WebEngine) could not start:\n{exc}")
             return
-        view.hide()
         self._page = view.page()
         # Paint the page background dark before the first frame (no white flash).
         self._page.setBackgroundColor(QColor(tokens.BG_0))
         self._page.profile().downloadRequested.connect(self.handle_download)
+        self._page.renderProcessTerminated.connect(self._on_render_process_terminated)
         view.loadFinished.connect(self._on_load_finished)
         layout.addWidget(view)
+        layout.addWidget(self.loading_label)  # added last: stacked on top
+        layout.setCurrentWidget(self.loading_label)
         self.web_view = view
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         color = tokens.TEXT if error else tokens.TEXT_MUTED
-        self.loading_label.setStyleSheet(f"color: {color}; font-size: 14px; padding: 24px;")
+        # Opaque: the label covers the page while it loads.
+        self.loading_label.setStyleSheet(
+            f"color: {color}; background-color: {tokens.BG_0}; font-size: 14px; padding: 24px;"
+        )
         self.loading_label.setText(text)
         self.loading_label.show()
+        self.loading_label.raise_()
 
     # ------------------------------------------------------------------ start-up
     def _start_build(self) -> None:
@@ -255,6 +305,20 @@ class DashVizWindow(QMainWindow):
         self._stage = _Stage.SHOWN
         self.loading_label.hide()
         self.web_view.show()
+
+    def _on_render_process_terminated(self, status, exit_code: int) -> None:
+        """A crashed or killed page renderer: say so instead of a blank page.
+
+        Marking the window failed makes the next open rebuild it; before, the dead
+        page was brought forward on every visit. A normal exit is not an error.
+        """
+        normal = QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus
+        if status == normal or self._stage not in (_Stage.LOADING, _Stage.SHOWN):
+            return
+        self._fail(
+            "The dashboard page stopped: its browser process ended unexpectedly "
+            f"({getattr(status, 'name', status)}, exit code {exit_code})."
+        )
 
     def _fail(self, message: str) -> None:
         """Show *message* instead of the page and stop background work."""

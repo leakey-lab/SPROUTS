@@ -273,6 +273,9 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
   border-top:1px solid var(--border);
   max-height:min(46vh, 520px); overflow-y:auto;
 }
+/* No slide: the chart under the strip is resized (a full Plotly redraw) on
+   every frame of Bootstrap's 0.35 s collapse, so the strip opens at once. */
+.viz-controls .collapsing{ transition:none; }
 .viz-controls-body .card{ margin-bottom:10px; }
 .viz-controls-body .card-body{ padding:12px 16px; }
 .viz-tube-dropdown{ margin-bottom:10px; max-width:420px; }

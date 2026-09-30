@@ -113,6 +113,7 @@ class MetricDataProcessor:
     def __init__(self, csv_path):
         self.csv_path = csv_path
         self.exclusions = RowExclusions()
+        self._load_problem: str | None = None  # why the file could not be used at all
         self.df = self._load_and_prepare_data()
         self._compute_unique_caches()
 
@@ -120,6 +121,16 @@ class MetricDataProcessor:
     def dropped_rows(self) -> int:
         """Rows left out of ``df`` because a key field or the value was unreadable."""
         return self.exclusions.total
+
+    def empty_reason(self) -> str | None:
+        """Why ``df`` has no row to chart (one user-facing sentence); None when it has rows."""
+        if not self.df.empty:
+            return None
+        if self._load_problem:
+            return self._load_problem
+        if self.exclusions.total:
+            return f"Nothing to chart: {self.exclusions.message()}"
+        return "The CSV has no measurement rows."
 
     def _compute_unique_caches(self):
         """Compute the sorted unique lookups once instead of on every accessor call."""
@@ -177,6 +188,13 @@ class MetricDataProcessor:
                     self.value_column,
                     list(df.columns),
                 )
+                self._load_problem = f"The CSV has no {self.value_column!r} column."
+                return pd.DataFrame()
+            missing = [column for column in KEY_COLUMNS if column not in df.columns]
+            if missing:
+                logger.error("CSV %s missing key column(s) %s", self.csv_path, missing)
+                names = ", ".join(repr(column) for column in missing)
+                self._load_problem = f"The CSV has no {names} column{'s' * (len(missing) > 1)}."
                 return pd.DataFrame()
             df["Date"] = pd.to_datetime(df["Date"], format="%Y.%m.%d", errors="coerce")
             # No integer downcast: int8 positions overflow in the depth-interval
@@ -196,8 +214,9 @@ class MetricDataProcessor:
             df["Tube"] = df["Tube"].astype("int64")
             df["Position"] = df["Position"].astype("int64")
             return df
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to load CSV %s", self.csv_path)
+            self._load_problem = f"The CSV could not be read: {exc}"
             return pd.DataFrame()
 
     def get_unique_tubes(self):

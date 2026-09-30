@@ -99,6 +99,13 @@ _SEQUENTIAL_SWATCHES = sample_colorscale(
     ],
 )
 
+# Bar value labels are drawn only when at most this many bars share the x axis
+# (the tubes of a stacked chart; positions x dates of a grouped profile). With
+# more, the labels shrink to unreadable specks and each costs Plotly a text
+# measurement: a 160-tube stacked chart rendered in 795 ms with labels and in
+# 314 ms without (QtWebEngine, median of 5). The hover shows the values anyway.
+MAX_LABELLED_BARS = 30
+
 # Light-variant surface overrides (geometry is shared with the dark template).
 _LIGHT = {
     "paper": "#ffffff",
@@ -266,6 +273,23 @@ def hover(title: str, rows: list[tuple[str, str]], *, with_extra: bool = True) -
 def color(index: int) -> str:
     """Categorical colour by series index (wraps the colorway)."""
     return COLORWAY[index % len(COLORWAY)]
+
+
+def value_labels(values) -> list[str]:
+    """Two-decimal labels; ``""`` for a missing (NaN) value."""
+    return ["" if value != value else f"{value:.2f}" for value in values]
+
+
+def bar_labels(text, bars: int) -> dict:
+    """``go.Bar`` label arguments: ``text`` shown inside the bars only when readable.
+
+    Args:
+        text: the per-bar labels.
+        bars: bars side by side on the x axis (see :data:`MAX_LABELLED_BARS`).
+    """
+    if bars > MAX_LABELLED_BARS:
+        return {"textposition": "none"}
+    return {"text": text, "textposition": "auto"}
 
 
 def sequential_color(fraction: float) -> str:

@@ -70,6 +70,41 @@ def test_index_parses_names_only_when_first_used(images, monkeypatch):
     assert len(calls) == len(images)  # parsed once
 
 
+def test_index_can_be_parsed_ahead_on_a_background_thread(images, monkeypatch):
+    # The first Growth Lines view waited ~95 ms for 47k names; a dashboard now
+    # parses them while its page loads (PKG-VIZ).
+    import threading
+
+    threads = []
+    real = diu.parse_image_name
+
+    def spy(name):
+        threads.append(threading.current_thread())
+        return real(name)
+
+    monkeypatch.setattr(diu, "parse_image_name", spy)
+    index = diu.build_available_images_map(FakeImageManager(images))
+
+    worker = index.parse_in_background()
+    worker.join(5)
+
+    assert not worker.is_alive()
+    assert threads and all(t is worker for t in threads)
+    assert (1, 11, "2024.07.18") in index
+    assert len(threads) == len(images)  # parsed once, by the background thread
+
+
+def test_dashboard_parses_its_image_index_in_the_background(tmp_path, monkeypatch):
+    from tests.viz_dash_helpers import build_length_app
+
+    started = []
+    monkeypatch.setattr(diu.ImageIndex, "parse_in_background", lambda self: started.append(self))
+
+    dashboard = build_length_app(tmp_path)
+
+    assert started == [dashboard.available_images]
+
+
 def test_index_without_images_is_empty():
     assert len(diu.build_available_images_map(None)) == 0
     assert len(diu.build_available_images_map(FakeImageManager({}))) == 0

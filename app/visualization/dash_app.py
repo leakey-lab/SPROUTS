@@ -99,6 +99,8 @@ class DashApp(DashVisualizations):
 
         self._setup_layout()
         self._setup_callbacks()
+        # Parsed while the page loads, not by the first Growth Lines view (~95 ms).
+        self.available_images.parse_in_background()
 
     def get_encoded_image(self, tube: int, position: int, date: pd.Timestamp) -> str:
         """Hover thumbnail as a ``data:image/jpeg`` URL (``""`` if unavailable)."""
@@ -676,14 +678,16 @@ class DashApp(DashVisualizations):
                 return sorted(int(tube) for tube in self.data_cache.tubes)
 
             selected = set(current_selection or [])
-            if trigger_id == "tube-multiselect" and multiselect_values:
-                selected = set(multiselect_values)
+            if trigger_id == "tube-multiselect":
+                # The dropdown replaces the selection; an emptied one clears it.
+                selected = set(multiselect_values or [])
             if trigger_id == "add-range-btn" and range_from is not None and range_to is not None:
                 if range_from <= range_to:
                     selected.update(range(int(range_from), int(range_to) + 1))
             if trigger_id == "tube-manual-entry" and manual_entry:
                 selected.update(parse_tube_selection(manual_entry))
-            return sorted(selected)
+            # Only tubes with data: "1-200" on a 160-tube trial said "200 tubes selected".
+            return sorted(selected & {int(tube) for tube in self.data_cache.tubes})
 
         @self.app.callback(
             Output("selected-tubes-display", "children"),

@@ -11,21 +11,23 @@ import http.client
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, QUrl, pyqtSignal  # noqa: E402
-from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest  # noqa: E402
+from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.visualization._viz_server import _DashServerThreadBase  # noqa: E402
-from app.visualization.viz_window import DashVizWindow  # noqa: E402
+from app.visualization.viz_window import DashVizWindow, require_rows  # noqa: E402
 
 DownloadState = QWebEngineDownloadRequest.DownloadState
+TerminationStatus = QWebEnginePage.RenderProcessTerminationStatus
 
 
 @pytest.fixture(scope="module")
@@ -70,6 +72,9 @@ class FakeProfile(QObject):
 
 
 class FakePage(QObject):
+    #: QWebEnginePage.renderProcessTerminated(status, exit code)
+    renderProcessTerminated = pyqtSignal(object, int)
+
     def __init__(self, profile: FakeProfile):
         super().__init__()
         self._profile = profile
@@ -229,13 +234,38 @@ def test_page_loads_from_ipv4_loopback_as_soon_as_the_server_listens(make_window
 def test_dashboard_is_revealed_only_once_the_page_has_loaded(make_window):
     window = make_window()
     assert wait_until(lambda: window.web_view.loads)
-    assert window.web_view.isHidden() and not window.loading_label.isHidden()
+    assert _covered_by_status(window)
 
     window.web_view.loadFinished.emit(True)
 
     assert not window.web_view.isHidden()
     assert window.loading_label.isHidden()
     assert not window.failed
+
+
+def _covered_by_status(window) -> bool:
+    """The status label is shown and stacked above the (loading) page."""
+    stack = window.centralWidget().layout()
+    return (
+        not window.loading_label.isHidden()
+        and stack.indexOf(window.loading_label) > stack.indexOf(window.web_view)
+        and stack.currentWidget() is window.loading_label
+    )
+
+
+def test_the_page_loads_at_the_window_size_under_the_status(make_window):
+    # A hidden view kept QWidget's default 640x480, so the page was laid out and its
+    # first chart drawn at 640x262, then everything again once the view was shown.
+    window = make_window()
+    window.resize(1000, 700)
+    window.show()
+    assert wait_until(lambda: window.web_view.loads)
+    pump(0.05)
+
+    assert not window.web_view.isHidden()
+    assert window.web_view.size() == window.centralWidget().size()
+    assert _covered_by_status(window)
+    window.hide()
 
 
 def test_page_that_fails_to_load_is_reported_in_place(make_window):
@@ -249,6 +279,35 @@ def test_page_that_fails_to_load_is_reported_in_place(make_window):
     assert window.web_view.isHidden() and not window.loading_label.isHidden()
 
 
+@pytest.mark.parametrize("status", ["CrashedTerminationStatus", "KilledTerminationStatus"])
+def test_a_page_whose_renderer_died_is_reported_and_marked_failed(make_window, status):
+    # Before, the dead page stayed blank and every later visit brought it forward
+    # (not failed, CSV unchanged); now the message shows and the next open rebuilds.
+    window = make_window()
+    assert wait_until(lambda: window.web_view.loads)
+    window.web_view.loadFinished.emit(True)
+
+    window.web_view.page().renderProcessTerminated.emit(getattr(TerminationStatus, status), 1)
+
+    assert window.failed
+    assert "stopped" in window.loading_label.text()
+    assert window.web_view.isHidden() and not window.loading_label.isHidden()
+    assert window.server_thread is None
+
+
+def test_a_renderer_that_ends_normally_or_after_cleanup_is_no_error(make_window):
+    window = make_window()
+    assert wait_until(lambda: window.web_view.loads)
+    window.web_view.loadFinished.emit(True)
+    page = window.web_view.page()
+
+    page.renderProcessTerminated.emit(TerminationStatus.NormalTerminationStatus, 0)
+    assert not window.failed
+    window.cleanup_server()
+    page.renderProcessTerminated.emit(TerminationStatus.CrashedTerminationStatus, 1)
+    assert not window.failed
+
+
 def test_unreadable_data_is_reported_in_place_and_starts_no_server(make_window):
     def broken():
         raise ValueError("No data found in CSV file")
@@ -259,6 +318,18 @@ def test_unreadable_data_is_reported_in_place_and_starts_no_server(make_window):
     assert "No data found in CSV file" in window.loading_label.text()
     assert window.server_thread is None
     assert window.web_view.loads == []
+
+
+def test_an_unchartable_csv_is_reported_with_the_processors_reason():
+    # "No data found in CSV file" was all a user saw, also for a CSV whose
+    # measurements had all failed or that lacked a column.
+    processor = SimpleNamespace(
+        df=SimpleNamespace(empty=True), empty_reason=lambda: "The CSV has no 'Date' column."
+    )
+    with pytest.raises(ValueError, match="The CSV has no 'Date' column."):
+        require_rows(processor)
+    with pytest.raises(ValueError, match="No data found in CSV file"):
+        require_rows(SimpleNamespace(df=SimpleNamespace(empty=True)))  # an older processor
 
 
 def test_server_failure_is_reported_in_place(make_window):
@@ -393,3 +464,56 @@ def test_only_completed_exports_are_announced(make_window, tmp_path):
     broken.finish(DownloadState.DownloadInterrupted)
 
     assert [os.path.normcase(p) for p in saved] == [os.path.normcase(str(tmp_path / "plot.svg"))]
+
+
+# --------------------------------------------------------------------------- #
+#  Prewarm (PKG-VIZ, V2): what the first open of a session used to wait for
+# --------------------------------------------------------------------------- #
+def test_prewarm_web_engine_starts_the_engine_once_with_a_throwaway_page(qapp, monkeypatch):
+    # A real QWebEnginePage needs a working Chromium (never started in tests).
+    import app.visualization.viz_window as vw
+
+    made = []
+
+    class Page(QObject):
+        def __init__(self):
+            super().__init__()
+            made.append(self)
+
+    monkeypatch.setattr(vw, "_web_engine_warm", False)
+
+    assert vw.prewarm_web_engine(page_factory=Page) is True
+    assert vw.prewarm_web_engine(page_factory=Page) is False  # once per session
+    assert len(made) == 1
+    pump(0.05)  # the page itself is not kept: the engine outlives it
+
+
+def test_a_failing_web_engine_prewarm_is_logged_not_raised(qapp, monkeypatch, caplog):
+    import app.visualization.viz_window as vw
+
+    def broken():
+        raise RuntimeError("no GPU")
+
+    monkeypatch.setattr(vw, "_web_engine_warm", False)
+
+    assert vw.prewarm_web_engine(page_factory=broken) is False
+    assert "no GPU" in caplog.text
+    assert vw._web_engine_warm is False  # the first dashboard retries (and reports) it
+
+
+def test_prewarm_imports_loads_the_dashboard_stack():
+    import sys
+
+    import app.visualization.viz_window as vw
+
+    vw.prewarm_imports()
+
+    for module in (
+        "dash",
+        "plotly.graph_objects",
+        "pandas",
+        "app.visualization.dash_app",
+        "app.visualization.dash_app_area",
+        "app.data_processing.data_processor",
+    ):
+        assert module in sys.modules, module
