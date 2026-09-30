@@ -9,11 +9,15 @@ intervals. ``faceted_profile_figure`` renders that grid.
 The figure is assembled as plain dicts on top of a ``make_subplots`` skeleton
 and validated ONCE by ``go.Figure`` (PV-08). Adding one shape per subplot with
 ``fig.add_shape`` re-validates the whole shapes tuple on every call, which made
-the build O(subplots²): 3 s for 6 tubes x 24 dates.
+the build O(subplots²): 3 s for 6 tubes x 24 dates. The skeleton only depends on
+the grid's shape, so it is built once per shape (``make_subplots`` validates a
+whole figure: 80 ms of a 140 ms build for 11 dates x 6 tubes, R-VIZ X4).
 """
 
 from __future__ import annotations
 
+import copy
+import functools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -160,6 +164,52 @@ def _axis_suffix(subplot: int) -> str:
     return "" if subplot == 1 else str(subplot)
 
 
+def _column_placeholder(col: int) -> str:
+    return f"\x00column {col}\x00"
+
+
+def _row_placeholder(row: int) -> str:
+    return f"\x00row {row}\x00"
+
+
+@functools.lru_cache(maxsize=16)
+def _grid_skeleton(n_rows: int, n_cols: int) -> dict:
+    """``make_subplots``' layout of an ``n_rows`` x ``n_cols`` grid, titles as placeholders.
+
+    Read-only: :func:`grid_layout` copies it. The template is left out (the figure
+    sets its own).
+    """
+    skeleton = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        shared_xaxes=False,
+        shared_yaxes=True,
+        vertical_spacing=0.005,
+        horizontal_spacing=0.008,
+        subplot_titles=[
+            _column_placeholder(col) if row == 0 else ""
+            for row in range(n_rows)
+            for col in range(n_cols)
+        ],
+        row_titles=[_row_placeholder(row) for row in range(n_rows)],
+    )
+    layout = skeleton.layout.to_plotly_json()
+    layout.pop("template", None)
+    return layout
+
+
+def grid_layout(column_titles: Sequence[str], row_titles: Sequence[str]) -> dict:
+    """The layout ``make_subplots`` gives a grid titled ``column_titles`` (on top) and
+    ``row_titles`` (right), from the cached skeleton of its shape: axes, domains and
+    title annotations, template excluded. A fresh dict, free to change."""
+    layout = copy.deepcopy(_grid_skeleton(len(row_titles), len(column_titles)))
+    titles = {_column_placeholder(col): text for col, text in enumerate(column_titles)}
+    titles.update({_row_placeholder(row): text for row, text in enumerate(row_titles)})
+    for annotation in layout.get("annotations", []):
+        annotation["text"] = titles[annotation["text"]]
+    return layout
+
+
 def _x_range(max_value: float) -> int:
     """Symmetric x half-range: 10% headroom, rounded up to a multiple of 10 (min 10)."""
     if max_value <= 0:
@@ -197,21 +247,10 @@ class _FacetedFigureAssembler:
         self.n_cols = len(profile.tubes)
 
     def figure(self) -> go.Figure:
-        skeleton = make_subplots(
-            rows=self.n_rows,
-            cols=self.n_cols,
-            shared_xaxes=False,
-            shared_yaxes=True,
-            vertical_spacing=0.005,
-            horizontal_spacing=0.008,
-            subplot_titles=[
-                f"Tube {int(tube)}" if row == 0 else ""
-                for row in range(self.n_rows)
-                for tube in self.profile.tubes
-            ],
-            row_titles=[date.strftime("%Y-%m-%d") for date in self.profile.dates],
+        layout = grid_layout(
+            [f"Tube {int(tube)}" for tube in self.profile.tubes],
+            [date.strftime("%Y-%m-%d") for date in self.profile.dates],
         )
-        layout = skeleton.layout.to_plotly_json()
         _merge(layout, self._layout_updates())
         for annotation in layout.get("annotations", []):
             _merge(annotation, {"font": {"size": 12}})

@@ -160,3 +160,68 @@ def test_x_ticks_keep_a_readable_scale(value, tickvals, ticktext):
 
     assert list(axis.tickvals) == tickvals
     assert list(axis.ticktext) == ticktext
+
+
+# ---- R-VIZ X4: the grid skeleton is built once per shape ---------------------------
+
+
+def _make_subplots_layout(column_titles, row_titles) -> dict:
+    """The layout make_subplots builds for the grid (what the assembler used before)."""
+    import json
+
+    from plotly.subplots import make_subplots
+
+    skeleton = make_subplots(
+        rows=len(row_titles),
+        cols=len(column_titles),
+        shared_xaxes=False,
+        shared_yaxes=True,
+        vertical_spacing=0.005,
+        horizontal_spacing=0.008,
+        subplot_titles=[
+            title if row == 0 else "" for row in range(len(row_titles)) for title in column_titles
+        ],
+        row_titles=list(row_titles),
+    )
+    layout = json.loads(skeleton.layout.to_json())
+    layout.pop("template", None)
+    return layout
+
+
+@pytest.mark.parametrize("rows, cols", [(1, 1), (1, 6), (4, 3), (11, 6), (24, 6)])
+def test_the_cached_grid_is_the_make_subplots_grid(rows, cols):
+    import json
+
+    from app.visualization.faceted_profile import grid_layout
+
+    columns = [f"Tube {c + 1}" for c in range(cols)]
+    dates = [f"2024-06-{r + 1:02d}" for r in range(rows)]
+
+    first = grid_layout(columns, dates)
+    again = grid_layout([f"Tube {c + 11}" for c in range(cols)], dates)
+
+    assert json.loads(json.dumps(first)) == _make_subplots_layout(columns, dates)
+    assert [a["text"] for a in again["annotations"]][:cols] == [
+        f"Tube {c + 11}" for c in range(cols)
+    ]
+    first["xaxis"]["range"] = [0, 1]  # a caller's change never reaches the cache
+    assert "range" not in grid_layout(columns, dates)["xaxis"]
+
+
+def test_the_faceted_figure_is_unchanged_by_the_cached_grid(cache, monkeypatch):
+    import json
+
+    from dash._utils import to_json
+
+    import app.visualization.faceted_profile as fp
+
+    profile = build_faceted_profile(cache, [1, 2])
+    cached = json.loads(to_json(faceted_profile_figure(profile)))
+    monkeypatch.setattr(
+        fp,
+        "grid_layout",
+        lambda columns, rows: {**_make_subplots_layout(columns, rows), "template": "sprouts"},
+    )
+    direct = json.loads(to_json(faceted_profile_figure(profile)))
+
+    assert cached == direct

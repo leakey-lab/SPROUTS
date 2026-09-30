@@ -28,13 +28,19 @@ from .dash_shell import (
     DashboardShell,
     ShellSpec,
     ViewOption,
+    clientside_js,
     count_label,
     create_dash_app,
     exclusions_note,
     tube_options,
     with_uirevision,
 )
-from .dash_visualizations import GROWTH_LINES_INTERVAL, DashVisualizations, parse_tube_selection
+from .dash_visualizations import (
+    GROWTH_LINES_INTERVAL,
+    DashVisualizations,
+    auto_legend,
+    parse_tube_selection,
+)
 from .faceted_profile import MAX_TUBES, build_faceted_profile
 
 theme.use("sprouts")
@@ -69,9 +75,16 @@ _FACETED_GRAPH_STYLE = {
 
 _DATE_TOKEN = re.compile(r"\d{4}\.\d{2}\.\d{2}")
 
-
-def _card_style(visible: bool) -> dict:
-    return _SHOWN if visible else _HIDDEN
+# (tube-selection, viz-options, multiselect options, faceted-options, faceted tube /
+# date options) of a view; the options are never re-sent (see _setup_callbacks).
+_VIEW_PANELS_JS = """
+function(view) {
+    var keep = window.dash_clientside.no_update;
+    var time = view === 'time' ? __SHOWN__ : __HIDDEN__;
+    var faceted = view === 'faceted' ? __SHOWN__ : __HIDDEN__;
+    return [time, time, keep, faceted, keep, keep];
+}
+"""
 
 
 class DashApp(DashVisualizations):
@@ -127,7 +140,9 @@ class DashApp(DashVisualizations):
             ),
             stores=[
                 dcc.Store(id="selected-tubes-store", data=[]),
-                dcc.Store(id="legend-visible-store", data=True),
+                # None: automatic (shown up to AUTO_LEGEND_MAX_TUBES tubes); the
+                # toggle stores the user's choice.
+                dcc.Store(id="legend-visible-store", data=None),
                 dcc.Store(id="faceted-tubes-store", data=[]),
                 dcc.Store(id="faceted-dates-store", data=[]),
             ],
@@ -506,6 +521,7 @@ class DashApp(DashVisualizations):
             raise PreventUpdate
         patch = Patch()
         patch["layout"]["showlegend"] = bool(visible)
+        patch["layout"]["margin"]["r"] = theme.margin_right(bool(visible))
         return (patch, *([dash.no_update] * 5))
 
     # ---- export (PV-16) ------------------------------------------------------
@@ -590,7 +606,13 @@ class DashApp(DashVisualizations):
             metric_slug="root_length",
         )
 
-        @self.app.callback(
+        # The control cards of the selected view, shown in the browser in the click's
+        # own frame, like the strip around them (dash_shell): the strip opens at its
+        # final height before the new figure is drawn. The options Outputs are kept
+        # for compatibility but never re-sent: blanking them made Dash 4's Dropdown
+        # drop the user's selection.
+        self.app.clientside_callback(
+            clientside_js(_VIEW_PANELS_JS, shown=_SHOWN, hidden=_HIDDEN),
             [
                 Output("tube-selection-card", "style"),
                 Output("viz-options-card", "style"),
@@ -601,22 +623,6 @@ class DashApp(DashVisualizations):
             ],
             [Input("view-selector", "value")],
         )
-        def toggle_view_panels(view_type):
-            """Show the control cards of the selected view.
-
-            The options Outputs are kept for compatibility but never re-sent:
-            blanking them made Dash 4's Dropdown drop the user's selection.
-            """
-            time_view, faceted_view = view_type == "time", view_type == "faceted"
-            keep = dash.no_update
-            return (
-                _card_style(time_view),
-                _card_style(time_view),
-                keep,
-                _card_style(faceted_view),
-                keep,
-                keep,
-            )
 
         @self.app.callback(
             [
@@ -710,13 +716,14 @@ class DashApp(DashVisualizations):
         @self.app.callback(
             Output("legend-visible-store", "data"),
             [Input("toggle-legend-btn", "n_clicks")],
-            [State("legend-visible-store", "data")],
+            [State("legend-visible-store", "data"), State("selected-tubes-store", "data")],
         )
-        def toggle_legend(n_clicks, current_state):
-            """Flip the Growth Over Time legend."""
-            if n_clicks:
-                return not current_state
-            return current_state
+        def toggle_legend(n_clicks, current_state, selected_tubes):
+            """Flip the Growth Over Time legend: from what is shown, automatic or chosen."""
+            if not n_clicks:
+                return current_state
+            shown = auto_legend(selected_tubes) if current_state is None else bool(current_state)
+            return not shown
 
         @self.app.callback(
             [

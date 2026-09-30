@@ -25,6 +25,21 @@ logger = logging.getLogger(__name__)
 GROWTH_LINES_INTERVAL = 10
 #: Figures kept per dashboard instance.
 FIGURE_MEMO_SIZE = 16
+#: The Growth Over Time legend is shown by default up to this many tubes. A 160-entry
+#: legend was ~200 ms of a ~670 ms draw (QtWebEngine, 46,970-row trial, median of 8)
+#: and ten colours cannot tell that many tubes apart; the hover names each one.
+#: "Toggle Legend" still shows it.
+AUTO_LEGEND_MAX_TUBES = 30
+
+
+def auto_legend(tubes) -> bool:
+    """Whether the Growth Over Time legend is shown for ``tubes`` when nobody chose."""
+    return len(tubes or ()) <= AUTO_LEGEND_MAX_TUBES
+
+
+def _scatter(x, y, **properties) -> dict:
+    """A scatter trace as a plain dict (validated once, with its figure)."""
+    return {"type": "scatter", "x": x, "y": y, **properties}
 
 
 def parse_tube_selection(text: str) -> list[int]:
@@ -211,7 +226,7 @@ class DashVisualizations:
         selected_tubes: list[int] | None = None,
         show_field_average: bool = True,
         show_field_variance: bool = True,
-        show_legend: bool = True,
+        show_legend: bool | None = True,
     ) -> go.Figure:
         """
         Generate growth over time figure with flexible tube selection and variance options.
@@ -220,13 +235,15 @@ class DashVisualizations:
             selected_tubes: List of tube numbers to display. If None or empty, no individual tubes shown.
             show_field_average: Whether to show the field average line
             show_field_variance: Whether to show shaded variance for field average
-            show_legend: Whether to display the legend
+            show_legend: Whether to display the legend; None: only up to
+                :data:`AUTO_LEGEND_MAX_TUBES` tubes (see :func:`auto_legend`)
 
         Returns:
             Plotly figure object
         """
         tubes = tuple(selected_tubes or ())
-        flags = (bool(show_field_average), bool(show_field_variance), bool(show_legend))
+        legend = auto_legend(tubes) if show_legend is None else bool(show_legend)
+        flags = (bool(show_field_average), bool(show_field_variance), legend)
         try:
             return self._memoized(
                 ("time", tubes, *flags), lambda: self._growth_over_time_figure(tubes, *flags)
@@ -238,6 +255,9 @@ class DashVisualizations:
     def _growth_over_time_figure(
         self, tubes: tuple, show_field_average: bool, show_field_variance: bool, show_legend: bool
     ) -> go.Figure:
+        # Plain dicts validated once by go.Figure: one go.Scatter per tube, validated
+        # again by go.Figure(data=...), took 80 ms for 160 tubes (29 ms now), on the
+        # server thread and holding the GIL. The browser gets the same JSON.
         label, unit = self._metric_text()
         traces = []
         if show_field_average:
@@ -249,13 +269,13 @@ class DashVisualizations:
             if totals.empty:
                 continue
             traces.append(
-                go.Scatter(
-                    x=totals.index,
-                    y=totals,
+                _scatter(
+                    totals.index.to_numpy(),
+                    totals.to_numpy(),
                     mode="lines+markers",
                     name=f"Tube {int(tube)}",
-                    line=dict(color=theme.color(idx), width=2),
-                    marker=dict(size=6),
+                    line={"color": theme.color(idx), "width": 2},
+                    marker={"size": 6},
                     hovertemplate=theme.hover(
                         f"Tube {int(tube)}",
                         [
@@ -266,41 +286,44 @@ class DashVisualizations:
                 )
             )
 
-        fig = go.Figure(data=traces)
-        fig.update_layout(
-            title_text="Root Growth Over Time",
-            xaxis_title_text="Date",
-            yaxis_title_text=f"Total {label} ({unit})",
-            showlegend=show_legend,
-            hovermode="closest",
-        )
-        return fig
+        layout = {
+            "title": {"text": "Root Growth Over Time"},
+            "xaxis": {"title": {"text": "Date"}},
+            "yaxis": {"title": {"text": f"Total {label} ({unit})"}},
+            "showlegend": show_legend,
+            # a hidden legend leaves no empty band beside the plot
+            "margin": {"r": theme.margin_right(show_legend)},
+            "hovermode": "closest",
+        }
+        return go.Figure(data=traces, layout=layout)
 
-    def _field_average_traces(self, show_variance: bool, label: str, unit: str) -> list:
+    def _field_average_traces(self, show_variance: bool, label: str, unit: str) -> list[dict]:
         """Field-average line (+ optional +-1 SD band) across tubes, dates merged (F-034)."""
         field = self.data_cache.get_field_growth()
+        dates = field["Date"].to_numpy()
+        mean, std = field["mean"].to_numpy(), field["std"].to_numpy()
         traces = []
         if show_variance and field["std"].notna().any():
             # Upper bound (invisible edge) then lower bound filled up to it.
             traces.append(
-                go.Scatter(
-                    x=field["Date"],
-                    y=field["mean"] + field["std"],
+                _scatter(
+                    dates,
+                    mean + std,
                     mode="lines",
-                    line=dict(color="rgba(0,0,0,0)"),
+                    line={"color": "rgba(0,0,0,0)"},
                     showlegend=False,
                     hoverinfo="skip",
                     legendgroup="field_avg",
                 )
             )
             traces.append(
-                go.Scatter(
-                    x=field["Date"],
-                    y=field["mean"] - field["std"],
+                _scatter(
+                    dates,
+                    mean - std,
                     mode="lines",
                     fill="tonexty",
                     fillcolor=theme.rgba(theme.TEXT, 0.10),
-                    line=dict(color="rgba(0,0,0,0)"),
+                    line={"color": "rgba(0,0,0,0)"},
                     name="Field Variance (±1 SD)",
                     legendgroup="field_avg",
                     hovertemplate=theme.hover(
@@ -313,13 +336,13 @@ class DashVisualizations:
                 )
             )
         traces.append(
-            go.Scatter(
-                x=field["Date"],
-                y=field["mean"],
+            _scatter(
+                dates,
+                mean,
                 mode="lines+markers",
                 name="Field Average",
-                line=dict(color=theme.TEXT, width=3),
-                marker=dict(size=8, color=theme.TEXT),
+                line={"color": theme.TEXT, "width": 3},
+                marker={"size": 8, "color": theme.TEXT},
                 legendgroup="field_avg",
                 hovertemplate=theme.hover(
                     "Field Average",

@@ -12,9 +12,12 @@ import json
 import pytest
 
 from tests.viz_dash_helpers import (
+    NO_UPDATE,
     build_area_app,
     build_length_app,
     call_callback,
+    call_clientside,
+    clientside_function,
     component_ids,
     walk_components,
 )
@@ -29,12 +32,12 @@ LENGTH_IDS = {
     "legend-visible-store", "main-graph", "select-all-btn", "selected-tubes-display",
     "selected-tubes-store", "toggle-legend-btn", "tube-date-availability", "tube-manual-entry",
     "tube-multiselect", "tube-range-from", "tube-range-to", "tube-selection-card",
-    "tube-selection-tabs", "tube-selector", "view-selector", "viz-controls-collapse",
-    "viz-controls-toggle", "viz-options-card", "viz-resize-dummy",
+    "tube-selection-tabs", "tube-selector", "view-selector", "viz-controls",
+    "viz-controls-collapse", "viz-controls-toggle", "viz-options-card", "viz-resize-dummy",
 }  # fmt: skip
 AREA_IDS = {
     "cached-data", "click-data", "main-graph", "tube-selector", "view-selector",
-    "viz-controls-collapse", "viz-controls-toggle", "viz-resize-dummy",
+    "viz-controls", "viz-controls-collapse", "viz-controls-toggle", "viz-resize-dummy",
 }  # fmt: skip
 LENGTH_CALLBACKS = {
     "viz-controls-collapse.is_open": ({"viz-controls-toggle.n_clicks"}, {"viz-controls-collapse.is_open"}),
@@ -153,6 +156,21 @@ def test_chart_loading_wrapper_is_a_flex_container(tmp_path, builder):
 
 
 # ---- PV-15: the control strip follows the selected view ------------------------
+# The strip callbacks run in the browser (R-VIZ X2): as server callbacks their
+# responses raced the new figure's, which was then drawn at the old size and again
+# at the new one. They are run here in Qt's JavaScript engine.
+
+STRIP_OUTPUTS = (
+    "viz-controls-collapse.is_open",
+    "viz-controls.style",
+    "viz-controls-caret.children",
+)
+
+
+@pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
+@pytest.mark.parametrize("output", STRIP_OUTPUTS)
+def test_the_strip_changes_in_the_browser_not_after_a_server_round_trip(tmp_path, builder, output):
+    assert clientside_function(builder(tmp_path).app, output)["clientside_function"]
 
 
 @pytest.mark.parametrize("was_open", [True, False])
@@ -163,20 +181,19 @@ def test_chart_loading_wrapper_is_a_flex_container(tmp_path, builder):
 def test_switching_view_opens_the_strip_only_when_the_view_has_controls(
     length_app, view, expected, was_open
 ):
-    status, out = call_callback(
+    out, _ = call_clientside(
         length_app.app,
         "viz-controls-collapse.is_open",
         {"view-selector.value": view, "viz-controls-collapse.is_open": was_open},
         changed=["view-selector.value"],
     )
-    assert status == 200
     assert out["viz-controls-collapse"]["is_open"] is expected
 
 
 @pytest.mark.parametrize("was_open", [True, False])
 @pytest.mark.parametrize("view, expected", [("profile", True), ("time", False), ("stacked", False)])
 def test_area_profile_view_opens_the_strip(area_app, view, expected, was_open):
-    _, out = call_callback(
+    out, _ = call_clientside(
         area_app.app,
         "viz-controls-collapse.is_open",
         {"view-selector.value": view, "viz-controls-collapse.is_open": was_open},
@@ -187,7 +204,7 @@ def test_area_profile_view_opens_the_strip(area_app, view, expected, was_open):
 
 @pytest.mark.parametrize("was_open", [True, False])
 def test_toggle_button_still_flips_the_strip(length_app, was_open):
-    _, out = call_callback(
+    out, _ = call_clientside(
         length_app.app,
         "viz-controls-collapse.is_open",
         {"viz-controls-toggle.n_clicks": 1, "view-selector.value": "time",
@@ -199,13 +216,117 @@ def test_toggle_button_still_flips_the_strip(length_app, was_open):
 
 @pytest.mark.parametrize("is_open, caret", [(True, "▾"), (False, "▸")])
 def test_caret_reflects_the_strip_state(length_app, is_open, caret):
-    _, out = call_callback(
+    out, _ = call_clientside(
         length_app.app,
         "viz-controls-caret.children",
         {"viz-controls-collapse.is_open": is_open},
         changed=["viz-controls-collapse.is_open"],
     )
     assert out["viz-controls-caret"]["children"] == caret
+
+
+# ---- W19: a view without settings shows no strip at all -------------------------
+
+
+@pytest.mark.parametrize(
+    "builder, views",
+    [
+        (build_length_app, {"stacked": False, "time": True, "lines": True, "faceted": True}),
+        (build_area_app, {"stacked": False, "time": False, "profile": True}),
+    ],
+    ids=["length", "area"],
+)
+def test_views_without_settings_hide_the_whole_strip(tmp_path, builder, views):
+    # Before, the stacked view showed "▸ Tube & date range ... No options for this
+    # view", a disclosure that opened onto an empty strip.
+    dash = builder(tmp_path).app
+    for view, shown in views.items():
+        out, _ = call_clientside(
+            dash, "viz-controls.style", {"view-selector.value": view}, ["view-selector.value"]
+        )
+        assert (out["viz-controls"]["style"].get("display") != "none") is shown, view
+
+
+@pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
+def test_the_default_view_starts_without_an_empty_strip(tmp_path, builder):
+    strip = _find(
+        _served_layout(builder(tmp_path).app),
+        lambda n: n.get("props", {}).get("id") == "viz-controls",
+    )
+    assert strip["props"]["style"] == {"display": "none"}  # the default view: stacked bars
+
+
+# ---- X2: the new figure is drawn once, at the size the strip left it --------------
+
+_FAKE_GRAPH = """
+window.__resized = 0;
+window.Plotly = {Plots: {resize: function (gd) { window.__resized += 1; }}};
+window.__handlers = {};
+window.__gd = {
+    _fullLayout: {_initialAutoSizeIsDone: true},
+    on: function (event, handler) {
+        (window.__handlers[event] = window.__handlers[event] || []).push(handler);
+    }
+};
+document.querySelector = function (selector) {
+    return selector === '#main-graph .js-plotly-plot' ? window.__gd : null;
+};
+"""
+
+
+@pytest.mark.parametrize("changed", ["view-selector.value", "viz-controls-collapse.is_open"])
+def test_a_strip_or_view_change_makes_the_next_draw_measure_the_chart_again(length_app, changed):
+    # Plotly.react keeps the size a plot autosized to once, so a figure arriving after
+    # the strip changed height was drawn at the old size, then again at the new one.
+    out, engine = call_clientside(
+        length_app.app,
+        "viz-resize-dummy.data",
+        {"view-selector.value": "time", "viz-controls-collapse.is_open": True},
+        [changed],
+        setup=_FAKE_GRAPH,
+    )
+    assert out["viz-resize-dummy"]["data"] == NO_UPDATE
+    assert engine.evaluate("window.__gd._fullLayout._initialAutoSizeIsDone").toBool() is False
+    assert engine.evaluate("window.__resized").toInt() == 1
+
+
+def test_every_later_draw_leaves_the_next_one_to_measure_the_chart(length_app):
+    # E.g. "Select All" grows the chip list (a server response of its own) before the
+    # new figure arrives: that figure must also be drawn at the new size, once.
+    _, engine = call_clientside(
+        length_app.app,
+        "viz-resize-dummy.data",
+        {"view-selector.value": "time", "viz-controls-collapse.is_open": True},
+        ["view-selector.value"],
+        setup=_FAKE_GRAPH,
+    )
+    assert engine.evaluate("window.__handlers.plotly_afterplot.length").toInt() == 1
+    engine.evaluate(
+        "window.__gd._fullLayout._initialAutoSizeIsDone = true;"
+        "window.__handlers.plotly_afterplot[0]();"
+    )
+    assert engine.evaluate("window.__gd._fullLayout._initialAutoSizeIsDone").toBool() is False
+
+
+def test_the_draw_listener_is_added_once(length_app):
+    _, engine = call_clientside(
+        length_app.app,
+        "viz-resize-dummy.data",
+        {"view-selector.value": "time", "viz-controls-collapse.is_open": True},
+        ["view-selector.value"],
+        setup=_FAKE_GRAPH + "window.__gd.__sproutsRemeasure = true;",
+    )
+    assert engine.evaluate("window.__handlers.plotly_afterplot === undefined").toBool()
+
+
+def test_the_refit_does_nothing_before_the_first_chart(length_app):
+    out, engine = call_clientside(
+        length_app.app,
+        "viz-resize-dummy.data",
+        {"view-selector.value": "time", "viz-controls-collapse.is_open": True},
+        ["view-selector.value"],
+    )
+    assert out["viz-resize-dummy"]["data"] == NO_UPDATE
 
 
 @pytest.mark.parametrize(

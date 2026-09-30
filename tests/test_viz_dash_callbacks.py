@@ -11,10 +11,12 @@ from PIL import Image
 
 from app.visualization import theme
 from tests.viz_dash_helpers import (
+    NO_UPDATE,
     FakeImageManager,
     build_area_app,
     build_length_app,
     call_callback,
+    call_clientside,
     walk_components,
 )
 
@@ -122,8 +124,10 @@ def test_legend_toggle_patches_the_figure_instead_of_rebuilding_it(length_app):
     assert status == 200
     patch = out["main-graph"]["figure"]
     assert patch["__dash_patch_update"] == "__dash_patch_update"
+    # the legend and its margin (no empty band beside the plot, R-VIZ X3) only
     assert patch["operations"] == [
-        {"operation": "Assign", "location": ["layout", "showlegend"], "params": {"value": False}}
+        {"operation": "Assign", "location": ["layout", "showlegend"], "params": {"value": False}},
+        {"operation": "Assign", "location": ["layout", "margin", "r"], "params": {"value": 24}},
     ]
     assert set(out) == {"main-graph"}  # nothing else is re-sent
 
@@ -236,8 +240,9 @@ def _blanked(out: dict, component: str) -> bool:
 
 
 def test_view_panels_never_blank_the_dropdown_options(length_app):
+    # The panels switch in the browser (R-VIZ X2); run in Qt's JavaScript engine.
     for view in ("stacked", "time", "lines", "faceted"):
-        _, out = call_callback(
+        out, _ = call_clientside(
             length_app.app,
             "viz-options-card.style",
             {"view-selector.value": view},
@@ -245,6 +250,29 @@ def test_view_panels_never_blank_the_dropdown_options(length_app):
         )
         for component in ("tube-multiselect", "faceted-tube-selector", "faceted-date-selector"):
             assert not _blanked(out, component), (view, component)
+            assert out[component]["options"] == NO_UPDATE, (view, component)
+
+
+@pytest.mark.parametrize(
+    "view, cards",
+    [
+        ("stacked", set()),
+        ("time", {"tube-selection-card", "viz-options-card"}),
+        ("lines", set()),
+        ("faceted", {"faceted-options-card"}),
+    ],
+)
+def test_each_view_shows_only_its_own_control_cards(length_app, view, cards):
+    out, _ = call_clientside(
+        length_app.app,
+        "viz-options-card.style",
+        {"view-selector.value": view},
+        ["view-selector.value"],
+    )
+    shown = {cid for cid, props in out.items() if props.get("style") == {"display": "block"}}
+    hidden = {cid for cid, props in out.items() if props.get("style") == {"display": "none"}}
+    assert shown == cards
+    assert shown | hidden == {"tube-selection-card", "viz-options-card", "faceted-options-card"}
 
 
 def test_main_callback_never_blanks_the_tube_options(length_app):

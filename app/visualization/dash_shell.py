@@ -13,6 +13,7 @@ offline PC and never contact a CDN or Google Fonts.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from datetime import datetime
 from typing import Any
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, State, ctx, dcc, html
+from dash import Dash, Input, Output, State, dcc, html
 from dash.exceptions import PreventUpdate
 
 from resources.resource_utils import resource_path
@@ -34,24 +35,76 @@ ASSETS_DIR = resource_path("app", "assets")
 
 CARET_OPEN = "▾"
 CARET_CLOSED = "▸"
+#: Summary of a view without settings (its control strip is not shown at all).
 NO_OPTIONS_SUMMARY = "No options for this view"
+#: ``style`` of the control strip of a view without settings: no empty disclosure.
+STRIP_HIDDEN = {"display": "none"}
 
 #: Show the chart spinner only when a figure takes longer than this, so quick
 #: updates do not flash an overlay over the chart.
 LOADING_DELAY_MS = 250
 
+# The strip, its caret and its visibility change in the browser, in the click's own
+# frame. As server callbacks their responses raced the new figure's: the chart was
+# drawn at the old size, then again (a full Plotly redraw) once the strip had
+# opened or closed.
+_SYNC_CONTROLS_JS = """
+function(_nClicks, view, isOpen) {
+    var triggered = window.dash_clientside.callback_context.triggered || [];
+    var byView = triggered.some(function (t) { return t.prop_id === 'view-selector.value'; });
+    return byView ? __VIEWS_WITH_CONTROLS__.indexOf(view) >= 0 : !isOpen;
+}
+"""
+_STRIP_VISIBILITY_JS = """
+function(view) {
+    return __VIEWS_WITH_CONTROLS__.indexOf(view) >= 0 ? {} : __STRIP_HIDDEN__;
+}
+"""
+_CARET_JS = """
+function(isOpen) {
+    return isOpen ? __CARET_OPEN__ : __CARET_CLOSED__;
+}
+"""
+
 #: Refit the Plotly graph when the control strip opens / closes or the view
 #: changes. Targets the real Plotly div (``.js-plotly-plot``), not dcc.Graph's
 #: wrapper, which ``Plotly.Plots.resize`` silently ignored (PV-05).
+#:
+#: Once a plot has autosized, ``Plotly.react`` keeps that size, so a new figure that
+#: arrived after the chart card changed size (the strip opened, closed, or grew with
+#: the selected-tube chips) was drawn at the old size and redrawn by the resize that
+#: followed. Clearing plotly.js's ``_initialAutoSizeIsDone`` now and after every draw
+#: makes each react (or resize) measure the card again: a new figure is drawn once.
+#: plotly.js only reads the flag; ``test_viz_dash_plotly_bundle`` checks the bundle.
 _REFIT_GRAPH_JS = """
 function(_isOpen, _view) {
     var gd = document.querySelector('#main-graph .js-plotly-plot');
     if (window.Plotly && gd) {
+        var remeasure = function () {
+            if (gd._fullLayout) { gd._fullLayout._initialAutoSizeIsDone = false; }
+        };
+        if (!gd.__sproutsRemeasure && typeof gd.on === 'function') {
+            gd.__sproutsRemeasure = true;
+            gd.on('plotly_afterplot', remeasure);
+        }
+        remeasure();
         try { window.Plotly.Plots.resize(gd); } catch (e) {}
     }
     return window.dash_clientside.no_update;
 }
 """
+
+
+def js_literal(value: Any) -> str:
+    """``value`` as a JavaScript literal (JSON), for constants inlined in clientside code."""
+    return json.dumps(value)
+
+
+def clientside_js(source: str, **constants: Any) -> str:
+    """``source`` with each ``__NAME__`` placeholder replaced by ``constants[name]`` as JSON."""
+    for name, value in constants.items():
+        source = source.replace(f"__{name.upper()}__", js_literal(value))
+    return source
 
 
 @dataclass(frozen=True)
@@ -80,6 +133,11 @@ class ShellSpec:
     def has_controls(self, view: str | None) -> bool:
         """True if ``view`` has settings in the control strip."""
         return any(option.value == view and option.has_controls for option in self.views)
+
+    @property
+    def views_with_controls(self) -> list[str]:
+        """The views whose control strip has settings (the strip is hidden for the others)."""
+        return [option.value for option in self.views if option.has_controls]
 
 
 def create_dash_app(import_name: str, title: str = "SPROUTS") -> Dash:
@@ -231,9 +289,16 @@ class DashboardShell:
         )
 
     def control_strip(self, controls: Any) -> html.Div:
-        """Collapsible strip holding the view-specific controls."""
+        """Collapsible strip holding the view-specific controls.
+
+        A view without settings shows no strip at all (it was a disclosure that
+        opened onto nothing, next to "No options for this view").
+        """
+        shown = self.spec.has_controls(self.spec.default_view)
         return html.Div(
+            id="viz-controls",
             className="viz-controls",
+            style={} if shown else dict(STRIP_HIDDEN),
             children=[
                 dbc.Button(
                     [
@@ -297,28 +362,33 @@ class DashboardShell:
             summarize: ``summarize(view, *summary_input_values) -> str``.
         """
         spec = self.spec
+        views = spec.views_with_controls
 
-        @app.callback(
+        # A view change opens its controls, or hides the strip of a view without
+        # any (PV-15, W19); the toggle button still opens / closes it by hand. All
+        # three run in the browser (see _SYNC_CONTROLS_JS).
+        app.clientside_callback(
+            clientside_js(_SYNC_CONTROLS_JS, views_with_controls=views),
             Output("viz-controls-collapse", "is_open"),
             Input("viz-controls-toggle", "n_clicks"),
             Input("view-selector", "value"),
             State("viz-controls-collapse", "is_open"),
             prevent_initial_call=True,
         )
-        def sync_controls(_n_clicks, view, is_open):
-            # A view change shows its controls (or hides an empty strip, PV-15);
-            # the toggle button still opens / closes the strip by hand.
-            if ctx.triggered_id == "view-selector":
-                return spec.has_controls(view)
-            return not is_open
-
-        @app.callback(
+        app.clientside_callback(
+            clientside_js(
+                _STRIP_VISIBILITY_JS, views_with_controls=views, strip_hidden=STRIP_HIDDEN
+            ),
+            Output("viz-controls", "style"),
+            Input("view-selector", "value"),
+            prevent_initial_call=True,
+        )
+        app.clientside_callback(
+            clientside_js(_CARET_JS, caret_open=CARET_OPEN, caret_closed=CARET_CLOSED),
             Output("viz-controls-caret", "children"),
             Input("viz-controls-collapse", "is_open"),
             prevent_initial_call=True,
         )
-        def show_caret(is_open):
-            return CARET_OPEN if is_open else CARET_CLOSED
 
         if summarize is not None:
 

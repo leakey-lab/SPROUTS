@@ -15,6 +15,10 @@ runs their shared lifecycle:
 * OpenGL canvas viewports stay off while any dashboard embeds a browser (Qt6
   cannot composite a QWebEngineView in a window holding a QOpenGLWidget) and
   come back when the last one closes, but only if they were on before.
+* Dashboards outlive a visit to the Visualize stage, so a revisit is instant.
+  ``stage_changed`` (called by MainWindow on every stage change) closes them
+  :data:`IDLE_RELEASE_MS` after the stage was left: the canvases get OpenGL back
+  and each dashboard's browser process (~150-250 MB) is freed.
 
 The module functions keep their historical names. The dashboard classes are
 imported on first use, so opening the app does not load the Dash stack.
@@ -33,7 +37,7 @@ from dataclasses import dataclass
 # Qt6 only lets QtWebEngineWidgets load before the QApplication exists. The
 # dashboard modules that use it are imported lazily, so import it here.
 from PyQt6 import QtWebEngineWidgets  # noqa: F401
-from PyQt6.QtCore import QEventLoop, QThreadPool
+from PyQt6.QtCore import QEventLoop, Qt, QThreadPool, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
@@ -41,6 +45,16 @@ from app.gui.image_manager import project_layout_of
 from app.project_layout import ProjectLayout, find_test_latest_dir
 
 logger = logging.getLogger(__name__)
+
+#: The shell stage that shows the dashboards (``shell_chrome`` stage key).
+VISUALIZE_STAGE = "Visualize"
+#: Dashboards are closed this long after the Visualize stage was left (5 min). A
+#: revisit before brings the live page back at once (a frame, ~2 ms); after it a
+#: dashboard opens again in about a second.
+IDLE_RELEASE_MS = 5 * 60 * 1000
+#: A release due while a mouse button is held (a brush stroke, a drag) or a popup
+#: or dialog is open waits this long: the viewport swap must not cut an action.
+IDLE_RELEASE_RETRY_MS = 5000
 
 __all__ = [
     "AREA",
@@ -60,6 +74,7 @@ __all__ = [
     "show_root_area_visualization",
     "show_root_length_visualization",
     "show_visualization",
+    "stage_changed",
     "toggle_root_area_visualization",
     "toggle_root_length_visualization",
     "toggle_visualization",
@@ -269,6 +284,11 @@ class DashboardController:
         self._gl = ViewportGlSuspension(self._set_opengl, self._opengl_in_use)
         self._sources: dict[str, tuple | None] = {}  # kind -> CSV signature it was built from
         self._showing = False
+        # Counts down from leaving the Visualize stage (see stage_changed). PyQt holds
+        # the bound slot weakly, so the timer never keeps the controller alive.
+        self._idle_timer = QTimer()
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(self._on_idle)
 
     @property
     def _mw(self):
@@ -326,14 +346,15 @@ class DashboardController:
             self.show(spec)
 
     def release_all(self) -> bool:
-        """Close every dashboard because another project was opened.
+        """Close every dashboard: another project was opened, or Visualize was left long ago.
 
-        They chart the previous project's CSVs; kept, they held a server, a
-        browser page and the OpenGL suspension, and the one on screen stayed there
-        under the new library. Unlike :meth:`close`, no image is re-shown: the
-        caller shows the new project. Returns True when a dashboard was on screen
-        (the display page is shown instead).
+        After a project change they charted the previous project's CSVs; kept, they
+        held a server, a browser page and the OpenGL suspension, and the one on
+        screen stayed there under the new library. Unlike :meth:`close`, no image is
+        re-shown: the caller shows the new project. Returns True when a dashboard
+        was on screen (the display page is shown instead).
         """
+        self._idle_timer.stop()
         mw = self._mw
         current = mw.right_panel.currentWidget()
         shown = False
@@ -347,6 +368,43 @@ class DashboardController:
             self._set_button_text(spec, spec.open_text)
             self._discard(spec, dashboard)
         return shown
+
+    # ------------------------------------------------------------------ idle release
+    def stage_changed(self, key: str) -> None:
+        """Count down to closing the dashboards while the Visualize stage is not shown.
+
+        Leaving Visualize starts :data:`IDLE_RELEASE_MS`; moving between other
+        stages keeps the countdown running (the time away is what counts), and
+        coming back stops it, so the live pages are shown again at once.
+        """
+        if key == VISUALIZE_STAGE:
+            self._idle_timer.stop()
+        elif self._alive() and not self._idle_timer.isActive():
+            self._idle_timer.start(IDLE_RELEASE_MS)
+
+    def idle_release_pending(self) -> bool:
+        """True while the dashboards are counting down to their release."""
+        return self._idle_timer.isActive()
+
+    def _alive(self) -> bool:
+        return any(self.dashboard(spec) is not None for spec in SPECS.values())
+
+    def _on_idle(self) -> None:
+        """The countdown ended: close the dashboards, unless one is on screen again."""
+        if self._window() is None or not self._alive():
+            return
+        if self._showing or self.visible_kind() is not None:
+            return  # shown again by a path that did not report the stage
+        if (
+            QApplication.mouseButtons() != Qt.MouseButton.NoButton
+            or QApplication.activePopupWidget() is not None
+            or QApplication.activeModalWidget() is not None
+        ):
+            # Never swap the canvases' viewports under a stroke, a drag or a dialog.
+            self._idle_timer.start(IDLE_RELEASE_RETRY_MS)
+            return
+        logger.info("Closing the dashboards: the Visualize stage was left a while ago")
+        self.release_all()
 
     # ------------------------------------------------------------------ show
     def _show(self, spec: DashboardSpec) -> None:
@@ -580,6 +638,22 @@ def release_all_visualizations(main_window) -> bool:
     except Exception:  # noqa: BLE001 -- opening the project must not fail on this
         logger.exception("Error releasing the dashboards of the previous project")
         return False
+
+
+def stage_changed(main_window, key: str) -> None:
+    """The shell entered stage ``key`` ("Library", ..., "Visualize"); MainWindow calls this
+    on every stage change.
+
+    Leaving Visualize starts the countdown after which the dashboards are closed
+    (:data:`IDLE_RELEASE_MS`); returning to it cancels the countdown.
+    """
+    controller = _controllers.get(main_window)
+    if controller is None:
+        return  # no dashboard was ever opened in this window
+    try:
+        controller.stage_changed(key)
+    except Exception:  # noqa: BLE001 -- a stage change must never fail on this
+        logger.exception("Error scheduling the release of the dashboards")
 
 
 def toggle_root_length_visualization(main_window) -> None:

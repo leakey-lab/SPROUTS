@@ -106,6 +106,11 @@ _SEQUENTIAL_SWATCHES = sample_colorscale(
 # 314 ms without (QtWebEngine, median of 5). The hover shows the values anyway.
 MAX_LABELLED_BARS = 30
 
+# Right margin of a chart: room for the legend beside the plot, or a thin edge when
+# the legend is hidden (the Growth Over Time view hides it for many tubes).
+MARGIN_RIGHT_LEGEND = 180
+MARGIN_RIGHT_NO_LEGEND = 24
+
 # Light-variant surface overrides (geometry is shared with the dark template).
 _LIGHT = {
     "paper": "#ffffff",
@@ -174,7 +179,7 @@ def _build(dark: bool) -> go.layout.Template:
             y=0.97,
             yanchor="top",
         ),
-        margin=dict(l=64, r=180, t=64, b=48),
+        margin=dict(l=64, r=MARGIN_RIGHT_LEGEND, t=64, b=48),
         xaxis=_axis(grid, zero, line, muted),
         yaxis=_axis(grid, zero, line, muted),
         legend=dict(
@@ -275,6 +280,11 @@ def color(index: int) -> str:
     return COLORWAY[index % len(COLORWAY)]
 
 
+def margin_right(show_legend: bool) -> int:
+    """The chart's right margin: room for the legend only when it is shown."""
+    return MARGIN_RIGHT_LEGEND if show_legend else MARGIN_RIGHT_NO_LEGEND
+
+
 def value_labels(values) -> list[str]:
     """Two-decimal labels; ``""`` for a missing (NaN) value."""
     return ["" if value != value else f"{value:.2f}" for value in values]
@@ -323,5 +333,9 @@ def message_figure(text: str, *, color: str = TEXT_MUTED, size: int = 20) -> go.
         y=0.5,
         showarrow=False,
         font=dict(size=size, color=color),
+    )
+    # Text only: the empty axes (-1..6 by -1..4) and plot area read as a chart of nothing.
+    fig.update_layout(
+        xaxis={"visible": False}, yaxis={"visible": False}, plot_bgcolor="rgba(0,0,0,0)"
     )
     return fig

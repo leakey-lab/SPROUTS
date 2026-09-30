@@ -131,3 +131,16 @@ def test_text_tokens_are_readable_on_every_dashboard_surface(name):
     # WCAG 1.4.3 AA for normal text; the tokens come from app.design.tokens (AR-17)
     for surface in (theme.BG_0, theme.BG_1, theme.BG_2, theme.BG_3):
         assert contrast_ratio(getattr(theme, name), surface) >= 4.5, (name, surface)
+
+
+@pytest.mark.parametrize("color", [theme.TEXT_MUTED, theme.DANGER])
+def test_a_message_figure_is_text_only(color):
+    # R-VIZ: hints and errors ("Select 1 to 6 tubes...") were drawn over an empty
+    # chart, axes -1..6 by -1..4 and a plot area, which read as a chart of nothing.
+    fig = theme.message_figure("Select 1 to 6 tubes", color=color)
+
+    assert fig.data == ()
+    assert fig.layout.xaxis.visible is False and fig.layout.yaxis.visible is False
+    assert fig.layout.plot_bgcolor == "rgba(0,0,0,0)"
+    (note,) = fig.layout.annotations
+    assert (note.text, note.x, note.y, note.font.color) == ("Select 1 to 6 tubes", 0.5, 0.5, color)

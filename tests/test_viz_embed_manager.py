@@ -583,3 +583,155 @@ def test_a_failing_import_prewarm_is_only_logged(qapp, monkeypatch, caplog):
 
     QThreadPool.globalInstance().waitForDone(5000)
     assert "dash is not installed" in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+#  Idle release: dashboards close a while after the Visualize stage is left
+#  (R-VIZ X1). Revisits within it stay instant; after it the canvases get
+#  OpenGL back and the browser processes are freed.
+# --------------------------------------------------------------------------- #
+def _visit_and_leave(mw, stage="Correct"):
+    vm.stage_changed(mw, "Visualize")
+    vm.show_root_length_visualization(mw)
+    mw.switch_right_panel("display")
+    vm.stage_changed(mw, stage)
+    return vm.controller_for(mw)
+
+
+def test_leaving_visualize_counts_down_to_closing_the_dashboards(env_gl):
+    mw = env_gl.mw
+    controller = _visit_and_leave(mw)
+    dashboard = mw.root_length_viz
+
+    assert controller.idle_release_pending()
+    assert controller._idle_timer.interval() == vm.IDLE_RELEASE_MS == 5 * 60 * 1000
+    assert mw.gl_calls == [False]  # raster canvases while the dashboard lives
+
+    controller._idle_timer.stop()
+    controller._on_idle()  # the countdown ended
+
+    assert mw.root_length_viz is None and dashboard.cleanups == 1
+    assert mw.gl_calls == [False, True]  # OpenGL canvases again
+    assert mw.right_panel.currentIndex() == _PANELS["display"]  # the page shown stays
+    assert mw.refreshed == []
+
+
+def test_the_countdown_really_fires(env, monkeypatch):
+    monkeypatch.setattr(vm, "IDLE_RELEASE_MS", 30)
+    mw = env.mw
+    _visit_and_leave(mw)
+
+    assert _wait(lambda: mw.root_length_viz is None, 3.0)
+
+
+def _wait(predicate, seconds):
+    import time
+
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        QCoreApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return predicate()
+
+
+def test_coming_back_within_the_countdown_keeps_the_live_dashboards(env):
+    mw = env.mw
+    controller = _visit_and_leave(mw)
+    dashboard = mw.root_length_viz
+
+    vm.stage_changed(mw, "Visualize")
+    vm.show_root_length_visualization(mw)
+
+    assert not controller.idle_release_pending()
+    assert mw.root_length_viz is dashboard and dashboard.cleanups == 0
+
+
+def test_moving_between_other_stages_keeps_the_original_deadline(env, monkeypatch):
+    mw = env.mw
+    controller = _visit_and_leave(mw, "Correct")
+    started = []
+    monkeypatch.setattr(controller._idle_timer, "start", lambda *a: started.append(a))
+
+    vm.stage_changed(mw, "Library")
+    vm.stage_changed(mw, "Trace GT")
+
+    assert started == []  # still counting from when Visualize was left
+    assert controller.idle_release_pending()
+
+
+def test_a_dashboard_back_on_screen_is_never_closed_by_the_countdown(env):
+    mw = env.mw
+    controller = _visit_and_leave(mw)
+    vm.show_root_length_visualization(mw)  # e.g. a legacy button, no stage report
+
+    controller._idle_timer.stop()
+    controller._on_idle()
+
+    assert mw.root_length_viz is not None and mw.root_length_viz.cleanups == 0
+
+
+@pytest.mark.parametrize("busy", ["mouse", "popup", "modal"])
+def test_a_release_during_a_stroke_or_dialog_waits(env, monkeypatch, busy):
+    # The release swaps the canvases' viewports (raster -> OpenGL): never under a
+    # brush stroke, a drag or an open dialog.
+    mw = env.mw
+    controller = _visit_and_leave(mw)
+    if busy == "mouse":
+        monkeypatch.setattr(
+            vm.QApplication, "mouseButtons", staticmethod(lambda: Qt.MouseButton.LeftButton)
+        )
+    elif busy == "popup":
+        monkeypatch.setattr(vm.QApplication, "activePopupWidget", staticmethod(lambda: mw))
+    else:
+        monkeypatch.setattr(vm.QApplication, "activeModalWidget", staticmethod(lambda: mw))
+
+    controller._idle_timer.stop()
+    controller._on_idle()
+
+    assert mw.root_length_viz is not None  # kept for now
+    assert controller.idle_release_pending()
+    assert controller._idle_timer.interval() == vm.IDLE_RELEASE_RETRY_MS
+    controller._idle_timer.stop()
+
+
+def test_stage_changes_before_any_dashboard_create_nothing(env):
+    vm.stage_changed(env.mw, "Correct")
+    vm.stage_changed(env.mw, "Visualize")
+
+    assert env.mw not in vm._controllers
+
+
+def test_leaving_visualize_without_a_live_dashboard_starts_no_countdown(env):
+    mw = env.mw
+    controller = _visit_and_leave(mw)
+    vm.close_root_length_visualization(mw)
+    controller._idle_timer.stop()
+
+    vm.stage_changed(mw, "Visualize")
+    vm.stage_changed(mw, "Library")
+
+    assert not controller.idle_release_pending()
+
+
+def test_opening_another_project_ends_the_countdown(env):
+    mw = env.mw
+    controller = _visit_and_leave(mw)
+
+    vm.release_all_visualizations(mw)
+
+    assert not controller.idle_release_pending()
+
+
+def test_the_countdown_does_not_keep_its_controller_alive(env):
+    import gc
+    import weakref as _weakref
+
+    controller = vm.DashboardController(env.mw)  # not registered for the window
+    controller._idle_timer.start(60_000)
+    ref = _weakref.ref(controller)
+    del controller
+    gc.collect()
+
+    assert ref() is None  # the timer's slot holds the controller weakly

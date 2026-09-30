@@ -77,3 +77,12 @@ def _area_figures(tmp_path):
 def test_every_dashboard_figure_uses_only_basic_trace_types(tmp_path, figures):
     for figure in figures(tmp_path):
         assert {trace.type for trace in figure.data} <= BASIC_TRACES
+
+
+def test_the_bundle_still_has_the_autosize_flag_the_refit_clears():
+    # dash_shell._REFIT_GRAPH_JS clears plotly.js's _fullLayout._initialAutoSizeIsDone so
+    # the figure after a strip or view change is drawn once, at its real size (R-VIZ X2).
+    # A plotly.js that renamed it would silently bring the second redraw back.
+    with open(BUNDLE, encoding="utf-8") as fh:
+        source = fh.read()
+    assert "_initialAutoSizeIsDone" in source

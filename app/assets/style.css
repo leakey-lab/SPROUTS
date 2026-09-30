@@ -322,12 +322,16 @@ input[type=checkbox], input[type=radio]{ accent-color:var(--accent); }
 /* ---- chart card: fills remaining space, full width -------- */
 .viz-chart-card{
   flex:1 1 auto; min-height:0; width:100%;
-  background:var(--bg-2); border:0;
+  /* the charts' paper colour, so the reserved scrollbar gutter below is invisible */
+  background:var(--bg-0); border:0;
   padding:0;
   display:flex; flex-direction:column;
   /* auto: width-fluid views produce no scrollbar; the faceted depth profile
      keeps its tall computed height and scrolls internally instead. */
   overflow-y:auto; overflow-x:hidden;
+  /* The scrollbar's width is reserved: appearing under a freshly drawn faceted
+     grid, it narrowed the chart, and that resize redrew the whole grid (~0.45 s). */
+  scrollbar-gutter:stable;
 }
 /* dcc.Loading renders two wrapper divs around the graph, both with
    parent_className="viz-loading". They must stretch too, or the chart

@@ -3,7 +3,9 @@
 Builds the length / area dashboards from small synthetic CSVs written under a
 pytest ``tmp_path`` and drives Dash callbacks through Flask's test client, i.e.
 through Dash's real dispatch (``/_dash-update-component``), so ``no_update``,
-``Patch`` and ``allow_duplicate`` behave exactly as in the app.
+``Patch`` and ``allow_duplicate`` behave exactly as in the app. Clientside
+(JavaScript) callbacks run in Qt's JavaScript engine (:func:`call_clientside`):
+no browser is needed.
 """
 
 from __future__ import annotations
@@ -160,3 +162,104 @@ def walk_components(node):
 def component_ids(layout) -> set[str]:
     """All string component ids in a layout tree."""
     return {c.id for c in walk_components(layout) if isinstance(getattr(c, "id", None), str)}
+
+
+# ---- clientside (JavaScript) callbacks --------------------------------------------
+
+#: What :func:`call_clientside` returns for ``window.dash_clientside.no_update``.
+NO_UPDATE = "<no_update>"
+_QAPP = None
+
+_JS_PRELUDE = """
+var window = this;
+window.dash_clientside = {no_update: {description: 'no_update'}};
+window.setTimeout = function (f) { f(); return 0; };
+window.document = {querySelector: function () { return null; }};
+var document = window.document;
+"""
+
+
+def clientside_function(dash, output: str) -> dict:
+    """The ``_callback_list`` entry of the clientside callback writing ``output``."""
+    key = find_callback_key(dash, output)
+    entry = next(cb for cb in dash._callback_list if cb["output"] == key)
+    assert entry.get("clientside_function"), f"{output!r} is written by a server callback"
+    return entry
+
+
+def call_clientside(
+    dash,
+    output: str,
+    values: dict[str, Any] | None = None,
+    changed: list[str] | tuple[str, ...] = (),
+    *,
+    setup: str = "",
+):
+    """Run the clientside callback writing ``output`` as the Dash renderer would.
+
+    The page's inline clientside scripts are evaluated in a ``QJSEngine`` with a
+    minimal ``window`` (``dash_clientside.no_update``, ``callback_context.triggered``,
+    an immediate ``setTimeout`` and a ``document`` without elements); ``setup`` is
+    JavaScript run before the call (e.g. a fake Plotly graph). A returned Promise
+    is awaited.
+
+    Returns:
+        (outputs {id: {prop: value}}, engine): a ``no_update`` value is
+        :data:`NO_UPDATE`; the engine allows inspecting what the callback changed.
+    """
+    import os as _os
+
+    _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QCoreApplication
+    from PyQt6.QtQml import QJSEngine
+    from PyQt6.QtWidgets import QApplication
+
+    global _QAPP
+    # Kept referenced: a QApplication nobody holds is deleted at once, and Qt with it.
+    _QAPP = QApplication.instance() or QApplication(["viz-dash-tests"])
+    values = values or {}
+    entry = clientside_function(dash, output)
+    spec = dash.callback_map[entry["output"]]
+    args = [
+        values.get(f"{item['id']}.{item['property']}") for item in spec["inputs"] + spec["state"]
+    ]
+    engine = QJSEngine()
+
+    def run(source: str):
+        result = engine.evaluate(source)
+        assert not result.isError(), result.toString()
+        return result
+
+    run(_JS_PRELUDE)
+    run(setup)
+    for script in dash._inline_scripts:
+        run(script)
+    triggered = [{"prop_id": prop, "value": values.get(prop)} for prop in changed]
+    function = entry["clientside_function"]
+    run(
+        "window.__result = undefined; window.dash_clientside.callback_context = "
+        f"{{triggered: {json.dumps(triggered)}}};"
+        f"var __ret = window.dash_clientside[{json.dumps(function['namespace'])}]"
+        f"[{json.dumps(function['function_name'])}].apply(null, {json.dumps(args)});"
+        "delete window.dash_clientside.callback_context;"
+        "if (__ret && typeof __ret.then === 'function') {"
+        "  __ret.then(function (v) { window.__result = {value: v}; });"
+        "} else { window.__result = {value: __ret}; }"
+    )
+    for _ in range(20):  # Promise reactions run from posted events
+        if run("window.__result !== undefined").toBool():
+            break
+        QCoreApplication.processEvents()
+        QCoreApplication.sendPostedEvents()
+    encoded = run(
+        "JSON.stringify(window.__result.value, function (k, v) {"
+        f" return v === window.dash_clientside.no_update ? {json.dumps(NO_UPDATE)} : v; }})"
+    ).toString()
+    result = json.loads(encoded) if encoded != "undefined" else None
+    parts = _split_output_key(entry["output"])
+    if not isinstance(parts, list):
+        return {parts["id"]: {parts["property"]: result}}, engine
+    outputs: dict[str, dict[str, Any]] = {}
+    for part, value in zip(parts, result, strict=True):
+        outputs.setdefault(part["id"], {})[part["property"].split("@")[0]] = value
+    return outputs, engine
