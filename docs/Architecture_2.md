@@ -252,6 +252,15 @@ flowchart TB
   saves (the unsaved layers, mask first; with nothing unsaved, the active layer), asks the
   one Save / Discard / Cancel question and keeps one undo timeline: `EditJournal` records
   which layer acted, each layer keeps its own stack.
+- **Paging** (2026-09-30): after each open, `paging.Neighbours` asks the library for the
+  next and previous images (`LibraryIndex.neighbours`, which skips rows the search hides)
+  and the Qt-free `read_ahead.ReadAhead` reads them on one worker thread: the photo, and
+  through each layer's `read_ahead` hook (`ReadAheadLayer` in `layer.py`) the mask plane and
+  the thinned skeleton. At most 3 images and 256 MiB are kept, and a read is used only while
+  the files' stamps still match, so `PgDn` opens from memory. The page's other small parts:
+  `keys.py` (its shortcut table), `chip.py` (the status chip's name forms and
+  "Image 12 / 40") and `layer_prefs.py` (layer opacity and visibility kept in QSettings).
+  The Library display reads ahead the same way (`app/gui/display_read_ahead.py`).
 - **Trace GT** stays a separate stage on `RasterEditorBase` (`app/gui/raster_editor_base.py`),
   built from the same canvas parts: `EditorCanvasView`, `EditorChrome`, `PaintCanvas`,
   `PhotoLayerItem`, `RasterLayerItem` and `editor_prompts`.
@@ -410,7 +419,7 @@ sequenceDiagram
 
     rect rgb(245, 230, 255)
         Note over U,WEB: Visualization
-        U->>MW: Click "Visualize Root Length"
+        U->>MW: Enter Visualize (opens the last chosen dashboard)
         MW->>+RLV: show_visualization(csv_path)
         RLV->>+DP: load_data(csv_path)
         DP->>FS: Read CSV
@@ -581,6 +590,9 @@ Root-Mask-and-Skeletons/
 │   │   ├── layer.py                     # EditLayer contract (Qt-free)
 │   │   ├── mask_layer.py                # Mask layer (+ mask_tools.py, mask_document.py)
 │   │   ├── skeleton_layer.py            # Skeleton layer (+ skeleton_document.py)
+│   │   ├── paging.py, read_ahead.py     # Neighbour images read ahead on a worker thread
+│   │   ├── keys.py, chip.py             # Page shortcuts; status chip name forms, "Image 12 / 40"
+│   │   ├── layer_prefs.py               # Layer opacity / visibility kept across restarts
 │   │   └── controls.py, layer_panel.py  # Rail groups, dock, polyline prompt; Layers panel
 │   ├── gt_tracing_interface.py          # Trace GT, on raster_editor_base.py
 │   ├── editor_canvas.py                 # EditorCanvasView (shared by both editors)

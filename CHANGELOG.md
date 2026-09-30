@@ -11,8 +11,13 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
-Two passes, not yet released:
+Three passes, not yet released:
 
+- **UX and speed pass** (branch `feat/unified-correct-editor`, 2026-09-30): the open items
+  of `docs/KNOWN_ISSUES.md` #5 and #6 worked through with the emphasis on UI/UX and speed,
+  plus a bug hunt: per-area packages with a UI walkthrough and a measured runtime review,
+  then a review of every commit. Timings are medians of interleaved runs on a machine shared
+  by up to eight agents, offscreen unless stated. Still open: `docs/KNOWN_ISSUES.md` #7.
 - **Unified Correct editor** (branch `feat/unified-correct-editor`, 2026-09-29; spec
   `docs/superpowers/specs/2026-09-29-unified-correct-editor-design.md`): one **Correct**
   stage replaces *Correct Mask* and *Correct Skeleton*, and the photo stays smooth at every
@@ -23,6 +28,74 @@ Two passes, not yet released:
   a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- **UX and speed pass (2026-09-30).** None of these changes a CSV value or an output pixel
+  except the two entries under *Scientific output changes* (stem clash, GT export size
+  check).
+  - Generation and Measure: two image files with one stem (`a.jpg` and `a.png`) no longer
+    race for one output file. A full disk ends a run at the next batch boundary as failed
+    and keeps the outputs already written (every remaining image used to fail one by one
+    while the model kept running). A cancelled or failed skeleton run refreshes the Library.
+    The cleanup after a sticky CUDA error no longer replaces the run's own error. A progress
+    callback that raises no longer counts an input as both written and failed, and counts
+    from several writer threads arrive in order (the bar could end at "1 of 7"). When the
+    full provenance record cannot be built, a minimal `_sprouts_run.json` replaces the
+    previous run's record. Measure-area warns when it measures an older `output/mask` folder
+    while `mask/` exists (the CSV is unchanged).
+  - Files: the GT export's text files (splits, `classes.json`, `manifest.csv`, `errors.txt`)
+    are written atomically, with the same bytes. The atomic writer shortens its temp name
+    when the temp path would pass Windows' 260 characters while the target fits, and on a
+    full disk its cleanup removes the temp file and keeps the original error. The per-user
+    settings folder is swept for stale temp files, and loading the Enhance defaults no
+    longer fails when no thread can start.
+  - Correct: coming back to an image after saving it no longer re-reads it and drops its
+    undo history. `B` or `Space` held while the canvas loses the keyboard (Alt+Tab, a
+    dialog) no longer stays on (Trace GT too). `PgDn` with a polyline draft hidden behind
+    the mask layer no longer traps the keyboard: it brings the skeleton forward so Enter and
+    Esc reach the draft. A skeleton opened with *Load skeleton file* that differs from the
+    open one counts as unsaved (it was dropped without a prompt). A read-ahead image is kept
+    when an open is cancelled, and the read-ahead plans again after a library search or a
+    Generate run.
+  - Skeleton layer: endpoint markers, polyline handles and previews sit on pixel centres (at
+    1600 % a marker sat 8 screen px off its line tip and a committed line jumped 8 px). The
+    marker cache is kept on large and HiDPI viewports (at about 2600 x 1500 device px all
+    1,738 markers were re-rendered every frame: 25.4 ms instead of 0.62 ms). The translucent
+    halo no longer darkens where segments overlap.
+  - Canvas: a very large image fits (the fit was clamped to 10 %, which cut off a
+    6000 x 4000 photo in a canvas narrower than about 650 px). The point under a still
+    cursor stays put through a run of Ctrl+wheel notches (it drifted up to 5 screen px).
+    Zooming in after zooming out to the limit no longer jumps back to an earlier point. The
+    pixel grid sits on the pixel edges on raster viewports. The photo's idle texture uploads
+    also happen when the view does not show the image's top-left corner.
+  - Trace GT: *Discard* puts back the tracing as last saved (or as opened), class ticks and
+    counts included; it used to keep the strokes on screen, and a later save wrote them. A
+    failed first save no longer has already replaced the tracing file (`gt/classes.json` is
+    written first). Opening another image decodes it before asking about unsaved edits.
+    Clicking the open image's library row gives the keys back to the canvas. In the class
+    editor, Enter or OK adds a typed class instead of dropping it. In the export dialog,
+    Enter exports instead of opening Browse, a relative folder goes next to the images and a
+    pasted quoted path works. Long class names no longer push the check boxes behind a
+    horizontal scroll bar.
+  - Library and shell: the app no longer fails to start on a recent-projects entry with a
+    UTC-offset time or a NaN count. After paging in an editor, the Library shows the
+    selected image, not the one it showed before. The Library stage button no longer keeps
+    the keyboard after a folder opens. Opening a folder again updates the "Loaded N images"
+    toast instead of stacking another. The selected library row keeps its green and orange
+    status dots and no longer shifts 3 px. The status line no longer says "Ready" during a
+    job or keeps a red dot after a failure has cleared, its idle text follows the loaded
+    folder ("Ready · 1 image"), and "Cancelling…" stays until the job stops. The metrics bar
+    has no stray separator. The loading card sits below the top bar and names the folder,
+    and the empty state says "Loading images…" during the first load; long folder names no
+    longer cut the card or widen the empty state. The window title is "<project> — SPROUTS"
+    (was "Root Viewer"). Welcome rows no longer clip descenders and underscores, count
+    images like the Library, and keep the keyboard focus after a recent project is removed.
+  - Dashboards: the area profile's x axis reads shallow to deep (it was in first-appearance
+    order: L10, L20, L5). Removing the last Multi-Select tube clears the chart. Typed or
+    ranged tubes without data no longer count as selected. Stacked bars leave out the dates
+    a tube was not measured on (they showed 0.00). A crashed page renderer is reported and
+    the next visit rebuilds the page (it stayed blank). An unchartable CSV says why (header
+    only, every row failed, a missing column). Dashboards are released when another project
+    opens (they kept the previous project's data). Hint and error panels no longer draw an
+    empty axis grid.
 - Correct: a skeleton file that *Load* cannot read changes nothing; it used to forget the
   skeleton's undo steps and drop its polyline draft.
 - The arrow keys in the Library tree keep stepping images while Correct or Trace GT is
@@ -76,13 +149,54 @@ Two passes, not yet released:
   - Out of GPU memory, a sub-batch at least as long as one that already ran out of memory is
     split without being tried (saving one wasted forward per split). Under a steady memory
     limit the sub-batches that run are the same as before; after a transient out-of-memory
-    they can differ, which does not change outputs (BatchNorm runs in eval mode). An image
+    they can differ, which can change the outputs of those images slightly (see *Scientific
+    output changes*, the batch-size correction of 2026-09-30). An image
     that runs out of memory alone is reported once as "OutOfMemoryError: ...", not
     "ItemOutOfMemory: OutOfMemoryError: ...".
   - Closing the F1 shortcut sheet or the About dialog no longer raises "wrapped C/C++ object
     ... has been deleted", and the Measure Retry prompt is freed once answered.
 
 ### Performance
+- **UX and speed pass (2026-09-30).** Outputs are unchanged by all of these.
+  - Correct reads the next and previous images ahead on a worker thread (photo, mask plane,
+    thinned skeleton; at most 3 images and 256 MiB, used only while the files are
+    unchanged): `PgDn` costs 19.2 ms of GUI time instead of 78.9 ms at 2048 px and 8.9
+    instead of 17.9 ms at 640 px (first paint included); the first `PgDn` after a library
+    search or a Generate run 66-76 -> 20 ms at 2048 px. The Library display reads ahead too:
+    `PgDn` at 2048 px about 10.4 -> 4.4 ms, arrow steps 9.2 -> 3.5 ms.
+  - Skeleton layer (dense 2048 px stress skeleton): undo history after 25 commits
+    75 -> 3.0 MiB; undo + paint 36.0 -> 3.9 ms; polyline commit + paint 29.6 -> 4.7 ms
+    (endpoints recomputed only around the change, markers repainted only where they
+    changed); first frame after a zoom to 200 % 9.9 -> 5.2 ms on the raster canvas, and on
+    OpenGL the skeleton item's share 5.2 -> 2.0 ms (vector tiles made ahead when idle).
+  - Mask canvas at 2048 x 1536: undo / redo of a whole-image stroke
+    31.7 / 30.7 -> 2.0 / 2.0 ms, of a Clear 39.3 / 37.5 -> 2.0 / 1.3 ms; committing that
+    stroke 24.7 -> 14.3 ms; opening a mask document 12.1 -> 10.5 ms.
+  - OpenGL first frames at a new zoom: a 6000 x 4000 photo at 33 % 10.35 -> 0.29 ms and at
+    67 % 10.06 -> 0.39 ms (the next pyramid level is prepared when idle); on the dense
+    2048 px page fit -> 200 % 3.87 -> 2.32 ms and `Ctrl+=` from 50 % 8.34 -> 0.76 ms (mask
+    tiles made ahead).
+  - Raster canvas: a full frame with the five floating panels 3.93 -> 2.80 ms at 400 % and
+    2.57 -> 1.20 ms at 100 % (cached shadow). The pixel grid costs 0.2-0.4 ms per frame.
+  - Trace GT at 2048 x 1536: opening an image with a tracing 58.0 -> 23.7 ms, saving
+    44.5 -> 7.3 ms, `PgDn` (save, then open the next image) 105.4 -> 35.5 ms, re-selecting
+    the open image 43.4 -> 0.04 ms (at 640 px: open 11.1 -> 8.1 ms, `PgDn` 19.5 -> 13.8 ms).
+    *Export dataset* opens without a freeze at 46k images: counting the traced images takes
+    20 ms instead of 740 ms (74 ms with 100 traced).
+  - Dashboards (46,970-row trial, 160 tubes): the first chart of a warm open 1886 -> 979 ms,
+    of a cold open 3298 -> 2203 ms (649 ms when Measure was entered first, which warms
+    the dashboard imports; 909 ms after resting on the Visualize button); the page is
+    laid out at its real
+    size, so the first chart is drawn once. View switches: length stacked 1028 -> 646 ms to
+    paint, area profile 501 -> 256 ms, the 160-tube time view 639 -> 279 ms (figures built
+    from dicts, legend automatic); 5-6 -> 3 server requests per switch, each chart drawn
+    once per switch, and the faceted grid no longer drawn twice (last redraw
+    1805 -> 1343 ms).
+  - Measure-length preprocessing 313 -> 178 ms per 300 images (CSV bytes identical); the
+    pre-Generate mask-origin scan of 46k files 1.57 -> 0.99 s; the project output scan
+    84.5 -> 58.8 ms at 46k files; a library selection in an unmeasured 46k project
+    59 -> 0.1 ms (the legacy-folder search left the GUI thread), without the ~50 ms wait
+    while a CSV is parsed; the Welcome screen with a 500-entry recent list 496 -> 7 ms.
 - Correct decodes an image once for the photo, Enhance and the zoom pyramid, and switching
   between the mask and the skeleton reads no file and keeps the view (switching between the
   two old stages cost 13-20 ms plus a re-fit).
@@ -136,6 +250,87 @@ Two passes, not yet released:
   app version, commit, model SHA-256, calibration and runtime precision.
 
 ### Changed
+- **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
+  the goldens.
+  - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so
+    `Ctrl+S`, undo, tool, layer and zoom keys work right after a click in the library tree
+    (text fields keep their typing, dialogs block the keys); held `B` and `Space` and
+    Correct's `S`, Enter, Esc and Delete reach the canvas from the tree. In the Library
+    `Ctrl+0` / `Ctrl+1` / `Ctrl+=` / `Ctrl+-` fit, show 100 % and zoom, F1 lists them, and
+    the metrics bar shows the zoom. `Ctrl+'` shows a pixel grid at 800 % and above in
+    Correct and Trace GT (display only). Tab reaches the Correct Layers rows and their eyes
+    (Space or Enter picks a layer, Space toggles an eye) and the Trace GT class panel's
+    boxes (Space ticks); a click never takes the keyboard from the canvas. The Tab order of
+    the top bar and of the Welcome screen follows the screen.
+  - Correct: a polyline draft of two or more points (or a picked branch that was moved)
+    counts as unsaved, so the one prompt also covers a tree click, a stage switch, *Load*
+    and quitting; Save and `Ctrl+S` finish the draft first. Skeleton undo keeps 100 steps
+    (was 25; 64 MiB cap). The skeleton tools' grab and snap distances are screen px
+    (unchanged at 100 %). The status chip shows "Image 12 / 40" and shortens a camera file
+    name by its suffix, time and field first, keeping tube, L-number and date. Layer opacity
+    and visibility are kept across restarts. The floating panels' shadow is cached (same
+    look).
+  - Zoom: step zooms (keys, buttons, whole wheel notches) glide over 120 ms, anchored and
+    interruptible (instant when Windows' UI effects are off); fits and zoom presets stay
+    instant. Zooming out stops at min(100 %, half the fit zoom) instead of a fixed 10 %.
+    Between about 76 % and 50 % the photo blends in the half-size pyramid level (less
+    aliasing).
+  - Trace GT: selecting the open image again keeps its tracing, history and view unless its
+    files changed on disk, as Correct does. An invalid `gt/classes.json` shows "Read-only"
+    on the chip, and "Editing is off" is announced once per image. The export dialog says
+    how many images have a GT tracing and keeps Export disabled when none has. Long class
+    names are elided with the full name as a tooltip.
+  - Library: Overlay and Side by side draw the skeleton correction when one exists (display
+    only; Measure still reads the generated skeleton, FR-03), with STATUS "Skeleton
+    corrected" and a diamond mark in the tree. The metrics bar flags LENGTH and AREA as
+    outdated separately (AREA against its mask, LENGTH against the generated skeleton), and
+    each tooltip names its own CSV and the input that changed. Narrow rows keep their start
+    ("2024.07.18 · 128", "07.18", "L44 · 11:15", "L44"). The status line says what Generate
+    or Measure would work on (images without a mask or skeleton; CSVs current or changed
+    since measured).
+  - Visualize: entering the stage opens the last chosen dashboard (else the highlighted
+    one); with nothing to chart, the page says why and offers *Go to Measure* or *Go to
+    Generate*. Dashboards are released 5 minutes after the stage is left, which gives the
+    canvases their OpenGL viewports back (a visit within those 5 minutes stays instant).
+    Bars carry value labels only when at most 30 share the axis (the hover keeps the values;
+    SVG exports of denser charts have no labels), the length time view shows its legend
+    automatically for up to 30 tubes, and the control strip opens without animation and
+    hides for views without settings. plotly.js basic 3.5.0 (1.1 MB, MIT) is vendored in
+    `app/assets/` and pinned to plotly.py's version by
+    `tests/test_viz_dash_plotly_bundle.py`.
+  - Notices: toasts keep clear of the status line, the metrics bar and the editors' docks,
+    zoom clusters and side panels. The Measure and Generate toasts name the file and its
+    project folder ("Saved root_lengths.csv in the skeletons folder"), with the full path in
+    the status line. Checked boxes show a check mark (8:1 contrast), not only a fill. The
+    Welcome stage list is plain text. The device chip names the device without a first
+    inference ("Checking GPU…" meanwhile); `SPROUTS_DEVICE_CHECK=0` or the setting
+    `device_check/at_startup` turns the check off. The chip is named through the NVIDIA
+    driver (ctypes, no torch import): 271 ms after the window shows, +20 MB.
+  - Warm-ups follow intent instead of timers (`app/gui/warmup.py`): entering Generate or
+    resting on its run buttons loads torch and the models' code; entering Measure, resting
+    on its buttons or on the Visualize stage button loads dash / plotly / pandas. One at a
+    time, never during a folder load, a Measure CSV parse or a batch job. Nothing heavy
+    loads at start-up or project load any more: start-up memory 511 -> 145 MB (124 MB at
+    `1a023bf`), no GUI pause over 16 ms at start-up, quit 466 -> 91 ms. A Generate
+    clicked 8 s after entering the stage reaches its first batch in 977 ms (3124 ms at
+    `1a023bf`).
+  - `app/gc_policy.py`: full garbage collections are held while a warm-up imports, and the
+    long-lived heap is frozen (`gc.freeze()`) after start-up and after each warm-up, so a
+    full collection no longer rescans the imported libraries (a full pass 10 s after
+    start-up: 55.8 -> 0.0 ms; 10 s after a 46k load: 122 -> 13 ms).
+  - Library browsing at 2048 x 1536 (40 images forward and back): an image you leave is
+    freed at once instead of by a later garbage-collection pass (the photo and
+    mask-canvas items no longer hold themselves in a reference cycle): memory peak
+    1374 -> 657 MB, 1153 -> 650 MB at the end (+506 -> +2 MB), and no collection pause
+    during the browse instead of two of 40-51 ms.
+  - Correct keeps the image it leaves as a finished read and adopts the Library's photo
+    decodes (one decode per photo): a 15-action session at 2048 px does 27 reads instead
+    of 48, and going back to the Library takes 2.2 ms instead of 65.5 ms.
+  - Tests: one shared Qt teardown (`tests/qt_teardown.py`) frees deleted widgets and
+    their signal proxies after every test; no crash in 24 loops of the editor test set,
+    and the whole suite runs 22 % faster (195.5 -> 152.7 s).
+  - Generation ignores a folder named like an image (`x.jpg/`), as the Library does; it was
+    counted as a failed input.
 - **One Correct stage** replaces *Correct Mask* and *Correct Skeleton* (seven stages become
   six: Library, Trace GT, Generate, Correct, Measure, Visualize; `Alt+1` … `Alt+6`, Correct
   is `Alt+4`). The mask and the skeleton of an image are drawn together on one canvas and
@@ -233,6 +428,34 @@ Two passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Stem clash (2026-09-30).** When two image files in a project share a stem (`a.jpg` and
+  `a.png`), Generate now uses only the image the Library shows (`.png` before `.jpg` before
+  `.jpeg`) for `mask/a.png` and `skeletons/a_fake.png`. Before, both images were processed
+  and their saves raced for the one file, so either image could win (over 30 runs one image
+  won 29 times for masks and 27 times for skeletons), and the run counted 2 inputs written
+  for 1 file. Folders without such a clash get the same inputs and outputs as before.
+- **GT export size check (2026-09-30).** A tracing whose size differs from its image (the
+  image was resized or replaced after tracing) is now an `errors.txt` entry and nothing is
+  exported for it; it used to be exported as a misaligned image / mask pair.
+- **Otherwise none from the UX and speed pass (2026-09-30).** Measure CSVs are
+  byte-identical before and after (300 synthetic and 50 real images, and 626 edge-case
+  files), saved mask and skeleton pixels are pinned by the goldens
+  (`tests/data/correct_goldens.json`), GT files are byte-identical for the same edits, and
+  the dashboards' CSV exports carry the same values. Interaction changes that alter what is
+  saved for the same actions are listed under *Changed* and *Fixed*: Save finishes a pending
+  polyline draft first; a skeleton loaded from a file that differs from the open one is
+  unsaved, so Save or `PgDn` writes it as the correction; Trace GT *Discard* reverts.
+- **Correction (2026-09-30): the batch size can change GPU outputs slightly.** BatchNorm
+  runs in eval mode, but the kernel cuDNN picks depends on the batch shape, also with
+  deterministic cuDNN. On 300 images, masks made with batch 16 and batch 8 differed in 148
+  files (327 pixels flipped between 0 and 255); skeletons made with batch 128 and batch 8
+  differed in 1 file (43 values by one grey level), with 128 and 1 in 208 files (by at most
+  5 levels). Runs with the same batch sizes are reproducible; the halving after an
+  out-of-memory error and the skeleton batch sized from free VRAM can change the outputs of
+  the images they touch (`_sprouts_run.json` records `batch_size` and
+  `effective_batch_size`). This section used to say that batch sizes do not change outputs;
+  CPU runs were not measured. A fixed batch per model is an owner decision
+  (`docs/KNOWN_ISSUES.md` #7).
 - **Skeleton corrections are saved at image resolution (Q1 fixed).**
   `skeleton_corrections/<stem>_skeleton.png` is now written at the photo's size, exactly
   as edited, instead of being shrunk back to the generated file's 341 x 256 with nearest
@@ -264,14 +487,15 @@ Two passes, not yet released:
 - **Deterministic GPU inference** (`app/inference/runtime.py`): cuDNN runs with
   `benchmark` off and `deterministic` on (set `SPROUTS_CUDNN_BENCHMARK=1` for the old
   autotuning). Generated masks and skeletons are now reproducible run to run on the same
-  GPU, but they are numerically equivalent to 2.x/3.0 output, not bit-identical: on 128
+  GPU at the same batch sizes (see the correction above), but they are numerically
+  equivalent to 2.x/3.0 output, not bit-identical: on 128
   real images, 40 of 39.3 M mask pixels differed (area changed on 24/128 images by at
   most 0.00076 mm², 0.085 %) and 502 of 33.5 M skeleton channel values differed by one
   grey level with no pixel crossing the binarisation threshold (root length identical on
   128/128). 2.x/3.0 masks were not reproducible run to run on the GPU either (two
   baseline runs gave different masks).
-- Batch sizes (including the new CPU batches) do not change outputs: BatchNorm runs in
-  eval mode.
+- Batch sizes: see the correction of 2026-09-30 at the top of this section (the batch size
+  can change GPU outputs slightly; BatchNorm runs in eval mode).
 
 ## [3.0.0] - not yet tagged
 

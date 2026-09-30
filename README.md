@@ -17,7 +17,9 @@ root_areas.csv + root_lengths.csv → Dash/Plotly dashboards
 
 The skeleton model reads the original image, not the mask, so correcting a mask changes
 **root area only**. Root length is measured from `skeletons/*_fake.png`; skeletons edited
-in *Correct* are saved to `skeleton_corrections/` and are not measured.
+in *Correct* are saved to `skeleton_corrections/` and are not measured (the Library's
+Overlay and Side by side views draw the correction and mark the image *Skeleton
+corrected*).
 The models are described in [`docs/MODELS.md`](docs/MODELS.md), every output file and
 column in [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 
@@ -94,6 +96,13 @@ Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log` (set `SPROUTS_LOG_DIR` to use a
 folder). A native crash writes the stacks of every thread to `fault.log` next to it; an
 unexpected Python error is logged and shown in a dialog instead of closing the app.
 
+The status line names the GPU (or CPU) it will use without waiting for a first run; the
+check asks the NVIDIA driver directly, so it does not load PyTorch. The heavy libraries
+load when you head for the stage that needs them (entering Generate loads PyTorch;
+entering Measure or pointing at Visualize loads the dashboards). Set
+`SPROUTS_DEVICE_CHECK=0` (or the setting `device_check/at_startup` to `false`) to turn it
+off; the status line then reads "Device not detected yet" until the first run.
+
 ## Stages
 
 The top bar walks through the work in six stages, in this order (`F1` lists every key):
@@ -106,6 +115,11 @@ The top bar walks through the work in six stages, in this order (`F1` lists ever
 | **Correct** | `Alt+4` | Fix the mask (area) and the skeleton (length) of an image on one canvas. |
 | **Measure** | `Alt+5` | Compute root length (mm) and area (mm²). |
 | **Visualize** | `Alt+6` | Explore length and area trends across the trial. |
+
+A stage's keys work wherever the keyboard is while the stage is on screen, also right
+after a click in the library tree. In the Library, `Ctrl+0`, `Ctrl+1` and `Ctrl+=` /
+`Ctrl+-` fit the photo, show it at 100 % and zoom. *Visualize* opens the dashboard you
+chose last (root length at first); with nothing to chart yet it says what to run first.
 
 ## Outputs
 
@@ -122,9 +136,11 @@ The top bar walks through the work in six stages, in this order (`F1` lists ever
 
 Generating masks into a folder that already has masks asks first: keep them and
 generate only the missing ones (the default), or replace every mask. On a GPU, outputs
-are reproducible run to run (cuDNN autotuning is off, deterministic algorithms on). They
-are numerically equivalent to earlier versions, not bit-identical: root length is
-unchanged and area moves by under 0.1 % (see `CHANGELOG.md`). On
+are reproducible run to run at the same batch size (cuDNN autotuning is off, deterministic
+algorithms on); a different batch size, for example after running out of GPU memory, can
+flip a few pixels (the run file records `effective_batch_size`). They are numerically
+equivalent to earlier versions, not bit-identical: root length is unchanged and area moves
+by under 0.1 % (see `CHANGELOG.md`). On
 Ampere and newer GPUs convolutions use TF32, recorded as `precision` in the run file.
 Set `SPROUTS_CUDNN_BENCHMARK=1` to allow cuDNN autotuning (faster on some GPUs, not
 bit-reproducible).
@@ -155,7 +171,9 @@ The **Correct** stage fixes both model outputs of an image on one canvas. The ma
 area) and the skeleton (root length) are drawn together over the photo and you edit one
 of them at a time, the *active layer*; the other stays visible at half its opacity as a
 reference. The **Layers** panel on the right shows each layer's state (Saved, Unsaved,
-Generated, Not saved …): click a row to edit that layer, click its eye to hide it.
+Generated, Not saved …): click a row to edit that layer, click its eye to hide it (or reach
+them with Tab: Space or Enter picks a layer, Space toggles an eye). Opacity and visibility
+are kept across restarts.
 
 - **Mask** (green): Brush, Eraser and Fill (fills a closed outline). It opens
   `mask/<stem>.png` and saves it as a white-on-transparent PNG; saving an empty mask
@@ -166,7 +184,8 @@ Generated, Not saved …): click a row to edit that layer, click its eye to hide
   to another point). It opens the corrected skeleton
   `skeleton_corrections/<stem>_skeleton.png` if there is one, else the generated
   `skeletons/<stem>_fake.png`, and saves to `skeleton_corrections/`. **Load skeleton
-  file…** in the dock opens another file. Corrected skeletons are not measured.
+  file…** in the dock opens another file; if it differs from the skeleton shown, it counts
+  as unsaved. Corrected skeletons are not measured.
 - **Enhance** (the contrast button on the tool rail) changes how the photo is shown, for
   every image while it is on; it never changes a mask, a skeleton or a measurement.
 
@@ -185,6 +204,7 @@ Generated, Not saved …): click a row to edit that layer, click its eye to hide
 | `Ctrl+Z` · `Ctrl+Y` / `Ctrl+Shift+Z` | Undo · redo |
 | `Ctrl+S` | Save |
 | `Ctrl+0` · `Ctrl+1` · `Ctrl+=` / `Ctrl+-` · `Ctrl`+wheel | Fit · 100 % · zoom in / out · zoom about the cursor |
+| `Ctrl+'` | Show or hide the pixel grid (drawn from 800 %; also in Trace GT) |
 | `PgDn` / `PgUp` | Save, then open the next / previous image |
 
 A tool key of the other layer switches layers too (`B`, `F` → mask; `V`, `P`, `C` →
@@ -203,8 +223,10 @@ its last point.
   is never rewritten.
 - `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
   image. If a save fails, you stay on the image and a message says why. An unfinished
-  polyline is never saved: with two or more points `PgDn` / `PgUp` stay until you finish
-  it (Enter) or cancel it (Esc).
+  polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you
+  finish it (Enter) or cancel it (Esc), and bring the skeleton forward if it was hidden.
+- A polyline you are placing (two or more points) counts as unsaved: **Save** and
+  `Ctrl+S` finish it first.
 - Every other way of leaving an image with unsaved changes (another image, another stage,
   opening a folder, closing the window) asks once and names the unsaved layers:
   **Save**, **Discard** (the unsaved layers go back to what is on disk) or **Cancel**
@@ -216,8 +238,9 @@ its last point.
 **Zoom:** the photo stays smooth at every zoom (no pixel squares when zoomed in, no
 shimmer when zoomed out), the mask shows its exact saved pixels from 100 % up, and the
 skeleton is drawn as a line at every zoom. The zoom buttons and keys step through round
-percentages, the wheel zooms continuously, and a right-click on the zoom readout offers
-presets (Fit, 50 % … 1600 %).
+percentages with a short glide, the wheel zooms continuously, and a right-click on the zoom
+readout offers presets (Fit, 50 % … 1600 %). Zooming out stops at half the fitted zoom or
+at 100 %, whichever is smaller.
 
 ## Ground-truth tracing (Trace GT)
 
@@ -244,7 +267,8 @@ A saved file means the image was annotated, even when nothing is painted
 **Editor:** the same brush / eraser / fill canvas as the mask in Correct, plus a class
 panel on the right. The brush paints the active class and replaces whatever was
 under it (one class per pixel). Each class has a ✓ box: it ticks itself when the
-class has pixels, and you tick it by hand for "looked for it, none present".
+class has pixels, and you tick it by hand for "looked for it, none present" (with the
+mouse, or reach the boxes with Tab and press Space).
 
 | Key | Action |
 |---|---|
@@ -268,11 +292,13 @@ manifest.csv.provenance.json   how it was made: options (split seed), counts, cl
 By default only images where every class is checked are exported, and all images
 of one tube stay in the same split (so the same root on different dates cannot
 leak between train and validation). The split is reproducible from the seed recorded
-in `manifest.csv.provenance.json`. Images that fail to export are listed in the
-dialog and in `errors.txt`; the rest still export.
+in `manifest.csv.provenance.json`. Images that fail to export (for example a tracing
+whose size no longer matches its image) are listed in the dialog and in `errors.txt`; the
+rest still export. A relative output folder is created next to the images.
 
 If a GT save fails (for example the file is locked by another program), your edits
-are kept: the prompt offers **Keep editing** instead of silently moving on.
+are kept: the prompt offers **Keep editing** instead of silently moving on. **Discard**
+puts the tracing back as it was last saved (or opened).
 
 ## Building the Windows app
 

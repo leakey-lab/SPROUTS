@@ -82,8 +82,9 @@ _SKELETON_BATCH_DEFAULT = 64
 
 # CPU fallback batches. Cancel is checked between batches, so a CPU batch must
 # take a second or two, not ~10 s (audit wf2 R2: 16 masks = 11 s, 64 skeletons
-# = 9 s on CPU, longer than the 5 s the window waits on close). Outputs do not
-# depend on the batch size (eval-mode BatchNorm).
+# = 9 s on CPU, longer than the 5 s the window waits on close). BatchNorm runs in
+# eval mode, but on a GPU the batch size can still change outputs slightly (cuDNN
+# picks kernels per batch shape; docs/KNOWN_ISSUES.md #7).
 MASK_BATCH_SIZE_CPU = 4
 SKELETON_BATCH_SIZE_CPU = 8
 
@@ -103,8 +104,9 @@ def _auto_skeleton_batch(default: int = _SKELETON_BATCH_DEFAULT) -> int:
     :data:`SKELETON_BATCH_SIZE_CPU`, see ``skeleton_inference``). On CUDA, targets 70% of
     *currently free* memory (leaving headroom for the driver, fragmentation, and
     pinned host transfers), rounds down to a multiple of 8, and never goes below
-    ``default``. BatchNorm runs in eval() (running stats), so the skeleton output
-    is invariant to batch size -- only throughput changes.
+    ``default``. BatchNorm runs in eval() (running stats), but the cuDNN kernel depends on
+    the batch shape, so the output can change slightly with the batch size
+    (docs/KNOWN_ISSUES.md #7).
 
     Imports torch and may create the CUDA context, so it only runs on demand
     (see :func:`get_skeleton_batch_size`), never at import.

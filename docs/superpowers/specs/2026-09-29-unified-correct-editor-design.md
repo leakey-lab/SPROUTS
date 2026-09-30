@@ -323,19 +323,20 @@ Per-layer undo (QGIS) would silently undo an older action of the layer the user 
   layers open; the view fits. Enhance, if on, applies to every image.
 - **Same image again** (stage re-entry, tree re-click): with unsaved edits nothing happens;
   when clean and none of the stamped files changed since the documents were opened, documents,
-  history and view are kept (no reload, no re-fit); when one changed (a Generate run, or our own
-  skeleton save wrote the correction), the documents reload and the view is kept. The stamped
+  history and view are kept (no reload, no re-fit); when one changed (a Generate run, another
+  program), the documents reload and the view is kept; a layer's own save takes its files'
+  stamps again (2026-09-30), so re-entry after our own save keeps the documents and the undo
+  history. The stamped
   files are the image, every mask candidate (`mask/<stem>.png` and the legacy types, in lookup
   order), the correction (`skeleton_corrections/<stem>_skeleton.png`) and the generated skeleton
   as the resolver finds it at the time of the check (else `skeletons/<stem>_fake.png`), each by
-  path, mtime and size, or as absent. This keeps saved pixels identical to today, including the
-  skeleton save round trip (Q1): after our own save the correction's stamp changed, so re-entry
-  reloads the saved correction, exactly as today's editor did.
+  path, mtime and size, or as absent. Saved pixels stay identical: corrections reopen pixel for
+  pixel since Q1.
 - **PgDn / PgUp** save the dirty layers without a prompt, then open the next / previous visible
   image, counted from the image open in the editor (Trace GT's contract). A failed save stays on
   the image with its notice. Every other exit uses the prompt.
 - **Arrow keys** in the library keep the 40 ms debounce; **tree clicks** prompt.
-- No background prefetch in this build: at 640x480 an open costs about 5-10 ms (section 14).
+- Background read-ahead (2026-09-30): paging.Neighbours plans the next and previous images and read_ahead.ReadAhead reads them on one worker thread; a read is used only while the stamps still match.
 
 ---
 
@@ -692,7 +693,7 @@ Task Z dropped.
 | D30 | Save reports | The session reports every layer save attempt (`on_saved`); the editor turns them into `mask_saved` / `mask_cleared` / `skeleton_saved` on every path | Prompt saves must update the Library badge and the metrics like Ctrl+S, as today. |
 | D31 | Library overlay | `vectors=False`: max-pool below 1, bilinear level 0 at s ≥ 1, no halo | The generated file has 2 px lines; users judge generation quality by it and dislike pixel blocks. |
 | D32 | Layer undo | One entry of the layer's own stack; False only when empty; never pops draft points; a skeleton undo / redo drops a draft, with a toast when it was hidden | The journal reads False as eviction; today's skeleton undo drops the draft. |
-| D33 | File stamps | Mask: every mask candidate path; skeleton: the correction and the resolved generated path; each stamped or absent | Re-entry after our own save must reload the correction (D11, Q1). |
+| D33 | File stamps | Mask: every mask candidate path; skeleton: the correction and the resolved generated path; each stamped or absent | A layer's own save takes its stamps again, so re-entry after it keeps the documents (2026-09-30). |
 | D34 | Provenance | `app/provenance.py` unchanged; CHANGELOG notes that it lists the packages loaded by the run | The prewarm normally loads skimage; recording versions from package metadata would need an owner for that file. |
 | D35 | Skeleton z | Item at 1.5, decorations unchanged | Equal z stacks by insertion order; the preview must paint over the line. |
 

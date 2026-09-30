@@ -24,6 +24,15 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
 in `output/skeletonizer/test_latest/images/` or masks in `output/mask/`; Measure still
 finds them there.
 
+When two images share a stem (`a.png` and `a.jpg`), SPROUTS uses one of them everywhere,
+the one the Library shows: `.png` first, then `.jpg`, then `.jpeg` (since 2026-09-30;
+before, generation processed both, and either could end up in `mask/a.png` or
+`skeletons/a_fake.png`). On Windows, stems that differ only in case (`A.png`, `a.jpg`) are
+still two images that share one output file. Skeleton generation also reads `.bmp`,
+`.tif`, `.tiff` and `.ppm` images, which the Library, mask generation and Measure-area
+ignore: such an image gets a skeleton and a `root_lengths.csv` row but no mask (an open
+question, `docs/KNOWN_ISSUES.md` #7).
+
 ## File-name convention
 
 Minirhizotron captures are named
@@ -136,7 +145,7 @@ shown at the end of the run.
 | File | Format | Meaning |
 |---|---|---|
 | `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
-| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Skeleton corrected in *Correct*, saved at the size of the skeleton it was edited from (341 x 256 by default); not read by Measure |
+| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Skeleton corrected in *Correct*, saved at the source image's resolution exactly as edited (corrections saved before 2026-09-29 are 341 x 256); not read by Measure. The Library's Overlay and Side by side views draw it when it exists |
 
 An image that cannot be decoded gets no skeleton file; it is listed in
 `skeletons/_sprouts_run.json` (`"failed"`) and in the warning shown at the end of the
@@ -191,7 +200,7 @@ off until it is fixed).
 | `splits/train.txt`, `splits/val.txt` | one stem per line, sorted |
 | `manifest.csv` | one row per exported image (below) |
 | `manifest.csv.provenance.json` | how the dataset was made (see [Provenance](#provenance-records)) |
-| `errors.txt` | only if some images failed: `<stem><TAB><message>` per line |
+| `errors.txt` | only if some images failed: `<stem><TAB><message>` per line (below) |
 
 `manifest.csv` columns (UTF-8, comma-separated):
 
@@ -208,6 +217,14 @@ is reproducible: stems are grouped by tube (so one tube never spans train and va
 groups are shuffled with the recorded `seed`, and whole groups go to val until it holds
 at least `val_fraction` of the images; the last group always stays in train.
 
+An image fails, and nothing is written for it, when its GT file cannot be read, its source
+image is missing or unreadable, or the tracing is not the size of the image (the image was
+resized or replaced after tracing; `errors.txt` then says, for example, `GT is 20x20 but
+the image is 40x30`). Before 2026-09-30 such a pair was exported misaligned. The rest of the
+dataset still exports, and the failures are counted in `outputs.errors` of the provenance
+record. The text files (`splits/*.txt`, `classes.json`, `manifest.csv`, `errors.txt`) are
+written atomically: each is complete or absent.
+
 ## Provenance records
 
 `<output>.provenance.json` next to an output describes what produced it
@@ -219,7 +236,17 @@ keys, describing the latest run into that folder that ran to its end (completed 
 cancelled, even with no outputs, for example a *Keep existing masks* run with nothing
 missing) or that stopped with an error after writing outputs (`outputs.status` is then
 `failed`). A run that stops with an error before writing anything leaves the previous
-record in place.
+record in place. A full disk stops a generation run: the first save that finds no space
+left ends the run at the next batch boundary with that error (`status` `failed`), and the
+outputs already written are kept (since 2026-09-30; before, every remaining image failed on
+its own while the run went on). Other save errors stay per-image failures.
+
+When the full record cannot be built or written (since 2026-09-30), a **minimal record**
+replaces it, so the folder never keeps the record of an older run: the same top-level keys,
+with `git_commit` `null`, `runtime`, `models`, `inputs` and `parameters` empty (`{}`),
+`outputs` complete, and an extra key `provenance_error` that says why
+(`"<ExceptionType>: <message>"`). If even that cannot be written, the outdated
+`_sprouts_run.json` is removed.
 
 | Key | Content |
 |---|---|
@@ -231,7 +258,8 @@ record in place.
 | `calibration` | `fov_width_mm`, `fov_height_mm` |
 | `runtime` | Python version and implementation, OS, versions of the libraries that were loaded, and (when PyTorch was used) its CUDA/cuDNN versions and precision flags |
 | `models` | per model: `path` (relative to the app folder), `sha256`, `size` in bytes; empty for the GT export |
-| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors`. Generation (`_sprouts_run.json`): `inputs` = `folder`, `n_images`, `names_sha256`; `parameters` = the batch size and the model's input settings; `outputs` = `status` (`completed`: the run reached the end, even if every input failed; `cancelled`; `failed`: it stopped with an error), `error` (`null` or `"<ExceptionType>: <message>"`), `n_inputs`, `n_written`, `n_failed`, `n_skipped`, `cancelled`, `batch_size`, `effective_batch_size`, `elapsed_s`, `failed` (`input` + `reason` per input), `skipped` |
+| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors`. Generation (`_sprouts_run.json`): `inputs` = `folder`, `n_images`, `names_sha256`; `parameters` = the batch size and the model's input settings; `outputs` = `status` (`completed`: the run reached the end, even if every input failed; `cancelled`; `failed`: it stopped with an error), `error` (`null` or `"<ExceptionType>: <message>"`), `n_inputs`, `n_written`, `n_failed`, `n_skipped`, `cancelled`, `batch_size`, `effective_batch_size` (on a GPU the batch size can change outputs slightly, see `docs/KNOWN_ISSUES.md` #7), `elapsed_s`, `failed` (`input` + `reason` per input), `skipped` |
+| `provenance_error` | only in a minimal record (generation): why the full record could not be made, `"<ExceptionType>: <message>"` |
 
 Paths in records are relative to the app or project folder so a shared record does not
 reveal user or drive names. Loaders ignore these files.

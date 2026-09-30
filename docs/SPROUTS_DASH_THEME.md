@@ -339,4 +339,37 @@ theme.style(fig, title=..., height=...)   # explicit apply (subplots, pre-defaul
 theme.hover("Tube %{x}", [("Date","%{x}"), ("Length","%{y:.2f} mm")])  # clean hovertemplate
 theme.color(i)                        # categorical colour by series index
 theme.COLORWAY, theme.SEQUENTIAL, theme.ACCENT, ...   # raw tokens
+theme.bar_labels(text, bars)          # go.Bar label args: text only up to MAX_LABELLED_BARS (30) bars
+theme.margin_right(show_legend)       # MARGIN_RIGHT_LEGEND (180) or MARGIN_RIGHT_NO_LEGEND (24)
+theme.message_figure(text, color=...) # text-only figure for hints, empty states and errors
 ```
+
+## Changes since this handoff (2026-09-30)
+
+The dashboards follow this guide; the UX and speed pass changed these parts (display only,
+no data changes):
+
+- **plotly.js bundle.** `app/assets/plotly-basic.min.js` (plotly.js basic 3.5.0, MIT,
+  `app/assets/licenses/plotly.js-MIT.txt`) is served before the Dash renderer, and
+  `dcc.Graph` uses it through `window.Plotly` instead of fetching the full 4.8 MB bundle.
+  It must match plotly.py's plotly.js version, and the dashboards may use only its trace
+  types (scatter, bar, pie): `tests/test_viz_dash_plotly_bundle.py` fails otherwise, and
+  `app/assets/THIRD_PARTY.md` says how to update it.
+- **`style.css`.** The chart card (`.viz-chart-card`) uses the paper colour `--bg-0` and
+  `scrollbar-gutter: stable`, so a scrollbar appearing under the tall faceted grid no longer
+  narrows the chart and redraws it. The control strip collapses without a transition
+  (`.viz-controls .collapsing`), which used to redraw the chart on every frame.
+- **Bar labels.** `theme.bar_labels` shows value labels only when at most
+  `theme.MAX_LABELLED_BARS` (30) bars share the x axis; the hover keeps the values.
+- **Legend.** The length time view shows its legend automatically for up to
+  `dash_visualizations.AUTO_LEGEND_MAX_TUBES` (30) tubes: `legend-visible-store` starts as
+  `None` (automatic), the toggle flips what is shown, and `theme.margin_right` makes room
+  for the legend only when it is shown.
+- **Message figures.** `theme.message_figure` is text only (no axes, transparent plot area),
+  so a hint no longer looks like an empty chart.
+- **Section 6, further.** The strip's open state, its caret and the length view's option
+  cards are clientside callbacks (ids and outputs unchanged; the tests run the JavaScript in
+  QJSEngine through `tests/viz_dash_helpers.call_clientside`). The whole strip
+  (`viz-controls`) hides for views without settings. After a strip or view change the refit
+  clears plotly.js's `_initialAutoSizeIsDone`, so the next draw measures the chart card
+  instead of drawing at the old size and redrawing.
