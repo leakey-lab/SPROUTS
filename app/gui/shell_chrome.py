@@ -24,8 +24,10 @@ Topbar
 Statusline
     The message is bound to ``mw.status_bar.messageChanged`` (every existing
     ``status_bar.showMessage`` caller keeps working); the TaskProgressWidget runs
-    inline in the same row; the chip names the inference device only once the
-    runtime module is loaded (it never imports torch to find out).
+    inline in the same row; the chip names the inference device once the runtime
+    has resolved it (it never imports torch itself: MainWindow resolves the device
+    in the thread pool after the window shows, and the chip reads "Checking GPU…"
+    meanwhile).
 
 Contract kept: ``mw.ribbon`` (the topbar), ``mw.ribbon_buttons`` (six keys, in
 order), ``mw.action_bar_stack``, ``mw.action_bar_viz_seg``,
@@ -69,6 +71,16 @@ COMPACT = "compact"
 
 _RUNTIME_MODULE = "app.inference.runtime"
 _RUNTIME_UNKNOWN = "Device: auto"
+
+#: Device-check states (:meth:`StatusLine.set_device_check`): MainWindow resolves the
+#: device in the thread pool after the window shows.
+CHECKING = "checking"
+FAILED = "failed"
+#: Chip text for an unresolved device while that check runs, and after it failed.
+DEVICE_CHECKING = "Checking GPU…"
+DEVICE_CHECK_FAILED = "Device unknown"
+#: The status message while a task runs and no other message is on show (not "Ready").
+WORKING_TEXT = "Working…"
 
 
 def _band(object_name: str, *, border: str = "bottom") -> str:
@@ -363,6 +375,24 @@ class ShellTopbar(QFrame):
         }
         self._pages = {key: self.action_stack.addWidget(_page(*ws)) for key, ws in pages.items()}
         mw._action_bar_pages = dict(self._pages)
+        self._order_tab_focus()
+
+    def _order_tab_focus(self) -> None:
+        """Tab follows the row: the stages, the shown stage's actions, then Load.
+
+        The action widgets are reparented into the pages after the rest of the window was
+        built, so they sat at the end of the focus chain (Tab went from the canvas to the
+        actions, back to the stages, then to Load). Hidden pages are skipped by Tab.
+        """
+        actions = [
+            widget
+            for i in range(self.action_stack.count())
+            for widget in self.action_stack.widget(i).findChildren(QWidget)
+            if widget.focusPolicy() & Qt.FocusPolicy.TabFocus
+        ]
+        chain = [*self.stage_buttons.values(), *actions]
+        for first, second in zip(chain, chain[1:], strict=False):
+            QWidget.setTabOrder(first, second)
 
     def _view_mode_control(self) -> SegmentedControl:
         """Display-mode control that forwards to the hidden ``view_mode_combo``
@@ -549,28 +579,45 @@ def build_topbar(mw) -> ShellTopbar:
 # --------------------------------------------------------------------------- #
 #  Statusline
 # --------------------------------------------------------------------------- #
-def runtime_status() -> tuple[str, bool]:
+def runtime_status(device_check: str | None = None) -> tuple[str, bool]:
     """(label, models_ok) for the device chip, WITHOUT importing torch.
 
     ``"Device: auto"`` until ``app.inference.runtime`` has been imported by a
     handler. Then its ``describe_runtime()`` summary (``.text`` / ``.models_ok``,
     never resolving the device itself) when the module offers one, else
     ``"GPU · <name>"`` / ``"CPU"`` once ``get_runtime()`` has been resolved.
+
+    ``device_check`` (:data:`CHECKING` / :data:`FAILED`) names an unresolved device
+    :data:`DEVICE_CHECKING` / :data:`DEVICE_CHECK_FAILED` instead, keeping the
+    summary's missing-model notes; a resolved device always shows as resolved.
     """
     module = sys.modules.get(_RUNTIME_MODULE)
+    unresolved = {CHECKING: DEVICE_CHECKING, FAILED: DEVICE_CHECK_FAILED}.get(device_check)
     if module is None:
-        return _RUNTIME_UNKNOWN, True
+        return unresolved or _RUNTIME_UNKNOWN, True
     describe = getattr(module, "describe_runtime", None)
     if callable(describe):
         try:
             summary = describe()
         except Exception:  # noqa: BLE001 - a status chip must never break the UI
-            return _RUNTIME_UNKNOWN, True
-        return str(getattr(summary, "text", summary)), bool(getattr(summary, "models_ok", True))
+            return unresolved or _RUNTIME_UNKNOWN, True
+        models_ok = bool(getattr(summary, "models_ok", True))
+        if unresolved and getattr(summary, "device", None) == "unknown":
+            missing = [
+                f"{model} model missing"
+                for model, present in (
+                    ("mask", getattr(summary, "mask_weights", True)),
+                    ("skeleton", getattr(summary, "skeleton_weights", True)),
+                )
+                if not present
+            ]
+            return " · ".join([unresolved, *missing]), models_ok
+        return str(getattr(summary, "text", summary)), models_ok
     get_runtime = getattr(module, "get_runtime", None)
     cache_info = getattr(get_runtime, "cache_info", None)
     if not callable(get_runtime) or cache_info is None or cache_info().currsize == 0:
-        return _RUNTIME_UNKNOWN, True  # never force device detection just to label a chip
+        # never force device detection just to label a chip
+        return unresolved or _RUNTIME_UNKNOWN, True
     config = get_runtime()
     return (f"GPU · {config.device_name}" if config.is_cuda else "CPU"), True
 
@@ -607,6 +654,8 @@ class StatusLine(QFrame):
         self._state = "idle"
         self._status_bar: QStatusBar | None = None
         self._progress: TaskProgressWidget | None = None
+        self._device_check: str | None = None
+        self._device_check_detail = ""
 
         self.setObjectName("shellStatusline")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -657,24 +706,43 @@ class StatusLine(QFrame):
         return self._state
 
     def set_state(self, state: str) -> None:
-        """Colour the dot: idle / working / warn / error."""
+        """Colour the dot: idle / working / warn / error (the idle message follows it)."""
         self._state = state if state in _STATE_COLORS else "idle"
         self.dot.setStyleSheet(
             f"background-color: {_STATE_COLORS[self._state]}; border-radius: 4px;"
         )
+        self.refresh_idle()
+
+    def refresh_idle(self) -> None:
+        """Re-read the idle message (e.g. another folder loaded) unless a status message
+        is on show."""
+        if self._status_bar is None or not self._status_bar.currentMessage():
+            self._show_idle()
+
+    def set_device_check(self, state: str | None, detail: str = "") -> None:
+        """Name an unresolved device after the device check: :data:`CHECKING` while it
+        runs, :data:`FAILED` (``detail`` = the reason, in the tooltip) when it could not
+        resolve it, ``None`` once it is done; then re-read the chip."""
+        self._device_check = state
+        self._device_check_detail = detail if state == FAILED else ""
+        self.refresh_runtime()
 
     def refresh_runtime(self) -> None:
         """Re-read the device chip (cheap; never imports torch).
 
         The chip is elided to ``INFO_MAX_WIDTH`` (full text in the tooltip) and
-        turns WARN when a model's weights are missing.
+        turns WARN when a model's weights are missing or the device check failed.
         """
-        text, models_ok = runtime_status()
+        text, models_ok = runtime_status(self._device_check)
+        failed = text.startswith(DEVICE_CHECK_FAILED) and self._device_check == FAILED
         metrics = QFontMetrics(self.info.font())
         self.info.setText(metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, INFO_MAX_WIDTH))
-        self.info.setToolTip(f"Inference runtime: {text}")
+        tip = f"Inference runtime: {text}"
+        if failed and self._device_check_detail:
+            tip += f"\nCould not detect the inference device: {self._device_check_detail}"
+        self.info.setToolTip(tip)
         self.info.setProperty("models_ok", models_ok)
-        color = tokens.TEXT_FAINT if models_ok else tokens.WARN
+        color = tokens.TEXT_FAINT if models_ok and not failed else tokens.WARN
         self.info.setStyleSheet(f"color: {color}; font-family: {tokens.MONO}; font-size: 11px;")
 
     # --------------------------------------------------------- internals
@@ -687,7 +755,9 @@ class StatusLine(QFrame):
 
     def _show_idle(self) -> None:
         text = "Ready"
-        if self._idle_text is not None:
+        if self._state == "working":
+            text = WORKING_TEXT  # the task's own progress sits beside it
+        elif self._idle_text is not None:
             try:
                 text = self._idle_text() or text
             except Exception:  # noqa: BLE001 - never let a label provider break the UI

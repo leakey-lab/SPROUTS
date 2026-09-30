@@ -24,11 +24,14 @@ unaffected.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QPainter, QPalette
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from app import config
+from app.gui.library_index import fit_label, stem_forms
 from app.gui.widgets import tokens
 
 _DASH = "—"
@@ -43,16 +46,27 @@ def fov_text() -> str:
 
 
 class _ElidedLabel(QLabel):
-    """A label that elides its text in the middle instead of widening its layout.
+    """A label that shortens its text instead of widening its layout.
 
     ``text()`` keeps the full string (callers and tests read it); only the painted
     text is shortened, and the full text becomes the tooltip whenever it is cut.
+    ``forms(text)`` (optional) lists shorter forms, most complete first: the first
+    that fits is painted, and when none fits the shortest is elided at its end.
+    Without shorter forms the text is elided in the middle.
     """
 
     MIN_WIDTH = 72
 
-    def __init__(self, text: str = "", parent: QWidget | None = None):
+    def __init__(
+        self,
+        text: str = "",
+        parent: QWidget | None = None,
+        *,
+        forms: Callable[[str], list[str]] | None = None,
+    ):
         super().__init__(text, parent)
+        self._forms = forms
+        self._forms_of: tuple[str, list[str]] = ("", [""])  # (text, its forms), cached
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
@@ -67,10 +81,20 @@ class _ElidedLabel(QLabel):
         super().resizeEvent(event)
         self._sync_tooltip()
 
+    def _text_forms(self) -> list[str]:
+        text = self.text()
+        if self._forms_of[0] != text:
+            self._forms_of = (text, (self._forms(text) if self._forms else None) or [text])
+        return self._forms_of[1]
+
     def _elided(self) -> str:
-        return self.fontMetrics().elidedText(
-            self.text(), Qt.TextElideMode.ElideMiddle, self.contentsRect().width()
-        )
+        width = self.contentsRect().width()
+        metrics = self.fontMetrics()
+        forms = self._text_forms()
+        if len(forms) == 1:
+            return metrics.elidedText(forms[0], Qt.TextElideMode.ElideMiddle, width)
+        shown = fit_label(forms, lambda form: metrics.horizontalAdvance(form) <= width)
+        return metrics.elidedText(shown, Qt.TextElideMode.ElideRight, width)
 
     def _sync_tooltip(self) -> None:
         self.setToolTip(self.text() if self._elided() != self.text() else "")
@@ -113,6 +137,7 @@ class MetricsBar(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
 
+        # A long image name falls back to its tube, depth, date and time (stem_forms).
         self._name_cell, self._name_value = self._add_cell(row, None, first=True, elide=True)
         self._name_value.setStyleSheet(
             f"color: {tokens.TEXT}; font-size: 11.5px; font-weight: 600; border: none;"
@@ -123,6 +148,13 @@ class MetricsBar(QWidget):
         self._fov_value.setText(fov_text())
         self._fov_cell.setToolTip("Calibrated field of view (app.config.CALIBRATION)")
         self._status_cell, self._status_value = self._add_cell(row, "STATUS")
+        self._cells = (
+            self._name_cell,
+            self._length_cell,
+            self._area_cell,
+            self._fov_cell,
+            self._status_cell,
+        )
 
         row.addStretch(1)
 
@@ -143,8 +175,7 @@ class MetricsBar(QWidget):
         """
         cell = QFrame()
         cell.setObjectName("metricsCell")
-        border = "none" if first else f"border-left: 1px solid {tokens.BORDER};"
-        cell.setStyleSheet(f"QFrame#metricsCell {{ background-color: transparent; {border} }}")
+        self._set_separator(cell, not first)
 
         line = QHBoxLayout(cell)
         line.setContentsMargins(13, 0, 13, 0)
@@ -158,7 +189,7 @@ class MetricsBar(QWidget):
             )
             line.addWidget(label)
 
-        value = _ElidedLabel(_DASH) if elide else QLabel(_DASH)
+        value = _ElidedLabel(_DASH, forms=stem_forms) if elide else QLabel(_DASH)
         value.setProperty("baseColor", tokens.ACCENT if accent else tokens.TEXT)
         value.setStyleSheet(_value_qss(value.property("baseColor")))
         line.addWidget(value)
@@ -194,6 +225,24 @@ class MetricsBar(QWidget):
         self._name_value.setText(name if name else _DASH)
         self._status_cell.setVisible(bool(status))
         self._name_cell.setVisible(bool(name))
+        self._sync_separators()
+
+    def _sync_separators(self) -> None:
+        """A separator in front of every shown cell but the first one shown."""
+        lead = True
+        for cell in self._cells:
+            if not cell.isHidden():
+                self._set_separator(cell, not lead)
+                lead = False
+
+    @staticmethod
+    def _set_separator(cell: QFrame, on: bool) -> None:
+        """Give ``cell`` a left separator (restyled only when that changes)."""
+        if cell.property("separator") == on:
+            return
+        cell.setProperty("separator", on)
+        border = f"border-left: 1px solid {tokens.BORDER};" if on else "border: none;"
+        cell.setStyleSheet(f"QFrame#metricsCell {{ background-color: transparent; {border} }}")
 
     @staticmethod
     def _show_metric(

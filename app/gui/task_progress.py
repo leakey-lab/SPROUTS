@@ -17,7 +17,8 @@ API (``app.gui.ui_feedback.QtUiFeedback`` adapts ``UiFeedback`` onto it):
 
 It is hidden by default; ``start`` shows it, ``finish``/``fail`` hide it after a
 short confirmation. ``state_changed`` reports "working" / "idle" / "error" for
-the statusline's state dot. The remaining time comes from :class:`EtaEstimator`
+the statusline's state dot; a failure goes back to "idle" when its row hides (the
+failure's toast keeps the message). The remaining time comes from :class:`EtaEstimator`
 (pure Python, injectable clock).
 """
 
@@ -160,6 +161,7 @@ class TaskProgressWidget(QWidget):
         super().__init__(parent)
         self._operation = ""
         self._on_cancel: Callable[[], None] | None = None
+        self._state = "idle"
         self._eta = EtaEstimator(clock)
         # One timer, so a pending hide from the previous task never hides a new one.
         self._hide_timer = QTimer(self)
@@ -214,7 +216,7 @@ class TaskProgressWidget(QWidget):
         self.cancel_button.setVisible(bool(cancelable or on_cancel is not None))
         self._render("0%")
         self.show()
-        self.state_changed.emit("working")
+        self._set_state("working")
 
     def set_progress(self, value: int) -> None:
         """Update the percentage (clamped to 0..100) and refresh the label."""
@@ -247,7 +249,7 @@ class TaskProgressWidget(QWidget):
         """
         self.bar.setValue(100)
         self.cancel_button.hide()
-        self.state_changed.emit("idle")
+        self._set_state("idle")
         if message:
             self.label.setText(message)
             self._hide_timer.start(FINISH_HIDE_MS)
@@ -258,7 +260,7 @@ class TaskProgressWidget(QWidget):
         """Mark the operation as failed: show ``message`` briefly, then hide."""
         self.cancel_button.hide()
         self.label.setText(message or "Failed")
-        self.state_changed.emit("error")
+        self._set_state("error")
         self._hide_timer.start(FAIL_HIDE_MS)
 
     # ------------------------------------------------------------------
@@ -285,6 +287,10 @@ class TaskProgressWidget(QWidget):
             self._on_cancel()
         self.canceled.emit()
 
+    def _set_state(self, state: str) -> None:
+        self._state = state
+        self.state_changed.emit(state)
+
     def _hide_and_reset(self) -> None:
         self._hide_timer.stop()
         self.hide()
@@ -292,3 +298,5 @@ class TaskProgressWidget(QWidget):
         self.label.setText("")
         self._operation = ""
         self._on_cancel = None
+        if self._state == "error":
+            self._set_state("idle")  # the failure's toast keeps the message

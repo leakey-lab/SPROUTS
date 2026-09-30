@@ -1,12 +1,12 @@
 """
-Main window for the Root Viewer application.
+Main window of SPROUTS.
 Orchestrates the GUI components and handles core functionality.
 """
 
 import logging
 import os
 
-from PyQt6.QtCore import QObject, QPoint, QSettings, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QApplication,
@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app import APP_NAME
 from app.data_processing.measurement_index import Measurement, MeasurementIndex
 from app.gt import RegistryError, load_registry
 from app.handlers.job_registry import JobRegistry
@@ -28,12 +29,14 @@ from app.naming import image_stem
 
 from . import (
     file_tree_manager,
+    shell_chrome,
     shortcuts,
     skeleton_graph_model,
     ui_panels,
     visualization_manager,
 )
 from .correct.editor import CorrectEditor
+from .device_check import DeviceCheck
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
 from .gt_tracing_interface import GtTracingInterface
@@ -42,6 +45,7 @@ from .library_index import count_label
 from .panels import Panel
 from .recent_projects import RecentProjectsStore
 from .task_progress import TaskProgressWidget
+from .toast_clearance import FLOATING_GAP, ToastClearance
 from .ui_feedback import QtUiFeedback
 from .window_state import WindowStateStore
 
@@ -53,6 +57,11 @@ USER_ROLE = Qt.ItemDataRole.UserRole
 #: so holding an arrow key decodes only the image it stops on.
 TREE_LOAD_DELAY_MS = 40
 
+#: The first project of a session imports the dashboards' libraries (dash, plotly, pandas)
+#: on a pool thread this long after it has loaded: about 1 s off the first dashboard
+#: open, ~100 MiB (PKG-VIZ measurements), and out of the way of the library scan.
+DASHBOARD_PREWARM_DELAY_MS = 2000
+
 #: Buttons that start a batch job; disabled (with a tooltip saying why) while one runs.
 JOB_BUTTONS = (
     "generate_all_button",
@@ -61,8 +70,8 @@ JOB_BUTTONS = (
     "calculate_area_button",
 )
 
-#: Gap kept between the toast stack and an editor dock sitting under it.
-_TOAST_DOCK_GAP = 8
+#: The editors' floating overlays in the bottom row, under the toast column.
+_EDITOR_CHROME = ("dock", "zoom_cluster")
 # Closing with a running job: first wait (window visible, "Stopping…"), then a
 # longer wait with the window hidden; a job still running after both is logged.
 _CLOSE_WAIT_MS = 5000
@@ -111,16 +120,20 @@ class MainWindow(QMainWindow):
     mask_saved = pyqtSignal(str)
     mask_cleared = pyqtSignal(str)
 
-    def __init__(self, *, settings: QSettings | None = None):
+    def __init__(self, *, settings: QSettings | None = None, detect_device: bool | None = None):
         """Build the window.
 
         ``settings`` (optional) is where window geometry, the last folder and the
         recent projects persist; by default the app's own QSettings. Headless
         (``offscreen``) runs without explicit settings neither restore nor save
         the window geometry / last folder, so test runs never touch the user's.
+
+        ``detect_device``: resolve the inference device in the thread pool once the
+        window first shows, for the status line's device chip (see
+        :class:`~app.gui.device_check.DeviceCheck`). Default: on, except headless.
         """
         super().__init__()
-        self.setWindowTitle("Root Viewer[*]")
+        self.setWindowTitle(f"{APP_NAME}[*]")  # "<project> — SPROUTS" once a folder loads
 
         self.window_state = WindowStateStore(settings)
         self.recent_projects = RecentProjectsStore(settings)
@@ -132,6 +145,10 @@ class MainWindow(QMainWindow):
         self._measurement_signals = _MeasurementSignals()
         self._measurement_signals.ready.connect(self._on_measurements_ready)
         self._job_button_tooltips: dict[str, str] = {}
+        if detect_device is None:
+            detect_device = QApplication.platformName() != "offscreen"
+        # Headless runs (tests) never import the dashboards' libraries behind a test's back.
+        self._dashboards_prewarmed = QApplication.platformName() == "offscreen"
 
         # Handlers are imported lazily (they import app.gui modules themselves).
         from app.handlers.mask_generation_handler import MaskGenerationHandler
@@ -147,7 +164,7 @@ class MainWindow(QMainWindow):
         self.mask_generation_handler = MaskGenerationHandler(self)
         # The Correct stage: the mask (root area) and the skeleton (root length) of an
         # image on one canvas.
-        self.correct_editor = CorrectEditor()
+        self.correct_editor = CorrectEditor(settings=settings)
         # Multi-class ground-truth editor (Trace GT stage). Independent of the
         # ML pipeline: it reads/writes only gt/, never mask/ or skeletons/.
         self.gt_tracing_interface = GtTracingInterface()
@@ -187,6 +204,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self._install_image_paging_shortcuts()
         self._install_global_shortcuts()
+        self._wire_library_order()
 
         if self._persist_window_state:
             self.window_state.restore(self, self.body_splitter)
@@ -197,10 +215,25 @@ class MainWindow(QMainWindow):
         # once the event loop runs, i.e. after main.py showed the window: neither the
         # start-up nor the first Correct open waits for it.
         QTimer.singleShot(0, self._prewarm_skeletonize)
+        # The device chip: resolved in the pool once the window shows (torch loads there).
+        self.device_check = DeviceCheck(self, self.statusline) if detect_device else None
 
     def _prewarm_skeletonize(self) -> None:
         """Start the scikit-image import in the thread pool (never on the GUI thread)."""
         QThreadPool.globalInstance().start(_prewarm_skeletonize_logged)
+
+    def _wire_library_order(self) -> None:
+        """The Library display and the Correct page read the next images ahead in library
+        order, and the Correct page names the open image's place ("Image 12 / 40")."""
+        index = self.library_index
+        self.display_controller.set_neighbour_provider(index.neighbours)
+        for setter, provider in (
+            ("set_neighbour_provider", index.neighbours),
+            ("set_position_provider", index.position_of),
+        ):
+            method = getattr(self.correct_editor, setter, None)
+            if callable(method):  # a Correct page without read-ahead keeps working
+                method(provider)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Offer to save editor changes, stop a running job, then clean up and persist.
@@ -372,7 +405,6 @@ class MainWindow(QMainWindow):
         Presentation wrapper only — the body (and its four right_panel indices)
         is unchanged; the chrome row forwards to existing handlers.
         """
-        from . import shell_chrome
 
         shell = QWidget()
         col = QVBoxLayout(shell)
@@ -398,7 +430,6 @@ class MainWindow(QMainWindow):
         # Guided app shell: a QStackedWidget that flips between the Welcome
         # screen (index 0) and the working shell/body (index 1). The window
         # starts on Welcome; load_images flips to the shell (T4.6).
-        from app.gui import shell_chrome
         from app.gui.loading_overlay import LoadingOverlay
         from app.gui.welcome_screen import WelcomeWidget
 
@@ -417,9 +448,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.app_stack)
         self.app_stack.setCurrentIndex(0)
 
-        # Full-window loading overlay (parented to the window), hidden until a
+        # Loading card (parented to the window, below the top bar), hidden until a
         # directory is chosen.
-        self.loading_overlay = LoadingOverlay(self)
+        self.loading_overlay = LoadingOverlay(
+            self, top_offset=lambda: self.ribbon.height() if self.ribbon.isVisible() else 0
+        )
         self.loading_overlay.hide()
 
         # One status surface: the statusline shows the QStatusBar's messages and
@@ -435,7 +468,14 @@ class MainWindow(QMainWindow):
         from app.gui.widgets import ToastManager
 
         self.toasts = ToastManager(self)
-        self.toasts.set_bottom_offset(self._toast_bottom_offset)
+        # The stack keeps clear of the bottom chrome and moves when that chrome does (a
+        # page switch shows the metrics bar, an editor lifts its zoom cluster).
+        self.toast_clearance = ToastClearance(self, self.toasts, self._bottom_chrome)
+        self.toast_clearance.watch(
+            self.statusline,
+            self.metrics_bar,
+            *(getattr(e, name, None) for e in self._editors().values() for name in _EDITOR_CHROME),
+        )
 
         shell_chrome.install_status_surface(self)
         # Handlers report progress / results / failures through this (AR-07).
@@ -453,26 +493,22 @@ class MainWindow(QMainWindow):
             toasts.show(message, kind=kind, timeout=timeout)
 
     def _toast_bottom_offset(self) -> int:
-        """Pixels the toast stack keeps above the window's bottom edge: the
-        statusline, or the current editor's dock when it sits under the toasts."""
-        offset = 0
-        line = getattr(self, "statusline", None)
-        if line is not None and line.isVisible():
-            offset = line.height()
-        right_panel = getattr(self, "right_panel", None)
-        if right_panel is None:
-            return offset
-        editor = self._editors().get(right_panel.currentIndex())
-        dock = getattr(editor, "dock", None)
-        if dock is None or not dock.isVisible():
-            return offset
-        from app.gui.widgets.toasts import MAX_TOAST_WIDTH
+        """Pixels the toast stack keeps above the window's bottom edge (see
+        :class:`~app.gui.toast_clearance.ToastClearance`)."""
+        return self.toast_clearance.offset()
 
-        top_left = dock.mapTo(self, QPoint(0, 0))
-        toast_left = self.width() - min(MAX_TOAST_WIDTH, self.width()) - 16
-        if top_left.x() + dock.width() > toast_left:
-            offset = max(offset, self.height() - top_left.y() + _TOAST_DOCK_GAP)
-        return offset
+    def _bottom_chrome(self) -> list[tuple]:
+        """``(widget, gap)`` of the chrome the toasts must not cover: the statusline, the
+        Library's metrics bar, the current editor's dock and zoom cluster (hidden ones are
+        skipped by the caller)."""
+        chrome = [(getattr(self, "statusline", None), 0), (getattr(self, "metrics_bar", None), 0)]
+        right_panel = getattr(self, "right_panel", None)
+        editor = None
+        if right_panel is not None:
+            editor = self._editors().get(right_panel.currentIndex())
+        for name in _EDITOR_CHROME:
+            chrome.append((getattr(editor, name, None), FLOATING_GAP))
+        return chrome
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -669,10 +705,13 @@ class MainWindow(QMainWindow):
         # Stash for on_loading_finished so it can persist a recent entry.
         self._last_loaded_dir = dir_name
 
-        # Leave the Welcome screen for the working shell and show the
-        # full-window loading overlay (PR4 T4.6).
+        # Leave the Welcome screen for the working shell and show the loading card
+        # (PR4 T4.6), naming the folder: a large network folder can take a while.
         self.app_stack.setCurrentIndex(1)
+        name = os.path.basename(os.path.normpath(dir_name)) or dir_name
+        self.loading_overlay.set_filename(name, tooltip=dir_name)
         self.loading_overlay.start("Loading images")
+        self.empty_state.set_loading(name)  # not "Load Images" under the loading card
 
         # Show progress before loading.
         self.task_progress.start("Loading images")
@@ -698,9 +737,16 @@ class MainWindow(QMainWindow):
     def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
         """Show a freshly scanned folder: build the library, then drop the overlay."""
         self._shown_leaf_name = None
+        # The dashboards chart the previous project's CSVs: release them (servers,
+        # pages, the OpenGL hold) and leave the Visualize stage if one was on screen.
+        if visualization_manager.release_all_visualizations(self):
+            self._go_to_stage("Library")
         layout = project_layout_of(self.image_manager)
         folder = layout.root if layout is not None else getattr(self, "_last_loaded_dir", None)
         self._measurements = MeasurementIndex(folder) if folder else None
+        if folder:  # the title bar and the taskbar name the open project
+            project = os.path.basename(os.path.normpath(folder)) or folder
+            self.setWindowTitle(f"{project} — {APP_NAME}[*]")
         self.populate_file_list()
         reset = getattr(self.display_controller, "reset", None)
         if callable(reset):
@@ -708,8 +754,10 @@ class MainWindow(QMainWindow):
         self._refresh_metrics_bar(None)
         if getattr(self, "loading_overlay", None) is not None:
             self.loading_overlay.hide()
+        self.empty_state.set_loading(None)
         message = f"Loaded {count_label(len(images))}"
         self.task_progress.finish(message)
+        self.statusline.refresh_idle()  # "Ready · N images" names this folder's count
         self.notify(message)
 
         # Swap the index-0 display page from the empty state to the real display
@@ -721,6 +769,17 @@ class MainWindow(QMainWindow):
         if images:
             self._record_recent_project(len(images))
         self._prewarm_measurements()  # parse the CSVs before the first selection
+        self._prewarm_dashboards()
+
+    def _prewarm_dashboards(self) -> None:
+        """Import the dashboards' libraries once per session, shortly after a project loads."""
+        if self._dashboards_prewarmed:
+            return
+        self._dashboards_prewarmed = True
+        QTimer.singleShot(
+            DASHBOARD_PREWARM_DELAY_MS,
+            lambda: visualization_manager.prewarm_dashboards(web_engine=False),
+        )
 
     def on_loading_empty(self, folder):
         """The scanned folder has no images: warn and keep whatever was loaded."""
@@ -734,6 +793,7 @@ class MainWindow(QMainWindow):
     def _end_failed_load(self, message, kind):
         if getattr(self, "loading_overlay", None) is not None:
             self.loading_overlay.hide()
+        self.empty_state.set_loading(None)
         if kind == "danger":
             self.task_progress.fail(message)
         else:
@@ -952,6 +1012,17 @@ class MainWindow(QMainWindow):
         controller.update_display()
         file_tree_manager.update_file_list_mask_status(self)
         self._refresh_metrics_bar(self._current_image_name())
+        # The Correct page's read-ahead holds masks / skeletons the run may have rewritten.
+        discard = getattr(self.correct_editor, "discard_read_ahead", None)
+        if callable(discard):
+            discard()
+
+    def on_library_filtered(self) -> None:
+        """The library search changed which images show: the Correct page's "Image i / n"
+        counts the shown ones, so it asks again."""
+        offer = getattr(self.correct_editor, "set_position_provider", None)
+        if callable(offer):
+            offer(self.library_index.position_of)
 
     # ==================== The editors (Correct, Trace GT) ====================
 

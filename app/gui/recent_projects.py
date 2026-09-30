@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -86,11 +87,13 @@ class RecentProjectsStore:
                 continue
             path = str(item["path"])
             count = item.get("count")
+            # JSON may hold NaN / Infinity, which int() refuses: such a count is dropped.
+            finite = isinstance(count, (int, float)) and math.isfinite(count)
             out.append(
                 RecentProject(
                     path=path,
                     name=str(item.get("name") or os.path.basename(os.path.normpath(path))),
-                    count=int(count) if isinstance(count, (int, float)) else None,
+                    count=int(count) if finite else None,
                     ts=str(item.get("ts") or ""),
                 )
             )

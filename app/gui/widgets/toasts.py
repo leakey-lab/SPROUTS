@@ -9,7 +9,8 @@
 - Lifetimes by kind: success / info expire (3.2 s by default), warn lasts at least 6 s,
   danger stays until closed. Warn and danger toasts have a close button; a click on any
   toast dismisses it.
-- ``set_bottom_offset`` keeps the stack above bottom chrome (status bars, a dock).
+- ``set_bottom_offset`` keeps the stack above bottom chrome (status bars, a dock);
+  :meth:`ToastManager.column_left` tells the host which chrome is under the stack.
 """
 
 from __future__ import annotations
@@ -290,6 +291,10 @@ class ToastManager:
     def toasts(self) -> list[Toast]:
         """The live toasts, oldest first."""
         return list(self._toasts)
+
+    def column_left(self) -> int:
+        """x (host coordinates) of the left edge of the column the widest toast can take."""
+        return self._host.width() - self._margin - self._max_width()
 
     def set_bottom_offset(self, offset: int | Callable[[], int]) -> None:
         """Keep the stack ``offset`` px (or ``offset()`` px, read on every reposition)

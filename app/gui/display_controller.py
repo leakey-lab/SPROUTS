@@ -22,11 +22,18 @@ blocks. The items choose their own filtering and cache nothing per zoom.
 Every new image is fitted to the canvas (and stays fitted on resize until the
 user zooms or pans). A message replaces the canvas when nothing is selected or
 the image cannot be decoded, so the canvas is never blank or stale.
+
+Once an image is shown, the images PgDn / PgUp / the arrow keys open next (the
+neighbour provider MainWindow sets from the library order) are decoded on a worker
+thread, and the photo shown is kept (:class:`~app.gui.display_read_ahead.DisplayReadAhead`):
+stepping on or back, or switching the view mode, shows a photo without decoding it on
+the GUI thread, and never a stale one (a read is used only while its file is unchanged).
 """
 
 import html
 import logging
 import os
+from collections.abc import Callable, Sequence
 
 import cv2
 from PyQt6.QtCore import QRectF, Qt
@@ -41,8 +48,20 @@ from .canvas_background import configure_canvas_background
 from .canvas_layers.photo import PhotoLayerItem
 from .canvas_layers.skeleton import SkeletonLayerItem
 from .canvas_view import CanvasViewMixin
+from .display_read_ahead import DisplayReadAhead, file_stamp
 
 logger = logging.getLogger(__name__)
+
+#: ``provider(path)``: the images the user would open next from ``path``, nearest first.
+NeighbourProvider = Callable[[str], Sequence[str]]
+
+#: Neighbours decoded ahead: the next image and the previous one.
+READ_AHEAD_COUNT = 2
+
+
+def _decode_photo(path: str):
+    """The photo as the display decodes it (the read-ahead worker's job)."""
+    return imread_unicode(path, DECODE_FLAGS)
 
 
 class MagnifyingGraphicsView(CanvasViewMixin, QGraphicsView):
@@ -52,6 +71,7 @@ class MagnifyingGraphicsView(CanvasViewMixin, QGraphicsView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAccessibleName("Image display")
         self._init_canvas(pan_mode=True)
         configure_canvas_background(self)
         self.setup_high_quality_rendering()
@@ -110,6 +130,15 @@ class DisplayController:
         self.current_name: str | None = None
         self.current_image: str | None = None
         self.current_fake_image: str | None = None
+        self.read_ahead = DisplayReadAhead(_decode_photo)
+        self._neighbours: NeighbourProvider | None = None
+
+    def set_neighbour_provider(self, provider: NeighbourProvider | None) -> None:
+        """``provider(path)``: the images the user would open next, nearest first; the
+        first :data:`READ_AHEAD_COUNT` are decoded ahead (None: nothing is read ahead)."""
+        self._neighbours = provider
+        if provider is None:
+            self.read_ahead.clear()
 
     def setup_display_area(self, parent) -> MagnifyingGraphicsView:
         """Put the canvas into ``parent``, showing the placeholder, and return it."""
@@ -122,17 +151,33 @@ class DisplayController:
     def reset(self) -> None:
         """Forget the selection (e.g. another folder was opened) and show the placeholder."""
         self.current_name = self.current_image = self.current_fake_image = None
+        self.read_ahead.clear()
         self.clear_magnifying_view()
 
     # ------------------------------------------------------------- selection
     def display_selected_image_by_name(self, name):
-        """Show the library image ``name`` in the current view mode."""
+        """Show the library image ``name`` in the current view mode, then read its
+        neighbours ahead."""
         self.current_name = name
         self.current_image = self.main_window.image_manager.get_image_path(name)
         # The skeleton belongs to this image: look it up again, never reuse the
         # previous image's (PG-02).
         self.current_fake_image = None
         self.update_display()
+        self._read_neighbours_ahead()
+
+    def _read_neighbours_ahead(self) -> None:
+        """Decode the next and previous images on the worker (the photo shown stays kept)."""
+        provider, current = self._neighbours, self.current_image
+        if provider is None or not current:
+            return
+        try:
+            paths = [str(p) for p in provider(current) or () if p][:READ_AHEAD_COUNT]
+        except Exception:  # noqa: BLE001 - stepping still works, it just decodes itself
+            logger.exception("The neighbours of %s are unknown", current)
+            return
+        self.read_ahead.retain([current, *paths])
+        self.read_ahead.request(paths)
 
     def update_display_mode(self):
         """Show the current image in the newly chosen mode (the library tree is untouched)."""
@@ -195,8 +240,17 @@ class DisplayController:
     # --------------------------------------------------------------- helpers
     def _photo_item(self) -> PhotoLayerItem | None:
         """The selected image as a photo item (Unicode-safe decode, RB-06); if it cannot be
-        decoded, say so on the canvas and in a toast and return None."""
-        image = imread_unicode(self.current_image, DECODE_FLAGS)
+        decoded, say so on the canvas and in a toast and return None.
+
+        A photo decoded ahead (or kept since it was shown) is used while its file is
+        unchanged; otherwise it is decoded here and kept.
+        """
+        path = self.current_image
+        image = self.read_ahead.get(path)
+        if image is None:
+            stamp = file_stamp(path)
+            image = imread_unicode(path, DECODE_FLAGS)
+            self.read_ahead.keep(path, stamp, image)
         if image is not None:
             item = PhotoLayerItem()
             item.set_image(image)

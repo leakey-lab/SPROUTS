@@ -258,6 +258,7 @@ def create_left_panel(main_window) -> QWidget:
     # ========== SEARCH FIELD ==========
     main_window.library_search = QLineEdit()
     main_window.library_search.setPlaceholderText("Search images…")
+    main_window.library_search.setAccessibleName("Search images")
     main_window.library_search.setClearButtonEnabled(True)
     main_window.library_search.setStyleSheet(f"""
         QLineEdit {{
@@ -305,9 +306,11 @@ def create_left_panel(main_window) -> QWidget:
         {tokens.focus_rule("QPushButton")}
     """
 
+    # Icon-only: Qt names a button after its text, so a screen reader needs the name set.
     main_window.expand_all_button = QPushButton()
     main_window.expand_all_button.setIcon(load_icon("expand", tokens.TEXT_MUTED, 15))
     main_window.expand_all_button.setToolTip("Expand all groups")
+    main_window.expand_all_button.setAccessibleName("Expand all groups")
     main_window.expand_all_button.setStyleSheet(tree_button_style)
     main_window.expand_all_button.setFixedSize(30, 30)
     main_window.expand_all_button.clicked.connect(lambda: main_window.file_list.expandAll())
@@ -316,6 +319,7 @@ def create_left_panel(main_window) -> QWidget:
     main_window.collapse_all_button = QPushButton()
     main_window.collapse_all_button.setIcon(load_icon("collapse", tokens.TEXT_MUTED, 15))
     main_window.collapse_all_button.setToolTip("Collapse all groups")
+    main_window.collapse_all_button.setAccessibleName("Collapse all groups")
     main_window.collapse_all_button.setStyleSheet(tree_button_style)
     main_window.collapse_all_button.setFixedSize(30, 30)
     main_window.collapse_all_button.clicked.connect(lambda: main_window.file_list.collapseAll())
@@ -329,6 +333,7 @@ def create_left_panel(main_window) -> QWidget:
 
     # ========== FILE TREE ==========
     main_window.file_list = QTreeWidget()
+    main_window.file_list.setAccessibleName("Image library")
     main_window.file_list.setHeaderLabels(["Field → Tube → Date → Images"])
     main_window.file_list.itemClicked.connect(main_window.on_tree_item_clicked)
     # Keyboard browsing (arrows, Home/End) loads the image after a short debounce.
@@ -393,7 +398,11 @@ def filter_file_list(main_window, query: str) -> int:
     """
     if getattr(main_window, "file_list", None) is None:
         return 0
-    return file_tree_manager.library_index_for(main_window).apply_filter(query or "")
+    count = file_tree_manager.library_index_for(main_window).apply_filter(query or "")
+    filtered = getattr(main_window, "on_library_filtered", None)
+    if callable(filtered):
+        filtered()  # positions ("Image i / n") count the images the search shows
+    return count
 
 
 def create_right_panel(main_window) -> QWidget:

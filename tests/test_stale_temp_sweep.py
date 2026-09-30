@@ -269,6 +269,8 @@ def test_a_loaded_project_is_swept_on_a_daemon_thread_after_its_scan(app, tmp_pa
     real_sweep = im.sweep_project_temp_files
 
     def held_sweep(swept_layout):
+        if swept_layout != layout:  # a delayed sweep scheduled by an earlier test's window
+            return real_sweep(swept_layout)
         calls.append((swept_layout, threading.current_thread()))
         release.wait(10)
         return real_sweep(swept_layout)

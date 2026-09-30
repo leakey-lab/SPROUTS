@@ -17,7 +17,8 @@ The index stays correct when other code rebuilds the tree by hand (tests do): an
 insert/remove marks it stale and the next query re-reads the tree once.
 
 The pure helpers (:func:`build_hierarchy`, :func:`leaf_label`, :func:`count_label`,
-:func:`natural_sort_key`) are Qt-free.
+:func:`natural_sort_key`, and :func:`label_forms` / :func:`stem_forms` / :func:`fit_label`,
+the shorter forms a narrow panel shows) are Qt-free.
 """
 
 from __future__ import annotations
@@ -30,8 +31,10 @@ from itertools import accumulate
 from PyQt6.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QLabel,
     QLineEdit,
+    QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QToolTip,
@@ -40,7 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.gui.widgets import tokens
-from app.naming import parse_image_name
+from app.naming import image_stem, parse_image_name
 
 USER_ROLE = Qt.ItemDataRole.UserRole
 NO_DEPTH = float("inf")
@@ -52,6 +55,9 @@ Hierarchy = dict[str, dict[str, dict[str, list[tuple[float, str]]]]]
 EXPAND_MATCHES_LIMIT = 300
 
 _DIGITS = re.compile(r"(\d+)")
+_CLOCK_TAIL = re.compile(r"(\d{2}:\d{2}):\d{2}$")  # "11:15:30" -> "11:15"
+_COUNT_TAIL = re.compile(r"([\d,]+) images?$")  # "128 images" -> "128"
+_FULL_DATE = re.compile(r"\d{4}\.\d{2}\.\d{2}")  # a date row's head
 
 
 # ---------------------------------------------------------------- Qt-free helpers
@@ -114,6 +120,52 @@ def count_label(count: int) -> str:
     return f"{count:,} image{'' if count == 1 else 's'}"
 
 
+def label_forms(text: str) -> list[str]:
+    """``text`` of a library row, then shorter forms for a narrow panel (most complete first).
+
+    ``"L44 · 11:15:30"`` -> ``"L44 · 11:15"`` -> ``"L44"``; ``"2024.07.18 · 128 images"``
+    -> ``"2024.07.18 · 128"`` -> ``"2024.07.18"`` -> ``"07.18"``; ``"L7 · <stem>"`` ->
+    ``"L7"``. The head (depth or date) is what stays; a text without a ``" · "`` tail has
+    no shorter form.
+    """
+    head, sep, tail = text.partition(" · ")
+    if not sep or not head:
+        return [text]
+    forms = [text]
+    time = _CLOCK_TAIL.match(tail)
+    count = _COUNT_TAIL.match(tail)
+    if time:
+        forms.append(f"{head} · {time.group(1)}")
+    elif count:
+        forms.append(f"{head} · {count.group(1)}")
+    forms.append(head)
+    if _FULL_DATE.fullmatch(head):
+        forms.append(head[5:])  # month.day: a trial rarely spans years
+    return forms
+
+
+def stem_forms(stem: str) -> list[str]:
+    """``stem``, then shorter forms that keep what identifies the capture (most complete
+    first): ``"T1 · L44 · 2024.07.18 · 11:15:30"``, ``"T1 · L44 · 2024.07.18"``,
+    ``"T1 · L44"``. A name without a tube or depth has no shorter form."""
+    info = parse_image_name(stem)
+    if info.tube is None or info.position is None:
+        return [stem]
+    core = f"T{info.tube} · L{info.position}"
+    forms = [stem]
+    if info.date and info.time:
+        forms.append(f"{core} · {info.date} · {info.time}")
+    if info.date:
+        forms.append(f"{core} · {info.date}")
+    forms.append(core)
+    return forms
+
+
+def fit_label(forms: list[str], fits: Callable[[str], bool]) -> str:
+    """The first of ``forms`` that ``fits``, else the last (shortest) one."""
+    return next((form for form in forms if fits(form)), forms[-1])
+
+
 def match_count_label(count: int, query: str) -> str:
     """Search feedback under the field: ``"3 matches"`` or ``No images match “q”``."""
     if count == 0:
@@ -162,7 +214,9 @@ class LibraryItemDelegate(QStyledItemDelegate):
     """Draws each image row's status badge and serves its tooltip on hover.
 
     Both are computed for the rows Qt actually paints / hovers, from ``status_of`` and
-    ``tooltip_of``, so building the tree sets neither per row.
+    ``tooltip_of``, so building the tree sets neither per row. A row too narrow for its
+    text is painted in the longest :func:`label_forms` form that fits (its item text is
+    unchanged); a shortened group row shows its full text as tooltip.
     """
 
     def __init__(self, status_of: StatusOf, tooltip_of: Callable[[str], str], parent=None):
@@ -185,11 +239,33 @@ class LibraryItemDelegate(QStyledItemDelegate):
             option.icon = self.status_icon(*self._status_of(name))
             option.decorationSize = _BADGE
             option.features |= QStyleOptionViewItem.ViewItemFeature.HasDecoration
+        self._fit_text(option)
+
+    @staticmethod
+    def _fit_text(option: QStyleOptionViewItem) -> None:
+        """Paint the longest form of the row text that fits its text rect (Qt elides the
+        shortest one if even that does not fit)."""
+        text = option.text
+        if not text or option.rect.width() <= 0 or " · " not in text:
+            return
+        widget = option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        room = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, widget).width()
+        metrics = option.fontMetrics
+        option.text = fit_label(label_forms(text), lambda t: metrics.horizontalAdvance(t) <= room)
 
     def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802
-        name = index.data(USER_ROLE) if index.isValid() else None
-        if name and event.type() == QEvent.Type.ToolTip:
+        if not index.isValid() or event.type() != QEvent.Type.ToolTip:
+            return super().helpEvent(event, view, option, index)
+        name = index.data(USER_ROLE)
+        if name:
             QToolTip.showText(event.globalPos(), self._tooltip_of(name), view)
+            return True
+        full = index.data(Qt.ItemDataRole.DisplayRole)
+        shown = QStyleOptionViewItem(option)
+        self.initStyleOption(shown, index)
+        if full and shown.text != full:  # a shortened group row: say what it holds
+            QToolTip.showText(event.globalPos(), full, view)
             return True
         return super().helpEvent(event, view, option, index)
 
@@ -404,6 +480,56 @@ class LibraryIndex:
             if not visible_only or not (filtered_out[j] or self._leaves[j].isHidden()):
                 remaining -= 1
         return self._leaves[j]
+
+    def neighbours(self, path: str, n: int = 1) -> list[str]:
+        """Paths of the images PgDn / PgUp would open from ``path`` (an image path or
+        stem), nearest first: next, previous, next but one, ... (``n`` each way).
+
+        Hidden (filtered-out) rows are skipped like :meth:`step` skips them; an image
+        that is not in the library has none. The Correct page and the Library display
+        read these ahead.
+        """
+        i = self._visible_position(path)
+        if i is None:
+            return []
+        after = self._visible_run(i, 1, n)
+        before = self._visible_run(i, -1, n)
+        order = [j for pair in zip(after, before, strict=False) for j in pair]
+        order += after[len(before) :] + before[len(after) :]
+        paths = (self._path_of(self._leaves[j].data(0, USER_ROLE)) for j in order)
+        return [p for p in paths if p]
+
+    def position_of(self, path: str) -> tuple[int, int] | None:
+        """``(index, count)``: the 1-based place of ``path`` (an image path or stem) among
+        the images the search shows, and how many it shows; None when it is not shown.
+
+        Counted from the filter's own state (no per-row Qt call: 46k rows stay cheap).
+        """
+        i = self._visible_position(path)
+        if i is None:
+            return None
+        hidden = self._leaf_hidden
+        return hidden[:i].count(False) + 1, len(hidden) - hidden.count(True)
+
+    def _visible_position(self, path: str) -> int | None:
+        """Position of the visible leaf of ``path`` (image path or stem), else None."""
+        if not path:
+            return None
+        self._ensure()
+        i = self._pos.get(image_stem(path))
+        if i is None or self._leaf_hidden[i] or self._leaves[i].isHidden():
+            return None
+        return i
+
+    def _visible_run(self, i: int, direction: int, n: int) -> list[int]:
+        """Up to ``n`` positions of visible leaves after (``direction`` 1) or before ``i``."""
+        out: list[int] = []
+        j = i + direction
+        while 0 <= j < len(self._leaves) and len(out) < n:
+            if not (self._leaf_hidden[j] or self._leaves[j].isHidden()):
+                out.append(j)
+            j += direction
+        return out
 
     # -------------------------------------------------------------------- status
     def status_of(self, name: str) -> tuple[bool, bool]:

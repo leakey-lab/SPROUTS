@@ -1,7 +1,7 @@
 """
 GUI Components Package
 
-This package contains all GUI-related components for the Root Viewer application.
+This package contains all GUI-related components of SPROUTS.
 Key classes are re-exported here for backward compatibility.
 
 Re-exports are resolved lazily via PEP 562 ``__getattr__`` (see ``_lazy.py``) so

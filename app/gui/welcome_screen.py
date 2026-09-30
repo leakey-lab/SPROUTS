@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
 
 from app import APP_NAME, __version__
 from app.gui import shortcuts
+from app.gui.library_index import count_label
 from app.gui.recent_projects import RecentProject, RecentProjectsStore
 from app.gui.widgets import tokens
 from app.gui.widgets.buttons import ghost_button, primary_button
@@ -212,7 +213,7 @@ class RecentRow(QFrame):
     def _info_text(entry: RecentProject) -> str:
         bits = []
         if entry.count is not None:
-            bits.append(f"{entry.count} images")
+            bits.append(count_label(entry.count))  # "1 image", "46,178 images"
         rel = WelcomeWidget._relative_date(entry.ts)
         if rel:
             bits.append(rel)
@@ -366,6 +367,7 @@ class WelcomeWidget(QWidget):
 
         self._recent_scroll = QScrollArea()
         self._recent_scroll.setObjectName("recentScroll")
+        self._recent_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # its rows take focus
         self._recent_scroll.setWidgetResizable(True)
         self._recent_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._recent_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -406,10 +408,12 @@ class WelcomeWidget(QWidget):
             f"color: {tokens.TEXT_FAINT}; font-family: {tokens.MONO}; font-size: 11px;"
         )
         row.addWidget(footer)
+        self._about_button = None
         if on_about is not None:
             about = ghost_button("About", "info", compact=True, tooltip="About SPROUTS")
             about.clicked.connect(lambda _=False: on_about())
             row.addWidget(about)
+            self._about_button = about
         row.addStretch(1)
         return row
 
@@ -439,6 +443,7 @@ class WelcomeWidget(QWidget):
             self._recent_col.insertWidget(i, row)
         self.recent_section.setVisible(bool(self._rows))
         self._fit_recent_scroll()
+        self._order_tab_focus()
         paths = [e.path for e in entries]
         if not paths:
             return
@@ -447,6 +452,19 @@ class WelcomeWidget(QWidget):
         else:
             for path in paths:
                 self._on_exists_checked(path, bool(self._path_exists(path)))
+
+    def _order_tab_focus(self) -> None:
+        """Tab follows the screen: Browse, each recent row (open, remove), then About.
+
+        The rows are (re)built after the footer, so they would come after About."""
+        chain = [self.browse_button]
+        for row in self._rows:
+            chain += [row.open_button, row.remove_button]
+        about = getattr(self, "_about_button", None)
+        if about is not None:
+            chain.append(about)
+        for first, second in zip(chain, chain[1:], strict=False):
+            QWidget.setTabOrder(first, second)
 
     def _fit_recent_scroll(self) -> None:
         """Show up to VISIBLE_RECENT_ROWS rows; the scroll may shrink to one row."""
@@ -480,14 +498,20 @@ class WelcomeWidget(QWidget):
 
     @staticmethod
     def _relative_date(ts: str) -> str:
-        """ISO timestamp -> short relative-ish label (best effort)."""
+        """ISO timestamp -> short relative-ish label (best effort; "" when unreadable).
+
+        A timestamp with a UTC offset is compared in local time (the app writes naive
+        local ones); one too close to the ends of the calendar to convert is left out.
+        """
         from datetime import datetime
 
         try:
             dt = datetime.fromisoformat(ts)
-        except (ValueError, TypeError):
+            if dt.tzinfo is not None:
+                dt = dt.astimezone().replace(tzinfo=None)
+            secs = (datetime.now() - dt).total_seconds()
+        except (ValueError, TypeError, OverflowError):
             return ""
-        secs = (datetime.now() - dt).total_seconds()
         if secs < 60:
             return "just now"
         if secs < 3600:

@@ -9,7 +9,8 @@ Public API
 - ``EmptyStateWidget(on_load, parent=None)``: a centered placeholder shown in
   the index-0 display page when no images are loaded. ``on_load`` is a 0-arg
   callable invoked when the user clicks the primary "Load Images" button
-  (``MainWindow`` passes ``main_window.load_images``).
+  (``MainWindow`` passes ``main_window.load_images``). ``set_loading(name)`` says
+  "Loading images…" (no button) while the first folder loads; ``None`` restores it.
 - ``ShortcutsDialog(parent=None, *, current_scope=None, on_about=None)``: the
   F1 sheet, generated from :data:`app.gui.shortcuts.REGISTRY` with one section
   per scope (the current stage's section first). ``on_about`` adds an
@@ -53,7 +54,15 @@ _KIND_HINT = {shortcuts.GESTURE: "mouse", shortcuts.KEY: ""}
 
 
 class EmptyStateWidget(QWidget):
-    """Centered placeholder shown when no images are loaded."""
+    """Centered placeholder shown when no images are loaded.
+
+    While the first folder loads it says so (:meth:`set_loading`) instead of inviting a
+    load under the loading card.
+    """
+
+    TITLE = "No images loaded"
+    SUBTITLE = "Load a folder of root images to begin."
+    LOADING_TITLE = "Loading images…"
 
     def __init__(self, on_load: Callable[[], None], parent: QWidget | None = None):
         super().__init__(parent)
@@ -70,14 +79,14 @@ class EmptyStateWidget(QWidget):
         icon_label.setPixmap(load_pixmap("sprouts_logo", tokens.ACCENT, 72))
         outer.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        title = QLabel("No images loaded")
+        self.title_label = title = QLabel(self.TITLE)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"color: {tokens.TEXT}; font-size: 12pt; font-weight: bold; margin-top: 12px;"
         )
         outer.addWidget(title)
 
-        subtitle = QLabel("Load a folder of root images to begin.")
+        self.subtitle_label = subtitle = QLabel(self.SUBTITLE)
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 9pt; margin-top: 4px;")
@@ -104,6 +113,14 @@ class EmptyStateWidget(QWidget):
         outer.addWidget(hint)
 
         outer.addStretch(1)
+
+    def set_loading(self, folder: str | None) -> None:
+        """Say that ``folder`` (its name) is loading, without the Load button; ``None``
+        goes back to the invitation to load a folder."""
+        loading = bool(folder)
+        self.title_label.setText(self.LOADING_TITLE if loading else self.TITLE)
+        self.subtitle_label.setText(folder if loading else self.SUBTITLE)
+        self.load_button.setVisible(not loading)
 
     def _handle_load(self) -> None:
         """Invoke the supplied 0-arg load callback, ignoring the clicked(bool) arg."""
