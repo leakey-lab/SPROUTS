@@ -27,16 +27,21 @@ Design rules (all enforced here so the two paths can never drift):
 Public API:
   get_runtime() -> RuntimeConfig          (cached, resolves the device)
   peek_runtime() -> RuntimeConfig | None  (never resolves)
+  warm_up(models=True) -> RuntimeConfig   (imports for the first job + get_runtime(); no model)
   describe_runtime(resolve=False) -> RuntimeSummary  (status line; never loads models)
   get_skeleton_model(device) -> SkeletonModel  (cached singleton)
   get_mask_model(device) -> torch.nn.Module     (cached singleton)
   release_cuda_cache() -> None            (call once when a batch job ends)
+
+Before torch is loaded, the status line names the device through the NVIDIA driver
+instead (``app.inference.device_probe``); it never reaches a run record.
 """
 
 from __future__ import annotations
 
 import functools
 import gc
+import importlib
 import logging
 import os
 import sys
@@ -213,6 +218,27 @@ def peek_runtime() -> RuntimeConfig | None:
     if get_runtime.cache_info().currsize:
         return get_runtime()
     return None
+
+
+#: What the first generation job imports besides torch: the Pix2Pix generator (with
+#: torchvision) and the ResNet mask model's code.
+_FIRST_JOB_MODULES = ("app.inference.skeleton_inference", "app.mask_model.model")
+
+
+def warm_up(*, models: bool = True) -> RuntimeConfig:
+    """Import what the first inference job needs, then resolve the runtime; load no model.
+
+    torch and the device first (:func:`get_runtime`, ~1.3 s, ~150k long-lived Python
+    objects), then with ``models`` torchvision and both models' code (~1 s, ~120k more):
+    call it off the GUI thread (the warm-up queue does when the user heads for Generate).
+    No checkpoint is read. Settings and outputs are those of a job that resolves the
+    runtime itself.
+    """
+    config = get_runtime()
+    if models:
+        for name in _FIRST_JOB_MODULES:
+            importlib.import_module(name)
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -397,4 +423,5 @@ __all__ = [
     "peek_runtime",
     "release_cuda_cache",
     "skeleton_weights_path",
+    "warm_up",
 ]

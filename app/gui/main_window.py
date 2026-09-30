@@ -5,6 +5,7 @@ Orchestrates the GUI components and handles core functionality.
 
 import logging
 import os
+import time
 
 from PyQt6.QtCore import QObject, QSettings, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
@@ -35,6 +36,7 @@ from . import (
     skeleton_graph_model,
     ui_panels,
     visualization_manager,
+    warmup,
 )
 from .canvas_key_relay import CanvasKeyRelay
 from .correct.editor import CorrectEditor
@@ -61,10 +63,9 @@ USER_ROLE = Qt.ItemDataRole.UserRole
 #: so holding an arrow key decodes only the image it stops on.
 TREE_LOAD_DELAY_MS = 40
 
-#: The first project of a session imports the dashboards' libraries (dash, plotly, pandas)
-#: on a pool thread this long after it has loaded: about 1 s off the first dashboard
-#: open, ~100 MiB (PKG-VIZ measurements), and out of the way of the library scan.
-DASHBOARD_PREWARM_DELAY_MS = 2000
+#: No warm-up import starts until this long after a project has loaded: the library tree,
+#: the first image, the CSV parse and the stale-temp sweep (at +2 s) go first.
+WARMUP_SETTLE_MS = 2500
 
 #: Buttons that start a batch job; disabled (with a tooltip saying why) while one runs.
 JOB_BUTTONS = (
@@ -140,7 +141,13 @@ class MainWindow(QMainWindow):
     mask_saved = pyqtSignal(str)
     mask_cleared = pyqtSignal(str)
 
-    def __init__(self, *, settings: QSettings | None = None, detect_device: bool | None = None):
+    def __init__(
+        self,
+        *,
+        settings: QSettings | None = None,
+        detect_device: bool | None = None,
+        warm_up: bool | None = None,
+    ):
         """Build the window.
 
         ``settings`` (optional) is where window geometry, the last folder and the
@@ -148,9 +155,15 @@ class MainWindow(QMainWindow):
         (``offscreen``) runs without explicit settings neither restore nor save
         the window geometry / last folder, so test runs never touch the user's.
 
-        ``detect_device``: resolve the inference device in the thread pool once the
+        ``detect_device``: name the inference device in the thread pool once the
         window first shows, for the status line's device chip (see
         :class:`~app.gui.device_check.DeviceCheck`). Default: on, except headless.
+
+        ``warm_up``: import torch / the dashboards' libraries when the user heads for
+        Generate / Visualize, and freeze the long-lived objects after start-up and after
+        each such import (see :mod:`app.gui.warmup`). Default: on, except headless, so
+        tests never import them behind a test's back. scikit-image is warmed up at
+        start-up either way.
         """
         super().__init__()
         self.setWindowTitle(f"{APP_NAME}[*]")  # "<project> — SPROUTS" once a folder loads
@@ -170,8 +183,12 @@ class MainWindow(QMainWindow):
         self._job_button_tooltips: dict[str, str] = {}
         if detect_device is None:
             detect_device = QApplication.platformName() != "offscreen"
-        # Headless runs (tests) never import the dashboards' libraries behind a test's back.
-        self._dashboards_prewarmed = QApplication.platformName() == "offscreen"
+        if warm_up is None:
+            warm_up = QApplication.platformName() != "offscreen"
+        self._warm_ups = bool(warm_up)
+        # Warm-ups wait while a folder loads and a little after (see _warmup_blocked).
+        self._loading_project = False
+        self._warmup_settle_until = 0.0
 
         # Handlers are imported lazily (they import app.gui modules themselves).
         from app.handlers.mask_generation_handler import MaskGenerationHandler
@@ -239,31 +256,99 @@ class MainWindow(QMainWindow):
         else:
             self.window_state.apply_default_geometry(self)
 
-        # scikit-image (the skeleton's thinning, ~0.2 s to import) loads in the thread pool
-        # once the event loop runs, i.e. after main.py showed the window: neither the
-        # start-up nor the first Correct open waits for it.
-        QTimer.singleShot(0, self._prewarm_skeletonize)
-        # The device chip: resolved in the pool once the window shows (torch loads there).
+        # The heavy imports, one at a time off the GUI thread (app.gui.warmup). scikit-image
+        # (the skeleton's thinning, ~0.2 s, in the thread pool) starts once the event loop
+        # runs, i.e. after main.py showed the window: neither the start-up nor the first
+        # Correct open waits for it. torch and the dashboards' libraries (each on a thread
+        # of its own) wait for the user to head for Generate / Visualize (entering a stage,
+        # resting on its buttons).
+        self.warmups = warmup.WarmupQueue(
+            self,
+            jobs={
+                warmup.SKIMAGE: lambda: _prewarm_skeletonize_logged(),
+                warmup.TORCH: warmup.warm_inference,
+                warmup.MODELS: warmup.warm_models,
+                warmup.DASHBOARDS: warmup.warm_dashboards,
+            },
+            blocked=self._warmup_blocked,
+            ungated=(warmup.SKIMAGE,),
+            pooled=(warmup.SKIMAGE,),
+            freeze=self._warm_ups,
+        )
+        self.warmups.finished.connect(self._on_warmup_finished)
+        self.warmups.request(warmup.SKIMAGE)
+        self._install_warmup_intents()
+        # The device chip: named in the pool once the window shows (no torch: the driver).
         self.device_check = (
             DeviceCheck(self, self.statusline, settings=settings) if detect_device else None
         )
 
-    def _prewarm_skeletonize(self) -> None:
-        """Start the scikit-image import in the thread pool (never on the GUI thread)."""
-        QThreadPool.globalInstance().start(_prewarm_skeletonize_logged)
+    # ==================== Warm-ups (app.gui.warmup) ====================
+
+    def _install_warmup_intents(self) -> None:
+        """Resting on a run button (or the Visualize stage button) asks for its warm-up."""
+        self._hover_intent = warmup.HoverIntent(self, self._request_warmup)
+        for attr, keys in warmup.BUTTON_WARMUPS.items():
+            self._hover_intent.watch(getattr(self, attr, None), keys)
+        visualize = (getattr(self, "ribbon_buttons", None) or {}).get("Visualize")
+        self._hover_intent.watch(visualize, warmup.VISUALIZE)
+
+    def _request_warmup(self, keys: tuple[str, ...] | None) -> None:
+        """Queue the ``keys`` warm-ups (torch and the models / the dashboards), in order,
+        when warm-ups are on."""
+        queue = getattr(self, "warmups", None)
+        if not keys or not self._warm_ups or queue is None:
+            return
+        for key in keys:
+            queue.request(key)
+
+    def _warmup_blocked(self) -> str | None:
+        """Why a warm-up import must wait now (None: it may start).
+
+        An import holds the interpreter lock for tens of milliseconds at a time, so it
+        never runs beside a folder scan, the library build and first image of a project
+        (:data:`WARMUP_SETTLE_MS`), a Measure CSV parse, a batch job or another pool job.
+        """
+        if self._loading_project:
+            return "a folder is loading"
+        if time.perf_counter() < self._warmup_settle_until:
+            return "the project is settling"
+        if self._measurements_loading:
+            return "the measurement CSVs are being read"
+        if self.jobs.is_busy():
+            return f"{self.jobs.running_name() or 'a job'} is running"
+        if QThreadPool.globalInstance().activeThreadCount() > 0:
+            return "a background job is running"
+        return None
+
+    def _on_warmup_finished(self, key: str, error: str) -> None:
+        """torch is loaded: the chip shows the full runtime line (or why it failed)."""
+        if key != warmup.TORCH:
+            return
+        line = self.statusline
+        if error:
+            line.set_device_check(shell_chrome.FAILED, error)
+        else:
+            line.refresh_runtime()
 
     def _wire_library_order(self) -> None:
         """The Library display and the Correct page read the next images ahead in library
-        order, and the Correct page names the open image's place ("Image 12 / 40")."""
-        index = self.library_index
-        self.display_controller.set_neighbour_provider(index.neighbours)
+        order, and the Correct page names the open image's place ("Image 12 / 40"). They
+        share their decoded photos: the Correct page takes the Library's (the Library's
+        cache empties while Correct is shown), the Library shows the Correct page's."""
+        index, display = self.library_index, self.display_controller
+        display.set_neighbour_provider(index.neighbours)
         for setter, provider in (
             ("set_neighbour_provider", index.neighbours),
             ("set_position_provider", index.position_of),
+            ("set_photo_source", display.take_photo),
         ):
             method = getattr(self.correct_editor, setter, None)
             if callable(method):  # a Correct page without read-ahead keeps working
                 method(provider)
+        shared = getattr(self.correct_editor, "cached_photo", None)
+        if callable(shared):
+            display.set_photo_source(shared)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Offer to save editor changes, stop a running job, then clean up and persist.
@@ -278,6 +363,11 @@ class MainWindow(QMainWindow):
         if not self._stop_jobs_for_close():
             event.ignore()
             return
+        # A warm-up that has not started is dropped (an import under way cannot be
+        # stopped: the quit waits for it), and so is a device check still waiting.
+        self.warmups.shutdown()
+        if self.device_check is not None:
+            self.device_check.cancel()
         try:
             if self.root_length_viz is not None:
                 self.close_root_length_visualization()
@@ -712,6 +802,11 @@ class MainWindow(QMainWindow):
             self._refresh_metrics_bar(self._current_image_name())
         if not busy and self._current_stage() == "Measure":
             self._check_freshness()  # a Measure run rewrote a CSV
+        warmups = getattr(self, "warmups", None)
+        if not busy and warmups is not None:
+            # A run that started before its warm-up imported torch itself: its modules are
+            # frozen now, right after the run's own full collection (app.gui.warmup).
+            warmups.freeze_new_imports("a run's imports")
         page = getattr(self, "visualization_widget", None)
         if not busy and page is not None and page.is_blocked():
             # Visualize said why its dashboard could not open, and a run just ended (it may
@@ -828,11 +923,13 @@ class MainWindow(QMainWindow):
 
     def on_stage_changed(self, key: str) -> None:
         """The highlighted stage changed (any path): the status line says what Generate or
-        Measure would work on (W12), and the dashboards are told, when they want to know
-        (they are released a while after Visualize is left)."""
+        Measure would work on (W12), the stage's warm-up is asked for (torch for Generate,
+        the dashboards' libraries for Measure), and the dashboards are told, when they
+        want to know (they are released a while after Visualize is left)."""
         if key == "Measure":
             self._check_freshness()
         self._refresh_idle_text()
+        self._request_warmup(warmup.STAGE_WARMUPS.get(key))
         changed = getattr(visualization_manager, "stage_changed", None)
         if callable(changed):
             try:
@@ -917,7 +1014,8 @@ class MainWindow(QMainWindow):
         for editor in self._editors().values():
             editor.reset()
 
-        # Load images through image manager
+        # Load images through image manager (warm-ups wait until it has settled).
+        self._loading_project = True
         self.image_manager.load_images(dir_name)
         if self._persist_window_state:
             self.window_state.set_last_folder(dir_name)
@@ -933,6 +1031,7 @@ class MainWindow(QMainWindow):
 
     def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
         """Show a freshly scanned folder: build the library, then drop the overlay."""
+        self._loading_project = False
         self._shown_leaf_name = None
         layout = project_layout_of(self.image_manager)
         folder = layout.root if layout is not None else getattr(self, "_last_loaded_dir", None)
@@ -974,17 +1073,7 @@ class MainWindow(QMainWindow):
         if images:
             self._record_recent_project(len(images))
         self._prewarm_measurements(locate=True)  # find and parse the CSVs before a selection
-        self._prewarm_dashboards()
-
-    def _prewarm_dashboards(self) -> None:
-        """Import the dashboards' libraries once per session, shortly after a project loads."""
-        if self._dashboards_prewarmed:
-            return
-        self._dashboards_prewarmed = True
-        QTimer.singleShot(
-            DASHBOARD_PREWARM_DELAY_MS,
-            lambda: visualization_manager.prewarm_dashboards(web_engine=False),
-        )
+        self._warmup_settle_until = time.perf_counter() + WARMUP_SETTLE_MS / 1000.0
 
     def on_loading_empty(self, folder):
         """The scanned folder has no images: warn and keep whatever was loaded."""
@@ -996,6 +1085,7 @@ class MainWindow(QMainWindow):
         self._end_failed_load(message, "danger")
 
     def _end_failed_load(self, message, kind):
+        self._loading_project = False
         if getattr(self, "loading_overlay", None) is not None:
             self.loading_overlay.hide()
         self.empty_state.set_loading(None)

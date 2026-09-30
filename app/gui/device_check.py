@@ -1,21 +1,24 @@
 """Name the inference device on the status line soon after start-up (KNOWN_ISSUES #5).
 
 The device chip used to read "Device not detected yet" until the first inference
-resolved the runtime. :class:`DeviceCheck` resolves it in the thread pool once its window
-has shown: torch loads there (about 1.3 s, 0.4 GB), never on the GUI thread and never
-before the first paint. The chip reads "Checking GPU…" meanwhile, then the device, or
-"Device unknown" (warning colour, the reason in its tooltip) if resolving failed. Only
-the public :func:`app.inference.runtime.describe_runtime` is called.
+resolved the runtime. :class:`DeviceCheck` names it in the thread pool once its window
+has shown, without loading torch: :func:`resolve_device_logged` asks the NVIDIA driver and
+reads the installed torch build (:mod:`app.inference.device_probe`, about 20 ms, +20 MB for
+the driver). The chip reads "Checking GPU…" meanwhile, then the device ("GPU · <name> ·
+CUDA 12.8" or "CPU", the reason in its tooltip), or "Device unknown" (warning colour) if the
+check failed. Once torch has resolved the runtime (the Generate warm-up, or a job), the
+full runtime line replaces it. Waves 1-2 loaded torch here (1.3 s, 0.4 GB, GUI stalls, a
+slower quit in every session); torch now loads when the user heads for Generate
+(:mod:`app.gui.warmup`).
 
-When: while torch initialises it holds the GIL, which stalls the GUI thread two or three
-times for 40-60 ms. So the check starts only once the user's input (mouse, keys, wheel,
-drag and drop, anywhere in the app) has paused for :data:`DEVICE_CHECK_IDLE_MS` and no
-task (a folder load, a batch job) is running: the stalls do not land on the first clicks.
+When: :data:`DEVICE_CHECK_DELAY_MS` after the window first shows, once the user's input
+(mouse, keys, wheel, drag and drop, anywhere in the app) has paused for
+:data:`DEVICE_CHECK_IDLE_MS` and no task (a folder load, a batch job) is running.
 
 Opt-out: ``SPROUTS_DEVICE_CHECK=0`` (also ``false`` / ``no`` / ``off``; ``1`` forces it on)
 or the setting ``device_check/at_startup = false``; the environment wins. The chip then
 reads as before this check ("Device not detected yet") until the first inference resolves
-the device, and torch (~0.4 GB) is not loaded at start-up.
+the device.
 """
 
 from __future__ import annotations
@@ -43,12 +46,13 @@ __all__ = [
     "resolve_device_logged",
 ]
 
-#: The device is never resolved sooner than this after the window first shows, so the
-#: first paint and layout never compete with loading torch.
+#: The device is never named sooner than this after the window first shows, so the first
+#: paint and layout go first.
 DEVICE_CHECK_DELAY_MS = 250
 #: ... and only once the user's input has paused this long (the countdown restarts on
-#: every mouse move, key, wheel step or drag).
-DEVICE_CHECK_IDLE_MS = 1500
+#: every mouse move, key, wheel step or drag). The check no longer loads torch (it held
+#: the interpreter lock for 40-60 ms at a time), so a short pause is enough.
+DEVICE_CHECK_IDLE_MS = 250
 #: Environment switch: 0 / false / no / off turns the check off, 1 / true / yes / on on.
 DEVICE_CHECK_ENV = "SPROUTS_DEVICE_CHECK"
 #: Setting (QSettings key) read when the environment says nothing; on by default.
@@ -123,36 +127,42 @@ def device_check_enabled(settings: Any = None, environ: Mapping[str, str] | None
     return True if flag is None else flag
 
 
-def resolve_device_logged() -> str:
-    """Resolve and cache the inference device (a thread-pool job: torch loads here).
+def resolve_device_logged():
+    """Name the inference device without loading torch (the check's thread-pool job).
 
-    Returns ``""`` once the runtime knows its device, else the reason it could not (logged).
-    Never raises: an exception must never leave the pool thread.
+    Returns ``""`` when the runtime is resolved already (the chip shows it), else the
+    :class:`~app.inference.device_probe.DeviceGuess` of the driver and the torch build; if
+    even that fails, the reason (logged). Never raises: an exception must never leave the
+    pool thread.
     """
     try:
-        from app.inference import runtime
+        from app.inference import device_probe, runtime
 
-        runtime.describe_runtime(resolve=True)
+        if runtime.describe_runtime().device != "unknown":
+            return ""
+        return device_probe.probe_device()
     except Exception as exc:
         logger.exception("Could not detect the inference device")
         return str(exc) or type(exc).__name__
-    return ""
 
 
 class _Signals(QObject):
-    """Carries 'device resolved' (``""``, or why it failed) from the pool thread.
+    """Carries the job's result (``""``, why it failed, or a device guess) from the pool
+    thread.
 
     Unparented and kept alive by the job's closure, so a job that ends after the window
     was destroyed emits into nothing instead of a dead object.
     """
 
-    resolved = pyqtSignal(str)
+    resolved = pyqtSignal(object)
 
 
 class DeviceCheck(QObject):
-    """Resolves the device once ``window`` has shown and the user paused; tells ``statusline``.
+    """Names the device once ``window`` has shown and the user paused; tells ``statusline``.
 
-    ``resolve`` (a test seam) is the pool job, :func:`resolve_device_logged` by default.
+    ``resolve`` (a test seam) is the pool job, :func:`resolve_device_logged` by default: it
+    returns ``""`` (resolved), why it failed, or a device guess (``statusline.
+    set_device_guess``, when the status line has it).
     ``enabled`` overrides :func:`device_check_enabled` (read from ``settings`` and the
     environment when ``None``). A check that is off changes nothing: no chip state, no
     filter, no job. ``statusline.state() == "working"`` (a running task) defers the job.
@@ -200,6 +210,12 @@ class DeviceCheck(QObject):
     def started(self) -> bool:
         """True once the pool job was started (at most once)."""
         return self._started
+
+    def cancel(self) -> None:
+        """Never start the check (the window closes): no job, no filter, no timer."""
+        self._started = True
+        self._idle.stop()
+        self._watch_input(False)
 
     def watching_input(self) -> bool:
         """True while the application's input is watched (shown, job not started yet)."""
@@ -251,14 +267,25 @@ class DeviceCheck(QObject):
         signals = self._signals
 
         def work() -> None:
-            error = resolve()
+            result = resolve()
             try:
-                signals.resolved.emit(error)
+                signals.resolved.emit(result)
             except RuntimeError:
                 pass  # the window is gone
 
         QThreadPool.globalInstance().start(work)
 
-    def _on_resolved(self, error: str) -> None:
-        """The chip names the resolved device, or says it is unknown (and why)."""
-        self._statusline.set_device_check(shell_chrome.FAILED if error else None, error)
+    def _on_resolved(self, result) -> None:
+        """The chip names the device (a guess, or the resolved runtime), or says it is
+        unknown (and why)."""
+        if result is None or isinstance(result, str):
+            self._statusline.set_device_check(shell_chrome.FAILED if result else None, result or "")
+            return
+        problem = getattr(result, "problem", "")
+        show_guess = getattr(self._statusline, "set_device_guess", None)
+        if problem:
+            self._statusline.set_device_check(shell_chrome.FAILED, problem)
+        elif callable(show_guess):
+            show_guess(result)
+        else:
+            self._statusline.set_device_check(None)

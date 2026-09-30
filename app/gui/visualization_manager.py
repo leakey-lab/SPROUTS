@@ -79,6 +79,7 @@ __all__ = [
     "toggle_root_length_visualization",
     "toggle_visualization",
     "visible_kind",
+    "warm_dashboard_imports",
 ]
 
 # Dashboard classes, imported on first use. Assigning the module attribute
@@ -598,16 +599,25 @@ def visible_kind(main_window) -> str | None:
     return controller_for(main_window).visible_kind()
 
 
-def _prewarm_imports_logged() -> None:
-    """Import the dashboard stack (a thread-pool job); a failure is only logged.
+def warm_dashboard_imports() -> str:
+    """Import the dashboard stack now (dash, plotly, pandas: ~1 s, ~100 MiB); blocking.
 
-    The first dashboard's build worker imports it anyway, so a failure here costs
-    nothing but the head start; an exception must never leave the pool thread.
+    Call it off the GUI thread (the main window's warm-up queue does, when the user
+    heads for Visualize; see :mod:`app.gui.warmup`). The first dashboard's build worker
+    imports the same modules anyway, so a failure costs nothing but the head start.
+    Returns "" or why it failed (logged); never raises.
     """
     try:
         importlib.import_module("app.visualization.viz_window").prewarm_imports()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Could not prewarm the dashboard imports")
+        return str(exc) or type(exc).__name__
+    return ""
+
+
+def _prewarm_imports_logged() -> None:
+    """:func:`warm_dashboard_imports` as a thread-pool job (a failure is only logged)."""
+    warm_dashboard_imports()
 
 
 def prewarm_dashboards(*, web_engine: bool = True) -> None:
@@ -618,6 +628,8 @@ def prewarm_dashboards(*, web_engine: bool = True) -> None:
     (GUI) thread: ~0.4 s during which the GUI does not respond, ~95 MiB. Measured
     on a 46k-row trial, both together took the first open of a session from 3.16 s
     to 1.77 s to its first chart (median of 5) and its GUI freeze from 439 ms to 52 ms.
+    The main window no longer calls this on a timer: its warm-up queue imports the
+    stack when the user heads for Visualize (:func:`warm_dashboard_imports`).
     """
     QThreadPool.globalInstance().start(_prewarm_imports_logged)
     if web_engine:

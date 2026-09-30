@@ -24,10 +24,10 @@ Topbar
 Statusline
     The message is bound to ``mw.status_bar.messageChanged`` (every existing
     ``status_bar.showMessage`` caller keeps working); the TaskProgressWidget runs
-    inline in the same row; the chip names the inference device once the runtime
-    has resolved it (it never imports torch itself: MainWindow resolves the device
-    in the thread pool after the window shows, and the chip reads "Checking GPU…"
-    meanwhile).
+    inline in the same row; the chip names the inference device (it never imports
+    torch itself: after the window shows, MainWindow names it through the NVIDIA
+    driver in the thread pool, the chip reading "Checking GPU…" meanwhile, and the
+    full runtime line replaces that once torch has resolved it).
 
 Contract kept: ``mw.ribbon`` (the topbar), ``mw.ribbon_buttons`` (six keys, in
 order), ``mw.action_bar_stack``, ``mw.action_bar_viz_seg``,
@@ -73,7 +73,7 @@ COMPACT = "compact"
 _RUNTIME_MODULE = "app.inference.runtime"
 _RUNTIME_UNKNOWN = "Device: auto"
 
-#: Device-check states (:meth:`StatusLine.set_device_check`): MainWindow resolves the
+#: Device-check states (:meth:`StatusLine.set_device_check`): MainWindow names the
 #: device in the thread pool after the window shows.
 CHECKING = "checking"
 FAILED = "failed"
@@ -598,7 +598,7 @@ def build_topbar(mw) -> ShellTopbar:
 # --------------------------------------------------------------------------- #
 #  Statusline
 # --------------------------------------------------------------------------- #
-def runtime_status(device_check: str | None = None) -> tuple[str, bool]:
+def runtime_status(device_check: str | None = None, guess=None) -> tuple[str, bool]:
     """(label, models_ok) for the device chip, WITHOUT importing torch.
 
     ``"Device: auto"`` until ``app.inference.runtime`` has been imported by a
@@ -607,21 +607,33 @@ def runtime_status(device_check: str | None = None) -> tuple[str, bool]:
     ``"GPU · <name>"`` / ``"CPU"`` once ``get_runtime()`` has been resolved.
 
     ``device_check`` (:data:`CHECKING` / :data:`FAILED`) names an unresolved device
-    :data:`DEVICE_CHECKING` / :data:`DEVICE_CHECK_FAILED` instead, keeping the
-    summary's missing-model notes; a resolved device always shows as resolved.
+    :data:`DEVICE_CHECKING` / :data:`DEVICE_CHECK_FAILED` instead, and ``guess`` (the
+    driver's :class:`~app.inference.device_probe.DeviceGuess`) names it by its ``text``,
+    keeping the summary's missing-model notes; a resolved device always shows as
+    resolved, and a check state wins over a guess.
     """
+    return _runtime_view(device_check, guess)[:2]
+
+
+def _runtime_view(device_check: str | None, guess) -> tuple[str, bool, str]:
+    """(label, models_ok, note): :func:`runtime_status` plus the guess's tooltip note,
+    kept only while the guess is what the chip shows."""
     module = sys.modules.get(_RUNTIME_MODULE)
     unresolved = {CHECKING: DEVICE_CHECKING, FAILED: DEVICE_CHECK_FAILED}.get(device_check)
+    guessed = str(getattr(guess, "text", "") or "") if guess is not None else ""
+    note = "" if unresolved else str(getattr(guess, "note", "") or "")
+    placeholder = unresolved or guessed
     if module is None:
-        return unresolved or _RUNTIME_UNKNOWN, True
+        return placeholder or _RUNTIME_UNKNOWN, True, note
     describe = getattr(module, "describe_runtime", None)
     if callable(describe):
         try:
             summary = describe()
         except Exception:  # noqa: BLE001 - a status chip must never break the UI
-            return unresolved or _RUNTIME_UNKNOWN, True
+            return placeholder or _RUNTIME_UNKNOWN, True, note
         models_ok = bool(getattr(summary, "models_ok", True))
-        if unresolved and getattr(summary, "device", None) == "unknown":
+        unknown = getattr(summary, "device", None) == "unknown"
+        if placeholder and unknown:
             missing = [
                 f"{model} model missing"
                 for model, present in (
@@ -630,15 +642,15 @@ def runtime_status(device_check: str | None = None) -> tuple[str, bool]:
                 )
                 if not present
             ]
-            return " · ".join([unresolved, *missing]), models_ok
-        return str(getattr(summary, "text", summary)), models_ok
+            return " · ".join([placeholder, *missing]), models_ok, note
+        return str(getattr(summary, "text", summary)), models_ok, note if unknown else ""
     get_runtime = getattr(module, "get_runtime", None)
     cache_info = getattr(get_runtime, "cache_info", None)
     if not callable(get_runtime) or cache_info is None or cache_info().currsize == 0:
         # never force device detection just to label a chip
-        return unresolved or _RUNTIME_UNKNOWN, True
+        return placeholder or _RUNTIME_UNKNOWN, True, note
     config = get_runtime()
-    return (f"GPU · {config.device_name}" if config.is_cuda else "CPU"), True
+    return (f"GPU · {config.device_name}" if config.is_cuda else "CPU"), True, ""
 
 
 def runtime_label() -> str:
@@ -675,6 +687,7 @@ class StatusLine(QFrame):
         self._progress: TaskProgressWidget | None = None
         self._device_check: str | None = None
         self._device_check_detail = ""
+        self._device_guess = None  # the driver's guess, until torch resolves the runtime
 
         self.setObjectName("shellStatusline")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -746,17 +759,28 @@ class StatusLine(QFrame):
         self._device_check_detail = detail if state == FAILED else ""
         self.refresh_runtime()
 
+    def set_device_guess(self, guess) -> None:
+        """Name the device from the driver's guess (a
+        :class:`~app.inference.device_probe.DeviceGuess`: ``text`` on the chip, ``note`` in
+        its tooltip) until torch resolves the runtime; ends the check state."""
+        self._device_check = None
+        self._device_check_detail = ""
+        self._device_guess = guess
+        self.refresh_runtime()
+
     def refresh_runtime(self) -> None:
         """Re-read the device chip (cheap; never imports torch).
 
         The chip is elided to ``INFO_MAX_WIDTH`` (full text in the tooltip) and
         turns WARN when a model's weights are missing or the device check failed.
         """
-        text, models_ok = runtime_status(self._device_check)
+        text, models_ok, note = _runtime_view(self._device_check, self._device_guess)
         failed = text.startswith(DEVICE_CHECK_FAILED) and self._device_check == FAILED
         metrics = QFontMetrics(self.info.font())
         self.info.setText(metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, INFO_MAX_WIDTH))
         tip = f"Inference runtime: {text}"
+        if note:
+            tip += f"\n{note}"
         if failed and self._device_check_detail:
             tip += f"\nCould not detect the inference device: {self._device_check_detail}"
         self.info.setToolTip(tip)
