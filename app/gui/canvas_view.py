@@ -109,11 +109,15 @@ def draw_pixel_grid(painter: QPainter, area: QRectF, colour: QColor) -> None:
     painter is drawn on. The vertical lines are one ``width x 1`` row image filled down the
     area as a texture: long spans, about 40x faster on the raster engine than a translucent
     line per column (thousands of one-pixel spans).
+
+    The device columns include everything between the painter and the device: the
+    devicePixelRatio and, on a raster viewport, the viewport's offset in its window (Qt's
+    paint redirection). The lines are drawn with that whole mapping undone, so they land
+    on exactly those columns (undoing the ratio alone added the offset a second time).
     """
     dev = painter.deviceTransform()
     sx, sy, dx, dy = dev.m11(), dev.m22(), dev.dx(), dev.dy()
-    world = painter.worldTransform().m11()
-    if area.isEmpty() or sx <= 0 or sy <= 0 or world <= 0 or dev.m12() or dev.m21():
+    if area.isEmpty() or sx <= 0 or sy <= 0 or dev.m12() or dev.m21():
         return
     left, right = math.ceil(area.left() * sx + dx - 0.5), math.ceil(area.right() * sx + dx - 0.5)
     top, bottom = math.ceil(area.top() * sy + dy - 0.5), math.ceil(area.bottom() * sy + dy - 0.5)
@@ -127,8 +131,8 @@ def draw_pixel_grid(painter: QPainter, area: QRectF, colour: QColor) -> None:
         if 0 <= column < width:
             row.setPixelColor(column, 0, colour)
     painter.save()
-    ratio = sx / world  # the device pixel ratio: from here on one unit is one device pixel
-    painter.setTransform(QTransform.fromScale(1 / ratio, 1 / ratio))
+    # From here on one unit is one device pixel: world x (the rest of the mapping) = identity.
+    painter.setTransform(dev.inverted()[0] * painter.worldTransform())
     painter.setBrushOrigin(left, 0)
     painter.fillRect(QRect(left, top, width, height), QBrush(row))
     for y in range(math.ceil(area.top()), math.floor(area.bottom()) + 1):
@@ -336,7 +340,12 @@ class CanvasViewMixin:
         self.setTransform(QTransform.fromScale(factor, factor))
         drift = self.mapFromScene(scene_pt) - anchor_pt
         self._scroll_by(drift.x(), drift.y())
-        self._anchor_memo = (QPoint(anchor_pt), self._view_state(), QPointF(scene_pt))
+        # Remembered only where it landed: near the zoom-out limit the view centres the
+        # scene and cannot scroll, and the anchor then shows another point.
+        rest = self.mapFromScene(scene_pt) - anchor_pt
+        placed = abs(rest.x()) <= 1 and abs(rest.y()) <= 1
+        memo = (QPoint(anchor_pt), self._view_state(), QPointF(scene_pt))
+        self._anchor_memo = memo if placed else None
         self.zoom_changed.emit(self.zoom_factor)
 
     def _anchor_scene(self, anchor_pt: QPoint) -> QPointF:
@@ -346,7 +355,8 @@ class CanvasViewMixin:
         a pixel off the anchor. While nothing else has moved the view since (same anchor,
         scroll, zoom, viewport and scene rect), the next zoom aims at that same point again
         instead of the one now under the pixel: over a run of wheel notches the errors do not
-        add up (a deep zoom magnified them to 5 screen px).
+        add up (a deep zoom magnified them to 5 screen px). A zoom that could not put its
+        point under the anchor (see :meth:`_apply_zoom`) leaves nothing to aim at again.
         """
         memo = self._anchor_memo
         if memo is not None and memo[0] == anchor_pt and memo[1] == self._view_state():

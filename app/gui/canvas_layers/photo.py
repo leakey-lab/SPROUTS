@@ -105,6 +105,15 @@ class TiledLevels:
         """``(level, tx, ty) -> cacheKey`` of every made tile."""
         return {key: tile[0].cacheKey() for key, tile in self._tiles.items()}
 
+    def levels(self) -> set[int]:
+        """The levels that have tiles."""
+        return {key[0] for key in self._tiles}
+
+    def retain(self, levels: set[int] | frozenset[int]) -> None:
+        """Forget the tiles of every level not in ``levels``."""
+        for key in [key for key in self._tiles if key[0] not in levels]:
+            self._forget(key)
+
     def drop(self, level: int, rect: Rect, level_size: tuple[int, int]) -> None:
         """Forget the tiles of ``level`` whose pixels (margin included) touch the level-0
         ``rect``; they are made again when next drawn."""
@@ -302,6 +311,9 @@ class PhotoLayerItem(QGraphicsItem):
         self._blend_painted = 0.0
         self._warm_plan: list[tuple[int, QRectF]] = []  # (level, image-px area) to warm
         self._warm_gl = False  # the last paint was on OpenGL: uploads follow the warm-up
+        # A pixel of the photo in view when the plan was made: an update there brings a
+        # frame (a view repaints only for updates that meet its viewport).
+        self._warm_spot = QRectF(0, 0, 1, 1)
         self._warm_timer: QTimer | None = None  # made at the first paint that plans
         # Makes option.exposedRect the dirty part rather than the whole item.
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
@@ -466,6 +478,8 @@ class PhotoLayerItem(QGraphicsItem):
         plan += [(level, grown) for level in self._levels_at(scale / self.WARM_STEP)]
         self._warm_plan = plan
         self._warm_gl = _is_gl(painter)
+        centre = view.center()
+        self._warm_spot = QRectF(math.floor(centre.x()), math.floor(centre.y()), 1, 1)
         if self._warm_timer is None:
             self._warm_timer = QTimer()
             self._warm_timer.setSingleShot(True)
@@ -479,4 +493,6 @@ class PhotoLayerItem(QGraphicsItem):
         if self.warm_levels(self.WARM_BUDGET_MS):
             self._warm_timer.start(0)  # the next slice, after the events waiting
         elif self._warm_gl and self._levels.pending_uploads():
-            self.update(QRectF(0, 0, 1, 1))  # a frame; its paint draws them invisibly
+            # A frame; its paint draws them invisibly. Asked for over a pixel in view: an
+            # update off screen (the top-left pixel once zoomed in) brings no frame.
+            self.update(self._warm_spot)
