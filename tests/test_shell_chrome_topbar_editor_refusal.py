@@ -20,6 +20,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.gui.panels import Panel  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
@@ -50,6 +51,8 @@ def mw(app):
     yield window
     window.close()
     window.deleteLater()
+    del window
+    flush_deleted()
 
 
 def _settle(app):

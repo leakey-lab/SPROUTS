@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 
 import pytest
 
@@ -40,8 +41,21 @@ def test_a_full_disk_stops_the_run_at_the_next_batch(tmp_path):
     paths = _make_images(str(tmp_path / "in"), NAMES)  # 7 images
     out = str(tmp_path / "out")
     steps = []
+    full = threading.Event()
+    fill = _disk_fills_after(2, out)
+
+    def save(arr, path):
+        try:
+            return fill(arr, path)
+        except OSError:
+            full.set()
+            raise
 
     def step(x):
+        # The writer runs on its own thread: the third batch waits until the disk is
+        # full, so the stop is checked at the next boundary whatever the timing.
+        if len(steps) == 2:
+            full.wait(5)
         steps.append(len(x))
         return _step(x)
 
@@ -49,7 +63,7 @@ def test_a_full_disk_stops_the_run_at_the_next_batch(tmp_path):
     with pytest.raises(OSError) as caught:
         run_batches(
             paths,
-            _spec(out, step=step, save=_disk_fills_after(2, out)),
+            _spec(out, step=step, save=save),
             batch_size=2,
             io_threads=1,
             report=report,

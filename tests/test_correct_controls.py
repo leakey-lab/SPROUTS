@@ -24,7 +24,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QPoint, QRectF, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QRectF, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
@@ -51,6 +51,7 @@ from app.gui.widgets import tokens  # noqa: E402
 from app.gui.widgets.icons import load_icon  # noqa: E402
 from app.gui.widgets.overlay_geometry import LayoutMetrics  # noqa: E402
 from tests.correct_fakes import FakeHost, FakeLayer  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 M = LayoutMetrics()
 UNDER_TEST = (
@@ -160,13 +161,14 @@ def make_page(app, tmp_path):
     yield make
     # Delete the pages while their wrappers are intact (page -> chrome -> OverlayLayout -> page
     # is a cycle the GC could otherwise empty while Qt still delivers teardown events).
-    for page in made:
-        skeleton = page.layers[SKELETON]
-        if isinstance(skeleton, SkeletonLayer):
-            skeleton.cancel_scheduled_render()
-        page.close()
-        page.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made, prepare=_quiet_skeleton)
+
+
+def _quiet_skeleton(page) -> None:
+    """Stop the skeleton layer's scheduled render before its page goes."""
+    skeleton = page.layers[SKELETON]
+    if isinstance(skeleton, SkeletonLayer):
+        skeleton.cancel_scheduled_render()
 
 
 # ------------------------------------------------------------------------------ helpers
@@ -739,10 +741,7 @@ def standalone(app):
         return panel
 
     yield make
-    for host in hosts:
-        host.close()
-        host.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(hosts)
 
 
 def test_the_panel_is_never_narrower_than_155_px(standalone):

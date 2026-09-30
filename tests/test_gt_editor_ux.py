@@ -27,7 +27,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton, QWidget  # noqa: E402
 
@@ -37,6 +37,7 @@ from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
 from app.gui.class_panel import ClassPanel  # noqa: E402
 from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 H, W = 60, 80
 
@@ -58,10 +59,7 @@ def made(app):
     """Widgets closed and deleted deterministically after the test."""
     widgets = []
     yield widgets
-    for w in widgets:
-        w.close()
-        w.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(widgets)
 
 
 def _photo(folder, name="plot_001.png"):

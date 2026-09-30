@@ -12,7 +12,6 @@ so the focus never moves on to the next box by itself.
 
 from __future__ import annotations
 
-import gc
 import os
 import sys
 import types
@@ -25,13 +24,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtGui import QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMessageBox, QWidget  # noqa: E402
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 H, W = 60, 80
 Focus = Qt.FocusPolicy
@@ -57,21 +57,6 @@ def _guards(monkeypatch, tmp_path):
     monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
 
 
-def _flush_deleted() -> None:
-    """Delete what deleteLater() queued, then deliver the queued calls that free the signal
-    proxies of deleted widgets, and collect: three rounds, as one round can queue more."""
-    for _ in range(3):
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        QApplication.sendPostedEvents()
-    gc.collect()
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _flush_earlier_tests(app):
-    """Dead wrappers that earlier test files left queued go first."""
-    _flush_deleted()
-
-
 @pytest.fixture
 def iface(app, tmp_path):
     """A shown, active GT editor on an image, the keys on its canvas; deleted afterwards
@@ -92,7 +77,7 @@ def iface(app, tmp_path):
     editor.close()
     editor.deleteLater()
     del editor
-    _flush_deleted()
+    flush_deleted()
 
 
 def _box(iface, key) -> QCheckBox:

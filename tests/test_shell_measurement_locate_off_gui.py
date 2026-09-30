@@ -18,7 +18,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -28,6 +28,7 @@ from app import project_layout  # noqa: E402
 from app.config import LENGTH_CSV_HEADERS  # noqa: E402
 from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
 from app.inference.metrics import write_metric_csv  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 LEGACY = ("skeletonizer", "test_latest", "images")
@@ -138,7 +139,7 @@ def test_the_bar_never_waits_for_a_csv_the_pool_is_parsing(app, tmp_path):
     finally:
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()
 
 
 def test_a_legacy_csv_reaches_the_metrics_bar(app, tmp_path):
@@ -166,4 +167,4 @@ def test_a_legacy_csv_reaches_the_metrics_bar(app, tmp_path):
     finally:
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()

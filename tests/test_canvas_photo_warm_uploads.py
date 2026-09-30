@@ -23,6 +23,7 @@ from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_layers import photo as photo_module  # noqa: E402
 from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 W, H = 1400, 1000
 
@@ -60,7 +61,8 @@ def page(app, monkeypatch):
     scene.removeItem(item)
     view.close()
     view.deleteLater()
-    app.processEvents()
+    del view, scene
+    flush_deleted()
 
 
 def _show(app, view, zoom: float, centre: tuple[float, float]) -> None:

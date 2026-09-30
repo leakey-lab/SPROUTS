@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect, QWi
 from app.gui.widgets import effects  # noqa: E402
 from app.gui.widgets.effects import CachedDropShadow, pop_shadow  # noqa: E402
 from app.gui.widgets.overlays import FloatingDock, ProgressOverlay, ToolRail  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 _APP = None
 
@@ -40,6 +41,8 @@ def host(app):
     yield widget
     widget.close()
     widget.deleteLater()
+    del widget
+    flush_deleted()
 
 
 def panel(host, size=(300, 60), pos=(110, 90)) -> QFrame:

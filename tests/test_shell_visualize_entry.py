@@ -22,7 +22,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -30,6 +30,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app import config  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
 
@@ -70,7 +71,7 @@ def window(app, tmp_path, monkeypatch):
     yield made
     made.close()
     made.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
     QApplication.processEvents()
 
 

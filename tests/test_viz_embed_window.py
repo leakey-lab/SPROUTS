@@ -25,6 +25,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.visualization._viz_server import _DashServerThreadBase  # noqa: E402
 from app.visualization.viz_window import DashVizWindow, require_rows  # noqa: E402
+from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
 
 DownloadState = QWebEngineDownloadRequest.DownloadState
 TerminationStatus = QWebEnginePage.RenderProcessTerminationStatus
@@ -212,9 +213,7 @@ def make_window(qapp, tmp_path, profile):
         return window
 
     yield make
-    for window in windows:
-        window.cleanup_server()
-        window.deleteLater()
+    delete_widgets(windows, close=False, prepare=lambda window: window.cleanup_server())
     pump(0.2)
 
 
@@ -370,6 +369,7 @@ def test_browser_that_cannot_start_is_reported_without_background_work(qapp, tmp
     finally:
         window.cleanup_server()
         window.deleteLater()
+        flush_deleted()
 
 
 # --------------------------------------------------------------------------- #

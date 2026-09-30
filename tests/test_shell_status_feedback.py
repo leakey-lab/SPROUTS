@@ -21,7 +21,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStatusBar  # noqa: E402
@@ -31,6 +31,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 from app.gui import task_progress  # noqa: E402
 from app.gui.shell_chrome import WORKING_TEXT, StatusLine  # noqa: E402
 from app.gui.task_progress import TaskProgressWidget  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -148,7 +149,7 @@ def test_the_window_title_names_the_app_and_the_project(app, tmp_path, monkeypat
     finally:
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()
 
 
 def test_the_idle_text_follows_the_loaded_folder(app, tmp_path, monkeypatch):
@@ -170,4 +171,4 @@ def test_the_idle_text_follows_the_loaded_folder(app, tmp_path, monkeypatch):
     finally:
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()

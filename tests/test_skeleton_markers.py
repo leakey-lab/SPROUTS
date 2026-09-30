@@ -38,6 +38,7 @@ from app.gui.skeleton_graph_model import (  # noqa: E402
 )
 from app.gui.skeleton_overlay import DotsItem, SkeletonDecorations  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -184,10 +185,7 @@ def _markers(scene: QGraphicsScene) -> DotsItem:
 
 
 def _close(*views: QGraphicsView) -> None:
-    for view in views:
-        view.close()
-        view.deleteLater()
-    QApplication.sendPostedEvents(None, 0)
+    delete_widgets(list(views))
 
 
 @pytest.mark.parametrize("zoom", [0.5, 1.0, 3.0])

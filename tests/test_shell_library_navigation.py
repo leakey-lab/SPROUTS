@@ -24,7 +24,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
 import cv2  # noqa: E402
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QTreeWidget  # noqa: E402
 
@@ -34,6 +34,7 @@ from app.gui import display_controller as display_module  # noqa: E402
 from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
 from app.gui.display_read_ahead import DisplayReadAhead, file_stamp  # noqa: E402
 from app.gui.library_index import LibraryIndex, index_names  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in range(11, 17)]
 
@@ -47,7 +48,7 @@ def app():
 def flush_deleted_widgets():
     """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 @pytest.fixture(autouse=True)
@@ -255,7 +256,7 @@ def window(app, tmp_path, monkeypatch):
     yield mw
     mw.close()
     mw.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
     QApplication.processEvents()
 
 

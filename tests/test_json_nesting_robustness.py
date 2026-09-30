@@ -26,6 +26,7 @@ from app.config import GT_META_CHUNK  # noqa: E402
 from app.gt.registry import RegistryError, load_registry  # noqa: E402
 from app.gt.store import GtFileError, gt_path, read_tracing  # noqa: E402
 from app.provenance import BUILD_INFO_FILENAME, git_commit  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 _DEPTH = 100_000
 NESTED = {
@@ -134,6 +135,7 @@ def gt_editor(app, monkeypatch):
     editor.notice.connect(lambda msg, kind: editor.notices.append((msg, kind)))
     yield editor
     editor.deleteLater()
+    flush_deleted()
 
 
 def _image(folder) -> str:

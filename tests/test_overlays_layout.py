@@ -35,6 +35,7 @@ from app.gui.widgets import (  # noqa: E402
     ToolRail,
     ZoomCluster,
 )
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 LONG_NAME = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
 
@@ -123,6 +124,8 @@ def editor(app):
     ed = _Editor()
     yield ed
     ed.close()
+    del ed
+    flush_deleted()
 
 
 def test_register_rejects_unknown_roles(editor):

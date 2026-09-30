@@ -18,6 +18,7 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from app.gui.widgets import ToastManager  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 LONG_ERROR = (
     "Cannot export: gt/classes.json is invalid ("
@@ -41,6 +42,8 @@ def host(app):
     yield window
     window.close()
     window.deleteLater()
+    del window
+    flush_deleted()
 
 
 def _text(toast) -> str:

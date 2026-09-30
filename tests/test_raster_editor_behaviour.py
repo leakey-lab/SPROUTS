@@ -12,7 +12,6 @@ Findings PE-04, PE-06, PE-13, UI-03, UXE-02/RB-05, UXE-03, UXE-07, UXE-08/09, AR
 of the UI/perf audit; plan package P3 of the unified Correct editor.
 """
 
-import gc
 import os
 
 import pytest
@@ -33,6 +32,7 @@ from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
 from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
 from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 _SAVE = QMessageBox.StandardButton.Save
 _DISCARD = QMessageBox.StandardButton.Discard
@@ -69,16 +69,9 @@ def make(app):
         return iface
 
     yield _make
-    for iface in made:
-        iface.close()
-        iface.deleteLater()
-    made.clear()
-    # Several rounds free the slot proxies too; dead wrappers left behind can make stale sip
-    # entries that crash a later test inside findChildren.
-    for _ in range(3):
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        QApplication.sendPostedEvents()
-    gc.collect()
+    # Dead wrappers left behind can make stale sip entries that crash a later test inside
+    # findChildren (see tests/qt_teardown.py).
+    delete_widgets(made)
 
 
 @pytest.fixture(scope="module")

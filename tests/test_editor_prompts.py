@@ -22,6 +22,7 @@ from app.gui.editor_prompts import (  # noqa: E402
     ask_unsaved,
     join_nouns,
 )
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 Button = QMessageBox.StandardButton
 ESCAPE = "escape"  # the scripted answer "the user pressed Esc"
@@ -37,7 +38,8 @@ def parent(app):
     widget = QWidget()
     yield widget
     widget.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    del widget
+    flush_deleted()
 
 
 class Answer:

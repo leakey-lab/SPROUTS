@@ -17,6 +17,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui.shell_chrome import StatusLine, runtime_label  # noqa: E402
 from app.gui.task_progress import TaskProgressWidget  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 RUNTIME = "app.inference.runtime"
 
@@ -166,3 +167,4 @@ def test_main_window_uses_one_status_surface(app):
     finally:
         mw.close()
         mw.deleteLater()
+        flush_deleted()

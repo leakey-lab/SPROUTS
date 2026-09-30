@@ -18,13 +18,14 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QRect, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui.toast_clearance import FLOATING_GAP, ToastClearance  # noqa: E402
 from app.gui.widgets.toasts import ToastManager  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 LONG = "Could not save mask for 24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg: disk full"
 
@@ -66,7 +67,7 @@ class Scene:
     def close(self) -> None:
         self.host.close()
         self.host.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()
 
 
 def settle() -> None:
@@ -143,7 +144,7 @@ def test_without_side_chrome_nothing_changes(app):
         assert toast.geometry().bottom() == 640 - 16 - 1
     finally:
         host.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()
 
 
 # ------------------------------------------------------ the main window (once wired)
@@ -202,5 +203,5 @@ def test_the_main_window_keeps_toasts_off_the_editor_side_panels(app, tmp_path, 
             editor.maybe_save_changes = lambda: True
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()
         QApplication.processEvents()

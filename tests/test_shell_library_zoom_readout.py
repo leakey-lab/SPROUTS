@@ -14,13 +14,14 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.metrics_bar import MetricsBar  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.test_correct_editor import qapp  # noqa: E402
 from tests.test_correct_main_window import new_project, open_project, select, settle  # noqa: E402
 
@@ -42,7 +43,7 @@ def guards(monkeypatch, tmp_path):
         image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
     )
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 def test_the_zoom_cell_formats_the_factor(app):
@@ -105,4 +106,4 @@ def test_the_library_zoom_is_on_the_metrics_bar(app, tmp_path):
     finally:
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()

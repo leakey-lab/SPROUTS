@@ -15,6 +15,8 @@ from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
+from tests.qt_teardown import flush_deleted  # noqa: E402
+
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 USER = Qt.ItemDataRole.UserRole
@@ -24,6 +26,17 @@ STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13,
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def no_delayed_temp_sweep(monkeypatch):
+    """A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer;
+    here it is a no-op, so a window of this test never sweeps inside a later test."""
+    from app.gui import image_manager
+
+    monkeypatch.setattr(
+        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
+    )
 
 
 @pytest.fixture
@@ -39,6 +52,8 @@ def mw(app, monkeypatch):
     yield w
     w.close()
     w.deleteLater()
+    del w
+    flush_deleted()
 
 
 def _project(folder, stems=STEMS):

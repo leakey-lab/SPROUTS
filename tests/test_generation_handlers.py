@@ -28,6 +28,7 @@ from app.handlers import generate_skeleton_handler as gsh
 from app.handlers import mask_generation_handler as mgh
 from app.inference import runtime
 from app.inference.mask_origin import ExistingMasks, OverwritePolicy
+from tests.qt_teardown import flush_deleted
 
 
 @pytest.fixture(scope="module")
@@ -112,6 +113,7 @@ def project(tmp_path, qapp, monkeypatch):
     yield SimpleNamespace(folder=folder, window=window, stub=stub, dialogs=dialogs)
     runtime.get_runtime.cache_clear()
     window.deleteLater()
+    flush_deleted()
 
 
 def _wait(thread, qapp, timeout=30.0):

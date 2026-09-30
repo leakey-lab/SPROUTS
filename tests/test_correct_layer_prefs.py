@@ -11,12 +11,12 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QSettings  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import QSettings  # noqa: E402
 
 from app.gui.correct.editor import CorrectEditor  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
 from app.gui.correct.layer_prefs import LayerPrefs  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 from tests.test_correct_editor import install_guards, new_project, qapp, settle  # noqa: E402
 
 
@@ -51,11 +51,7 @@ def pages(app):
         return editor
 
     yield make
-    for editor in made:
-        editor.layers[SKELETON].cancel_scheduled_render()
-        editor.close()
-        editor.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made, prepare=lambda editor: editor.layers[SKELETON].cancel_scheduled_render())
 
 
 def settings_at(path: str) -> QSettings:

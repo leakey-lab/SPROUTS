@@ -20,12 +20,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, Qt  # noqa: E402
+from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from app.gui import welcome_screen  # noqa: E402
 from app.gui.recent_projects import RecentProjectsStore  # noqa: E402
 from app.gui.welcome_screen import RecentRow, WelcomeWidget  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 STAGES = ["Library", "Trace GT", "Generate", "Correct", "Measure", "Visualize"]
 QSS_PATH = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
@@ -74,10 +75,7 @@ def welcome(app):
         return widget
 
     yield make
-    for widget in made:
-        widget.close()
-        widget.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made)
 
 
 def _taller_name_font(monkeypatch, px: str = "22px") -> None:

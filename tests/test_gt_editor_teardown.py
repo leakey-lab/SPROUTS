@@ -13,7 +13,6 @@ cache or a timer without a parent would).
 
 from __future__ import annotations
 
-import gc
 import os
 import weakref
 
@@ -23,7 +22,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint  # noqa: E402
+from PyQt6.QtCore import QPoint  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from app.gt import default_registry  # noqa: E402
@@ -31,6 +30,7 @@ from app.gui import canvas_gl  # noqa: E402
 from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
 from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 H, W = 60, 80
 
@@ -48,15 +48,6 @@ def _guards(monkeypatch, tmp_path):
     monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
 
 
-def _flush() -> None:
-    """Delete what deleteLater() queued, then deliver the queued calls that free the signal
-    proxies of deleted widgets, and collect: three rounds, as one round can queue more."""
-    for _ in range(3):
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        QApplication.sendPostedEvents()
-    gc.collect()
-
-
 def _image(tmp_path) -> str:
     path = str(tmp_path / "plot_001.png")
     cv2.imwrite(path, np.full((H, W, 3), 90, np.uint8))
@@ -65,7 +56,7 @@ def _image(tmp_path) -> str:
 
 @pytest.mark.parametrize("used", [False, True], ids=["new", "used"])
 def test_a_deleted_editor_leaves_no_wrapper(app, tmp_path, used):
-    _flush()
+    flush_deleted()
     iface = GtTracingInterface()
     if used:
         iface.show()
@@ -79,13 +70,13 @@ def test_a_deleted_editor_leaves_no_wrapper(app, tmp_path, used):
     iface.deleteLater()
     del iface
 
-    _flush()
+    flush_deleted()
 
     assert ref() is None
 
 
 def test_the_class_editor_goes_with_its_editor(app, tmp_path, monkeypatch):
-    _flush()
+    flush_deleted()
     iface = GtTracingInterface()
     iface.load_image(_image(tmp_path))
     opened = []
@@ -101,20 +92,20 @@ def test_the_class_editor_goes_with_its_editor(app, tmp_path, monkeypatch):
     iface.deleteLater()
     del iface
 
-    _flush()
+    flush_deleted()
 
     assert len(opened) == 1 and opened[0]() is None
     assert ref() is None
 
 
 def test_a_closed_export_dialog_leaves_no_wrapper(app, tmp_path):
-    _flush()
+    flush_deleted()
     dialog = ExportDatasetDialog(str(tmp_path), {"plot_001": _image(tmp_path)}, default_registry())
     ref = weakref.ref(dialog)
     dialog.reject()
     dialog.deleteLater()
     del dialog
 
-    _flush()
+    flush_deleted()
 
     assert ref() is None

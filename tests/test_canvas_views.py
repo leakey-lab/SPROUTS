@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.display_controller import MagnifyingGraphicsView  # noqa: E402
 from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 VIEWS = [MagnifyingGraphicsView, EditorCanvasView]
 CTRL = Qt.KeyboardModifier.ControlModifier
@@ -69,8 +70,8 @@ def make_view(app, raster_only):
         return view
 
     yield make
-    for view, _scene in made:
-        view.close()
+    delete_widgets([view for view, _scene in made])  # the views first, then their scenes
+    made.clear()
 
 
 def _wheel(view, pos: QPointF, delta: int, modifiers=CTRL) -> None:
@@ -373,11 +374,7 @@ def correct_page(app, raster_only):
         return page
 
     yield open_page
-    for page in made:
-        page.layers["skeleton"].cancel_scheduled_render()
-        page.close()
-        page.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made, prepare=lambda page: page.layers["skeleton"].cancel_scheduled_render())
 
 
 def test_mask_hover_reaches_the_brush_ring_on_the_raster_viewport(correct_page, tmp_path):

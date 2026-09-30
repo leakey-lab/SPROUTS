@@ -5,7 +5,6 @@ image and a full-white ``mask/plot_001.png``: the GT editor must never read
 (or write) ``mask/``, so every test starts from an empty tracing.
 """
 
-import gc
 import os
 import sys
 import types
@@ -16,7 +15,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6 import sip  # noqa: E402
 from PyQt6.QtCore import QEvent, QPoint, Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMessageBox  # noqa: E402
@@ -33,6 +31,7 @@ from app.gt import (  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
 from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 H, W = 60, 80
 
@@ -43,52 +42,15 @@ def app():
     yield a
 
 
-def _delete_all(widgets: list) -> None:
-    """close() and deleteLater() each of ``widgets`` and forget them: no reference may stay
-    for the collection that follows (a held wrapper keeps its dead children's wrappers)."""
-    while widgets:
-        widget = widgets.pop()
-        if not sip.isdeleted(widget):
-            widget.close()
-            widget.deleteLater()
-
-
-def _flush_deleted() -> None:
-    """Delete what deleteLater() queued, then deliver the queued calls that free the signal
-    proxies of deleted widgets, and collect: three rounds, as one round can queue more."""
-    for _ in range(3):
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        QApplication.sendPostedEvents()
-    gc.collect()
-
-
 _MADE: list[GtTracingInterface] = []  # the editors a test made: deleted after it
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _flush_earlier_tests(app):
-    """Dead wrappers that earlier test files left queued go first (see the fixture below)."""
-    _flush_deleted()
 
 
 @pytest.fixture(autouse=True)
 def _delete_test_editors(app):
     """Close and delete the test's editors, and drop every dead wrapper, before the next
-    test runs.
-
-    ``sendPostedEvents(None, DeferredDelete)`` alone deletes the widgets but not the signal
-    proxies of their lambdas: PyQt frees those through queued calls, which only a full
-    ``sendPostedEvents()`` delivers (and that one skips deleteLater() outside an event loop).
-    A lambda that captures a widget (``lambda: self.save_mask()``) so kept the dead wrapper
-    for the rest of the run, and with it the wrappers of its C++-made children (scroll
-    bars, viewports) in sip's address map; a later findChildren(QWidget) got one of those
-    back for a new object at the same address (a QBoxLayout typed as a QScrollBar in a new
-    ClassPanel) and the run ended in an access violation, about every other run of the GT
-    test files.
-    """
+    test runs (see tests/qt_teardown.py)."""
     yield
-    _delete_all(_MADE)
-    _flush_deleted()
+    delete_widgets(_MADE)
 
 
 @pytest.fixture(autouse=True)

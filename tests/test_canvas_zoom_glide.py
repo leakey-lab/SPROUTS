@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
 from app.gui.widgets import ZoomCluster  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 IMAGE_W, IMAGE_H = 800, 600
@@ -72,6 +73,8 @@ def view(app, monkeypatch):
     yield view
     view.close()
     view.deleteLater()
+    del view
+    flush_deleted()
 
 
 def settle(view, timeout_s: float = 3.0) -> None:
@@ -267,3 +270,4 @@ def test_glides_follow_the_platform_animation_setting(app, monkeypatch):
     finally:
         view.close()
         view.deleteLater()
+        flush_deleted()

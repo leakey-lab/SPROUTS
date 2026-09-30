@@ -14,7 +14,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -27,6 +27,7 @@ from app.gui.stage_summary import (  # noqa: E402
     input_freshness,
     measure_text,
 )
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13, 14)]
 
@@ -100,7 +101,8 @@ def window(app, tmp_path):
     yield made
     made.close()
     made.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    del made
+    flush_deleted()
     QApplication.processEvents()
 
 

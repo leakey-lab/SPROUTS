@@ -19,7 +19,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QRect, QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui.panels import Panel  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
 LONG = "Mask saved for 24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
@@ -71,13 +72,14 @@ def make_window(app, tmp_path):
         return window
 
     yield make
-    for window in made:
-        for editor in window._editors().values():
-            editor.maybe_save_changes = lambda: True
-        window.close()
-        window.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made, prepare=_no_save_prompts)
     QApplication.processEvents()
+
+
+def _no_save_prompts(window) -> None:
+    """No editor asks to save when ``window`` closes."""
+    for editor in window._editors().values():
+        editor.maybe_save_changes = lambda: True
 
 
 def settle() -> None:

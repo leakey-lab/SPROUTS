@@ -24,6 +24,7 @@ from app.gui.widgets import (  # noqa: E402
     FloatingDock,
     IconButton,
 )
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -38,6 +39,8 @@ def host(app):
     widget = QWidget()
     yield widget
     widget.deleteLater()
+    del widget
+    flush_deleted()
 
 
 def _mask_dock(host):

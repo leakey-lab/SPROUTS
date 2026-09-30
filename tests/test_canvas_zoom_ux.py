@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
 from app.gui.widgets import ZoomCluster  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 IMAGE_W, IMAGE_H = 800, 600
@@ -71,6 +72,9 @@ def view(app, monkeypatch):
     view.set_zoom(1.0)
     yield view
     view.close()
+    view.deleteLater()
+    del view, scene
+    flush_deleted()
 
 
 # --------------------------------------------------------------------------- ladder
@@ -165,6 +169,8 @@ def cluster(view):
     zoom.bind(view)
     yield zoom
     host.deleteLater()
+    del host, zoom
+    flush_deleted()
 
 
 def _menu_entries(menu: QMenu) -> list[str]:
@@ -269,3 +275,4 @@ def test_gl_viewport_requests_the_msaa_samples(app, monkeypatch, value):
         assert viewport.format().samples() == canvas_gl.gl_samples()
     finally:
         viewport.deleteLater()
+        flush_deleted()

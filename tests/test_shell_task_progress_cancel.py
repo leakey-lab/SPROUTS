@@ -16,10 +16,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.gui.task_progress import TaskProgressWidget  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 class _Worker:
@@ -40,7 +40,8 @@ def progress(app):
     widget = TaskProgressWidget()
     yield widget
     widget.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    del widget
+    flush_deleted()
 
 
 def test_progress_after_cancel_keeps_the_cancelling_text(progress):

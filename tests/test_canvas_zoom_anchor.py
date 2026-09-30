@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 
@@ -56,6 +57,8 @@ def view(app, monkeypatch):
     yield view
     view.close()
     view.deleteLater()
+    del view, scene
+    flush_deleted()
 
 
 def wheel(view, anchor: QPointF, delta: int) -> None:

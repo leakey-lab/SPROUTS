@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin, draw_pixel_grid  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 from tests.render_metrics import qimage_to_rgb  # noqa: E402
 
 W, H = 64, 48
@@ -69,10 +70,12 @@ def make_view(app, monkeypatch):
         return view
 
     yield make
+    views = []
     for view, item in made:
         view.scene().removeItem(item)
-        view.close()
-        view.deleteLater()
+        views.append(view)
+    made.clear()
+    delete_widgets(views)
 
 
 def grab(view, zoom: float, centre=(W / 2, H / 2)) -> np.ndarray:

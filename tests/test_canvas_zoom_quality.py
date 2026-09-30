@@ -22,7 +22,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF  # noqa: E402
+from PyQt6.QtCore import QPoint, QPointF, QRectF  # noqa: E402
 from PyQt6.QtGui import QPainter  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -37,6 +37,7 @@ from app.gui.display_controller import DisplayController  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
 from app.gui.image_manager import ImageManager  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.render_metrics import (  # noqa: E402
     chirp_alias_std,
     chirp_image,
@@ -164,7 +165,7 @@ class _Canvas:
             self.editor._set_clean()
         self.widget.close()
         self.widget.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)  # deterministic
+        flush_deleted()  # deterministic
 
 
 @pytest.fixture(scope="module")

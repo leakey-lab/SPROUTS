@@ -31,16 +31,23 @@ os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, QRect, QSettings, Qt, QThreadPool  # noqa: E402
+from PyQt6.QtCore import QPoint, QRect, QSettings, Qt, QThreadPool  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
-from app.gui import canvas_gl, shell_chrome, shortcuts, skeleton_graph_model  # noqa: E402
+from app.gui import (  # noqa: E402
+    canvas_gl,
+    image_manager,
+    shell_chrome,
+    shortcuts,
+    skeleton_graph_model,
+)
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     CANCEL,
     DISCARD,
@@ -183,6 +190,11 @@ def guards(monkeypatch, tmp_path):
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", _no_dialog)
     monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
     monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
+    # A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer:
+    # a no-op here, so a window of this test never sweeps inside a later test.
+    monkeypatch.setattr(
+        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
+    )
     errors = []
 
     def hook(kind, value, tb):
@@ -216,17 +228,17 @@ def make_window(app, tmp_path):
         return window
 
     yield make
-    for window in made:
-        editors = getattr(window, "_editors", dict)()
-        for editor in editors.values():
-            editor.maybe_save_changes = lambda: True
-        correct = getattr(window, "correct_editor", None)
-        if correct is not None:
-            correct.layers[SKELETON].cancel_scheduled_render()
-        window.close()
-        window.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made, prepare=_quiet_window)
     QApplication.processEvents()
+
+
+def _quiet_window(window) -> None:
+    """No save prompt and no scheduled skeleton render when ``window`` closes."""
+    for editor in getattr(window, "_editors", dict)().values():
+        editor.maybe_save_changes = lambda: True
+    correct = getattr(window, "correct_editor", None)
+    if correct is not None:
+        correct.layers[SKELETON].cancel_scheduled_render()
 
 
 def in_correct(make_window, tmp_path, image: int = 0, project: Project | None = None):

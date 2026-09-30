@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 W, H = 400, 300
 
@@ -60,7 +61,8 @@ def view(app, monkeypatch):
     scene.removeItem(item)
     view.close()
     view.deleteLater()
-    app.processEvents()
+    del view, scene
+    flush_deleted()
 
 
 def _off_anchor(view, scene_pt: QPointF, anchor: QPoint) -> int:

@@ -15,7 +15,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QCoreApplication, QEvent, Qt, pyqtSignal  # noqa: E402
+from PyQt6.QtCore import QCoreApplication, Qt, pyqtSignal  # noqa: E402
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -32,6 +32,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 import app.project_layout as project_layout  # noqa: E402
 from app.gui import visualization_manager as vm  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 #: The fixed right-panel pages, in page order: ``switch_right_panel`` key -> index.
 _PANELS = {panel.key: int(panel) for panel in Panel}
@@ -158,11 +159,6 @@ class FakeMainWindow(QWidget):
             vm.close_root_area_visualization(self)
 
 
-def _flush_deletes():
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
-    QCoreApplication.processEvents()
-
-
 @pytest.fixture
 def project(tmp_path):
     (tmp_path / "skeletons").mkdir()
@@ -205,7 +201,9 @@ def env(qapp, monkeypatch, project):
     ctx = _environment(qapp, monkeypatch, project, opengl=False)
     yield ctx
     ctx.mw.deleteLater()
-    _flush_deletes()
+    del ctx
+    flush_deleted()
+    QCoreApplication.processEvents()
 
 
 @pytest.fixture
@@ -213,7 +211,9 @@ def env_gl(qapp, monkeypatch, project):
     ctx = _environment(qapp, monkeypatch, project, opengl=True)
     yield ctx
     ctx.mw.deleteLater()
-    _flush_deletes()
+    del ctx
+    flush_deleted()
+    QCoreApplication.processEvents()
 
 
 def _touch_newer(path, content: str) -> None:

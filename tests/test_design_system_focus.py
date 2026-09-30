@@ -32,6 +32,8 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
+from tests.qt_teardown import flush_deleted  # noqa: E402
+
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 
 
@@ -58,6 +60,8 @@ def host(app):
     yield window, layout, sink
     window.close()
     window.deleteLater()
+    del window, layout, sink
+    flush_deleted()
 
 
 def _grab(widget: QWidget) -> QImage:

@@ -34,6 +34,7 @@ from app.gui.canvas_layers.skeleton import (  # noqa: E402
 )
 from app.gui.skeleton_overlay import overlay_indices  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 GREY = QColor(96, 96, 96)
 HALO_ALPHA = 170
@@ -54,6 +55,14 @@ def _no_message_boxes(monkeypatch):
 
 # ------------------------------------------------------------------------------ helpers
 _SCENES: list[QGraphicsScene] = []  # keep every scene referenced for the module
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _drop_scenes():
+    """The scenes go with the module (with their items' warm-up timers, which would fire in
+    a later test file)."""
+    yield
+    _SCENES.clear()
 
 
 def _in_scene(item: SkeletonLayerItem) -> SkeletonLayerItem:
@@ -768,11 +777,10 @@ def test_without_an_extraction_budget_pending_tiles_show_the_pixel_overlay(app):
 
 @pytest.fixture
 def shown_views():
-    """Views a test shows, closed afterwards even when the test fails."""
+    """Views a test shows, closed and deleted afterwards even when the test fails."""
     views: list[QGraphicsView] = []
     yield views
-    for view in views:
-        view.close()
+    delete_widgets(views)
 
 
 def _raster_view(

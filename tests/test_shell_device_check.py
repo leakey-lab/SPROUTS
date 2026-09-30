@@ -22,7 +22,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt, QThreadPool  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt, QThreadPool  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -31,6 +31,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 from app.gui import device_check, shell_chrome  # noqa: E402
 from app.gui.shell_chrome import DEVICE_CHECK_FAILED, DEVICE_CHECKING, runtime_status  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
 
 RUNTIME = "app.inference.runtime"
 
@@ -44,7 +45,7 @@ def app():
 def flush_deleted_widgets():
     """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 @pytest.fixture(autouse=True)
@@ -118,10 +119,7 @@ def make_window(app, tmp_path):
 
     yield make
     assert QThreadPool.globalInstance().waitForDone(5000)
-    for window in made:
-        window.close()
-        window.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made)
     QApplication.processEvents()
 
 

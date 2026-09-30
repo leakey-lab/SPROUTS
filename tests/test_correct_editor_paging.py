@@ -64,8 +64,11 @@ def ring(*paths):
 def read_ahead_done(editor, timeout: float = 5.0) -> list[str]:
     """Wait for the read-ahead timer and its jobs; the kept entries (normalised paths)."""
     QTest.qWait(Neighbours.DELAY_MS + 30)
-    ahead = editor.paging._ahead
     deadline = time.perf_counter() + timeout
+    # On a loaded machine the paging timer can fire after the fixed wait: wait it out.
+    while editor.paging._timer.isActive() and time.perf_counter() < deadline:
+        QTest.qWait(10)
+    ahead = editor.paging._ahead
     while ahead is not None and time.perf_counter() < deadline:
         if all(job.done() for job in ahead._jobs.values()):
             break

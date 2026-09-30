@@ -40,6 +40,9 @@ APP_MODULES = [
     "app.visualization.dash_data_cache",
     "app.visualization.dash_visualizations",
     "app.visualization.dash_app",
+    "app.visualization.dash_length_layout",
+    "app.visualization.dash_length_views",
+    "app.visualization.dash_length_callbacks",
     "app.visualization.dash_app_area",
     "app.visualization.root_length_visulization",
     "app.visualization.root_area_visualization",
@@ -143,6 +146,23 @@ APP_MODULES = [
     "app.gui.correct.controls",
     "app.gui.correct.layer_panel",
     "app.gui.correct.editor",
+    # Modules added by the 2026-09-30 UX and speed pass.
+    "app.gui.correct.chip",
+    "app.gui.correct.keys",
+    "app.gui.correct.layer_prefs",
+    "app.gui.correct.paging",
+    "app.gui.correct.read_ahead",
+    "app.gui.correct.read_back",
+    "app.gui.device_check",
+    "app.gui.toast_clearance",
+    "app.gui.display_read_ahead",
+    "app.gui.canvas_key_relay",
+    "app.gui.visualize_empty_state",
+    "app.gui.stage_summary",
+    "app.gui.stage_status",
+    "app.gui.warmup",
+    "app.gc_policy",
+    "app.inference.device_probe",
 ]
 
 

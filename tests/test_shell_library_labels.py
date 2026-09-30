@@ -35,6 +35,7 @@ from app.gui.library_index import (  # noqa: E402
     stem_forms,
 )
 from app.gui.metrics_bar import MetricsBar  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 
@@ -48,7 +49,7 @@ def app():
 def flush_deleted_widgets():
     """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 # ------------------------------------------------------------------ Qt-free forms

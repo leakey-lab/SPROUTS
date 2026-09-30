@@ -27,6 +27,7 @@ from app.handlers import mask_generation_handler as mgh
 from app.handlers.generation_base import show_failure_report
 from app.inference import runtime
 from app.inference.mask_origin import OverwritePolicy
+from tests.qt_teardown import flush_deleted
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +101,7 @@ def project(tmp_path, qapp, monkeypatch):
     )
     runtime.get_runtime.cache_clear()
     window.deleteLater()
+    flush_deleted()
 
 
 def _wait(thread, qapp, timeout=30.0):
@@ -196,6 +198,7 @@ def test_the_report_of_a_run_that_wrote_nothing_claims_no_other_outputs(qapp, tm
     finally:
         box.close()
         parent.deleteLater()
+        flush_deleted()
 
 
 # --------------------------------------------------------------------------- unchanged behaviour

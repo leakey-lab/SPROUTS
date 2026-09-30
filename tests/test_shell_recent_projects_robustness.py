@@ -24,13 +24,14 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui.recent_projects import SETTINGS_KEY, RecentProjectsStore  # noqa: E402
 from app.gui.welcome_screen import WelcomeWidget  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 class Settings(dict):
@@ -50,7 +51,7 @@ def app():
 def flush_deleted_widgets():
     """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 def _store(raw: str) -> RecentProjectsStore:
@@ -127,4 +128,4 @@ def test_the_window_starts_with_such_a_list(app, tmp_path, monkeypatch):
     finally:
         window.close()
         window.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()

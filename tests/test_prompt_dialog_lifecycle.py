@@ -26,6 +26,7 @@ from app.handlers import mask_generation_handler as mgh  # noqa: E402
 from app.handlers.job_registry import JobRegistry  # noqa: E402
 from app.handlers.skeleton_handler import SkeletonHandler  # noqa: E402
 from app.inference.mask_origin import ExistingMasks, OverwritePolicy  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 _Button = QMessageBox.StandardButton
 _Role = QMessageBox.ButtonRole
@@ -42,7 +43,8 @@ def window(qapp):
     widget = QWidget()
     yield widget
     widget.deleteLater()
-    _flush_deferred_deletes()
+    del widget
+    flush_deleted()
 
 
 def _flush_deferred_deletes() -> None:

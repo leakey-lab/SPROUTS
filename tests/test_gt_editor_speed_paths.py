@@ -18,13 +18,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint  # noqa: E402
+from PyQt6.QtCore import QPoint  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import app.gui.gt_tracing_interface as gti  # noqa: E402
 from app.gt import Tracing, default_registry, gt_path, present_keys, read_tracing  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 H, W = 90, 120
 
@@ -55,10 +56,7 @@ def editor(app, tmp_path):
         return iface
 
     yield _make
-    for iface in made:
-        iface.close()
-        iface.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made)
 
 
 def _reference_ids_from_argb(arr, registry, fallback=None):

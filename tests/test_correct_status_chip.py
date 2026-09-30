@@ -13,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QWidget  # noqa: E402
 
 from app.gui.widgets.overlays import StatusChip, name_forms  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     editor_factory,
     install_guards,
@@ -35,6 +36,8 @@ def host(app):
     widget.resize(1100, 700)
     yield widget
     widget.deleteLater()
+    del widget
+    flush_deleted()
 
 
 def chip_for(host, name: str = CAMERA, state: str = "clean") -> StatusChip:

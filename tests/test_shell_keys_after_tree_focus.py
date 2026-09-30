@@ -24,7 +24,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QKeySequence, QShortcut  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
@@ -34,6 +34,7 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 from app.gui import canvas_gl, shortcuts  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.test_correct_editor import paint, plane, qapp  # noqa: E402
 from tests.test_correct_main_window import (  # noqa: E402
     STEMS,
@@ -89,7 +90,8 @@ def window(app, tmp_path):
     made.correct_editor.layers[SKELETON].cancel_scheduled_render()
     made.close()
     made.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    del made, editor
+    flush_deleted()
     QApplication.processEvents()
 
 

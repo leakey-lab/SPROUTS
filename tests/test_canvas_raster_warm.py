@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.render_metrics import qimage_to_rgb  # noqa: E402
 
 W, H = 1400, 1000
@@ -100,7 +101,8 @@ def page(app, monkeypatch):
     view.scene().removeItem(item)
     view.close()
     view.deleteLater()
-    app.processEvents()
+    del view
+    flush_deleted()
 
 
 def show(view, zoom: float, centre=CENTRE) -> None:
@@ -238,6 +240,7 @@ def test_each_idle_slice_keeps_to_its_budget(app, monkeypatch):
         view.scene().removeItem(item)
         view.close()
         view.deleteLater()
+        flush_deleted()
 
 
 def _grab(view) -> np.ndarray:

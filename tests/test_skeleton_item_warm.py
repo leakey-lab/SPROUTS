@@ -23,6 +23,7 @@ from PyQt6.QtGui import QImage, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView  # noqa: E402
 
 from app.gui.canvas_layers.skeleton import SkeletonLayerItem  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 W, H = 1100, 700  # 5 x 3 tiles of 256 px
 
@@ -36,10 +37,7 @@ def app():
 def views():
     shown: list[QGraphicsView] = []
     yield shown
-    for view in shown:
-        view.close()
-        view.deleteLater()
-    QApplication.sendPostedEvents(None, 0)
+    delete_widgets(shown)
 
 
 def _busy(seed: int = 4) -> np.ndarray:

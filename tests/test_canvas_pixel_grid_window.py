@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.render_metrics import qimage_to_rgb  # noqa: E402
 
 W, H = 64, 48
@@ -77,7 +78,8 @@ def window(app, monkeypatch):
     scene.removeItem(item)
     host.close()
     host.deleteLater()
-    app.processEvents()
+    del host, view, scene
+    flush_deleted()
 
 
 def _render(app, host, view, dpr: float, zoom: float, grid: bool) -> np.ndarray:

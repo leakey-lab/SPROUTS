@@ -18,6 +18,8 @@ from PyQt6.QtCore import QPoint, QRect, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import QIcon  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
+from tests.qt_teardown import flush_deleted  # noqa: E402
+
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 STAGES = [
@@ -47,6 +49,8 @@ def mw(app):
     yield window
     window.close()
     window.deleteLater()
+    del window
+    flush_deleted()
 
 
 def _settle(app):

@@ -17,6 +17,7 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from resources.resource_utils import project_root, resource_path  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -101,8 +102,6 @@ def test_escape_closes_the_open_enhance_popover(app):
 
 @pytest.mark.parametrize("editor", ["CorrectEditor", "GtTracingInterface"])
 def test_editor_enhance_button_shows_whether_the_popover_is_open(app, editor):
-    from PyQt6.QtCore import QEvent
-
     from app.gui.correct.editor import CorrectEditor
     from app.gui.gt_tracing_interface import GtTracingInterface
 
@@ -117,7 +116,7 @@ def test_editor_enhance_button_shows_whether_the_popover_is_open(app, editor):
     finally:
         iface.close()
         iface.deleteLater()
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        flush_deleted()
 
 
 def test_segmented_control_reports_reclicks_on_activated(app):

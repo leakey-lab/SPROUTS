@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView  # noqa:
 from app.gui import skeleton_tools  # noqa: E402
 from app.gui.correct.skeleton_layer import SkeletonLayer  # noqa: E402
 from tests.correct_fakes import FakeHost  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 W, H = 640, 480
 NO_MOD = Qt.KeyboardModifier.NoModifier
@@ -58,10 +59,7 @@ def make_layer(app, tmp_path):
         return layer
 
     yield make
-    for view in views:
-        view.close()
-        view.deleteLater()
-    QApplication.sendPostedEvents(None, 0)
+    delete_widgets(views)
 
 
 def _click(layer, x, y, modifiers=NO_MOD):

@@ -17,7 +17,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QSize  # noqa: E402
+from PyQt6.QtCore import QSize  # noqa: E402
 from PyQt6.QtGui import QColor, QIcon, QImage, QPalette  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 )
 
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
@@ -65,7 +66,8 @@ def library(app):
     yield tree, index
     tree.close()
     tree.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    del tree, index
+    flush_deleted()
 
 
 def _rects(tree, index, item, selected: bool) -> tuple[int, int]:

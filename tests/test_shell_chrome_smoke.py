@@ -18,6 +18,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from app.gui.panels import Panel  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
@@ -148,6 +149,7 @@ def test_main_window_contract(app):
     finally:
         mw.close()
         mw.deleteLater()
+        flush_deleted()
 
 
 # --------------------------------------------------------------------------- #
@@ -163,6 +165,8 @@ def main_window(app, monkeypatch):
     yield mw
     mw.close()
     mw.deleteLater()
+    del mw
+    flush_deleted()
 
 
 def test_lifecycle_hooks_call_gt_prompt(main_window, monkeypatch):

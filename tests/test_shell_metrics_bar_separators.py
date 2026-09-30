@@ -13,10 +13,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.gui.metrics_bar import MetricsBar  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +28,7 @@ def app():
 def flush_deleted_widgets():
     """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 def _separated(bar: MetricsBar) -> list[str]:

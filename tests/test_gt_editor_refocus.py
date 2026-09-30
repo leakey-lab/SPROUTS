@@ -7,7 +7,6 @@ once. Since the open image is kept when it is selected again (same file, unchang
 digit jumps the selection by type-ahead instead of picking a class (walkthrough W1 shape).
 """
 
-import gc
 import os
 import weakref
 
@@ -17,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint  # noqa: E402
+from PyQt6.QtCore import QPoint  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -29,6 +28,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 H, W = 60, 80
 
@@ -44,21 +44,6 @@ def _guards(monkeypatch, tmp_path):
     monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
     monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
     monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-
-
-def _flush_deleted() -> None:
-    """Delete what deleteLater() queued, then deliver the queued calls that free the signal
-    proxies of deleted widgets, and collect: three rounds, as one round can queue more."""
-    for _ in range(3):
-        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        QApplication.sendPostedEvents()
-    gc.collect()
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _flush_earlier_tests(app):
-    """Dead wrappers that earlier test files left queued go first."""
-    _flush_deleted()
 
 
 @pytest.fixture
@@ -84,7 +69,7 @@ def window(app, tmp_path):
     host.close()
     host.deleteLater()
     del host, row, library, iface
-    _flush_deleted()
+    flush_deleted()
 
 
 @pytest.mark.parametrize("dirty", [False, True], ids=["clean", "unsaved"])

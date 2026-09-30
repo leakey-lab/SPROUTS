@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from app.gui import device_check  # noqa: E402
 from app.gui.device_check import DeviceCheck, device_check_enabled  # noqa: E402
+from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +37,7 @@ def app():
 @pytest.fixture(autouse=True)
 def flush_deleted_widgets():
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 class Line:
@@ -83,13 +84,7 @@ def window(app):
         return widget
 
     yield make
-    for widget in made:
-        try:
-            widget.close()
-            widget.deleteLater()
-        except RuntimeError:
-            pass  # a test deleted it
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made)  # skips the ones a test deleted
     assert device_check.QThreadPool.globalInstance().waitForDone(5000)
 
 
@@ -206,6 +201,7 @@ def test_the_check_waits_while_the_user_keeps_moving_the_mouse(app, window):
         assert resolve.times[0] - last_input >= 0.24  # the whole quiet period (250 ms)
     finally:
         other.deleteLater()
+        flush_deleted()
 
 
 @pytest.mark.parametrize("kind", ["key", "click", "wheel"])

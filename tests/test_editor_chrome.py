@@ -12,7 +12,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QRectF, Qt  # noqa: E402
+from PyQt6.QtCore import QRectF, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QPixmap  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
@@ -44,6 +44,7 @@ from app.gui.widgets import (  # noqa: E402
 )
 from app.gui.widgets.buttons import primary_button  # noqa: E402
 from app.gui.widgets.overlay_geometry import LayoutMetrics  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 M = LayoutMetrics()
 UNDER_TEST = {"editor_chrome.py", "editor_canvas.py", "test_editor_chrome.py"}
@@ -129,10 +130,7 @@ def make_page(app, tmp_path):
     # Delete the pages now, while their Python wrappers are intact. Left to the cyclic GC
     # (page -> chrome -> OverlayLayout -> page), the layout's event filter can see events
     # during the C++ teardown after the collector has already emptied its __dict__.
-    for page in made:
-        page.close()
-        page.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made)
 
 
 def settle(app, page=None) -> None:

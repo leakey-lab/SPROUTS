@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.gui.recent_projects import RecentProjectsStore  # noqa: E402
 from app.gui.welcome_screen import WelcomeWidget  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 
 class _Settings:
@@ -70,10 +71,7 @@ def welcome(app):
         return widget
 
     yield make
-    for widget in made:
-        widget.close()
-        widget.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    delete_widgets(made)
 
 
 def _remove_with_keyboard(widget: WelcomeWidget, index: int) -> None:

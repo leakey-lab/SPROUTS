@@ -8,11 +8,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtGui import QKeySequence, QShortcut  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
 
 from app.gui import shortcuts as sc  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -153,7 +153,8 @@ def test_every_live_editor_shortcut_is_documented(app):
         finally:
             w.close()
             w.deleteLater()
-            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            del w  # gone before the next editor is made
+            flush_deleted()
 
 
 # ------------------------------------------------------------------ F1 sheet

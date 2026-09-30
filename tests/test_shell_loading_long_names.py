@@ -15,11 +15,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from app.gui.empty_state import EmptyStateWidget  # noqa: E402
 from app.gui.loading_overlay import LoadingOverlay  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 LONG = "Minirhizotron_EnergyFarm_2024_all_tubes_T001-T096_raw_exports_CI600"
 HUGE = "x" * 40 + "_" + "y" * 120
@@ -33,7 +33,7 @@ def app():
 @pytest.fixture(autouse=True)
 def flush_deleted_widgets():
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 @pytest.fixture
@@ -45,6 +45,8 @@ def card(app):
     yield overlay
     host.close()
     host.deleteLater()
+    del host, overlay
+    flush_deleted()
 
 
 @pytest.mark.parametrize("name", [LONG, HUGE])
@@ -85,3 +87,4 @@ def test_a_huge_folder_name_does_not_widen_the_empty_state(app):
         assert empty.subtitle_label.toolTip() == ""
     finally:
         empty.deleteLater()
+        flush_deleted()

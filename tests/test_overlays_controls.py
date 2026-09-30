@@ -21,6 +21,7 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget  # noqa: E402
 
 from app.gui.widgets import DockSlider, IconButton, SegmentedControl  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -43,6 +44,8 @@ def window(app):
     yield win, layout, sink
     win.close()
     win.deleteLater()
+    del win, layout, sink
+    flush_deleted()
 
 
 def _grab(widget: QWidget) -> QImage:

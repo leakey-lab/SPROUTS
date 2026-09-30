@@ -21,6 +21,7 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem  # noqa: E402
 
 from app.gui.widgets import tokens  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 # The library tree's own stylesheet (ui_panels.py) sets a translucent selection fill.
@@ -62,6 +63,8 @@ def tree(app):
     yield widget
     widget.close()
     widget.deleteLater()
+    del widget, field, tube, date
+    flush_deleted()
 
 
 def _select(tree: QTreeWidget, item: QTreeWidgetItem) -> tuple[QImage, object]:

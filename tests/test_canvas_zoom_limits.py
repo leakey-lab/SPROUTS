@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 
 from app.gui import canvas_gl  # noqa: E402
 from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 
@@ -61,9 +62,7 @@ def make_view(app, monkeypatch):
         return view
 
     yield make
-    for view in made:
-        view.close()
-        view.deleteLater()
+    delete_widgets(made)
 
 
 def fit_zoom(view, w, h, margin=CanvasViewMixin.FIT_MARGIN) -> float:

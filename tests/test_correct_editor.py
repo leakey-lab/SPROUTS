@@ -52,6 +52,7 @@ from app.gui.widgets import (  # noqa: E402
     tokens,
 )
 from tests.correct_goldens_support import png_colour_type  # noqa: E402
+from tests.qt_teardown import delete_widgets  # noqa: E402
 from tests.render_metrics import equal_neighbour_fraction, sine_image, sine_step_ratio  # noqa: E402
 
 W, H = 200, 150  # the photos of the behaviour tests
@@ -124,11 +125,8 @@ def editor_factory():
         return editor
 
     yield make
-    for editor in made:  # delete while the wrappers are intact (host -> layout -> host cycle)
-        editor.layers[SKELETON].cancel_scheduled_render()
-        editor.close()
-        editor.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    # Delete while the wrappers are intact (host -> layout -> host cycle).
+    delete_widgets(made, prepare=lambda editor: editor.layers[SKELETON].cancel_scheduled_render())
 
 
 @dataclass(frozen=True)

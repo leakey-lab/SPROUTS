@@ -14,12 +14,13 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QRect, QSettings, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui.loading_overlay import LoadingOverlay  # noqa: E402
+from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -31,7 +32,7 @@ def app():
 def flush_deleted_widgets():
     """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
     yield
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    flush_deleted()
 
 
 def test_empty_detail_lines_take_no_room(app):
@@ -74,7 +75,8 @@ def window(app, tmp_path, monkeypatch):
     mw.loading_overlay.hide()
     mw.close()
     mw.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    del mw
+    flush_deleted()
     QApplication.processEvents()
 
 
