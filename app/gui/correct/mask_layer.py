@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from functools import partial
 
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QColor, QImage, QKeyEvent
@@ -41,7 +42,7 @@ from app.gui.correct.layer import (
     SizeSpec,
     ToolSpec,
 )
-from app.gui.correct.mask_document import MaskDocument, MaskSaveResult
+from app.gui.correct.mask_document import MaskDocument, MaskRead, MaskSaveResult
 from app.gui.correct.mask_tools import (
     FILL_MISS_NOTICE,
     TOOL_CLASSES,
@@ -116,16 +117,25 @@ class MaskLayer:
         return self._tool.tool_id
 
     # ------------------------------------------------------------------ document
+    def read_ahead(self, image_path: str, images_base_folder: str | None):
+        """``ReadAheadLayer``: a worker reader of ``image_path``'s saved mask."""
+        return partial(MaskDocument.read, image_path)
+
     def open(
-        self, image_path: str, size: tuple[int, int], images_base_folder: str | None
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        images_base_folder: str | None,
+        ahead: object | None = None,
     ) -> list[Notice]:
         """Open the saved mask of ``image_path`` (``size`` = (w, h)); the notices to show.
 
         A stroke in progress is committed first. The mask lives next to the image, so
-        ``images_base_folder`` is not used.
+        ``images_base_folder`` is not used. ``ahead`` is a :meth:`read_ahead` result.
         """
         self.finish_gesture()
-        notices = self.document.open(image_path, size)
+        read = ahead if isinstance(ahead, MaskRead) else None
+        notices = self.document.open(image_path, size, read)
         self._replaced()
         return notices
 

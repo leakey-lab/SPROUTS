@@ -433,7 +433,8 @@ def test_the_canvas_zoom_keys_fit_show_100_percent_and_step(page):
     press(page, Key.Key_Equal, CTRL)
     assert view.zoom_factor == pytest.approx(1.25)
     press(page, Key.Key_Minus, CTRL)
-    press(page, Key.Key_Minus, CTRL)
-    assert view.zoom_factor == pytest.approx(0.8)
+    assert view.zoom_factor == pytest.approx(1.0)
+    press(page, Key.Key_Minus, CTRL)  # a 200 x 150 photo fits at about 4x: zoom-out stops at 100 %
+    assert view.zoom_out_limit == 1.0 and view.zoom_factor == pytest.approx(1.0)
     press(page, Key.Key_0, CTRL)
     assert view.zoom_factor == pytest.approx(fitted)

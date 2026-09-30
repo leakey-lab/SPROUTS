@@ -33,7 +33,7 @@ from app.masks import MaskFileError, MaskStore, write_mask_file
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MaskDocument", "MaskSaveResult"]
+__all__ = ["MaskDocument", "MaskRead", "MaskSaveResult"]
 
 _SIZE_MISMATCH = "Saved mask size does not match the image; starting empty"
 
@@ -52,6 +52,28 @@ class MaskSaveResult:
     path: str | None = None
     removed: bool = False  # an empty mask removed an existing file
     error: str = ""
+
+
+@dataclass(frozen=True)
+class MaskRead:
+    """The saved mask of one image, read ahead on a worker thread (:meth:`MaskDocument.read`).
+
+    ``stamps`` are the mask files' stamps taken before the read (``file_stamps`` order);
+    ``plane`` is the 0/1 plane at ``size`` (None: no usable file); ``mismatch``: a file of
+    another size was found (the open warns about it).
+    """
+
+    image_path: str
+    size: tuple[int, int]
+    stamps: tuple
+    plane: np.ndarray | None
+    has_saved_file: bool
+    mismatch: bool
+
+    @property
+    def nbytes(self) -> int:
+        """Bytes held (the read-ahead cache counts them)."""
+        return 0 if self.plane is None else int(self.plane.nbytes)
 
 
 class MaskDocument:
@@ -123,44 +145,59 @@ class MaskDocument:
         return tuple(_stamp(path) for path in self._store.layout.mask_candidates(self.image_path))
 
     # ------------------------------------------------------------------ lifecycle
-    def open(self, image_path: str, size: tuple[int, int]) -> list[Notice]:
-        """Open the saved mask of ``image_path`` for an image of ``size`` ``(w, h)``.
-
-        The mask as saved (grey above 200) becomes the plane and the baseline: clean,
-        with an empty history. No saved mask, an undecodable one or one of another size
-        opens empty; a size mismatch also returns a warning notice.
-        """
+    @staticmethod
+    def read(image_path: str, size: tuple[int, int]) -> MaskRead:
+        """Read the saved mask of ``image_path`` for an image of ``size`` ``(w, h)``, as
+        :meth:`open` would (any thread: touches no document)."""
         store = MaskStore.for_image(image_path)
+        stamps = tuple(_stamp(path) for path in store.layout.mask_candidates(image_path))
         width, height = size
-        plane = np.zeros((height, width), np.uint8)
-        notices: list[Notice] = []
-        has_saved_file = False
         try:
             on = store.read(image_path)
         except MaskFileError as exc:
             logger.warning("Failed to load existing mask: %s", exc)
             on = None
-        if on is not None:
-            if on.shape != (height, width):
-                logger.warning(
-                    "Mask of %s is %sx%s, image is %sx%s; ignoring it",
-                    image_path,
-                    on.shape[1],
-                    on.shape[0],
-                    width,
-                    height,
-                )
-                notices.append(Notice(_SIZE_MISMATCH, "warn"))
-            else:
-                plane[on] = 1
-                has_saved_file = True
+        if on is None:
+            return MaskRead(image_path, size, stamps, None, False, False)
+        if on.shape != (height, width):
+            logger.warning(
+                "Mask of %s is %sx%s, image is %sx%s; ignoring it",
+                image_path,
+                on.shape[1],
+                on.shape[0],
+                width,
+                height,
+            )
+            return MaskRead(image_path, size, stamps, None, False, True)
+        return MaskRead(image_path, size, stamps, _zero_one_plane(on), True, False)
+
+    def open(
+        self, image_path: str, size: tuple[int, int], read: MaskRead | None = None
+    ) -> list[Notice]:
+        """Open the saved mask of ``image_path`` for an image of ``size`` ``(w, h)``.
+
+        The mask as saved (grey above 200) becomes the plane and the baseline: clean,
+        with an empty history. No saved mask, an undecodable one or one of another size
+        opens empty; a size mismatch also returns a warning notice. ``read`` (a
+        :meth:`read` done ahead) is used while the mask files are still the ones it read.
+        """
+        store = MaskStore.for_image(image_path)
+        current = tuple(_stamp(path) for path in store.layout.mask_candidates(image_path))
+        if read is None or (read.image_path, tuple(read.size), read.stamps) != (
+            image_path,
+            tuple(size),
+            current,
+        ):
+            read = self.read(image_path, size)
+        width, height = size
+        plane = read.plane if read.plane is not None else np.zeros((height, width), np.uint8)
         self._store = store
         self.image_path = image_path
-        self.has_saved_file = has_saved_file
+        self.has_saved_file = read.has_saved_file
         self._baseline = plane.copy()
         self.history.reset(plane)
         self._restart()
-        return notices
+        return [Notice(_SIZE_MISMATCH, "warn")] if read.mismatch else []
 
     def close(self) -> None:
         """Forget the document: no plane, no history, no file."""
@@ -241,6 +278,17 @@ class MaskDocument:
         self._save_error = str(exc)
         self._error_revision = self._revision
         return MaskSaveResult(ok=False, path=path, error=str(exc))
+
+
+def _zero_one_plane(on: np.ndarray) -> np.ndarray:
+    """The ``uint8`` 0/1 plane of the boolean mask ``on`` (``MaskStore.read``'s fresh array).
+
+    A contiguous boolean array already holds bytes 0 and 1: its ``uint8`` view is the plane,
+    with no second array to fill (1.7 ms at 2048 x 1536). Anything else is converted.
+    """
+    if on.dtype == np.bool_ and on.ndim == 2 and on.flags.c_contiguous and on.flags.writeable:
+        return on.view(np.uint8)
+    return np.asarray(on, dtype=bool).astype(np.uint8)
 
 
 def _planes_equal(a: np.ndarray, b: np.ndarray) -> bool:

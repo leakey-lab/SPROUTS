@@ -95,8 +95,9 @@ def test_zoom_stops_are_sorted_round_numbers_within_the_limits():
         (0.9995, +1, 1.25),  # within the 1e-3 tolerance of 100 %: the next stop up
         (1.0005, -1, 0.8),
         (20.0, +1, 20.0),  # clamped at MAX_ZOOM
-        (0.1, -1, 0.1),  # clamped at MIN_ZOOM
-        (0.11, -1, 0.1),
+        # Below the zoom-out limit (half the fit zoom, about 0.21 here) a step down stays.
+        (0.1, -1, 0.1),
+        (0.11, -1, 0.11),
         (19.0, +1, 20.0),
     ],
 )

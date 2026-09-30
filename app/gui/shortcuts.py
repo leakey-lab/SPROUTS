@@ -113,6 +113,7 @@ def _canvas_rows(kind: Kind) -> list[tuple]:
         ("zoom_100", ("Ctrl+1",), "Zoom to 100 %", kind),
         ("zoom_in", ("Ctrl+=", "Ctrl++"), "Zoom in", kind),
         ("zoom_out", ("Ctrl+-",), "Zoom out", kind),
+        ("pixel_grid", ("Ctrl+'",), "Show or hide the pixel grid (at 800 % and above)", kind),
         ("pan", ("Space",), "Hold and drag to pan (middle-drag also pans)", KEY, "Space (hold)"),
         ("zoom_wheel", ("Ctrl+wheel",), "Zoom about the cursor", GESTURE),
     ]
