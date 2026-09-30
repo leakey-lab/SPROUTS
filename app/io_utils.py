@@ -67,6 +67,11 @@ _WRITE_MODES = frozenset({"w", "wb", "wt"})
 _TEMP_TOKEN_BYTES = 4  # secrets.token_hex: two hex digits per byte
 _TEMP_SUFFIX = ".tmp"
 _HEX_DIGITS = frozenset("0123456789abcdef")
+# (X1) A temp path must fit wherever its target fits: Windows without long-path support
+# allows paths of up to 259 characters (MAX_PATH less the NUL), and NTFS / ext4 file
+# names of up to 255. The temp name is 14 characters longer than the target's.
+_MAX_PATH_CHARS = 259
+_MAX_NAME_CHARS = 255
 
 
 class FileLockedError(PermissionError):
@@ -88,10 +93,20 @@ class FileLockedError(PermissionError):
 
 
 def _temp_path(target: str) -> str:
-    """A unique sibling of ``target`` that no image/CSV scanner will pick up."""
+    """A unique sibling of ``target`` that no image/CSV scanner will pick up.
+
+    ``.<target name>.<token>.tmp``, with the target name cut short (to one character at
+    least) where the full one would make the temp path longer than a target path that
+    fits in MAX_PATH, or the temp name longer than 255 characters (X1). A target path
+    over MAX_PATH exists only with long paths enabled: then only the name limit applies.
+    """
     folder, name = os.path.split(target)
-    token = secrets.token_hex(_TEMP_TOKEN_BYTES)
-    return os.path.join(folder, f".{name}.{token}{_TEMP_SUFFIX}")
+    tail = f".{secrets.token_hex(_TEMP_TOKEN_BYTES)}{_TEMP_SUFFIX}"
+    keep = _MAX_NAME_CHARS - 1 - len(tail)
+    full = len(os.path.abspath(target))
+    if full <= _MAX_PATH_CHARS:
+        keep = min(keep, _MAX_PATH_CHARS - (full - len(name)) - 1 - len(tail))
+    return os.path.join(folder, f".{name[: max(1, keep)]}{tail}")
 
 
 def _is_temp_name(name: str) -> bool:

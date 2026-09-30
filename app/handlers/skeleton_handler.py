@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
-from app.handlers.deps import HandlerDependencies
+from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
 from app.inference.measure_run import AREA, LENGTH, SPECS, MeasureRun, MetricSpec
 from app.inference.metric_thread import MetricCalculatorThread
@@ -167,15 +167,19 @@ class SkeletonHandler(HandlerDependencies):
         rows = thread.job.rows or []
         errors = sum(1 for row in rows if row.get("Error"))
         label = thread.spec.label.capitalize()
+        name = os.path.basename(csv_path)
+        # (W13) The toast names the file and its folder (a full path is one word it can
+        # only elide mid-word); the full path goes to the status line and its tooltip.
+        self.feedback.status(f"Saved {csv_path}", SAVED_PATH_STATUS_MS)
         self.feedback.task_finished(f"{label} measured for {len(rows):,} images")
         if errors:
             self.feedback.notify(
-                f"{errors:,} images could not be measured: see the Error column of "
-                f"{os.path.basename(csv_path)}",
+                f"{errors:,} images could not be measured: see the Error column of {name}",
                 "warn",
             )
         else:
-            self.feedback.notify(f"Saved {csv_path}", "success")
+            folder = folder_label(os.path.dirname(csv_path), thread.job.project_root)
+            self.feedback.notify(f"Saved {name} in the {folder} folder", "success")
 
     def _on_failed(self, thread: MetricCalculatorThread, message: str) -> None:
         self._release(thread)

@@ -282,7 +282,8 @@ def _sweep_settings_dir_once(folder: str) -> threading.Thread | None:
 
     The same rule as a project's output folders (``app.io_utils.sweep_stale_temp_files``:
     only ``.<name>.<8 hex>.tmp`` files older than an hour). Returns the started thread,
-    or None when this process already swept ``folder``. Never raises.
+    or None when this process already swept ``folder`` or no thread could start (then
+    a later call tries again). Never raises.
     """
     key = os.path.normcase(os.path.abspath(folder))
     with _sweep_lock:
@@ -300,7 +301,13 @@ def _sweep_settings_dir_once(folder: str) -> threading.Thread | None:
             logger.info("Removed %d stale temp file(s) in %s", len(removed), folder)
 
     thread = threading.Thread(target=run, name="settings-temp-sweep", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except RuntimeError as exc:  # "can't start new thread": skip it, a later load retries
+        logger.warning("Could not start the stale temp-file sweep of %s: %s", folder, exc)
+        with _sweep_lock:
+            _swept_settings_dirs.discard(key)
+        return None
     return thread
 
 

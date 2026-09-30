@@ -8,10 +8,33 @@ the value injected into the constructor (tests, tools), then the window's own
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from app.gui.feedback import NullFeedback, UiFeedback
 from app.handlers.job_registry import JobRegistry
+
+#: How long the status line keeps "Saved <full path>" after a toast named only the
+#: file and its folder: long enough to hover it for the tooltip with the whole path (W13).
+SAVED_PATH_STATUS_MS = 15_000
+
+
+def folder_label(folder: str, root: str | None = None) -> str:
+    """``folder`` as a toast names it: relative to the project ``root`` when inside it
+    (``skeletons``, ``output\\mask``), else the folder's own name (W13).
+
+    A toast wraps at spaces, so a full path is one word it can only elide in the
+    middle; the full path goes to the status line instead.
+    """
+    folder = os.path.normpath(folder)
+    if root:
+        try:
+            rel = os.path.relpath(folder, os.path.normpath(root))
+        except ValueError:  # another drive (Windows)
+            rel = ""
+        if rel and rel != os.curdir and not rel.startswith(os.pardir):
+            return rel
+    return os.path.basename(folder) or folder
 
 
 class HandlerDependencies:

@@ -27,6 +27,7 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
+from app.handlers.deps import SAVED_PATH_STATUS_MS, folder_label
 from app.handlers.generation_base import (
     GenerationHandlerBase,
     every_input_failed,
@@ -297,7 +298,10 @@ class MaskGenerationHandler(GenerationHandlerBase):
                 self.parent_widget(), "Mask generation", output_dir, report.failed
             )
         else:
-            self.feedback.notify(f"{message}. Saved to {output_dir}", "success")
+            # (W13) The folder's name in the toast, its full path in the status line.
+            self.feedback.status(f"Saved to {output_dir}", SAVED_PATH_STATUS_MS)
+            folder = folder_label(output_dir, self.project_folder())
+            self.feedback.notify(f"{message}. Saved to the {folder} folder", "success")
         self.outputs_changed()
 
     def _on_failed(self, thread: MaskGenerationThread, message: str) -> None:

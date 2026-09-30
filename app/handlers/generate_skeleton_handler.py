@@ -21,6 +21,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from app.gui.feedback import UiFeedback
+from app.handlers.deps import SAVED_PATH_STATUS_MS, folder_label
 from app.handlers.generation_base import (
     GenerationHandlerBase,
     every_input_failed,
@@ -164,7 +165,10 @@ class GenerateSkeletonHandler(GenerationHandlerBase):
                 self.parent_widget(), "Skeleton generation", results_dir, report.failed
             )
         else:
-            self.feedback.notify(f"Skeletons saved to {results_dir}", "success")
+            # (W13) The folder's name in the toast, its full path in the status line.
+            self.feedback.status(f"Skeletons saved to {results_dir}", SAVED_PATH_STATUS_MS)
+            folder = folder_label(results_dir, self.project_folder())
+            self.feedback.notify(f"Skeletons saved to the {folder} folder", "success")
         self.main_window.load_results(results_dir)
 
     def _on_failed(self, thread: SkeletonGeneratorThread, message: str) -> None:
