@@ -21,10 +21,13 @@ Rules every layer follows:
   that drag until the next ``press``. A layer's own ``set_tool``, ``set_visible(False)``,
   ``save``, ``revert``, ``open`` and ``close`` finish a gesture first themselves.
   Nothing is ever dropped silently.
+- Optional (``ReadAheadLayer``): a layer with ``read_ahead`` lets the page read the
+  document of the next image on a worker thread and open it from that payload.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -256,6 +259,33 @@ class EditLayer(Protocol):
 
     def set_opacity(self, value: float) -> None:
         """Set the user's opacity 0..1."""
+
+
+class ReadAheadLayer(Protocol):
+    """Optional part of an ``EditLayer``: its document read ahead, off the GUI thread.
+
+    ``read_ahead`` runs on the GUI thread (it may ask the page, e.g. a resolver) and returns
+    a reader for the worker of :mod:`app.gui.correct.read_ahead`, or None. The reader,
+    ``reader((w, h))``, reads the files ``open`` would read and computes what ``open`` would
+    compute from them; it must not touch the layer, nor make or hold a Qt object (the
+    worker thread drops it). Its payload comes back as ``open(..., ahead=payload)``, which
+    adopts it only while it still matches the files on disk (the layer checks) and
+    otherwise reads them itself, as without it.
+    """
+
+    def read_ahead(
+        self, image_path: str, images_base_folder: str | None
+    ) -> Callable[[tuple[int, int]], object] | None:
+        """A worker reader of ``image_path``'s document, or None (nothing to read ahead)."""
+
+    def open(
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        images_base_folder: str | None,
+        ahead: object | None = None,
+    ) -> list[Notice]:
+        """``EditLayer.open``, from ``ahead`` (a reader's payload) when it is current."""
 
 
 def _declared_members(protocol: type) -> dict[str, bool]:

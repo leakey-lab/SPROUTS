@@ -19,6 +19,12 @@ Modules (consumers import the submodules; this package imports nothing):
   skeleton tools.
 - ``controls``: ``CorrectControls``, the rail groups, dock controls and polyline prompt.
 - ``layer_panel``: ``LayerPanel``, the Layers panel.
+- ``chip``: what the status chip shows (file name, worst layer state, library position,
+  hint).
+- ``read_ahead``: ``ReadAhead``, the next images read on a worker thread. Qt-free.
+- ``paging``: ``Neighbours``, the library position and the neighbour read-ahead.
+- ``layer_prefs``: ``LayerPrefs``, the layers' opacity and visibility across restarts.
+- ``keys``: the page's shortcuts (the registry's Correct rows, PgDn / PgUp).
 - ``editor``: ``CorrectEditor``, the page ``MainWindow`` shows; it only composes the
   parts above.
 """

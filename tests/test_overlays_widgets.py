@@ -318,7 +318,8 @@ def test_status_chip_rejects_unknown_states(host):
 def test_long_file_names_are_elided_in_the_middle(host):
     from app.gui.widgets import StatusChip
 
-    name = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM_" + "x" * 80 + ".jpg"
+    # A camera name keeps its tube, L-number and date instead (test_correct_status_chip.py).
+    name = "24EFCAM1_scan_001_SMM_" + "x" * 80 + ".jpg"
     chip = StatusChip(host, max_name_width=200)
     chip.set_text(name)
     shown = chip.file_label.text()

@@ -6,11 +6,13 @@ which places them together without collisions and follows host resizes; a
 panel without one places itself when its host calls ``reposition()`` (and
 must be ``raise_()``-d above the QGraphicsView). QSS has no backdrop-filter,
 so the translucent design panels are approximated with a near-opaque
-``--bg-1`` fill plus a QGraphicsDropShadowEffect.
+``--bg-1`` fill plus a drop shadow (:class:`~app.gui.widgets.effects.CachedDropShadow`, the
+look of a QGraphicsDropShadowEffect blitted from a cache).
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 from PyQt6.QtCore import QEvent, QPoint, Qt, pyqtSignal
@@ -299,17 +301,52 @@ class ZoomCluster(CornerPanel):
             getattr(self._view, method)(*args)
 
 
+# A camera name: [<field>_]T<tube>_L<position>_<YYYY.MM.DD>[_<HHMMSS>]<rest> (app.naming).
+_CAPTURE = re.compile(
+    r"^(?:(?P<field>.*?)_)?(?P<core>T\d+_L\d+_\d{4}\.\d{2}\.\d{2})(?P<time>_\d{6})?"
+    r"(?P<rest>(?:[_.].*)?)$"
+)
+
+
+def name_forms(name: str) -> tuple[str, ...]:
+    """``name`` and shorter forms of it that keep what identifies a capture, longest first.
+
+    A camera name such as ``24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg`` drops, in
+    turn, its end (suffix and extension), its time and its field:
+    ``24EFCAM1_T001_L044_2024.07.18_111530…``, ``24EFCAM1_T001_L044_2024.07.18…``,
+    ``…T001_L044_2024.07.18…``; the tube, the position (L-number) and the date stay. Any
+    other name has no shorter form (the chip elides it in the middle).
+    """
+    match = _CAPTURE.match(name)
+    if match is None:
+        return (name,)
+    field, core, time, rest = match.group("field", "core", "time", "rest")
+    time = time or ""
+    forms = [name]
+    if rest:
+        forms.append(f"{field}_{core}{time}…" if field else f"{core}{time}…")
+    if time or rest:
+        forms.append(f"{field}_{core}…" if field else f"{core}…")
+    if field:
+        forms.append(f"…{core}…" if time or rest else f"…{core}")
+    return tuple(dict.fromkeys(forms))
+
+
 class StatusChip(CornerPanel):
-    """Canvas chip: mono file name and a coloured save-state dot, plus an optional
-    muted hint line below them.
+    """Canvas chip: mono file name and a coloured save-state dot, the image's place in
+    the library (optional), plus an optional muted hint line below them.
 
     ``set_state`` takes ``"none"`` (faint; no text unless ``label`` is given),
     ``"clean"`` (Saved), ``"dirty"`` (Unsaved), ``"saving"`` or ``"error"``;
     ``label`` replaces the default text, e.g. ``set_state("none", "No mask")`` or
-    ``set_state("clean", "Saved · 2/3 checked")``. Long names are elided in the
-    middle (full name in the tooltip); an :class:`OverlayLayout` narrows the chip
-    further with :meth:`fit_to_width`. The hint line can start with a coloured dot
-    (``set_hint(..., dot=tokens.MASK)``), e.g. the active layer of the Correct editor.
+    ``set_state("clean", "Saved · 2/3 checked")``. ``set_position(12, 40)`` shows
+    "Image 12 / 40". An :class:`OverlayLayout` narrows the chip with
+    :meth:`fit_to_width`: a camera name then drops its least telling parts first
+    (:func:`name_forms`: tube, L-number and date stay), the position shortens to
+    "12 / 40" and then hides before the name loses those; any other long name is elided
+    in the middle (the full name is always the tooltip). The hint line can start with a
+    coloured dot (``set_hint(..., dot=tokens.MASK)``), e.g. the active layer of the
+    Correct editor.
     """
 
     STATES = {
@@ -319,7 +356,7 @@ class StatusChip(CornerPanel):
         "saving": (tokens.INFO, "Saving…"),
         "error": (tokens.DANGER, "Error"),
     }
-    MIN_NAME_WIDTH = 80  # about a dozen mono characters: "24EF…SMM.jpg"
+    MIN_NAME_WIDTH = 80  # about a dozen mono characters: "…T001_L044…"
     MIN_HINT_WIDTH = 160  # narrowest useful hint column
     HINT_DOT = "●"
     _HINT_QSS = "color: {color}; font-size: 12px; background: transparent;"
@@ -339,6 +376,8 @@ class StatusChip(CornerPanel):
         self._max_hint_width = max_hint_width
         self._max_width: int | None = None
         self._name = ""
+        self._forms: tuple[str, ...] = ("",)
+        self._positions: tuple[str, ...] = ()  # "Image 12 / 40", "12 / 40"; () hides it
         self._hint = ""
         self._dot: str | None = None
         self._state = "none"
@@ -350,6 +389,12 @@ class StatusChip(CornerPanel):
         )
         self.state_label = QLabel()
         self.state_label.setTextFormat(Qt.TextFormat.RichText)
+        self.position_label = QLabel()
+        self.position_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.position_label.setStyleSheet(
+            f"color: {tokens.TEXT_FAINT}; font-size: 11.5px; background: transparent;"
+        )
+        self.position_label.hide()
         self.hint_label = QLabel()
         self.hint_label.setTextFormat(Qt.TextFormat.PlainText)
         self.hint_label.setStyleSheet(self._HINT_QSS.format(color=tokens.TEXT_MUTED))
@@ -364,6 +409,7 @@ class StatusChip(CornerPanel):
         name_row.addWidget(self.file_label)
         name_row.addWidget(self.state_label)
         name_row.addStretch(1)
+        name_row.addWidget(self.position_label)
         hint_row = QHBoxLayout()
         hint_row.setSpacing(6)
         hint_row.addWidget(self.hint_dot, 0, Qt.AlignmentFlag.AlignTop)
@@ -380,13 +426,25 @@ class StatusChip(CornerPanel):
 
     # ------------------------------------------------------------------ API
     def set_text(self, name: str) -> None:
-        """Show ``name`` (a file name), elided in the middle when it is long."""
+        """Show ``name`` (a file name), shortened when it is long (see the class docstring)."""
         self._name = name
+        self._forms = name_forms(name)
         self._refresh()
         self.reposition()
 
     def text(self) -> str:
         return self._name
+
+    def set_position(self, index: int | None, count: int | None = None) -> None:
+        """Show "Image ``index`` / ``count``" (1-based) on the name row; None hides it."""
+        if index is None or count is None:
+            self._positions = ()
+            self.position_label.setToolTip("")
+        else:
+            self._positions = (f"Image {index} / {count}", f"{index} / {count}")
+            self.position_label.setToolTip(f"Image {index} of {count} in the library order")
+        self._refresh()
+        self.reposition()
 
     def set_state(self, state: str, label: str | None = None, *, tooltip: str = "") -> None:
         """Show the save state; see the class docstring for ``state`` and ``label``."""
@@ -450,17 +508,27 @@ class StatusChip(CornerPanel):
             chrome = margins.left() + margins.right() + frame.left() + frame.right()
             inner = self._max_width - chrome
 
+        self.file_label.ensurePolished()
+        self.position_label.ensurePolished()
+        metrics, spacing = self.file_label.fontMetrics(), self._name_row.spacing()
         name_width = self._max_name_width
+        position = self._positions[0] if self._positions else ""
         if inner is not None:
             state = self.state_label
-            used = state.sizeHint().width() + self._name_row.spacing() if state.text() else 0
-            name_width = max(self.MIN_NAME_WIDTH, min(name_width, inner - used))
-        self.file_label.ensurePolished()
-        metrics = self.file_label.fontMetrics()
-        self.file_label.setText(
-            metrics.elidedText(self._name, Qt.TextElideMode.ElideMiddle, name_width)
-        )
+            free = inner - (state.sizeHint().width() + spacing if state.text() else 0)
+            # The name keeps its shortest telling form; the position takes what is left.
+            kept = min(metrics.horizontalAdvance(self._forms[-1]), self._max_name_width)
+            position = self._fit_position(free - max(kept, self.MIN_NAME_WIDTH) - spacing)
+            used = self._position_width(position) + spacing if position else 0
+            name_width = max(self.MIN_NAME_WIDTH, min(name_width, free - used))
+        text = self._fit_name(metrics, name_width)
+        if self.file_label.text() != text:
+            self.file_label.setText(text)
         self.file_label.setToolTip(self._name)
+        if self.position_label.text() != position:
+            self.position_label.setText(position)
+        if self.position_label.isHidden() == bool(position):
+            self.position_label.setVisible(bool(position))
 
         hint_width = self._max_hint_width
         if inner is not None:
@@ -470,6 +538,22 @@ class StatusChip(CornerPanel):
             hint_width -= self.hint_dot.sizeHint().width() + self._hint_row.spacing()
         wrap_label(self.hint_label, hint_width)
         self._box.activate()  # the name row / column layouts cache hints until activated
+
+    def _fit_name(self, metrics, width: int) -> str:
+        """The longest form of the name that fits ``width`` px, else the shortest one
+        elided (at its end for a camera name, in the middle for any other name)."""
+        for form in self._forms:
+            if metrics.horizontalAdvance(form) <= width:
+                return form
+        mode = Qt.TextElideMode.ElideRight if len(self._forms) > 1 else Qt.TextElideMode.ElideMiddle
+        return metrics.elidedText(self._forms[-1], mode, width)
+
+    def _position_width(self, text: str) -> int:
+        return self.position_label.fontMetrics().horizontalAdvance(text) + 1
+
+    def _fit_position(self, width: int) -> str:
+        """The longest position text that fits ``width`` px ("" when none does)."""
+        return next((text for text in self._positions if self._position_width(text) <= width), "")
 
 
 class EnhancePopover(_FloatingPanel):
@@ -555,7 +639,7 @@ class ProgressOverlay(QWidget):
                 border-radius: 2px; height: 4px; }}
             QProgressBar::chunk {{ background-color: {tokens.ACCENT}; border-radius: 2px; }}
         """)
-        pop_shadow(frame)
+        pop_shadow(frame, radius=12)  # the card's border-radius
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)

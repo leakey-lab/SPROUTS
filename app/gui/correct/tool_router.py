@@ -165,6 +165,13 @@ class ToolRouter:
         self._last_pos = None
         self._active.hover(None)
 
+    def canvas_focus_lost(self) -> None:
+        """The canvas lost the keyboard (another window, a dialog): a held B will not see
+        its release, so the hold ends here (not a tap: the tool stays)."""
+        if self._b_held:
+            self._b_held = False
+            self._on_b_hold(False)
+
     def canvas_pan_changed(self, panning: bool) -> None:
         """A pan started (hide the ring) or ended (the next move shows it again)."""
         if panning:

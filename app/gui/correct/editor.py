@@ -7,7 +7,9 @@ under the ``MaskLayer`` and the ``SkeletonLayer``; the ``CorrectSession`` opens,
 prompts (``app.gui.editor_prompts``) and keeps the one undo timeline, and its report of each
 layer save becomes ``mask_saved`` / ``mask_cleared`` / ``skeleton_saved`` on every path; the
 overlays are the ``EditorChrome``, the ``CorrectControls`` and the ``LayerPanel``; the keys
-are the registry's Correct rows. The editor is the layers' ``LayerHost``, by delegation.
+are the registry's Correct rows (``keys``). ``Neighbours`` (``paging``) knows the image's place
+in the library and reads the next images ahead; ``LayerPrefs`` keeps the layers' opacity and
+visibility across restarts. The editor is the layers' ``LayerHost``, by delegation.
 Every transition (tool, layer, visibility, save, paging, open, Load, Clear, leaving) first
 ends a drag in progress as its release would (the mid-gesture rule of
 :mod:`app.gui.correct.layer`); opening, a layer switch, paging and leaving also make the
@@ -19,16 +21,19 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import QEvent, QRectF, QSettings, QSize, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QGraphicsScene, QVBoxLayout, QWidget
 
 from app.gui import editor_prompts, shortcuts
 from app.gui.canvas_layers.photo import PhotoLayerItem
+from app.gui.correct.chip import chip_content, show_on_chip, title
 from app.gui.correct.controls import CorrectControls
+from app.gui.correct.keys import install_page_shortcuts
 from app.gui.correct.layer import MASK, SKELETON, LayerStatus, SaveOutcome
 from app.gui.correct.layer_panel import LayerPanel
+from app.gui.correct.layer_prefs import LayerPrefs
 from app.gui.correct.mask_layer import MaskLayer
+from app.gui.correct.paging import Neighbours
 from app.gui.correct.session import CorrectSession
 from app.gui.correct.skeleton_layer import SkeletonLayer
 from app.gui.correct.tool_router import ToolRouter
@@ -37,23 +42,19 @@ from app.gui.editor_chrome import EditorChrome
 from app.gui.image_normalization_interface import NormalizationControls
 
 if TYPE_CHECKING:  # pragma: no cover
+    import numpy as np
+
     from app.gui.correct.layer import EditLayer
+    from app.gui.correct.paging import NeighbourProvider, PositionProvider
     from app.gui.skeleton_document import GeneratedResolver
 
 __all__ = ["CorrectEditor"]
 
 _SKELETON_FILES = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
-_PAGING = (("PgDown", 1), ("PgUp", -1))  # documented by the Global next / previous rows
-_NO_REPEAT = ("swap_layer", "toggle_layers", "toggle_reference")  # holding must not flicker
-_RANK = {"none": 0, "clean": 1, "dirty": 2, "error": 3}  # the chip shows the worst layer state
 
 
 def _same_file(a: str, b: str) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
-
-
-def _title(noun: str) -> str:
-    return f"{noun[:1].upper()}{noun[1:]}"
 
 
 class CorrectEditor(QWidget):
@@ -74,14 +75,22 @@ class CorrectEditor(QWidget):
     FINISH_LINE_FIRST = "Finish the line (Enter) or cancel it (Esc) first"
     SHORTCUT_SCOPE = shortcuts.CORRECT
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, settings: QSettings | None = None) -> None:
+        """``settings``: where the layers' opacity and visibility are kept across restarts
+        (None: the app's QSettings; nothing on the ``offscreen`` platform)."""
         super().__init__(parent)
         self._size = QSize()  # the open image; empty while nothing is open (no input then)
+        self._photo: np.ndarray | None = None  # its decoded photo (Enhance renders from it)
         self._chip: tuple = ()  # what the status chip shows (it is updated on changes only)
+        self._placed: tuple = (None, None)  # (path, its library position) the chip shows
         self._build_parts()
         self._build_overlays()
         self._connect()
-        self._install_shortcuts()
+        self._prefs = LayerPrefs.for_app(settings)
+        self._prefs.restore(self.layers.values())
+        for layer_id, layer in self.layers.items():
+            self.layer_panel.set_visible_state(layer_id, layer.is_visible())
+        self._shortcuts = install_page_shortcuts(self)
         self.graphics_view.refresh_cursor()
         self._refresh()
 
@@ -120,6 +129,8 @@ class CorrectEditor(QWidget):
             on_layer_shown=self._shown,
         )
         view.set_sink(self.router)
+        view.installEventFilter(self)  # focus-out ends the hold keys (eventFilter)
+        self.paging = Neighbours(self, self.layers)  # library position, read-ahead
 
     def _build_overlays(self) -> None:
         """The chrome, the page's controls on it and the Layers panel (right edge)."""
@@ -153,48 +164,24 @@ class CorrectEditor(QWidget):
         panel.visibility_toggled.connect(self.set_layer_visible)
         self.norm_controls.enhancement_changed.connect(self.apply_normalization)
 
-    def _install_shortcuts(self) -> None:
-        """One QShortcut per key of the registry's Correct rows, and PgDn / PgUp."""
-        view = self.graphics_view
-        installed = shortcuts.install_shortcuts(
-            self,
-            self.SHORTCUT_SCOPE,
-            {
-                "undo": self.undo,
-                "redo": self.redo,
-                "save": self.save,
-                "mask_layer": lambda: self.set_active_layer(MASK),
-                "skeleton_layer": lambda: self.set_active_layer(SKELETON),
-                "swap_layer": self.swap_layer,
-                "fill": lambda: self.request_tool(MASK, "fill"),
-                "select_tool": lambda: self.request_tool(SKELETON, "select"),
-                "polyline": lambda: self.request_tool(SKELETON, "polyline"),
-                "connect": lambda: self.request_tool(SKELETON, "connect"),
-                "eraser": lambda: self.request_tool(self.active_layer_id, "eraser"),
-                "size_smaller": lambda: self._active().step_size(-1),
-                "size_larger": lambda: self._active().step_size(1),
-                "toggle_layers": self.toggle_layers,
-                "toggle_reference": self.toggle_reference,
-                "fit": lambda: view.fit_to_view(),
-                "zoom_100": lambda: view.set_zoom(1.0),
-                "zoom_in": lambda: view.zoom_step(1),
-                "zoom_out": lambda: view.zoom_step(-1),
-            },
-        )
-        for action in _NO_REPEAT:
-            for shortcut in installed[action]:
-                shortcut.setAutoRepeat(False)
-        self._shortcuts = [shortcut for group in installed.values() for shortcut in group]
-        for key, delta in _PAGING:  # the page binds them itself so it can save first
-            shortcut = QShortcut(QKeySequence(key), self)
-            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            shortcut.activated.connect(lambda d=delta: self.navigate(d))
-            self._shortcuts.append(shortcut)
-
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         """Shown: the canvas takes the keys (Space, B, the gesture keys)."""
         super().showEvent(event)
         self.graphics_view.setFocus()
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Hidden (another stage, or the app quits): keep the layers' opacity and visibility."""
+        super().hideEvent(event)
+        self._prefs.store(self.layers.values())
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt override
+        """The canvas lost the keyboard: B and Space, if held, will not see their release."""
+        view = getattr(self, "graphics_view", None)  # None while the page is being torn down
+        if watched is view and event.type() == QEvent.Type.FocusOut:
+            self.router.canvas_focus_lost()
+            if view.space_pan:
+                view.set_space_pan(False)
+        return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------ MainWindow API
     @property
@@ -213,7 +200,8 @@ class CorrectEditor(QWidget):
         The open image again keeps unsaved edits; clean, it keeps documents, history and view
         unless a file changed on disk (the documents reload, same view; a changed photo opens
         fitted). Another image is decoded first (unreadable: a toast, nothing changes), then
-        unsaved edits are asked about (Cancel stays).
+        unsaved edits are asked about (Cancel stays). A neighbour read ahead is adopted
+        instead of decoding again (``set_neighbour_provider``).
         """
         session = self.session
         self._end_drag()
@@ -224,21 +212,24 @@ class CorrectEditor(QWidget):
                 if session.files_changed():
                     session.reload_documents()
                 return
-        image = self.norm_controls.display_image(image_path)
-        if image is None:
+        ahead = self.paging.take(image_path)
+        photo = ahead.photo if ahead is not None else self.norm_controls.source_image(image_path)
+        if photo is None:
             self.notice.emit(f"Could not open {os.path.basename(image_path)}", "danger")
             return
         if not session.release():
-            return  # the user kept editing the open image
-        height, width = image.shape[:2]
-        self._size = QSize(width, height)
-        session.open(image_path, (width, height), images_base_folder)
-        self.photo_item.set_image(image)
+            self.paging.put_back(ahead)  # the user kept editing the open image
+            return
+        height, width = photo.shape[:2]
+        self._size, self._photo = QSize(width, height), photo
+        session.open(image_path, (width, height), images_base_folder, ahead and ahead.layers)
+        self.photo_item.set_image(self.norm_controls.apply_to(photo))
         view = self.graphics_view
         view.set_content_rect(QRectF(0, 0, width, height))
         view.fit_to_view()
         if self.isVisible():
             view.setFocus()
+        self.paging.opened(image_path, images_base_folder)
 
     def has_unsaved_changes(self) -> bool:
         """True when a layer of the open image differs from its saved state."""
@@ -254,7 +245,8 @@ class CorrectEditor(QWidget):
         self._end_drag()
         if not self.session.reset():
             return False
-        self._size = QSize()
+        self._size, self._photo = QSize(), None
+        self.paging.closed()
         self.photo_item.set_image(None)
         self.graphics_view.clear_content_rect()
         return True
@@ -271,6 +263,22 @@ class CorrectEditor(QWidget):
     def set_generated_skeleton_resolver(self, resolver: GeneratedResolver | None) -> None:
         """Where the skeleton layer finds an image's generated skeleton (None: skeletons/)."""
         self._skeleton.set_resolver(resolver)
+
+    def set_neighbour_provider(self, provider: NeighbourProvider | None) -> None:
+        """``provider(path)``: the images PgDn / PgUp would open next, nearest first; the
+        page reads them ahead on a worker thread (None: nothing is read ahead)."""
+        self.paging.set_neighbour_provider(provider)
+
+    def set_position_provider(self, provider: PositionProvider | None) -> None:
+        """``provider(path)``: ``(index, count)`` of the image in the library (1-based) or
+        None, for the chip's "Image 12 / 40"."""
+        self.paging.set_position_provider(provider)
+        self._placed = (None, None)  # asked again
+        self._refresh()
+
+    def discard_read_ahead(self) -> None:
+        """Files changed on disk (a Generate run): forget every image read ahead."""
+        self.paging.forget()
 
     def save(self) -> bool:
         """Ctrl+S: save the unsaved layers (none unsaved: the edited one); True when all did."""
@@ -296,15 +304,10 @@ class CorrectEditor(QWidget):
         layer.clear()
 
     def apply_normalization(self) -> None:
-        """Show the open photo with the Enhance settings (the raw photo when they are off)."""
-        path = self.session.image_path
-        if not path:
-            return
-        image = self.norm_controls.display_image(path)
-        if image is None:
-            self.notice.emit("Could not read the image for enhancement", "danger")
-            return
-        self.photo_item.set_image(image)
+        """Show the open photo with the Enhance settings (the raw photo when they are off),
+        rendered from the photo decoded at open (the one the documents were opened for)."""
+        if self.session.image_path and self._photo is not None:
+            self.photo_item.set_image(self.norm_controls.apply_to(self._photo))
 
     # ------------------------------------------------------------------ layers and tools
     def set_active_layer(self, layer_id: str) -> bool:
@@ -395,20 +398,21 @@ class CorrectEditor(QWidget):
     def _shown(self, layer_id: str) -> None:
         """A hidden layer was shown to be edited: its eye, and a toast naming it."""
         self.layer_panel.set_visible_state(layer_id, True)
-        self.notice.emit(f"{_title(self.layers[layer_id].noun)} shown", "info")
+        self.notice.emit(f"{title(self.layers[layer_id].noun)} shown", "info")
 
     def _undone(self, layer_id: str, action: str) -> None:
         """An undo / redo stepped ``layer_id``: shown if hidden; the other layer says so."""
         layer = self.layers[layer_id]
         if layer_id != self.active_layer_id:
             self.layer_panel.flash(layer_id)
-            self.notice.emit(f"{_title(action)} · {layer.noun}", "info")
+            self.notice.emit(f"{title(action)} · {layer.noun}", "info")
         if not layer.is_visible():
             layer.set_visible(True)
             self.layer_panel.set_visible_state(layer_id, True)
 
     def _report(self, outcome: SaveOutcome) -> None:
         """One layer save attempt -> MainWindow's signals; a failed save reports nothing."""
+        self.paging.forget(self.session.image_path)  # its files changed: nothing read stays
         if not outcome.ok:
             return
         if outcome.layer_id == MASK and (outcome.path or outcome.cleared):
@@ -429,22 +433,11 @@ class CorrectEditor(QWidget):
         self._refresh_chip(layer, statuses)
 
     def _refresh_chip(self, layer: EditLayer, statuses: dict[str, LayerStatus]) -> None:
-        """File name, the worst layer state (error > unsaved > saved > none) and the hint
-        "<Layer> · <tool hint>" with a dot in the edited layer's colour; changes only."""
-        path, state, label, tip = self.session.image_path, "none", None, ""
-        if path:
-            state = max((status.state for status in statuses.values()), key=_RANK.__getitem__)
-        if state == "error":  # the failed layer's label ("Not saved") and reason
-            failed = next(status for status in statuses.values() if status.state == "error")
-            label, tip = failed.label, failed.tooltip
-        hint, hint_tip = layer.tool_hint()
-        hint = f"{_title(layer.noun)} · {hint}"
-        shown = (os.path.basename(path) or "No image", (state, label, tip), (hint, hint_tip))
-        old, chip = self._chip or (None, None, None), self.status_chip
-        if shown[0] != old[0]:
-            chip.set_text(shown[0])
-        if shown[1] != old[1]:
-            chip.set_state(state, label, tooltip=tip)
-        if shown[2] != old[2]:
-            chip.set_hint(hint, hint_tip, dot=layer.color)
+        """The chip (:mod:`app.gui.correct.chip`); the library position is asked once per
+        image; changes only."""
+        path = self.session.image_path
+        if self._placed[0] != path:
+            self._placed = (path, self.paging.position(path))
+        shown = chip_content(path, statuses, layer, self._placed[1])
+        show_on_chip(self.status_chip, shown, self._chip)
         self._chip = shown

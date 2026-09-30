@@ -14,7 +14,7 @@ like any other edit, and nothing painted is dropped silently.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -80,20 +80,27 @@ def _by_id(layers: Sequence[EditLayer]) -> dict[str, EditLayer]:
 
 
 class _Batch:
-    """Re-entrant scope that defers the session's UI sync to its outermost end."""
+    """Re-entrant scope that defers the session's UI sync to its outermost end.
 
-    __slots__ = ("_session",)
+    A ``quiet`` batch syncs only when something inside it asked for a sync (a layer
+    change, a save, a revert): paging and leaving a clean image refresh nothing.
+    """
 
-    def __init__(self, session: CorrectSession) -> None:
+    __slots__ = ("_quiet", "_session")
+
+    def __init__(self, session: CorrectSession, *, quiet: bool = False) -> None:
         self._session = session
+        self._quiet = quiet
 
     def __enter__(self) -> None:
         self._session._batch_depth += 1
+        if not self._quiet:
+            self._session._stale = True
 
     def __exit__(self, *_exc) -> None:
         session = self._session
         session._batch_depth -= 1
-        if not session._batch_depth:
+        if not session._batch_depth and session._stale:
             session._sync()
 
 
@@ -129,14 +136,24 @@ class CorrectSession:
         self._image_stamp: tuple = ()
         self._dirty = False
         self._batch_depth = 0
+        self._stale = False  # a sync is owed at the end of the outermost batch
         self._batch = _Batch(self)
+        self._quiet = _Batch(self, quiet=True)
 
     # ------------------------------------------------------------------ lifecycle
-    def open(self, image_path: str, size: tuple[int, int], images_base_folder: str | None) -> None:
+    def open(
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        images_base_folder: str | None,
+        ahead: Mapping[str, object] | None = None,
+    ) -> None:
         """Open ``image_path`` (``size`` = (w, h)) in every layer, with a new timeline.
 
-        The caller asks about unsaved edits first (``release``). The layers' notices are
-        forwarded; the image's and the layers' file stamps are recorded.
+        The caller asks about unsaved edits first (``release``). ``ahead`` maps a layer id
+        to what that layer's ``read_ahead`` reader read (``open(..., ahead=payload)``); the
+        other layers open as usual. The layers' notices are forwarded; the image's and the
+        layers' file stamps are recorded.
         """
         with self._batch:
             self.finish_gestures()
@@ -144,7 +161,7 @@ class CorrectSession:
             self._size = size
             self._images_base_folder = images_base_folder
             self._image_stamp = _file_stamp(image_path)
-            self._open_layers()
+            self._open_layers(ahead or {})
 
     def reload_documents(self) -> None:
         """Same image, files changed on disk: reopen every layer, with a new timeline.
@@ -181,9 +198,13 @@ class CorrectSession:
         """True when the image file's stamp differs from the one at open."""
         return bool(self.image_path) and _file_stamp(self.image_path) != self._image_stamp
 
-    def _open_layers(self) -> None:
-        for layer in self.layers.values():
-            self._forward(layer.open(self.image_path, self._size, self._images_base_folder))
+    def _open_layers(self, ahead: Mapping[str, object] | None = None) -> None:
+        args = (self.image_path, self._size, self._images_base_folder)
+        for layer_id, layer in self.layers.items():
+            payload = None if ahead is None else ahead.get(layer_id)
+            self._forward(
+                layer.open(*args) if payload is None else layer.open(*args, ahead=payload)
+            )
         self.journal.clear()
         self._stamps = {layer_id: layer.file_stamps() for layer_id, layer in self.layers.items()}
 
@@ -226,7 +247,9 @@ class CorrectSession:
 
     def _sync(self) -> None:
         if self._batch_depth:
-            return  # the outermost batch syncs once when it ends
+            self._stale = True  # the outermost batch syncs once when it ends
+            return
+        self._stale = False
         dirty = self.is_dirty()
         if dirty != self._dirty:
             self._dirty = dirty
@@ -249,20 +272,28 @@ class CorrectSession:
             return self._save(self.dirty_layers() or [active_id])
 
     def save_dirty(self) -> SaveReport:
-        """PgDn / PgUp: save the dirty layers only; an empty report when none is."""
-        with self._batch:
+        """PgDn / PgUp: save the dirty layers only; an empty report (and no refresh of the
+        page) when none is."""
+        with self._quiet:
             self.finish_gestures()
             dirty = self.dirty_layers()
             return self._save(dirty) if dirty else SaveReport()
 
     def _save(self, layer_ids: Iterable[str]) -> SaveReport:
-        """Save ``layer_ids`` mask first; report each attempt; a failure stops nothing."""
+        """Save ``layer_ids`` mask first; report each attempt; a failure stops nothing.
+
+        A layer's own write is no change on disk: its file stamps are taken again, so
+        coming back to the image keeps the documents and their history.
+        """
+        self._stale = True  # inside a batch: its end refreshes the page
         targets = set(layer_ids)
         outcomes = []
         for layer_id, layer in self.layers.items():
             if layer_id in targets:
                 layer.finish_gesture()
                 outcome = layer.save()
+                if outcome.ok and layer_id in self._stamps:
+                    self._stamps[layer_id] = layer.file_stamps()
                 outcomes.append(outcome)
                 self._on_saved(outcome)
         self._announce(outcomes)
@@ -290,9 +321,10 @@ class CorrectSession:
         Asks about the dirty layers among ``layer_ids`` (all when None), naming them and
         the image. Discard reverts them and forgets their timeline entries; Cancel
         stays; Save saves them (each attempt reported) and, if one fails, asks about the
-        failed layers only: Discard reverts them, Keep editing stays.
+        failed layers only: Discard reverts them, Keep editing stays. Nothing to ask, or
+        Cancel, changes nothing and refreshes nothing.
         """
-        with self._batch:
+        with self._quiet:
             self.finish_gestures()
             dirty = [i for i in self.dirty_layers() if layer_ids is None or i in layer_ids]
             if not dirty:
@@ -324,6 +356,7 @@ class CorrectSession:
         return _join_nouns([self.layers[layer_id].noun for layer_id in layer_ids])
 
     def _revert(self, layer_ids: Sequence[str]) -> None:
+        self._stale = True  # inside a batch: its end refreshes the page
         for layer_id in layer_ids:
             self._forward(self.layers[layer_id].revert())
             self.journal.forget(layer_id)

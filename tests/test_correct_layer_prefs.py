@@ -1,0 +1,144 @@
+"""The Correct layers keep their opacity and visibility across app restarts (QSettings;
+KNOWN_ISSUES #6). Every test gives the page its own INI file: the user's settings are
+never read or written."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+
+from PyQt6.QtCore import QEvent, QSettings  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+from app.gui.correct.editor import CorrectEditor  # noqa: E402
+from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.correct.layer_prefs import LayerPrefs  # noqa: E402
+from tests.test_correct_editor import install_guards, new_project, qapp, settle  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def app():
+    return qapp()
+
+
+@pytest.fixture(autouse=True)
+def guards(monkeypatch, tmp_path):
+    yield from install_guards(monkeypatch, tmp_path)
+
+
+@pytest.fixture
+def ini(tmp_path):
+    return str(tmp_path / "settings.ini")
+
+
+@pytest.fixture
+def pages(app):
+    made: list[CorrectEditor] = []
+
+    def make(settings=None, image=None, base=None) -> CorrectEditor:
+        editor = CorrectEditor(settings=settings)
+        editor.resize(1100, 800)
+        editor.show()
+        settle(editor)
+        if image is not None:
+            editor.load_image(image, base)
+            settle(editor)
+        made.append(editor)
+        return editor
+
+    yield make
+    for editor in made:
+        editor.layers[SKELETON].cancel_scheduled_render()
+        editor.close()
+        editor.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def settings_at(path: str) -> QSettings:
+    return QSettings(path, QSettings.Format.IniFormat)
+
+
+def restart(editor: CorrectEditor) -> None:
+    """What quitting the app does to the page: it is hidden with its window."""
+    editor.hide()
+    settle()
+
+
+def test_opacity_and_visibility_come_back_after_a_restart(pages, ini, tmp_path):
+    project = new_project(tmp_path)
+    first = pages(settings_at(ini), project.a, project.folder)
+    first.controls.opacity_slider.slider.setValue(35)  # the mask is the edited layer
+    first.set_layer_visible(SKELETON, False)
+    restart(first)
+
+    second = pages(settings_at(ini), project.b, project.folder)
+
+    mask, skeleton = second.layers[MASK], second.layers[SKELETON]
+    assert mask.opacity() == pytest.approx(0.35) and mask.is_visible()
+    assert not skeleton.is_visible()
+    assert skeleton.opacity() == pytest.approx(skeleton.DEFAULT_OPACITY)
+    assert second.controls.opacity_slider.slider.value() == 35
+    assert not second.layer_panel.rows[SKELETON].eye_button.isChecked()
+    assert second.layer_panel.rows[MASK].eye_button.isChecked()
+    assert mask.item.opacity() == pytest.approx(0.35)  # drawn as restored
+    assert not skeleton.item.isVisible()
+
+
+def test_a_restored_hidden_layer_is_shown_again_to_be_edited(pages, ini, tmp_path):
+    project = new_project(tmp_path)
+    first = pages(settings_at(ini))
+    first.set_layer_visible(MASK, False)
+    restart(first)
+    second = pages(settings_at(ini), project.a, project.folder)
+    notices = []
+    second.notice.connect(lambda message, kind: notices.append(message))
+
+    second.clear_active_layer()  # the mask, hidden: shown first
+
+    assert second.layers[MASK].is_visible() and "Mask shown" in notices
+
+
+def test_the_values_are_stored_under_the_correct_group(pages, ini):
+    first = pages(settings_at(ini))
+    first.set_active_layer(SKELETON)
+    first.controls.opacity_slider.slider.setValue(50)
+    restart(first)
+
+    stored = settings_at(ini)
+    assert float(stored.value("correct/skeleton/opacity")) == pytest.approx(0.5)
+    assert stored.value("correct/mask/visible") in (True, "true")
+
+
+@pytest.mark.parametrize(
+    "opacity, visible",
+    [("abc", "maybe"), ("7.5", "2"), ("-1", ""), ("nan", None)],
+)
+def test_unreadable_values_leave_the_defaults(pages, ini, opacity, visible):
+    stored = settings_at(ini)
+    stored.setValue("correct/mask/opacity", opacity)
+    if visible is not None:
+        stored.setValue("correct/mask/visible", visible)
+    stored.sync()
+
+    page = pages(settings_at(ini))
+
+    mask = page.layers[MASK]
+    assert mask.opacity() == pytest.approx(mask.DEFAULT_OPACITY) and mask.is_visible()
+
+
+def test_a_page_without_settings_on_the_offscreen_platform_keeps_nothing(pages, monkeypatch):
+    made = []
+    monkeypatch.setattr(
+        "app.gui.correct.layer_prefs.QSettings",
+        lambda *args, **kwargs: made.append(args) or pytest.fail("QSettings made"),
+    )
+
+    page = pages()
+    page.set_layer_visible(MASK, False)
+    restart(page)
+
+    assert made == [] and LayerPrefs.for_app(None).settings is None
