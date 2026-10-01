@@ -20,6 +20,11 @@ ask for the next / previous image (``navigate_requested``). A lossy class
 remap on load (unknown classes became Ignore) is never saved silently: PgDn
 then asks like any other unsaved change.
 
+The tracing is unsaved while it differs from the one last saved or opened (its
+class ids or its ticks), like Correct's layers: undoing every edit, or ticking a
+box and unticking it, leaves nothing to save. A lossy remap on load stays
+unsaved until it is saved or discarded.
+
 Unsaved edits are never dropped behind the user's back: when a save fails,
 ``maybe_save_changes`` asks again (Discard / Keep editing) and returns False
 on "Keep editing", so the caller (next image, stage switch, window close,
@@ -27,6 +32,9 @@ open folder) stays on this image. Discard puts the tracing back as last saved
 (or as opened: empty when there is no GT file), class ticks included, and
 clears the history. While ``gt/classes.json`` is invalid, saving is
 impossible, so every edit is refused up front.
+
+Tab from the canvas goes through the rail, the dock and the zoom cluster, then
+the class panel (the gear, then each "checked" box in class order).
 """
 
 from __future__ import annotations
@@ -174,7 +182,8 @@ class GtTracingInterface(RasterEditorBase):
         # ticked from the keyboard keeps it for the next box.
         self.class_panel.active_changed.connect(self._focus_canvas)
         self.class_panel.reviewed_changed.connect(self._after_tick)
-        self.overlay_layout.register(side_panel=self.class_panel)
+        self.chrome.register(side_panel=self.class_panel)
+        self.chrome.order_tab_focus()  # Tab: rail, dock, zoom cluster, then the classes
 
         self.set_active_class(self._default_key())
         self._refresh_panel()
@@ -317,7 +326,7 @@ class GtTracingInterface(RasterEditorBase):
         else:
             self._reviewed.discard(key)
         if was != checked:
-            self.mark_dirty()
+            self._sync_dirty()  # a tick taken back is no change
         self._refresh_panel()
 
     def edit_classes(self) -> None:
@@ -598,6 +607,16 @@ class GtTracingInterface(RasterEditorBase):
         super()._remember_saved()
         self._saved_reviewed = frozenset(self._reviewed)
         self._saved_counts = self._counts.copy()
+
+    def _rest_differs(self) -> bool:
+        """The class ticks differ from the saved tracing's, or a class's pixel count does.
+
+        Different counts mean different ids, so the base skips its pixel compare: it runs
+        only when the counts match, e.g. once every edit is undone.
+        """
+        return self._reviewed != self._saved_reviewed or not np.array_equal(
+            self._counts, self._saved_counts
+        )
 
     def _restore_saved(self) -> None:
         """Discard: the ticks and the class counts go back with the plane."""

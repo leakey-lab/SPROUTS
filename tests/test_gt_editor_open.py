@@ -104,7 +104,7 @@ def test_reselecting_the_clean_open_image_keeps_tracing_history_and_view(editor,
     _stroke(iface, (10, 10), (40, 10))
     assert iface.save_mask()
     _stroke(iface, (10, 40), (40, 40))
-    iface.undo()  # an undo is an edit too: save again, clean with one undo and one redo left
+    iface.undo()  # back at the saved tracing; save anyway: one undo and one redo left
     assert iface.save_mask()
     view = _shown(iface)
     view.set_zoom(4.0)

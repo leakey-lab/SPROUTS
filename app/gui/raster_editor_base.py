@@ -18,14 +18,24 @@ editor shares:
 * :class:`~app.gui.brush_preview.BrushPreview`: the brush ring (z 10).
 
 The photo is decoded once per open, through the Enhance controls' source cache
-(``NormalizationControls.display_image``), so an enhancement sticks across images. Dirty is a
-flag, set by every edit, undo and redo and cleared by a save or by Discard. Discard puts the
-document back as it was last saved (or opened) and clears the history, like the Correct
-editor's Discard: the editor keeps a copy of the plane each time it becomes clean.
+(``NormalizationControls.display_image``), so an enhancement sticks across images. The editor
+keeps a copy of the plane each time it becomes clean (saved, opened or discarded). Unsaved
+means the document differs from that state, as in Correct: after every stroke, fill, clear,
+undo and redo the plane is compared with the copy (one ``cv2.norm`` pass, about 0.05 ms at
+2048 x 1536; Trace GT compares its class pixel counts first and needs the pass only when
+they match), so undoing every edit leaves nothing to save. A stroke in progress counts as
+unsaved, and so does a document that was unsaved as opened (``_open_document`` says so)
+until it is saved or discarded. Discard puts the document back as it was last saved (or
+opened) and clears the history, like the Correct editor's Discard.
 
 A subclass decides what the plane means and where it is stored: ``_open_document`` reads it,
 ``save_mask`` writes it, ``_plane_lut`` / ``_argb_to_plane`` / ``_fill_source`` map it to canvas
-colours and back, and ``_status`` names its save state for the status chip.
+colours and back, ``_status`` names its save state for the status chip, and
+``_remember_saved`` / ``_restore_saved`` / ``_rest_differs`` keep, restore and compare the
+rest of its saved state.
+
+Tab from the canvas follows the screen: the rail (at the chosen tool), the Enhance popover
+when open, the dock, the zoom cluster, then a subclass's side panel (``EditorChrome``).
 
 Keys (the Trace GT scope of :mod:`app.gui.shortcuts`, the registry behind the F1 sheet): B brush
 (hold B + wheel = brush size), E eraser, F fill, [ / ] brush size, H show / hide the layer,
@@ -38,6 +48,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
+import cv2
 import numpy as np
 from PyQt6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap, QWheelEvent
@@ -78,6 +89,21 @@ def _same_file(a: str, b: str) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
+def _same_plane(plane: np.ndarray, saved: np.ndarray | None) -> bool:
+    """True when ``saved`` holds the pixels of ``plane``.
+
+    One ``cv2.norm`` pass (the largest difference), with no temporary array: 0.05 ms at
+    2048 x 1536 where ``np.array_equal`` takes 0.6 ms.
+    """
+    if saved is None or saved.shape != plane.shape or saved.dtype != plane.dtype:
+        return False
+    if plane.size == 0:
+        return True
+    if plane.dtype != np.uint8:
+        return bool(np.array_equal(plane, saved))
+    return cv2.norm(plane, saved, cv2.NORM_INF) == 0
+
+
 class RasterEditorBase(QWidget):
     """Canvas editor over one image and an editable plane (the Trace GT stage's shell).
 
@@ -87,7 +113,9 @@ class RasterEditorBase(QWidget):
       photo's ``QSize``);
     - ``save_mask(save_path=None) -> bool`` writes it;
     - ``_plane_lut()`` / ``_argb_to_plane()`` / ``_fill_source()`` map it to canvas colours;
-    - ``_status()`` names its save state for the status chip.
+    - ``_status()`` names its save state for the status chip;
+    - ``_remember_saved()`` / ``_restore_saved()`` / ``_rest_differs()`` keep, restore and
+      compare the rest of its saved state (beyond the plane).
 
     The editor is the ``InputSink`` of its canvas: the ``canvas_*`` methods receive the
     input the view does not use for panning, in image pixels.
@@ -115,8 +143,12 @@ class RasterEditorBase(QWidget):
         self.current_image_path = ""
         # One entry per stroke / fill / clear; the committed plane lives here too.
         self.edits = PatchHistory(on_change=self._sync_history_buttons)
-        # The plane as last saved or opened (a copy): what Discard goes back to.
+        # The plane as last saved or opened (a copy): what Discard goes back to, and what
+        # "unsaved" is measured against.
         self._saved_plane: np.ndarray | None = None
+        # The document was unsaved as opened (``_open_document`` said so): it stays unsaved
+        # until saved or discarded, whatever the plane holds.
+        self._opened_unsaved = False
         # File stamps of the open photo and of its document files: re-selecting the open
         # image reloads only what changed on disk.
         self._photo_stamp: tuple = ()
@@ -255,6 +287,17 @@ class RasterEditorBase(QWidget):
             dock.add_widget(button)
         dock.add_separator()
         dock.add_widget(self.save_button)
+        self._sync_tool_tab_stop()
+        chrome.order_tab_focus()  # Tab follows the screen, not the build order
+
+    def _sync_tool_tab_stop(self) -> None:
+        """Tab reaches the tools at the checked one, as a radio group (as in Correct; Qt's
+        own rule is the tool focused last, else the first one)."""
+        checked = self.tool_button_group.checkedButton()
+        for button in self.tool_button_group.buttons():
+            policy = Qt.FocusPolicy.TabFocus if button is checked else Qt.FocusPolicy.NoFocus
+            if button.focusPolicy() != policy:
+                button.setFocusPolicy(policy)
 
     def _reposition_overlays(self) -> None:
         """Re-place the floating overlays over the current widget bounds."""
@@ -392,6 +435,7 @@ class RasterEditorBase(QWidget):
     def _on_tool_toggled(self, _button, checked: bool) -> None:
         if not checked:
             return
+        self._sync_tool_tab_stop()
         self._style_brush_preview()
         self._sync_brush_preview()
 
@@ -479,14 +523,14 @@ class RasterEditorBase(QWidget):
         self.drawing = True
         if self.fill_button.isChecked():
             if self.flood_fill(pos):
-                self.mark_dirty()
+                self._sync_dirty()
                 self._after_stroke()
             else:
                 self.notice.emit(self.FILL_MISS_NOTICE, "info")
             return
         erase = self.eraser_button.isChecked()
         self.paint.begin(pos, self.brush_color, self.brush_size, erase=erase)
-        self.mark_dirty()
+        self.mark_dirty()  # unsaved while it lasts; its end decides
 
     def continue_stroke(self, pos: QPoint) -> None:
         """Paint the segment to image pixel ``pos`` (only during a brush / eraser stroke)."""
@@ -494,9 +538,13 @@ class RasterEditorBase(QWidget):
             self.paint.extend(pos)
 
     def end_stroke(self) -> None:
-        """End the stroke: what it painted becomes one undoable action."""
-        self.drawing = False
-        if self.paint.commit() is not None:
+        """End the stroke: what it painted becomes one undoable action. A stroke that
+        changed no pixel (or missed the image) leaves the document as it was."""
+        pressed, self.drawing = self.drawing, False
+        changed = self.paint.commit() is not None
+        if pressed:
+            self._sync_dirty()
+        if changed:
             self._after_stroke()
 
     def flood_fill(self, pos: QPoint) -> bool:
@@ -509,7 +557,7 @@ class RasterEditorBase(QWidget):
             return
         self.end_stroke()
         self.paint.clear()
-        self.mark_dirty()
+        self._sync_dirty()
         self._after_stroke()
         self.notice.emit(self.CLEARED_NOTICE, "info")
 
@@ -524,7 +572,7 @@ class RasterEditorBase(QWidget):
     def _step_history(self, step: Callable[[], Patch | None]) -> None:
         if self.drawing or step() is None:
             return
-        self.mark_dirty()
+        self._sync_dirty()  # an undo back to the saved document is saved again
         self._after_stroke()
 
     def _finish_stroke(self) -> None:
@@ -554,22 +602,49 @@ class RasterEditorBase(QWidget):
 
     # ====================================================== dirty / status
     def mark_dirty(self) -> None:
-        """There are unsaved edits (``dirty_changed`` on the transition)."""
-        if not self.dirty:
-            self.dirty = True
-            self.dirty_changed.emit(True)
+        """There are unsaved edits, e.g. a stroke in progress (``dirty_changed`` on the
+        transition). The next :meth:`_sync_dirty` measures them again."""
+        self._set_dirty(True)
+
+    def _sync_dirty(self) -> None:
+        """Unsaved = the document differs from its saved (or opened) state; asked after
+        every action, so an undo back to that state is saved again (``dirty_changed`` on
+        each transition)."""
+        self._set_dirty(self._differs_from_saved())
+
+    def _set_dirty(self, dirty: bool) -> None:
+        """Record ``dirty`` (``dirty_changed`` on a change) and refresh the status chip."""
+        if dirty != self.dirty:
+            self.dirty = dirty
+            self.dirty_changed.emit(dirty)
         self._update_status_chip()
+
+    def _differs_from_saved(self) -> bool:
+        """True when the open document is not its saved (or opened) state: a stroke is in
+        progress, it was unsaved as opened, the rest of its state differs
+        (:meth:`_rest_differs`), or a plane pixel does. False while nothing is open."""
+        plane = self.edits.plane
+        if plane is None:
+            return False
+        if self.paint.in_stroke() or self._opened_unsaved or self._rest_differs():
+            return True
+        return not _same_plane(plane, self._saved_plane)
+
+    def _rest_differs(self) -> bool:
+        """Hook: True when the saved state beyond the plane (kept by :meth:`_remember_saved`)
+        differs, or a cheap summary of the plane does (the pixel compare is then skipped).
+        Nothing here."""
+        return False
 
     def _set_clean(self) -> None:
         """The document is its saved state now (saved, opened unchanged or discarded)."""
         self._remember_saved()
-        if self.dirty:
-            self.dirty = False
-            self.dirty_changed.emit(False)
-        self._update_status_chip()
+        self._opened_unsaved = False
+        self._set_dirty(False)
 
     def _remember_saved(self) -> None:
-        """Keep a copy of the plane as the saved state, the one Discard goes back to.
+        """Keep a copy of the plane as the saved state, the one Discard goes back to and
+        "unsaved" is measured against.
 
         Subclasses extend it to keep the rest of their saved state.
         """
@@ -764,6 +839,7 @@ class RasterEditorBase(QWidget):
         self._sync_open_controls()
         if dirty_on_load:
             self._remember_saved()  # Discard goes back to the document as opened
+            self._opened_unsaved = True  # unsaved even with every edit undone
             self.mark_dirty()
         else:
             self._set_clean()

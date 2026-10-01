@@ -74,6 +74,14 @@ def count_traced(images: dict[str, str]) -> int:
     return traced
 
 
+def traced_sentence(traced: int, total: int) -> str:
+    """``"1 of 40 images has a GT tracing."``: the noun agrees with ``total``, the verb
+    with ``traced`` ("2 of 40 images have", "1 of 1 image has")."""
+    noun = "image" if total == 1 else "images"
+    verb = "has" if traced == 1 else "have"
+    return f"{traced} of {total} {noun} {verb} a GT tracing."
+
+
 def _gt_names(folder: str) -> set[str]:
     """The case-normalised names in ``folder``'s ``gt/`` (none when it cannot be listed)."""
     try:
@@ -165,10 +173,8 @@ class ExportDatasetDialog(QDialog):
         layout.addWidget(subtitle)
 
         # What there is to export, before choosing anything.
-        total = len(self.images)
-        noun = "image has" if total == 1 else "images have"
         self.traced_label = QLabel(
-            f"{self.traced} of {total} {noun} a GT tracing." if self.traced else _NOTHING_TRACED
+            traced_sentence(self.traced, len(self.images)) if self.traced else _NOTHING_TRACED
         )
         self.traced_label.setWordWrap(True)
         color = tokens.TEXT if self.traced else tokens.WARN

@@ -6,7 +6,7 @@
     tests read on the GT editor.
 (b) Base cases through a test-local ``ProbeEditor(RasterEditorBase)``: the shared render
     items, one decode per open, the canvas view and its sink, zoom keys on the ladder,
-    B hold / tap, the brush ring, GT's flag-based dirty and its prompt.
+    B hold / tap, the brush ring, unsaved = differs from the saved plane, and the prompt.
 
 Findings PE-04, PE-06, PE-13, UI-03, UXE-02/RB-05, UXE-03, UXE-07, UXE-08/09, AR-11 and AR-13
 of the UI/perf audit; plan package P3 of the unified Correct editor.
@@ -631,14 +631,14 @@ def test_base_discard_reverts_to_the_saved_plane(make, tmp_path, probe_cls, monk
     assert np.array_equal(iface.edits.plane, iface.saved[-1])
 
 
-def test_base_dirty_is_a_flag_set_by_every_edit_undo_and_redo(make, tmp_path, probe_cls):
+def test_base_dirty_follows_every_edit_undo_and_redo(make, tmp_path, probe_cls):
     iface = make(probe_cls, _image(tmp_path))
     changes = []
     iface.dirty_changed.connect(changes.append)
     _stroke(iface, (10, 10), (40, 10), size=6)
     assert iface.save_mask() and not iface.has_unsaved_changes()
     iface.undo()
-    assert iface.has_unsaved_changes()  # back at the opened state, still "unsaved"
+    assert iface.has_unsaved_changes()  # the opened state differs from the saved one
     iface._set_clean()
     iface.redo()
     assert iface.has_unsaved_changes()
