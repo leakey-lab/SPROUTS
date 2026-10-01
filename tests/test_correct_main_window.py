@@ -73,7 +73,25 @@ STAGE_NAMES = ["Library", "Trace GT", "Generate", "Correct", "Measure", "Visuali
 #: The code under test: an exception it raises inside a Qt slot fails the test.
 UNDER_TEST = tuple(
     os.path.normcase(os.path.join("app", "gui", *part))
-    for part in (("main_window.py",), ("shell_chrome.py",), ("correct", "editor.py"))
+    for part in (
+        ("main_window.py",),
+        ("shell_chrome.py",),
+        ("correct", "editor.py"),
+        *(
+            ("window", f"{name}.py")
+            for name in (
+                "_common",
+                "body",
+                "editors",
+                "job_buttons",
+                "lifecycle",
+                "metrics",
+                "navigator",
+                "project_loader",
+                "stages",
+            )
+        ),
+    )
 )
 
 
