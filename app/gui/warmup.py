@@ -9,16 +9,20 @@ off ran 60-120 ms each), and quitting took 0.7-1.6 s instead of 0.13 s. Now:
 * the device chip is named without torch (:mod:`app.inference.device_probe`);
 * ``torch`` (:data:`TORCH`: torch, then the runtime is resolved and the chip shows the
   full line, ~1.3 s) and ``models`` (:data:`MODELS`: torchvision and both models' code,
-  ~1 s) load, in that order, when the user enters Generate or rests the pointer on one of
-  its run buttons (two jobs: a quit waits for at most one of them);
-* ``dashboards`` (:data:`DASHBOARDS`: dash, plotly, pandas) load when the user enters
+  ~1 s) load, in that order, when the user stays in Generate or rests the pointer on one
+  of its run buttons (two jobs: a quit waits for at most one of them);
+* ``dashboards`` (:data:`DASHBOARDS`: dash, plotly, pandas) load when the user stays in
   Measure (Visualize comes next) or rests on Measure's run buttons or on the Visualize
   stage button. Measure itself never needs torch (its thinning is scikit-image, its CSV
-  cv2 and numpy), so entering it does not load torch;
+  cv2 and numpy), so staying there does not load torch;
 * ``skimage`` (:data:`SKIMAGE`, the skeleton tools' scikit-image) still loads at start-up,
   as before these waves: it is the one warm-up that does not wait for a request.
 
-:data:`STAGE_WARMUPS` and :data:`BUTTON_WARMUPS` are the whole policy.
+:data:`STAGE_WARMUPS` and :data:`BUTTON_WARMUPS` are the whole policy. Staying means
+:data:`STAGE_DWELL_MS` in the stage (:class:`StageIntent`): passing through it on the way
+elsewhere asks for nothing. Entering Generate used to start the torch import at once, and
+a user who went on to zoom in Correct got one 52-69 ms GUI stall from it (V9). Resting
+means :data:`HOVER_DWELL_MS` on a button, or the keyboard focus on it (:class:`HoverIntent`).
 
 :class:`WarmupQueue` runs one warm-up at a time, each at most once per session, and only
 when ``blocked()`` (the window's rules) has nothing against it: no folder scan, no project
@@ -64,9 +68,11 @@ __all__ = [
     "MODELS",
     "RETRY_MS",
     "SKIMAGE",
+    "STAGE_DWELL_MS",
     "STAGE_WARMUPS",
     "TORCH",
     "HoverIntent",
+    "StageIntent",
     "WarmupQueue",
     "warm_dashboards",
     "warm_inference",
@@ -102,6 +108,10 @@ MARKERS: dict[str, str] = {
 #: The pointer must rest this long on a watched button to count as intent: passing over
 #: it on the way elsewhere (to the close button, say) starts nothing.
 HOVER_DWELL_MS = 200
+#: The user must stay this long in a stage for its :data:`STAGE_WARMUPS` to start:
+#: passing through it on the way elsewhere (Generate on the way to Correct, say) starts
+#: nothing, so the import cannot stall the work the user went on to do.
+STAGE_DWELL_MS = 1000
 #: A blocked warm-up asks again this often (a zero-cost timer while nothing is queued).
 RETRY_MS = 250
 
@@ -412,3 +422,52 @@ class HoverIntent(QObject):
         key = self._keys.get(self._hovered) if self._hovered is not None else None
         if key:
             self._request(key)
+
+
+class StageIntent(QObject):
+    """Calls ``request(keys)`` with a stage's warm-ups once the user has stayed in that
+    stage for :data:`STAGE_DWELL_MS`.
+
+    The window reports every change of the highlighted stage (:meth:`stage_changed`).
+    Leaving the stage before the dwell is over asks for nothing, and coming back starts a
+    whole dwell again. ``warmups`` (stage -> warm-up keys, :data:`STAGE_WARMUPS` by
+    default) and ``dwell_ms`` (:data:`STAGE_DWELL_MS` by default) are read when the intent
+    is built."""
+
+    def __init__(
+        self,
+        parent: QObject | None,
+        request: Callable[[tuple[str, ...]], object],
+        *,
+        warmups: Mapping[str, tuple[str, ...]] | None = None,
+        dwell_ms: int | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._request = request
+        self._warmups = dict(STAGE_WARMUPS if warmups is None else warmups)
+        self._stage: str | None = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(max(0, int(STAGE_DWELL_MS if dwell_ms is None else dwell_ms)))
+        self._timer.timeout.connect(self._on_dwell)
+
+    def waiting(self) -> str | None:
+        """The stage whose dwell is under way, if any."""
+        return self._stage if self._timer.isActive() else None
+
+    def stage_changed(self, stage: str | None) -> None:
+        """``stage`` is the highlighted stage now: start its dwell when it has warm-ups,
+        and drop the dwell of the stage left. The same stage again keeps its dwell."""
+        if stage == self._stage:
+            return
+        self._stage = stage
+        if stage is not None and self._warmups.get(stage):
+            self._timer.start()
+        else:
+            self._timer.stop()
+
+    def _on_dwell(self) -> None:
+        keys = self._warmups.get(self._stage) if self._stage is not None else None
+        if keys:
+            logger.debug("Stayed in %s: asking for %s", self._stage, ", ".join(keys))
+            self._request(keys)

@@ -81,8 +81,8 @@ def test_freeze_moves_the_live_objects_out_of_later_collections(caplog):
     alive = Node()
     before = gc.get_freeze_count()
     with caplog.at_level(logging.INFO, logger="app.gc_policy"):
-        frozen = gc_policy.freeze("a test")
-    assert frozen > 0 and gc.get_freeze_count() > before  # an object frozen here may die since
+        gc_policy.freeze("a test")
+    assert gc.get_freeze_count() > before  # an object frozen here may die since
     assert "after a test" in caplog.text
     ref = weakref.ref(alive)
     del alive
@@ -118,3 +118,17 @@ def test_old_garbage_is_frozen_unless_the_freeze_is_full():
     gone = old_garbage()
     gc_policy.freeze("a full freeze", full=True)
     assert gone() is None
+
+
+def test_a_freeze_does_not_walk_the_frozen_objects(monkeypatch, caplog):
+    """gc.get_freeze_count() walks every frozen object (about 30 ns each): the three counts
+    a freeze logged cost the GUI thread 29-47 ms once torchvision was frozen (W5-D, V9)."""
+    real = gc.get_freeze_count
+    walks: list[int] = []
+    monkeypatch.setattr(gc, "get_freeze_count", lambda: walks.append(1) or real())
+    with caplog.at_level(logging.INFO, logger="app.gc_policy"):
+        gc_policy.freeze("a test")
+    assert walks == [] and "after a test" in caplog.text
+    with caplog.at_level(logging.DEBUG, logger="app.gc_policy"):
+        gc_policy.freeze("a debug test")
+    assert len(walks) == 1  # the total, for the DEBUG log only

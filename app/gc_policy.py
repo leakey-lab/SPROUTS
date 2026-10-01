@@ -80,24 +80,23 @@ def full_collections_held() -> bool:
     return _holds > 0
 
 
-def freeze(reason: str, *, full: bool = False) -> int:
+def freeze(reason: str, *, full: bool = False) -> None:
     """Collect, then freeze every object alive (see the module doc).
 
     The collection covers the young generations (only the objects created since the
     last one: about 1 ms), or with ``full`` every generation, so that no garbage at all is
     frozen (a whole pass over the heap; the app does not need it). ``gc.freeze()`` itself
-    only moves lists. Returns how many objects this call froze.
+    only moves lists. Nothing is counted at the INFO level: ``gc.get_freeze_count()``
+    walks every frozen object (about 30 ns each), and the three counts this logged cost
+    the GUI thread 10-16 ms after the torch warm-up and 29-47 ms after the models one.
     """
     started = time.perf_counter()
-    before = gc.get_freeze_count()
     gc.collect(2 if full else 1)
     gc.freeze()
-    frozen = gc.get_freeze_count() - before
     logger.info(
-        "Froze %d long-lived objects after %s (%.1f ms; %d frozen in all)",
-        frozen,
+        "Froze the long-lived objects after %s (%.1f ms)",
         reason,
         (time.perf_counter() - started) * 1000.0,
-        gc.get_freeze_count(),
     )
-    return frozen
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("%d objects frozen in all", gc.get_freeze_count())
