@@ -6,7 +6,8 @@ canvas handles in its own key events (the registry's ``key`` rows: hold B to siz
 brush, hold Space to pan, and Correct's S, Enter, Esc, Delete) went to the tree's
 type-ahead instead, so Space + drag painted where it should have panned. The relay sends
 those keys to the canvas of the editor on screen; the tree keeps the keyboard, so the
-arrows go on browsing.
+arrows go on browsing. Other typing selects nothing there: the tree's type-ahead is off
+while an editor page is on screen (``ui_panels.LibraryTree``, V5).
 
 A key held when the tree loses the keyboard ends its hold the way the canvas ends one
 when it loses the keyboard itself (a ``FocusOut``), unless the canvas took the keyboard

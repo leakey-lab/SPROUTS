@@ -109,15 +109,23 @@ def _tree(app, width: int) -> tuple[QTreeWidget, LibraryIndex]:
 
 
 def _painted(tree: QTreeWidget, item) -> tuple[str, int]:
-    """(text the delegate paints for ``item``, width of its text rect)."""
+    """(text the delegate paints for ``item``, width the style draws that text in: its text
+    rect less the margin the style keeps inside it on each side, V4)."""
     model_index = tree.indexFromItem(item)
     option = QStyleOptionViewItem()
     option.initFrom(tree.viewport())
     option.rect = tree.visualRect(model_index)
     option.widget = tree
     tree.itemDelegate().initStyleOption(option, model_index)
-    room = tree.style().subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, tree).width()
-    return option.text, room
+    style = tree.style()
+    rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, tree)
+    margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, None, tree) + 1
+    return option.text, rect.width() - 2 * margin
+
+
+def _fits(metrics, text: str, room: int) -> bool:
+    """Qt draws ``text`` whole in ``room`` px (its own eliding leaves it as it is)."""
+    return metrics.elidedText(text, Qt.TextElideMode.ElideRight, room) == text
 
 
 def _date_row(tree):
@@ -133,7 +141,7 @@ def test_a_date_row_shows_the_longest_form_that_fits(app, width):
     forms = label_forms(row.text(0))
     assert painted in forms
     metrics = tree.fontMetrics()
-    fitting = [f for f in forms if metrics.horizontalAdvance(f) <= room]
+    fitting = [f for f in forms if _fits(metrics, f, room)]
     assert painted == (fitting[0] if fitting else forms[-1])
     tree.deleteLater()
 
@@ -148,7 +156,7 @@ def test_a_narrow_image_row_drops_seconds_then_the_time(app):
         QApplication.processEvents()
         painted, room = _painted(tree, leaf)
         assert painted in label_forms(full)
-        if metrics.horizontalAdvance(full) <= room:
+        if _fits(metrics, full, room):
             assert painted == full
     tree.deleteLater()
 

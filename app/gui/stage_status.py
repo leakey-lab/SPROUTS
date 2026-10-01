@@ -5,6 +5,10 @@ state for the stage on screen, and :meth:`StageStatus.check` counts, in the thre
 each metric's inputs and those written after its CSV (one ``os.scandir`` per folder,
 ~60 ms at 46k files, never on the GUI thread); ``changed`` is emitted once that count is
 in. A newer check, or :meth:`StageStatus.reset` (another project), makes an older count void.
+
+Generate's phrase walks every image name twice (~5 ms on the GUI thread at 46k images), and
+the status line asks for it on every idle refresh while Generate is on screen (V8). It is
+counted again only when the library's outputs change: see :meth:`StageStatus.text`.
 """
 
 from __future__ import annotations
@@ -43,6 +47,10 @@ class StageStatus(QObject):
         super().__init__(parent)
         self._freshness: dict[str, Freshness] | None = None
         self._token: object | None = None
+        # Generate's phrase and what it was counted from: (images, masks, skeletons,
+        # their sizes, text). The collections themselves are held, so none of them can be
+        # freed and a new one take its id while the phrase is kept.
+        self._generate: tuple | None = None
         self._signals = _Signals()
         self._signals.ready.connect(self._on_ready)
 
@@ -54,7 +62,7 @@ class StageStatus(QObject):
         if not images:
             return None
         if stage == "Generate":
-            return generate_text(images, manager.masks, manager.skeleton_stems)
+            return self._generate_text(images, manager.masks, manager.skeleton_stems)
         if stage == "Measure":
             fresh = self._freshness or {}
             return measure_text(
@@ -65,9 +73,31 @@ class StageStatus(QObject):
             )
         return None
 
+    def _generate_text(self, images, masks, skeletons) -> str:
+        """:func:`generate_text`, counted again only when the outputs changed (V8).
+
+        The library replaces its collections when a folder loads and when a run's outputs
+        are re-read; a mask saved or cleared in an editor adds or removes the image's key
+        in place, which changes the size of ``masks``. Only library images get a mask that
+        way, so its count of images without a mask follows the size of ``masks`` alone.
+        """
+        sizes = (len(images), len(masks), len(skeletons))
+        kept = self._generate
+        if (
+            kept is not None
+            and kept[0] is images
+            and kept[1] is masks
+            and kept[2] is skeletons
+            and kept[3] == sizes
+        ):
+            return kept[4]
+        text = generate_text(images, masks, skeletons)
+        self._generate = (images, masks, skeletons, sizes, text)
+        return text
+
     def reset(self) -> None:
         """Forget the counts (another project): an older count still on its way is void."""
-        self._freshness = self._token = None
+        self._freshness = self._token = self._generate = None
 
     def check(self, index, layout, *, locate: bool = True) -> None:
         """Count each metric's inputs, and those written after its CSV, in the thread pool.

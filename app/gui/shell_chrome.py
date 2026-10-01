@@ -61,11 +61,12 @@ from app.gui.task_progress import TaskProgressWidget
 from app.gui.widgets import SegmentedControl, tokens
 from app.gui.widgets.buttons import ghost_button
 from app.gui.widgets.icons import load_icon, load_pixmap
+from app.gui.widgets.text_fit import ElidedLabel
 
 TOPBAR_HEIGHT = 46
 STATUSLINE_HEIGHT = 28
 DENSITY_HYSTERESIS = 24  # px above the full width before leaving compact mode
-INFO_MAX_WIDTH = 320  # device chip, elided beyond this
+INFO_MAX_WIDTH = 320  # device chip: its device part gives way beyond this (runtime_chip_text)
 
 FULL = "full"
 COMPACT = "compact"
@@ -658,6 +659,72 @@ def runtime_label() -> str:
     return runtime_status()[0]
 
 
+#: The runtime line's parts are joined with this; a part that ends in " missing" is a warning.
+_SEP = " · "
+#: Device kinds the chip always shows. A status in their place ("Device not detected yet",
+#: "Checking GPU…") gives way to the warnings when the chip is short of room.
+_KINDS = ("GPU", "CPU")
+#: Leading words a GPU name loses first on the chip ("NVIDIA GeForce RTX 5070 Ti").
+_VENDOR_WORDS = frozenset({"NVIDIA", "GeForce", "AMD", "Radeon"})
+#: Characters a shortened GPU name keeps at least ("RTX…"); else the name is dropped.
+_MIN_NAME_CHARS = 3
+
+
+def runtime_chip_text(text: str, metrics, max_width: int = INFO_MAX_WIDTH) -> str:
+    """The device chip's text for the runtime line ``text``: the line as it is when it
+    fits in ``max_width`` px; else the device gives way and the warnings never do (V10).
+
+    The warnings ("mask model missing") and the device kind ("GPU", "CPU") are always
+    shown whole, so the chip is wider than ``max_width`` when they need it. The device's
+    details give way in order: the GPU name drops its vendor words ("NVIDIA GeForce RTX
+    5070 Ti" -> "RTX 5070 Ti"), then the details go from the end (precision, CUDA version),
+    then the name is shortened ("RTX 50…") and dropped. A status in the kind's place
+    ("Device not detected yet") is dropped when it does not fit beside the warnings. The
+    chip's tooltip keeps the full line. ``metrics``: the chip's ``QFontMetrics``.
+    """
+    width = metrics.horizontalAdvance
+    if width(text) <= max_width:
+        return text
+    parts = text.split(_SEP)
+    warnings = _SEP.join(part for part in parts if part.endswith(" missing"))
+    device = [part for part in parts if not part.endswith(" missing")]
+    if not device:
+        return warnings
+    room = max_width - width(_SEP + warnings) if warnings else max_width
+    kind, details = device[0], device[1:]
+    shown = next(
+        (form for form in _device_forms(kind, details, room, metrics) if width(form) <= room), None
+    )
+    if shown is None:  # not even the kind fits
+        if not warnings:
+            shown = metrics.elidedText(kind, Qt.TextElideMode.ElideRight, max_width)
+        else:
+            shown = kind if kind in _KINDS else ""
+    return _SEP.join(part for part in (shown, warnings) if part)
+
+
+def _device_forms(kind: str, details: list[str], room: int, metrics):
+    """The device part of the chip, most complete first (see :func:`runtime_chip_text`)."""
+    yield _SEP.join([kind, *details])
+    named = kind == "GPU" and bool(details) and not details[0].startswith("CUDA ")
+    if named:
+        words = details[0].split()
+        while len(words) > 1 and words[0] in _VENDOR_WORDS:
+            words.pop(0)
+        details = [" ".join(words), *details[1:]]
+        yield _SEP.join([kind, *details])
+    for end in range(len(details) - 1, 0, -1):
+        yield _SEP.join([kind, *details[:end]])
+    if named:
+        head = kind + _SEP
+        name = metrics.elidedText(
+            details[0], Qt.TextElideMode.ElideRight, room - metrics.horizontalAdvance(head)
+        )
+        if len(name.rstrip("…")) >= _MIN_NAME_CHARS:
+            yield head + name
+    yield kind
+
+
 _STATE_COLORS = {
     "idle": tokens.OK,
     "working": tokens.ACCENT,
@@ -703,7 +770,9 @@ class StatusLine(QFrame):
         self.dot.setFixedSize(8, 8)
         row.addWidget(self.dot)
 
-        self.message = QLabel()
+        # A long message (a saved file's full path) is elided in the middle: the file
+        # name at its end stays readable, the tooltip has it whole (V3).
+        self.message = ElidedLabel()
         self.message.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 11.5px;")
         self.message.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         row.addWidget(self.message, 1)
@@ -771,13 +840,16 @@ class StatusLine(QFrame):
     def refresh_runtime(self) -> None:
         """Re-read the device chip (cheap; never imports torch).
 
-        The chip is elided to ``INFO_MAX_WIDTH`` (full text in the tooltip) and
-        turns WARN when a model's weights are missing or the device check failed.
+        The chip fits ``INFO_MAX_WIDTH`` by shortening the device, never a warning (see
+        :func:`runtime_chip_text`; full text in the tooltip), and turns WARN when a model's
+        weights are missing or the device check failed.
         """
         text, models_ok, note = _runtime_view(self._device_check, self._device_guess)
         failed = text.startswith(DEVICE_CHECK_FAILED) and self._device_check == FAILED
-        metrics = QFontMetrics(self.info.font())
-        self.info.setText(metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, INFO_MAX_WIDTH))
+        color = tokens.TEXT_FAINT if models_ok and not failed else tokens.WARN
+        self.info.setStyleSheet(f"color: {color}; font-family: {tokens.MONO}; font-size: 11px;")
+        self.info.ensurePolished()  # measured in its own font, from the first refresh on
+        self.info.setText(runtime_chip_text(text, QFontMetrics(self.info.font())))
         tip = f"Inference runtime: {text}"
         if note:
             tip += f"\n{note}"
@@ -785,8 +857,6 @@ class StatusLine(QFrame):
             tip += f"\nCould not detect the inference device: {self._device_check_detail}"
         self.info.setToolTip(tip)
         self.info.setProperty("models_ok", models_ok)
-        color = tokens.TEXT_FAINT if models_ok and not failed else tokens.WARN
-        self.info.setStyleSheet(f"color: {color}; font-family: {tokens.MONO}; font-size: 11px;")
 
     # --------------------------------------------------------- internals
     def _on_message(self, text: str) -> None:

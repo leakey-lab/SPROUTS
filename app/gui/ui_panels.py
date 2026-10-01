@@ -4,6 +4,7 @@ Handles left panel (controls/tree) and right panel (display area) creation.
 """
 
 import os
+from collections.abc import Callable
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon
@@ -115,6 +116,32 @@ def create_section_label(text: str, color: str | None = None) -> QLabel:
         }}
     """)
     return label
+
+
+class LibraryTree(QTreeWidget):
+    """The library tree, whose type-ahead (a typed letter selects the next row that starts
+    with it) runs only while ``typing_selects()`` is true.
+
+    On an editor page the tree keeps the keyboard so the arrows browse (W1), and a letter
+    that is no shortcut reached the type-ahead: "L" selected the next "L…" row, and that
+    image opened in the editor, or its save prompt came up (V5). The window turns typing
+    off there; the arrows, PgDn / PgUp, Home / End and the expand keys keep working, and the
+    search field still finds images.
+    """
+
+    def __init__(self, typing_selects: Callable[[], bool] | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self._typing_selects = typing_selects or (lambda: True)
+
+    def keyboardSearch(self, search: str) -> None:  # noqa: N802 - Qt API
+        if self._typing_selects():
+            super().keyboardSearch(search)
+
+
+def _no_editor_on_screen(main_window) -> bool:
+    """True unless an editor page (Correct, Trace GT) is on screen."""
+    editor_canvas = getattr(main_window, "_editor_canvas", None)
+    return not callable(editor_canvas) or editor_canvas() is None
 
 
 def create_left_panel(main_window) -> QWidget:
@@ -332,7 +359,9 @@ def create_left_panel(main_window) -> QWidget:
     # it is the only left panel in the app — no redundant "Image Library" label.
 
     # ========== FILE TREE ==========
-    main_window.file_list = QTreeWidget()
+    # Typing selects rows in the Library only: on an editor page a stray letter must not
+    # switch the image being edited (V5).
+    main_window.file_list = LibraryTree(lambda: _no_editor_on_screen(main_window))
     main_window.file_list.setAccessibleName("Image library")
     main_window.file_list.setHeaderLabels(["Field → Tube → Date → Images"])
     main_window.file_list.itemClicked.connect(main_window.on_tree_item_clicked)
@@ -368,7 +397,9 @@ def library_tree_qss() -> str:
     competing row treatments in a ~240px panel). The selected row's accent bar (a 3 px
     left border) takes the place of 3 px of left padding that every other row has, so a
     row does not move 3 px, or switch to a shorter label, when it is selected (W10). (A
-    transparent border instead would cut a seam into the hover fill.)
+    transparent border instead would cut a seam into the hover fill.) Those 3 px come off
+    the right padding, so the text keeps the room it had before: the default 240 px panel
+    shows "2024.07.18 · 8 images", not "2024.07.18 · 8" (V4).
     """
     bar = 3
     return f"""
@@ -384,6 +415,7 @@ def library_tree_qss() -> str:
         QTreeWidget::item {{
             padding: 4px;
             padding-left: {4 + bar}px;
+            padding-right: {4 - bar}px;
             border-radius: 5px;
         }}
         QTreeWidget::item:hover {{ background-color: {tokens.BG_2}; }}

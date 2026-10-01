@@ -278,16 +278,28 @@ class LibraryItemDelegate(QStyledItemDelegate):
 
     @staticmethod
     def _fit_text(option: QStyleOptionViewItem) -> None:
-        """Paint the longest form of the row text that fits its text rect (Qt elides the
-        shortest one if even that does not fit)."""
+        """Paint the longest form of the row text that the style draws whole (Qt elides the
+        shortest one if even that does not fit).
+
+        The room is where the style draws the text: its text rect less the margin it keeps
+        inside it on each side (``PM_FocusFrameHMargin`` + 1, as ``QCommonStyle`` paints).
+        Measured against the text rect alone, a form up to 6 px too wide was chosen and then
+        cut by Qt ("2024.07.18 · 8 ima…", V4). A form fits when Qt's own eliding leaves it
+        whole.
+        """
         text = option.text
         if not text or option.rect.width() <= 0 or " · " not in text:
             return
         widget = option.widget
         style = widget.style() if widget is not None else QApplication.style()
-        room = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, widget).width()
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, widget)
+        margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, None, widget) + 1
+        room = rect.width() - 2 * margin
         metrics = option.fontMetrics
-        option.text = fit_label(label_forms(text), lambda t: metrics.horizontalAdvance(t) <= room)
+        elide = Qt.TextElideMode.ElideRight
+        option.text = fit_label(
+            label_forms(text), lambda t: metrics.elidedText(t, elide, room) == t
+        )
 
     def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802
         if not index.isValid() or event.type() != QEvent.Type.ToolTip:
