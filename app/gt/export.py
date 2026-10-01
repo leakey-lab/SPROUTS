@@ -52,6 +52,10 @@ _PROVENANCE_KIND = "gt_export"
 # and the GT tracings themselves). Only their names are used here: nothing in
 # them is read.
 _PROTECTED_DIRS = ("mask", "skeletons", "skeleton_corrections", GT_DIRNAME)
+# Pillow refuses to open an image over twice ``Image.MAX_IMAGE_PIXELS`` (about 179 Mpx)
+# with this error, which is neither OSError nor ValueError: one such image or tracing is
+# that stem's export error, like any unreadable file, and never ends the whole export.
+_TOO_LARGE = Image.DecompressionBombError
 
 
 class ExportError(ValueError):
@@ -160,7 +164,8 @@ def _check_image_size(image_path: str, shape: tuple[int, ...]) -> None:
 
     Trace GT treats such a file as unreadable (the image was replaced or resized
     after tracing); exported, the pair would be misaligned. Reads the image
-    header only; a missing or unidentifiable image raises ``OSError``.
+    header only; a missing or unidentifiable image raises ``OSError``, one Pillow
+    refuses as too large ``DecompressionBombError``.
     """
     with Image.open(image_path) as image:
         width, height = image.size
@@ -223,7 +228,8 @@ def export_dataset(
 
     ``images`` is ``image_manager.images`` (stem -> image path). Stems
     without a GT file are silently skipped. A GT file that fails to read
-    (``GtFileError``), a missing/unreadable source image, a tracing whose size
+    (``GtFileError``), a missing/unreadable source image, a tracing or image
+    Pillow refuses as too large (over about 179 Mpx), a tracing whose size
     is not the image's (Trace GT does not open it either), or a failure while
     writing that stem's mask/copy (``OSError``/``ValueError``) is recorded in
     ``errors`` and the export continues with the remaining stems (spec §5.4);
@@ -264,7 +270,7 @@ def export_dataset(
         if os.path.exists(gt_file):
             try:
                 tracing = read_tracing(gt_file)
-            except GtFileError as exc:
+            except (GtFileError, _TOO_LARGE) as exc:
                 logger.warning("Skipping unreadable GT file for %s: %s", stem, exc)
                 errors.append((stem, str(exc)))
                 _emit_progress(progress_cb, i, n)
@@ -302,10 +308,10 @@ def export_dataset(
                             "classes_present": classes_present,
                         }
                         exported_stems.append(stem)
-                except (OSError, ValueError) as exc:
-                    # A missing/unreadable source image, or a write failure
-                    # (disk full, bad permissions, malformed array), must not
-                    # abort the whole export (spec §5.4: one bad file adds an
+                except (OSError, ValueError, _TOO_LARGE) as exc:
+                    # A missing/unreadable/too large source image, or a write
+                    # failure (disk full, bad permissions, malformed array), must
+                    # not abort the whole export (spec §5.4: one bad file adds an
                     # errors entry and the export continues). Clean up any
                     # partial output so this stem is never half-exported.
                     logger.warning("Skipping %s due to export error: %s", stem, exc)

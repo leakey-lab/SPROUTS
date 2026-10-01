@@ -6,7 +6,14 @@ methods section. Model verification hashes ~390 MB on first use, so it runs on
 a worker thread (``app.models.verify_all`` caches by path/size/mtime); the
 dialog shows "checking…" until the result arrives and never blocks.
 
-The text builders (:func:`citation_text`, :func:`details_text`) are Qt-free.
+The Runtime line is exact about its source. Once PyTorch has resolved the runtime it
+is that runtime (device, CUDA, precision). PyTorch loads only when the user heads for
+Generate, so before that the dialog asks the NVIDIA driver on a worker thread
+(:func:`app.inference.device_probe.probe_device`, about 20 ms, no torch) and names the
+device "from the NVIDIA driver; PyTorch not loaded yet".
+
+The text builders (:func:`citation_text`, :func:`details_text`, :func:`runtime_text`)
+are Qt-free.
 """
 
 from __future__ import annotations
@@ -39,11 +46,15 @@ from app.models import MODELS, ModelStatus
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AboutDialog", "CITATION_PATH", "citation_text", "details_text"]
+__all__ = ["AboutDialog", "CITATION_PATH", "citation_text", "details_text", "runtime_text"]
 
 CITATION_PATH = os.path.join(PROJECT_ROOT, "CITATION.cff")
 _CHECKING = "checking…"
 _STATE_TEXT = {"ok": "verified", "mismatch": "DIFFERENT weights", "missing": "missing"}
+# Where a device named before PyTorch has loaded comes from (the Runtime line).
+_FROM_DRIVER = "from the NVIDIA driver; PyTorch not loaded yet"
+_NOT_LOADED = "PyTorch not loaded yet"
+_NOT_DETECTED = "Device not detected yet"
 
 
 # ------------------------------------------------------------------ Qt-free text builders
@@ -112,15 +123,63 @@ def _fov() -> str:
     return fov_text()
 
 
-def _runtime_text() -> str:
-    """Device summary without importing torch (``unknown`` until a job resolved it)."""
+def _runtime_summary():
+    """The runtime summary without importing torch (device ``unknown`` until PyTorch has
+    resolved it), or None when it is unavailable."""
     try:
         from app.inference.runtime import describe_runtime
 
-        return describe_runtime(resolve=False).text
+        return describe_runtime(resolve=False)
     except Exception:  # never let the About box fail on a runtime probe
         logger.exception("Runtime summary unavailable")
+        return None
+
+
+def _clause(sentence: str) -> str:
+    """A guess's reason as one part of the Runtime line (no final full stop)."""
+    return (sentence or "").strip().rstrip(".")
+
+
+def _probe_device():
+    """The device the NVIDIA driver and the installed PyTorch build name (a worker-thread
+    job: about 20 ms; never imports torch, never raises)."""
+    from app.inference.device_probe import probe_device
+
+    return probe_device()
+
+
+def runtime_text(guess=None) -> str:
+    """The Runtime line; never imports torch.
+
+    Once PyTorch has resolved the runtime: that runtime (``"GPU · <name> · CUDA 12.8 ·
+    TF32"``), whatever ``guess`` says. Before that, from ``guess`` (a
+    :class:`~app.inference.device_probe.DeviceGuess`): the device the NVIDIA driver named,
+    "(from the NVIDIA driver; PyTorch not loaded yet)"; for a CPU or unknown device the
+    guess's reason follows. Without a guess: "Device not detected yet". Missing weights are
+    named last, as on the status line.
+    """
+    summary = _runtime_summary()
+    if summary is None:
         return "unavailable"
+    if summary.device != "unknown" or guess is None:
+        return summary.text
+    if guess.device == "GPU":
+        parts = [f"{guess.name or 'GPU'} ({_FROM_DRIVER})"]
+    elif guess.problem:  # PyTorch is not installed: nothing will load
+        parts = [_NOT_DETECTED, _clause(guess.problem)]
+    else:
+        device = "CPU" if guess.device == "CPU" else _NOT_DETECTED
+        parts = [f"{device} ({_NOT_LOADED})", _clause(guess.note)]
+    parts = [part for part in parts if part]
+    parts += [
+        f"{model} model missing"
+        for model, present in (
+            ("mask", summary.mask_weights),
+            ("skeleton", summary.skeleton_weights),
+        )
+        if not present
+    ]
+    return " · ".join(parts)
 
 
 def _commit() -> str:
@@ -139,14 +198,17 @@ def _model_line(key: str, status: ModelStatus | None) -> str:
     return f"{name} · sha256 {digest} · {_STATE_TEXT.get(status.state, status.state)}"
 
 
-def details_text(statuses: Mapping[str, ModelStatus] | None = None) -> str:
-    """Plain-text provenance block for a methods section or lab notebook."""
+def details_text(
+    statuses: Mapping[str, ModelStatus] | None = None, runtime: str | None = None
+) -> str:
+    """Plain-text provenance block for a methods section or lab notebook; ``runtime`` is
+    the Runtime line (:func:`runtime_text` without a device guess when None)."""
     statuses = statuses or {}
     lines = [
         f"{APP_FULL_NAME} v{__version__}",
         f"Commit: {_commit()}",
         f"Calibration FOV: {_fov()}",
-        f"Runtime: {_runtime_text()}",
+        f"Runtime: {runtime_text() if runtime is None else runtime}",
         f"Python {platform.python_version()} · {platform.system()} {platform.release()}",
     ]
     lines += [f"Model {key}: {_model_line(key, statuses.get(key))}" for key in MODELS]
@@ -161,23 +223,24 @@ def _verify_models() -> dict[str, ModelStatus]:
 
 # ------------------------------------------------------------------ Qt dialog
 class _ModelVerifier(QObject):
-    """Runs :func:`_verify_models` on a worker thread and reports back."""
+    """Runs a job (:func:`_verify_models`, :func:`_probe_device`) on a worker thread and
+    reports its result back (``failed`` when it raised)."""
 
     finished = pyqtSignal(object)
 
-    def start(self, verify: Callable[[], Mapping[str, ModelStatus]]) -> None:
+    def start(self, job: Callable[[], object], *, name: str = "about-verify-models", failed=None):
         def run() -> None:
             try:
-                result = dict(verify())
+                result = job()
             except Exception:
-                logger.exception("Model verification failed")
-                result = {}
+                logger.exception("About dialog job %s failed", name)
+                result = failed
             try:
                 self.finished.emit(result)
             except RuntimeError:  # dialog closed meanwhile
                 pass
 
-        threading.Thread(target=run, name="about-verify-models", daemon=True).start()
+        threading.Thread(target=run, name=name, daemon=True).start()
 
 
 class AboutDialog(QDialog):
@@ -190,7 +253,11 @@ class AboutDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMinimumWidth(540)
         self._statuses: dict[str, ModelStatus] = {}
+        self._guess = None  # the driver's device guess, once asked (PyTorch not loaded)
         self._citation = citation_text(CITATION_PATH)
+        summary = _runtime_summary()
+        # PyTorch has not resolved the runtime yet: the driver names the device meanwhile.
+        ask_driver = summary is not None and summary.device == "unknown"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 16)
@@ -218,7 +285,7 @@ class AboutDialog(QDialog):
         self._grid.setColumnStretch(1, 1)
         self._add_fact("Commit", _commit())
         self._add_fact("Calibration", f"FOV {_fov()}")
-        self._add_fact("Runtime", _runtime_text())
+        self._runtime_label = self._add_fact("Runtime", _CHECKING if ask_driver else runtime_text())
         self._model_labels = {
             key: self._add_fact(f"Model · {key}", _model_line(key, None)) for key in MODELS
         }
@@ -255,7 +322,13 @@ class AboutDialog(QDialog):
 
         self._verifier = _ModelVerifier()  # unparented: outlives a closed dialog
         self._verifier.finished.connect(self._on_models_verified)
-        self._verifier.start(_verify_models)
+        verify = _verify_models
+        self._verifier.start(lambda: dict(verify()), failed={})
+        self._prober = None
+        if ask_driver:  # its own thread: the model hashing can take seconds
+            self._prober = _ModelVerifier()
+            self._prober.finished.connect(self._on_device_probed)
+            self._prober.start(_probe_device, name="about-probe-device")
 
     def _add_fact(self, name: str, value: str) -> QLabel:
         row = self._grid.rowCount()
@@ -280,9 +353,19 @@ class AboutDialog(QDialog):
                     f"color: {tokens.WARN}; font-family: {tokens.MONO}; border: none;"
                 )
 
+    @pyqtSlot(object)
+    def _on_device_probed(self, guess) -> None:
+        """The driver named the device (or said why it could not): the Runtime line."""
+        self._guess = guess
+        self._runtime_label.setText(runtime_text(guess))
+
     def copy_details(self) -> None:
-        """Copy the provenance block (version, commit, FOV, runtime, model digests)."""
-        QGuiApplication.clipboard().setText(details_text(self._statuses))
+        """Copy the provenance block (version, commit, FOV, runtime, model digests). The
+        Runtime line is read again: PyTorch may have resolved the runtime meanwhile."""
+        runtime = runtime_text(self._guess)
+        if self._runtime_label.text() not in (runtime, _CHECKING):  # not while asking the driver
+            self._runtime_label.setText(runtime)
+        QGuiApplication.clipboard().setText(details_text(self._statuses, runtime))
 
     def copy_citation(self) -> None:
         if self._citation:

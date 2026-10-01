@@ -143,6 +143,7 @@ class CorrectControls(QObject):
         self, parent: QWidget, chrome: EditorChrome, layers: Mapping[str, EditLayer]
     ) -> None:
         super().__init__(parent)
+        self._chrome = chrome
         self._layers = dict(layers)
         self._shown: str | None = None
         self._draft: DraftState | None = None
@@ -276,13 +277,15 @@ class CorrectControls(QObject):
         self._show_prompt()
 
     def sync(self, layer: EditLayer) -> None:
-        """Show ``layer``'s state (the shown layer's): its current tool checked, the size
-        slider of its tool's ``SizeSpec`` at ``layer.size()`` (made on first sight; the
-        disabled placeholder for a tool without a size) and its opacity in percent. The sliders' signals are blocked
-        meanwhile: it emits nothing."""
+        """Show ``layer``'s state (the shown layer's): its current tool checked (the rail's
+        Tab stop), the size slider of its tool's ``SizeSpec`` at ``layer.size()`` (made on
+        first sight; the disabled placeholder for a tool without a size) and its opacity in
+        percent. The sliders' signals are blocked meanwhile: it emits nothing."""
         button = self.tool_buttons.get((layer.layer_id, layer.current_tool))
-        if button is not None and not button.isChecked():
-            button.setChecked(True)
+        if button is not None:
+            if not button.isChecked():
+                button.setChecked(True)
+            self._tab_stop(button)
         spec = layer.size_spec()
         shown = None if spec is None else self._size_slider(spec)
         if shown is not None:
@@ -329,7 +332,16 @@ class CorrectControls(QObject):
             self._slot_row.addWidget(slider)
             keep_canvas_focus(slider)
             self.size_sliders[spec] = slider
+            self._chrome.order_tab_focus()  # in the dock's place, not after everything
         return slider
+
+    def _tab_stop(self, checked: IconButton) -> None:
+        """Tab reaches the tools at the checked one, as a radio group (Qt's own rule is the
+        tool focused last, else the first one)."""
+        for button in self.tool_buttons.values():
+            policy = Qt.FocusPolicy.TabFocus if button is checked else Qt.FocusPolicy.NoFocus
+            if button.focusPolicy() != policy:
+                button.setFocusPolicy(policy)
 
     def _tool_clicked(self, index: int) -> None:
         self.tool_requested.emit(*self._tool_keys[index])

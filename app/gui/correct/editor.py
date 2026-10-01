@@ -139,6 +139,7 @@ class CorrectEditor(PagingApi, QWidget):
         self.controls = controls = CorrectControls(self, chrome, self.layers)
         self.layer_panel = LayerPanel(list(self.layers.values()), self)
         chrome.register(side_panel=self.layer_panel)
+        chrome.order_tab_focus()  # Tab follows the screen, not the build order
         # The parts MainWindow, the shell and the tests use by name.
         self.tool_rail, self.dock, self.enhance_popover = chrome.rail, chrome.dock, chrome.popover
         self.status_chip, self.zoom_cluster = chrome.chip, chrome.zoom

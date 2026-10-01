@@ -304,7 +304,9 @@ def test_a_loaded_project_is_swept_on_a_daemon_thread_after_its_scan(app, tmp_pa
         stale_while_held = [os.path.exists(p) for p in stale]
     finally:
         release.set()
-        manager.loader_thread.wait(5000)
+        # The manager lets a scan's thread go once it has ended.
+        if manager.loader_thread is not None:
+            manager.loader_thread.wait(5000)
 
     assert returned_after < 2.0  # load_images never waits for the sweep
     ((swept_layout, thread),) = calls

@@ -5,13 +5,21 @@ Shares its chrome with the length dashboard (:mod:`.dash_shell`) and its
 aggregates with it (:class:`.dash_data_cache.DataCache` over the area column), so
 every figure is built from cached per-tube / per-position tables and memoized
 (PV-17: the area app used to re-filter the whole frame on every callback).
+
+The Growth Over Time view draws one line per tube and shows its legend as the length
+view does: automatically up to :data:`~.dash_visualizations.AUTO_LEGEND_MAX_TUBES` tubes
+(a 160-entry legend was about 200 ms of each ~660 ms draw, and the hover names each
+tube), and "Toggle Legend" shows or hides it; the choice is kept across views. The button
+floats in the chart's top-left margin on that view only: the view keeps no control strip,
+because a strip opening or closing resizes the chart on screen, a full redraw (measured:
+it took back most of what the hidden legend saves).
 """
 
 import logging
 
 import dash
 import plotly.graph_objects as go
-from dash import Input, Output, State, dcc
+from dash import Input, Output, State, dcc, html
 from dash.exceptions import PreventUpdate
 
 from app.config import DASH_AREA_PORT, DASH_HOST
@@ -19,15 +27,22 @@ from app.config import DASH_AREA_PORT, DASH_HOST
 from . import dash_export, theme
 from .dash_data_cache import DataCache
 from .dash_shell import (
+    LEGEND_STORE_ID,
+    LEGEND_TOGGLE_ID,
     NO_OPTIONS_SUMMARY,
     DashboardShell,
     ShellSpec,
     ViewOption,
+    clientside_js,
     create_dash_app,
     exclusions_note,
+    legend_patch,
+    legend_shown,
+    legend_store,
     tube_options,
     with_uirevision,
 )
+from .dash_visualizations import AUTO_LEGEND_MAX_TUBES, auto_legend
 from .figure_memo import FigureMemo
 
 theme.use("sprouts")
@@ -51,6 +66,36 @@ _GRAPH_STYLE = {"height": "100%", "width": "100%", "overflow": "hidden"}
 _SHOWN = {"display": "block"}
 _HIDDEN = {"display": "none"}
 _FIGURE_MEMO_SIZE = 16
+
+# The chart's box: fills the chart card as the card's own flex child does (.viz-loading),
+# and places "Toggle Legend" over the chart's top-left margin (above the plot, left of the
+# centred title), so showing or hiding the button never resizes the chart.
+_CHART_BOX = {
+    "flex": "1 1 0%",
+    "minHeight": 0,
+    "display": "flex",
+    "flexDirection": "column",
+    "position": "relative",
+}
+_LEGEND_BUTTON = {"position": "absolute", "top": "14px", "left": "16px", "zIndex": 5}
+_LEGEND_BUTTON_SHOWN = {**_LEGEND_BUTTON, "display": "inline-block"}
+_LEGEND_BUTTON_HIDDEN = {**_LEGEND_BUTTON, "display": "none"}
+_LEGEND_TIP = (
+    f"Show or hide the legend (hidden at first for more than {AUTO_LEGEND_MAX_TUBES} "
+    "tubes; the hover names a line's tube)"
+)
+# The button shows with its view, in the browser, in the click's own frame.
+_LEGEND_BUTTON_JS = """
+function(view) {
+    return view === 'time' ? __SHOWN__ : __HIDDEN__;
+}
+"""
+
+
+def _triggered_ids() -> set[str]:
+    """The component ids whose change fired the running callback."""
+    triggered = dash.callback_context.triggered
+    return {t["prop_id"].split(".")[0] for t in triggered} if triggered else set()
 
 
 class DashAppArea:
@@ -82,9 +127,33 @@ class DashAppArea:
                     style=_HIDDEN,
                 ),
             ],
-            chart=self.shell.chart_graph(),
+            chart=html.Div(
+                style=_CHART_BOX,
+                children=[
+                    # Growth Over Time only: shows or hides its legend (as the length view's).
+                    html.Button(
+                        "Toggle Legend",
+                        id=LEGEND_TOGGLE_ID,
+                        n_clicks=0,
+                        className="btn btn-secondary btn-sm",
+                        title=_LEGEND_TIP,
+                        style=(
+                            _LEGEND_BUTTON_SHOWN
+                            if AREA_SHELL.default_view == "time"
+                            else _LEGEND_BUTTON_HIDDEN
+                        ),
+                    ),
+                    self.shell.chart_graph(),
+                ],
+            ),
+            stores=[legend_store()],
             notice=exclusions_note(self.data_processor),
         )
+
+    def _legend_shown(self, choice) -> bool:
+        """Whether the time view shows its legend: the user's choice, else automatic (up to
+        ``AUTO_LEGEND_MAX_TUBES`` tubes, all of which the view draws)."""
+        return legend_shown(choice, auto_legend(self.data_cache.tubes))
 
     def _profile_tube(self, selected_tube):
         """The tube the profile view plots: the dropdown's, else the first."""
@@ -127,6 +196,17 @@ class DashAppArea:
             summary_inputs=[Input("tube-selector", "value")],
             summarize=self._controls_summary,
         )
+        self.shell.register_legend_toggle(
+            self.app, automatic=lambda: auto_legend(self.data_cache.tubes)
+        )
+        self.app.clientside_callback(
+            clientside_js(
+                _LEGEND_BUTTON_JS, shown=_LEGEND_BUTTON_SHOWN, hidden=_LEGEND_BUTTON_HIDDEN
+            ),
+            Output(LEGEND_TOGGLE_ID, "style"),
+            Input("view-selector", "value"),
+            prevent_initial_call=True,
+        )
         self.shell.register_export(
             self.app,
             states=[State("tube-selector", "value")],
@@ -147,10 +227,16 @@ class DashAppArea:
             [
                 Input("view-selector", "value"),
                 Input("tube-selector", "value"),
+                Input(LEGEND_STORE_ID, "data"),
             ],
         )
-        def update_visualization(view_type, selected_tube):
+        def update_visualization(view_type, selected_tube, legend=None):
             keep = dash.no_update  # tube-selector options are static (see layout)
+            if _triggered_ids() == {LEGEND_STORE_ID}:
+                # "Toggle Legend": flip the legend of the time view in place.
+                if view_type != "time":
+                    raise PreventUpdate
+                return legend_patch(self._legend_shown(legend)), keep, keep, keep, keep
             try:
                 if view_type == "profile":
                     tube = self._profile_tube(selected_tube)
@@ -160,7 +246,7 @@ class DashAppArea:
                     figure = with_uirevision(self.show_area_profile(tube), "profile", tube)
                     return figure, "", _SHOWN, keep, _GRAPH_STYLE
                 if view_type == "time":
-                    figure = with_uirevision(self.show_growth_over_time(), "time")
+                    figure = with_uirevision(self.show_growth_over_time(legend), "time")
                     return figure, "", _HIDDEN, keep, _GRAPH_STYLE
                 figure = with_uirevision(self.create_stacked_bar_chart(), "stacked")
                 return figure, "", _HIDDEN, keep, _GRAPH_STYLE
@@ -256,11 +342,15 @@ class DashAppArea:
         fig.update_xaxes(categoryorder="array", categoryarray=[f"L{int(p)}" for p in positions])
         return fig
 
-    def show_growth_over_time(self) -> go.Figure:
-        """Total root area per tube over time, one line per tube."""
-        return self._memoized(("time",), self._growth_over_time_figure)
+    def show_growth_over_time(self, show_legend: bool | None = None) -> go.Figure:
+        """Total root area per tube over time, one line per tube. ``show_legend``: the
+        user's choice; None: automatic (shown up to ``AUTO_LEGEND_MAX_TUBES`` tubes)."""
+        legend = self._legend_shown(show_legend)
+        return self._memoized(("time", legend), lambda: self._growth_over_time_figure(legend))
 
-    def _growth_over_time_figure(self) -> go.Figure:
+    def _growth_over_time_figure(self, show_legend: bool = True) -> go.Figure:
+        """The time view's figure; shown, the legend is the theme's (the figure as before
+        the toggle), hidden it leaves no empty band beside the plot."""
         # Plain dicts validated once by go.Figure (add_trace validated every trace
         # and then the figure again: 57 -> ~20 ms for 160 tubes); the same JSON.
         hovertemplate = theme.hover(
@@ -285,6 +375,9 @@ class DashAppArea:
             "xaxis": {"title": {"text": "Date"}},
             "yaxis": {"title": {"text": "Total Area (mm²)"}},
         }
+        if not show_legend:
+            layout["showlegend"] = False
+            layout["margin"] = {"r": theme.margin_right(False)}
         return go.Figure(data=traces, layout=layout)
 
     def run_server(self):

@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, State, dcc, html
+from dash import Dash, Input, Output, Patch, State, dcc, html
 from dash.exceptions import PreventUpdate
 
 from resources.resource_utils import resource_path
@@ -43,6 +43,12 @@ STRIP_HIDDEN = {"display": "none"}
 #: Show the chart spinner only when a figure takes longer than this, so quick
 #: updates do not flash an overlay over the chart.
 LOADING_DELAY_MS = 250
+
+#: The Growth Over Time legend of either dashboard: the store holds None (automatic: the
+#: dashboard decides from the number of tubes) or the user's choice, which the toggle
+#: button flips and which is kept across views. The ids are the length dashboard's.
+LEGEND_STORE_ID = "legend-visible-store"
+LEGEND_TOGGLE_ID = "toggle-legend-btn"
 
 # The strip, its caret and its visibility change in the browser, in the click's own
 # frame. As server callbacks their responses raced the new figure's: the chart was
@@ -207,6 +213,36 @@ def with_uirevision(figure, *key: Any):
     view or tube) starts from the figure's own axes again."""
     figure.update_layout(uirevision=":".join(str(part) for part in key))
     return figure
+
+
+# ---- the Growth Over Time legend toggle ------------------------------------------
+
+
+def legend_store() -> dcc.Store:
+    """The legend choice: None (automatic) until the user presses the toggle."""
+    return dcc.Store(id=LEGEND_STORE_ID, data=None)
+
+
+def legend_shown(choice: bool | None, automatic: bool) -> bool:
+    """Whether the legend is shown: the user's ``choice``, else ``automatic``."""
+    return automatic if choice is None else bool(choice)
+
+
+def flip_legend(n_clicks: int | None, choice: bool | None, automatic: bool) -> bool | None:
+    """The choice after a press of the toggle: the opposite of what is shown (automatic
+    or chosen); without a press (page load) the choice stays."""
+    if not n_clicks:
+        return choice
+    return not legend_shown(choice, automatic)
+
+
+def legend_patch(visible: bool) -> Patch:
+    """Show or hide the legend of the figure on screen in place, with the right margin it
+    needs: a Patch instead of re-sending every trace (PV-07)."""
+    patch = Patch()
+    patch["layout"]["showlegend"] = bool(visible)
+    patch["layout"]["margin"]["r"] = theme.margin_right(bool(visible))
+    return patch
 
 
 class DashboardShell:
@@ -422,6 +458,33 @@ class DashboardShell:
             Input("viz-controls-collapse", "is_open"),
             Input("view-selector", "value"),
         )
+
+    def register_legend_toggle(
+        self,
+        app: Dash,
+        *,
+        automatic: Callable[..., bool],
+        states: Sequence[State] = (),
+    ) -> None:
+        """Wire the legend toggle (:data:`LEGEND_TOGGLE_ID`): each press stores the
+        opposite of what is shown in :data:`LEGEND_STORE_ID` (see :func:`flip_legend`).
+
+        Args:
+            app: the dashboard's Dash app.
+            automatic: ``automatic(*state_values)`` -> whether the legend is shown while
+                nobody chose (e.g. up to 30 tubes).
+            states: the selection States ``automatic`` needs.
+        """
+
+        @app.callback(
+            Output(LEGEND_STORE_ID, "data"),
+            Input(LEGEND_TOGGLE_ID, "n_clicks"),
+            State(LEGEND_STORE_ID, "data"),
+            *states,
+            prevent_initial_call=True,
+        )
+        def toggle_legend(n_clicks, choice, *values):
+            return flip_legend(n_clicks, choice, automatic(*values))
 
     def register_export(
         self,

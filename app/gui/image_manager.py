@@ -7,7 +7,9 @@ generation run, so nothing on the GUI thread stats files per image.
 
 :class:`ImageLoaderThread` scans a folder off the GUI thread and also builds the library
 hierarchy there. Opening another folder never kills a scan: the old one is asked to stop
-and its late result is dropped by a generation token.
+and its late result is dropped by a generation token. A scan's thread is let go when it
+ends and no slot holds it, so reference counting frees it at once (a slot holding it made
+a reference cycle only the cyclic garbage collector broke, never once it was frozen).
 
 Once a folder has loaded, its output folders are swept for the temp files of killed
 writes (:func:`sweep_project_temp_files`), on a daemon thread (R8).
@@ -16,6 +18,7 @@ writes (:func:`sweep_project_temp_files`), on a daemon thread (R8).
 import logging
 import os
 import threading
+import weakref
 from functools import partial
 
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal
@@ -135,7 +138,7 @@ class ImageManager:
         self.corrected_stems: set[str] = set()
         self.has_fake_real_pairs = False
         self.original_folder = None
-        self.loader_thread = None
+        self.loader_thread = None  # the newest scan until its thread ends
         self.main_window = main_window
         self.current_view_mode = None
         self.processed_base_path = None
@@ -144,7 +147,7 @@ class ImageManager:
         self._hierarchy_cache_valid = False
         self._labels_cache = None
         # Scan bookkeeping: only the newest scan may deliver; superseded scans are kept
-        # referenced until their thread really ends (never terminate()).
+        # referenced until their thread really ends (never terminate()), then let go.
         self._generation = 0
         self._pending_folder = None
         self._retired_threads: set[QThread] = set()
@@ -168,8 +171,14 @@ class ImageManager:
         self.loader_thread = thread
         if self.main_window:
             thread.progress.connect(self.main_window.update_loading_progress)
-        thread.finished.connect(partial(self._on_scan_finished, self._generation, thread))
+        # The slots hold a weak reference: one holding the thread would keep it alive
+        # through its own connection (thread -> slot -> thread), a cycle.
+        ref = weakref.ref(thread)
+        thread.finished.connect(partial(self._on_scan_finished, self._generation, ref))
         thread.failed.connect(partial(self._on_scan_failed, self._generation))
+        # QThread's own finished (the class shadows it with the result signal): after the
+        # result, so the thread is let go once it has delivered.
+        QThread.finished.__get__(thread, QThread).connect(partial(self._on_loader_ended, ref))
         thread.start()
 
     @staticmethod
@@ -192,19 +201,27 @@ class ImageManager:
         threading.Thread(target=run, name="stale-temp-sweep", daemon=True).start()
 
     def _retire_loader(self):
-        """Ask a running scan to stop; keep it alive until its thread finishes."""
+        """Ask the current scan to stop and keep its thread until :meth:`_on_loader_ended`
+        lets it go: also when the thread has ended already, as its result and its end may
+        still wait in the event queue."""
         old = self.loader_thread
         self.loader_thread = None
-        if old is None or not old.isRunning():
+        if old is None:
             return
         old.requestInterruption()
         self._retired_threads.add(old)
-        # QThread's own finished (the class shadows it with the result signal).
-        QThread.finished.__get__(old, QThread).connect(
-            lambda t=old: self._retired_threads.discard(t)
-        )
 
-    def _on_scan_finished(self, generation, thread, images, fake_images, masks, pairs):
+    def _on_loader_ended(self, ref) -> None:
+        """A scan's thread ended (it delivered, failed or was superseded): let it go. No slot
+        holds it, so it is freed now rather than by the cyclic garbage collector."""
+        thread = ref()
+        if thread is None:
+            return
+        self._retired_threads.discard(thread)
+        if self.loader_thread is thread:
+            self.loader_thread = None
+
+    def _on_scan_finished(self, generation, ref, images, fake_images, masks, pairs):
         if generation != self._generation:
             return  # a newer folder was opened meanwhile
         folder, self._pending_folder = self._pending_folder, None
@@ -213,16 +230,17 @@ class ImageManager:
                 self.main_window.on_loading_empty(folder)
             return
         self.original_folder = folder
-        self.on_loading_finished(
-            images,
-            fake_images,
-            masks,
-            pairs,
-            hierarchy=thread.hierarchy,
-            labels=thread.labels,
-            skeleton_stems=thread.skeleton_stems,
-            corrected_stems=thread.corrected_stems,
-        )
+        # Alive: the manager holds the newest scan until its thread has ended, after this.
+        thread = ref()
+        extra = {}
+        if thread is not None:  # else they are computed here (on_loading_finished)
+            extra = {
+                "hierarchy": thread.hierarchy,
+                "labels": thread.labels,
+                "skeleton_stems": thread.skeleton_stems,
+                "corrected_stems": thread.corrected_stems,
+            }
+        self.on_loading_finished(images, fake_images, masks, pairs, **extra)
         QTimer.singleShot(TEMP_SWEEP_DELAY_MS, partial(self._start_temp_sweep, folder))
 
     def _on_scan_failed(self, generation, message):
