@@ -16,8 +16,11 @@ Three passes, not yet released:
 - **UX and speed pass** (branch `feat/unified-correct-editor`, 2026-09-30): the open items
   of `docs/KNOWN_ISSUES.md` #5 and #6 worked through with the emphasis on UI/UX and speed,
   plus a bug hunt: per-area packages with a UI walkthrough and a measured runtime review,
-  then a review of every commit. Timings are medians of interleaved runs on a machine shared
-  by up to eight agents, offscreen unless stated. Still open: `docs/KNOWN_ISSUES.md` #7.
+  then a review of every commit, a fourth wave that split `MainWindow`, reviewed the
+  warm-up and memory work and walked the app again, and a fifth wave that fixed what
+  that walkthrough found. Timings are medians of interleaved runs
+  on a machine shared by up to eight agents, offscreen unless stated. Still open:
+  `docs/KNOWN_ISSUES.md` #7.
 - **Unified Correct editor** (branch `feat/unified-correct-editor`, 2026-09-29; spec
   `docs/superpowers/specs/2026-09-29-unified-correct-editor-design.md`): one **Correct**
   stage replaces *Correct Mask* and *Correct Skeleton*, and the photo stays smooth at every
@@ -31,6 +34,14 @@ Three passes, not yet released:
 - **UX and speed pass (2026-09-30).** None of these changes a CSV value or an output pixel
   except the two entries under *Scientific output changes* (stem clash, GT export size
   check).
+  - Second walkthrough (fifth wave): entering Visualize no longer leaves the focus on the
+    Library stage button; opening another folder clears the previous project's saved-CSV
+    status and toasts; library date rows are no longer cut mid-word at the default width
+    (a regression of this pass); a typed letter in Correct or Trace GT no longer moves
+    the library selection and so the edited image; save toasts update in place with one
+    wording for both editors; Trace GT no longer asks to save after every stroke was
+    undone; the device chip keeps its warnings whole; Trace GT's Tab order follows the
+    screen; the status line elides a long message in the middle.
   - Generation and Measure: two image files with one stem (`a.jpg` and `a.png`) no longer
     race for one output file. A full disk ends a run at the next batch boundary as failed
     and keeps the outputs already written (every remaining image used to fail one by one
@@ -74,7 +85,11 @@ Three passes, not yet released:
     editor, Enter or OK adds a typed class instead of dropping it. In the export dialog,
     Enter exports instead of opening Browse, a relative folder goes next to the images and a
     pasted quoted path works. Long class names no longer push the check boxes behind a
-    horizontal scroll bar.
+    horizontal scroll bar. The dataset export goes on past an image or tracing that Pillow
+    refuses as too large (over about 179 Mpx): it becomes that image's `errors.txt` entry
+    and its partial outputs are removed. The export used to stop there and leave a
+    half-written folder; the other images are exported byte-identical to an export without
+    the large one.
   - Library and shell: the app no longer fails to start on a recent-projects entry with a
     UTC-offset time or a NaN count. After paging in an editor, the Library shows the
     selected image, not the one it showed before. The Library stage button no longer keeps
@@ -88,6 +103,13 @@ Three passes, not yet released:
     longer cut the card or widen the empty state. The window title is "<project> — SPROUTS"
     (was "Root Viewer"). Welcome rows no longer clip descenders and underscores, count
     images like the Library, and keep the keyboard focus after a recent project is removed.
+  - Memory and warm-ups: a folder scan's thread and its results are freed as soon as the
+    scan ends. A reference cycle kept them until a full garbage collection (46,178 images:
+    17.2 MB and 46,838 objects, freed by a 41-51 ms pass), and a heap freeze made while the
+    project was open kept them for the session (13.5 MB per freeze). A warm-up ended by
+    `SystemExit` or `KeyboardInterrupt` no longer leaves the warm-up queue stuck and
+    automatic full garbage collections off for the rest of the session (no production path
+    raises one there).
   - Dashboards: the area profile's x axis reads shallow to deep (it was in first-appearance
     order: L10, L20, L5). Removing the last Multi-Select tube clears the chart. Typed or
     ranged tubes without data no longer count as selected. Stacked bars leave out the dates
@@ -158,6 +180,11 @@ Three passes, not yet released:
 
 ### Performance
 - **UX and speed pass (2026-09-30).** Outputs are unchanged by all of these.
+  - Fifth wave: entering Generate on a 46k project 6.8 -> 1.4 ms to paint (the status text
+    recounted every name on each refresh; the counts are now cached); stage warm-ups wait
+    for a 1 s stay, so passing through Generate starts no torch import (worst GUI gap while
+    working on 45.4 -> 12.7 ms); the freeze after a warm-up no longer walks the frozen heap
+    (30.4 -> 0.5 ms on the GUI thread).
   - Correct reads the next and previous images ahead on a worker thread (photo, mask plane,
     thinned skeleton; at most 3 images and 256 MiB, used only while the files are
     unchanged): `PgDn` costs 19.2 ms of GUI time instead of 78.9 ms at 2048 px and 8.9
@@ -191,12 +218,24 @@ Three passes, not yet released:
     paint, area profile 501 -> 256 ms, the 160-tube time view 639 -> 279 ms (figures built
     from dicts, legend automatic); 5-6 -> 3 server requests per switch, each chart drawn
     once per switch, and the faceted grid no longer drawn twice (last redraw
-    1805 -> 1343 ms).
+    1805 -> 1343 ms). The area Growth Over Time view (legend hidden above 30 tubes) paints
+    in 501 instead of 600 ms when entered and in 399 instead of 524 ms the next time; the
+    next profile or stacked view pays part of it back inside plotly.js (251 -> 272 ms,
+    304 -> 394 ms), so five switches take 1,699 instead of 1,808 ms. *Toggle Legend* shows
+    the legend in 369 ms and hides it in 183 ms (a 275-byte patch).
   - Measure-length preprocessing 313 -> 178 ms per 300 images (CSV bytes identical); the
     pre-Generate mask-origin scan of 46k files 1.57 -> 0.99 s; the project output scan
     84.5 -> 58.8 ms at 46k files; a library selection in an unmeasured 46k project
     59 -> 0.1 ms (the legacy-folder search left the GUI thread), without the ~50 ms wait
     while a CSV is parsed; the Welcome screen with a 500-entry recent list 496 -> 7 ms.
+  - End to end (second walkthrough: 40 images at 640 x 480, `1a023bf` against `fcef800`,
+    three interleaved runs each, median ms to paint): Correct `PgDn` 14.9 -> 10.3 and Trace
+    GT `PgDn` 11.3 -> 8.7; Library -> Trace GT 14.5 -> 8.2 and Correct -> Trace GT
+    12.4 -> 8.3; skeleton undo 8.0 -> 1.8 and Trace GT undo 5.9 -> 1.2; in Correct
+    `Ctrl`+wheel 5.5 -> 4.5, `Ctrl+1` 4.0 -> 1.9 and a pan at 400 % 5.8 -> 4.1. Slightly
+    slower: the Library's overlay and side-by-side image switch (6.2 -> 7.1, 5.0 -> 6.1;
+    the single view 7.6 -> 5.6), its `Ctrl`+wheel (1.1 -> 1.5) and switching to a display
+    page (2.8-3.0 -> 5.2-5.9, all under 8 ms).
 - Correct decodes an image once for the photo, Enhance and the zoom pyramid, and switching
   between the mask and the skeleton reads no file and keeps the view (switching between the
   two old stages cost 13-20 ms plus a re-fit).
@@ -261,7 +300,10 @@ Three passes, not yet released:
     Correct and Trace GT (display only). Tab reaches the Correct Layers rows and their eyes
     (Space or Enter picks a layer, Space toggles an eye) and the Trace GT class panel's
     boxes (Space ticks); a click never takes the keyboard from the canvas. The Tab order of
-    the top bar and of the Welcome screen follows the screen.
+    the top bar, of the Welcome screen and of Correct follows the screen. In Correct it goes
+    canvas, polyline prompt (while shown), rail (at the chosen tool), Enhance popover (while
+    open), dock, zoom cluster, Layers; it used to visit the zoom cluster first and the size
+    slider after the Layers rows.
   - Correct: a polyline draft of two or more points (or a picked branch that was moved)
     counts as unsaved, so the one prompt also covers a tree click, a stage switch, *Load*
     and quitting; Save and `Ctrl+S` finish the draft first. Skeleton undo keeps 100 steps
@@ -293,11 +335,12 @@ Three passes, not yet released:
     Generate*. Dashboards are released 5 minutes after the stage is left, which gives the
     canvases their OpenGL viewports back (a visit within those 5 minutes stays instant).
     Bars carry value labels only when at most 30 share the axis (the hover keeps the values;
-    SVG exports of denser charts have no labels), the length time view shows its legend
-    automatically for up to 30 tubes, and the control strip opens without animation and
-    hides for views without settings. plotly.js basic 3.5.0 (1.1 MB, MIT) is vendored in
-    `app/assets/` and pinned to plotly.py's version by
-    `tests/test_viz_dash_plotly_bundle.py`.
+    SVG exports of denser charts have no labels), the time views of both dashboards show
+    their legend automatically for up to 30 tubes (the area view gains a *Toggle Legend*
+    button over the chart's top-left margin; the choice is kept across views), and the
+    control strip opens without animation and hides for views without settings. plotly.js
+    basic 3.5.0 (1.1 MB, MIT) is vendored in `app/assets/` and pinned to plotly.py's
+    version by `tests/test_viz_dash_plotly_bundle.py`.
   - Notices: toasts keep clear of the status line, the metrics bar and the editors' docks,
     zoom clusters and side panels. The Measure and Generate toasts name the file and its
     project folder ("Saved root_lengths.csv in the skeletons folder"), with the full path in
@@ -305,7 +348,11 @@ Three passes, not yet released:
     Welcome stage list is plain text. The device chip names the device without a first
     inference ("Checking GPU…" meanwhile); `SPROUTS_DEVICE_CHECK=0` or the setting
     `device_check/at_startup` turns the check off. The chip is named through the NVIDIA
-    driver (ctypes, no torch import): 271 ms after the window shows, +20 MB.
+    driver (ctypes, no torch import): 271 ms after the window shows, +20 MB. The About
+    dialog's Runtime line does the same before PyTorch loads ("NVIDIA GeForce RTX 5070 Ti
+    (from the NVIDIA driver; PyTorch not loaded yet)", asked on a worker thread, 59 ms after
+    the dialog opened) and shows the resolved runtime once it has; *Copy details* reads the
+    line again, so a runtime resolved meanwhile is copied.
   - Warm-ups follow intent instead of timers (`app/gui/warmup.py`): entering Generate or
     resting on its run buttons loads torch and the models' code; entering Measure, resting
     on its buttons or on the Visualize stage button loads dash / plotly / pandas. One at a
@@ -329,6 +376,15 @@ Three passes, not yet released:
   - Tests: one shared Qt teardown (`tests/qt_teardown.py`) frees deleted widgets and
     their signal proxies after every test; no crash in 24 loops of the editor test set,
     and the whole suite runs 22 % faster (195.5 -> 152.7 s).
+  - Code (review CQ-07): `MainWindow` is built from parts in `app/gui/window/`
+    (`main_window.py` 1,556 -> 699 lines), and the length dashboard from
+    `dash_length_layout.py`, `dash_length_views.py` and `dash_length_callbacks.py`
+    (`dash_app.py` 845 -> 178 lines). Both are pure moves:
+    `tests/test_shell_window_split_surface.py` pins the window's API surface and
+    `tests/test_viz_dash_split_golden.py` the dashboard's served layout, callbacks and
+    figure JSON. A scripted golden run of the window gave identical session states, signal
+    receivers and QObject trees, and start-up stayed within noise (`MainWindow()`
+    221.0 -> 218.9 ms, process start to first paint 438.4 -> 441.7 ms, n = 20).
   - Generation ignores a folder named like an image (`x.jpg/`), as the Library does; it was
     counted as a failed input.
 - **One Correct stage** replaces *Correct Mask* and *Correct Skeleton* (seven stages become

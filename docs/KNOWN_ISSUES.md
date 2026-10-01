@@ -62,22 +62,22 @@ Owner decisions (not made by the tooling):
 
 Remaining low-severity review items:
 
-- `MainWindow` is still over 1,000 lines: 1,466 on 2026-09-30, up from 1,142 before that
-  day's pass (stage entry, focus, per-metric staleness and read-ahead wiring; the new logic
-  itself went to `device_check.py`, `toast_clearance.py`, `canvas_key_relay.py`,
-  `stage_status.py` and `visualize_empty_state.py`). Split it into a library navigator,
-  project loader and metrics controller (review CQ-07; the Correct swap already replaced its
-  two editor toggles with one and dropped the editor-signal connect / disconnect
-  bookkeeping). Building the hidden Correct and Trace GT pages takes about 107 ms of the
-  157 ms `MainWindow()` build: build them after the first paint as part of the split. Plan:
-  `docs/superpowers/plans/2026-09-29-modularise-four-large-files.md` (Track A; Track B
-  splits `app/visualization/dash_app.py`). The compat shims `app/gui/widgets/tokens.py`
-  (token re-export) and `shell_chrome.build_ribbon` have no deprecation plan (CQ-10).
-  Track B is done (2026-09-30): `dash_app.py` (845 -> 178 lines) composes
-  `dash_length_layout.py`, `dash_length_views.py` and `dash_length_callbacks.py`; the
-  served layout, callbacks, clientside JS and figure JSON are pinned identical by
-  `tests/test_viz_dash_split_golden.py`. Track A (MainWindow, about 1,500 lines after
-  this pass) is still open.
+- (Resolved 2026-09-30) CQ-07, both tracks of
+  `docs/superpowers/plans/2026-09-29-modularise-four-large-files.md`. Track A:
+  `main_window.py` 1,556 -> 699 lines; `MainWindow` is built from the parts in
+  `app/gui/window/` (library navigator, project loader, `MetricsController`, editor pages,
+  stages, job buttons, closing, widgets). Parts without state of their own are functions
+  attached to the window under their old names, so no hot path gains a call and every slot
+  stays a window method. `tests/test_shell_window_split_surface.py` pins the API surface
+  (153 tests); a scripted golden run gave identical session states, signal receivers and
+  QObject trees, and start-up stayed within noise (`MainWindow()` 221.0 -> 218.9 ms,
+  process start to first paint 438.4 -> 441.7 ms, n = 20). Track B: `dash_app.py`
+  (845 -> 178 lines) composes `dash_length_layout.py`, `dash_length_views.py` and
+  `dash_length_callbacks.py`; the served layout, callbacks, clientside JS and figure JSON
+  are pinned identical by `tests/test_viz_dash_split_golden.py`. Building the editor pages
+  after the first paint was not part of the move: see the owner question in #7.
+- The compat shims `app/gui/widgets/tokens.py` (token re-export) and
+  `shell_chrome.build_ribbon` have no deprecation plan (CQ-10).
 - (Resolved 2026-09-29) CQ-10 for `app/handlers/mask_handler.py`: deleted with the old
   mask editor. CQ-11: `RasterEditorBase` now lives in `app/gui/raster_editor_base.py`
   (Trace GT's editor, built on the shared canvas parts).
@@ -223,9 +223,10 @@ Limits measured during the build (not regressions):
 
 The pass worked through sections 5 and 6 with the emphasis on UI/UX and speed and hunted
 for bugs: per-area packages, a UI walkthrough (findings W1-W19) and a measured runtime
-review, then a review of every commit. Resolved items are marked above, and `CHANGELOG.md`
-lists the changes. Timings are medians of interleaved runs on a shared machine, offscreen
-unless stated.
+review, then a review of every commit. A fourth wave split `MainWindow`, reviewed the
+warm-up and memory work and walked the app again (findings V1-V11). Resolved items are
+marked above, and `CHANGELOG.md` lists the changes. Timings are medians of interleaved runs
+on a shared machine, offscreen unless stated.
 
 Owner questions (science or product scope; nothing here blocks use):
 
@@ -250,6 +251,28 @@ Owner questions (science or product scope; nothing here blocks use):
   *Clear*, which the dock also has, while *Save* sits only in the dock; the accent-filled
   *Save* (and Trace GT's *Save GT*) stays highlighted when there is nothing to save. Left as
   a design question.
+- **Save with nothing unsaved (V1, spec D7).** `Ctrl+S` or *Save* with nothing unsaved
+  saves the active layer (D7, kept: it is how a generated skeleton is accepted or a model
+  mask marked hand-checked). On the mask layer that rewrites the mask, and only AREA is
+  flagged as outdated. On the skeleton layer it writes
+  `skeleton_corrections/<stem>_skeleton.png` for an image nobody edited, and the Library
+  then shows the image as corrected (the diamond, "Skeleton corrected", the correction
+  drawn). The file is not a copy: T100_L049's generated skeleton (341 x 256, 46.79 mm)
+  became a 640 x 480 file of 45.99 mm (-1.7 %), which would change root length if
+  corrections were measured (FR-03). Keep it as an acceptance, write nothing and say
+  "Nothing to save", apply D7 to the mask only, or write a correction only when it differs
+  from the generated skeleton? Best decided together with W16.
+- **Build the editor pages after the first paint?** The hidden Correct and Trace GT pages
+  cost about 140 ms of the `MainWindow()` build (214.7 -> 74.1 ms with empty stand-ins,
+  n = 12): their constructors take about 50 ms, the rest is reparenting and style work.
+  That is about a third of process start to first paint (about 440 ms). The split left
+  them as they are because building them later is not a clean move:
+  `tests/test_shell_chrome_smoke.py::test_main_window_contract` checks the pages on a window
+  that is never shown; pages made after the first paint join the end of the Tab chain;
+  `correct_editor` and `gt_tracing_interface` would need a build on first access and a
+  placeholder at their fixed `Panel` index; and all their wiring (signals, the skeleton
+  resolver, read-ahead providers, toast clearance, the heap freeze after start-up) would
+  have to wait as well.
 - **Discard after an external change.** When another program rewrites `gt/<stem>.png` while
   the image has unsaved edits, *Discard* returns to the copy in memory and the chip says
   Saved although the file on disk differs; the next selection reloads it. The Correct mask
@@ -261,10 +284,13 @@ Owner questions (science or product scope; nothing here blocks use):
 - **Bar labels above 30 bars.** Dashboard bars carry value labels only when at most 30 share
   the axis, also when zoomed in on a few tubes; the hover still shows the values. The
   recommendation is to keep it.
-- **Area time-view legend.** The area dashboard's Growth Over Time view keeps a legend entry
-  per tube (160 entries take about 200 ms of each ~660 ms draw) because it has no legend
-  toggle, and clicking the legend is its only way to isolate a tube. Add a toggle and show
-  the legend automatically up to 30 tubes, as the length view now does?
+- **Area time-view legend — RESOLVED (2026-09-30).** The area dashboard's Growth Over Time
+  view shows its legend by itself up to 30 tubes, as the length view does, and *Toggle
+  Legend* (over the chart's top-left margin, on that view only) shows or hides it in place;
+  the choice is kept across views, and the view still has no control strip. With 160 tubes
+  the view paints in 501 ms instead of 600 ms when entered and in 399 ms instead of 524 ms
+  the next time. The next profile or stacked view pays part of it back inside plotly.js
+  (251 -> 272 ms, 304 -> 394 ms); five switches still take 1,699 ms instead of 1,808 ms.
 - Wording and naming: the two dashboards name their views differently ("Faceted Depth
   Profile" vs "Area Profile by Position") and their date colours reuse the mask green and
   the skeleton orange (W19); the Measure buttons are nouns ("Root Length", "Root Area") and
@@ -277,9 +303,30 @@ Follow-ups:
   dashboard imports) made every full garbage collection a 60-120 ms GUI pause at
   `49d3f11` and cost 0.4-0.6 GB and 0.4-1.5 s at quit. Warm-ups now follow intent
   (`app/gui/warmup.py`) and the heap is frozen after them (`app/gc_policy.py`). Left as
-  they are: quitting while a torch warm-up imports waits for the import (about 1.1 s); a
-  dashboard opened with no intent signal first waits for its imports (1.3 s to the first
-  chart); the About dialog shows the runtime only once torch has loaded.
+  they are: quitting while a torch warm-up imports waits for the import (1.1-1.3 s, then a
+  clean exit); a dashboard opened with no intent signal (a click within the 200 ms hover
+  dwell, or `Alt+6`) first waits for its imports (1.3 s to the first chart), and those
+  imports run without the collection hold and stay unfrozen until the next warm-up or job
+  end (each later full collection about 30 ms longer). The About dialog now names the
+  device before torch loads: "NVIDIA GeForce RTX 5070 Ti (from the NVIDIA driver; PyTorch
+  not loaded yet)", asked on a worker thread, 59 ms after the dialog opened; once torch is
+  loaded it shows the resolved runtime.
+- (Resolved 2026-09-30) A warm-up job ended by `SystemExit` or `KeyboardInterrupt` stayed
+  "running" for good, so no later warm-up started and, with freezing on, automatic full
+  collections stayed off for the session; it now reports a failure and the queue goes on.
+  No production path raises one there. The same review found nothing else in the warm-up
+  and memory work: across 5 project loads and about 53 image opens a freeze pinned no
+  document, image, array, data frame or dashboard, only the scan thread below, and fast
+  random Library / Correct switching (5 x 250 steps) always showed the right photo.
+- (Resolved 2026-09-30) A finished folder scan's thread lived in a reference cycle with its
+  results until a full collection (46,178 images: 17.2 MB and 46,838 objects, freed by a
+  41-51 ms pass), and a heap freeze made while that project was open kept it for the session
+  (13.5 MB per freeze). It is now freed as soon as its scan has ended.
+- Same class as the warm-up fix, no known trigger: the Measure CSV parse
+  (`app/gui/window/metrics.py`) and the device check catch `Exception` only, so a
+  `BaseException` there would leave the metrics loading for good (warm-ups blocked, the bar
+  not refreshed) or the chip at "Checking GPU…"; a folder scan that fails with anything but
+  `OSError` reports neither outcome, and the loading card would stay up.
 - (Resolved 2026-09-30) Photo and raster layer items were freed only by the cyclic garbage
   collector (`TiledLevels` held a bound method of the item); they are now freed as soon as
   their scene lets go of them (browse at 2048 px: peak 1374 -> 657 MB, no GC pause).
@@ -292,8 +339,12 @@ Follow-ups:
   and keeps the skeleton's history (J2). Still open: the Library read-ahead counts a photo
   against its 192 MiB only once it is shown; entering Correct still reads the first
   image's mask and skeleton on the GUI thread.
-- Correct's Tab order does not follow the screen (canvas, zoom cluster, rail, dock, the size
-  slider, then Layers).
+- (Resolved 2026-09-30) Correct's Tab order follows the screen (WCAG 2.4.3): canvas,
+  polyline prompt (while shown), rail (at the chosen tool), Enhance popover (while open),
+  the dock left to right, the zoom cluster, then Layers; `Shift+Tab` walks back. It was
+  canvas, zoom cluster, rail, dock, then the size slider after Layers.
+- (Resolved 2026-09-30) Trace GT's Tab order follows the screen as Correct's does: rail,
+  dock, zoom cluster, classes (it followed the build order).
 - Very large skeleton edits pay for deflate in the patch history: a Clear at 6000 x 4000
   records in 61-66 ms (6.3 ms with whole copies) and undoes in 30 ms (3.6 ms); at 2048 px in
   6.4-7.7 ms and 3.8 ms. The 640 x 480 data is not affected. Bit-pack 0/255 patches if large
@@ -301,28 +352,63 @@ Follow-ups:
 - The skeleton halo's layer costs up to 7 ms per full raster repaint at 4K (3840 x 2160 at
   800 %: 7.06 ms, against 1.29 ms drawn directly with darker joints); the OpenGL canvas is
   not affected.
-- GT export: a source image over about 179 Mpx aborts the whole export (Pillow's
-  `DecompressionBombError` from the new size check is not caught per image); unrealistic for
-  minirhizotron images. A drive-relative export folder (`D:out` with the project on `C:`)
-  stays relative.
+- (Resolved 2026-09-30) GT export: a source image or tracing over about 179 Mpx (Pillow's
+  `DecompressionBombError`) is that image's entry in `errors.txt`, its partial outputs are
+  removed and the export goes on; it used to abort the whole export. Still open: a
+  drive-relative export folder (`D:out` with the project on `C:`) stays relative.
 - Dashboards: while one is alive the canvases use raster viewports (Qt cannot show a web
   view in a window that holds OpenGL viewports); hidden dashboards are now released
   5 minutes after Visualize is left, and OpenGL comes back then (the trade-off is a ~1 s
-  reopen after that). The first faceted build of a grid shape takes about 130 ms, and
-  `dcc.Graph` relayouts the grid once (about 120 ms) after its first draw. The runtime venv
-  has IPython (pulled in by pipreqs), about 250 ms of the first dashboard import; a clean
-  install from `requirements.txt` has none.
+  reopen after that). The first dashboard open still freezes the GUI for 230-270 ms (its
+  click handler takes 306-345 ms; real WebEngine, offscreen), although its first length
+  chart now comes 1.88 s after a cold click and 0.73 s after entering Measure (second
+  walkthrough; the first measured 2.14 s cold). The first faceted build of a grid shape
+  takes about 130 ms, and `dcc.Graph` relayouts the grid once (about 120 ms) after its
+  first draw. The runtime venv has IPython (pulled in by pipreqs), about 250 ms of the
+  first dashboard import; a clean install from `requirements.txt` has none.
 - `refresh_outputs` stays on the GUI thread at the end of a generation run (56-64 ms for 23k
   masks and 23k skeletons, once per run; an asynchronous scan would race with saves). The
   pre-Generate mask-origin scan still runs on the GUI thread (about 1.0 s for 46k masks,
   with a wait cursor).
 - "Changed since measured" compares file times, so a copied folder can report changes that
-  did not happen. `Ctrl+S` with nothing unsaved still rewrites the active mask (spec D7); it
-  now marks only AREA as outdated.
+  did not happen. (`Ctrl+S` with nothing unsaved: see the owner question V1 above.)
 - Check that a normal launch gets hardware OpenGL: in the test sessions Qt picked its
   software renderer (the adapter read as vendor 0x0), which turns the OpenGL canvases off.
   The app log says "OpenGL canvas viewports available" or "off: software renderer"; raster
   frames are about 10x slower.
 - Small texts: "Cancelling Generating masks…" reads awkwardly; a danger toast can cover the
   Welcome screen's About button at 1024 x 640; a metric CSV edited to hold `nan` shows
-  "nan mm"; the status line clips a long message at its right edge.
+  "nan mm". (Resolved 2026-09-30: the status line elides a long message in the middle,
+  so a saved file's name stays readable; the full text is in the tooltip.)
+
+Second walkthrough (V1-V11, 2026-09-30); V1 is the owner question above, the rest:
+
+- (Resolved 2026-09-30) V2: entering Visualize with the library tree focused gave the
+  focus to the Library stage button (two stages looked highlighted, Space left the
+  dashboard); the dashboard page takes it now and the tree gets it back on return.
+- (Resolved 2026-09-30) V3: opening another folder clears the previous project's
+  "Saved <CSV path>" status and its toasts.
+- (Resolved 2026-09-30) V4: library date rows were cut mid-word at the default width
+  ("2024.07.18 · 8 ima…") because the fit ignored the style's text margins; a row shows
+  the longest short form that fits again.
+- (Resolved 2026-09-30) V5: with the tree focused in Correct or Trace GT, a letter that
+  is not a shortcut no longer moves the tree selection (and so the edited image); the
+  search field finds images, arrows and PgDn / PgUp still browse.
+- (Resolved 2026-09-30) V6: save toasts update in place instead of stacking, with one
+  wording for both editors ("Saved mask · X", "Saved skeleton · X", "Saved GT · X").
+- (Resolved 2026-09-30) V7: Trace GT counts as unsaved only while the tracing differs
+  from the saved or opened one (undoing every stroke no longer asks to save).
+- (Resolved 2026-09-30) V8: entering Generate on a 46k project cost up to 21.7 ms of GUI
+  time (2.8 ms before the pass) because the status text recounted every name; the counts
+  are cached until the library's outputs change (6.8 -> 1.4 ms to paint).
+- (Resolved 2026-09-30) V9: stage warm-ups wait for a 1 s stay in the stage, so passing
+  through Generate no longer starts a torch import (worst GUI gap 45.4 -> 12.7 ms);
+  the freeze after a warm-up no longer walks the frozen heap (30.4 -> 0.5 ms).
+- (Resolved 2026-09-30) V10: the device chip keeps warnings such as "mask model missing"
+  whole and shortens the device name first.
+- (Resolved 2026-09-30) V11: "Measuring root length is running" and "1 of 40 images
+  have a GT tracing" reworded.
+- Still open from that walkthrough: a batch job that finishes after another folder was
+  opened still reports the previous project (refuse or ask before opening while a job
+  runs, or name the project in the job's toasts?); a long file name wraps the Correct
+  save toast onto two lines.

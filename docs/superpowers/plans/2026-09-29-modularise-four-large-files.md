@@ -2,11 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-09-29, re-baselined on `3469885`).** Written for four files; the unified Correct
-> editor has since deleted two of them (`mask_tracing_interface.py`, `skeleton_correction_interface.py`),
-> so Tracks C and D are removed and Track A is re-derived against the current `MainWindow`
-> (two editor toggles instead of three). The file name is kept because the Correct spec links it.
-> Nothing in this plan has been executed yet.
+> **Status (2026-09-30): executed; CQ-07 is closed.** Track B landed in `2e34f45`
+> (`dash_app.py` 845 -> 178 lines; its tests are `test_viz_dash_split_golden`,
+> `test_viz_dash_split_surface` and `test_viz_dash_length_views` instead of `test_split_*`).
+> Track A landed in `2bc8486` (`main_window.py` 1556 -> 699 lines) with one deviation from the
+> design below: parts without state of their own are modules of functions attached in the
+> `MainWindow` class body under their old names (`navigator`, `project_loader`, `editors`,
+> `stages`, `job_buttons`, `lifecycle`, `body`, `_common`), not controllers behind delegators,
+> so no hot path gains a call and slots stay window methods; `MetricsController`
+> (`window/metrics.py`) is the one controller. Its tests are `test_shell_window_split_surface`,
+> `test_shell_window_parts` and `test_shell_window_split_imports`. Building the Correct and
+> Trace GT pages after the first paint was measured but not done (an owner decision,
+> `docs/KNOWN_ISSUES.md` #7). Re-baselined on `3469885` (2026-09-29): the unified Correct
+> editor deleted two of the four files (`mask_tracing_interface.py`,
+> `skeleton_correction_interface.py`), so Tracks C and D were removed; the file name is kept
+> because the Correct spec links it.
 
 **Goal:** Split `app/gui/main_window.py` (1142 lines) and `app/visualization/dash_app.py` (834) into single-responsibility modules with **zero behaviour change and no measurable latency or startup regression**. Closes review item CQ-07 (`docs/KNOWN_ISSUES.md` #5).
 

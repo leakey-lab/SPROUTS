@@ -580,7 +580,9 @@ Root-Mask-and-Skeletons/
 ├── main.py                              # Application entry point
 │
 ├── 📱 app/gui/                          # PyQt6 interface
-│   ├── main_window.py                   # Main window controller
+│   ├── main_window.py                   # MainWindow, composed from the parts in window/
+│   ├── window/                          # Library navigator, project loader, metrics,
+│   │                                    # editor pages, stages, job buttons, closing, widgets
 │   ├── display_controller.py            # Library canvas (single, overlay, side by side)
 │   ├── image_manager.py                 # File management
 │   ├── correct/                         # The Correct stage: mask + skeleton on one canvas
@@ -808,6 +810,6 @@ class MaskGenerationHandler(QObject):
 
 ---
 
-*Last Updated: September 2026 (the Correct stage: editor node, composition, file tree)*
+*Last Updated: September 2026 (the Correct stage: editor node, composition, file tree; the MainWindow parts)*
 *Version: 3.0.0*
 *Architecture Document Revision: 3.2*

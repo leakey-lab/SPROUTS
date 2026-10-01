@@ -361,10 +361,13 @@ no data changes):
   (`.viz-controls .collapsing`), which used to redraw the chart on every frame.
 - **Bar labels.** `theme.bar_labels` shows value labels only when at most
   `theme.MAX_LABELLED_BARS` (30) bars share the x axis; the hover keeps the values.
-- **Legend.** The length time view shows its legend automatically for up to
+- **Legend.** The time views of both dashboards show their legend automatically for up to
   `dash_visualizations.AUTO_LEGEND_MAX_TUBES` (30) tubes: `legend-visible-store` starts as
   `None` (automatic), the toggle flips what is shown, and `theme.margin_right` makes room
-  for the legend only when it is shown.
+  for the legend only when it is shown. The area view takes these pieces from `dash_shell`
+  (`legend_store`, `legend_shown`, `flip_legend`, `legend_patch`,
+  `DashboardShell.register_legend_toggle`); its *Toggle Legend* floats over the chart's
+  top-left margin on the time view only, so that view keeps no control strip.
 - **Message figures.** `theme.message_figure` is text only (no axes, transparent plot area),
   so a hint no longer looks like an empty chart.
 - **Section 6, further.** The strip's open state, its caret and the length view's option
