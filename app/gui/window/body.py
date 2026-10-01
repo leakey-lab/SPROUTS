@@ -4,7 +4,9 @@ the toasts, which keep clear of the chrome at the bottom and at the side.
 
 The right panel's pages are added in the fixed order of :class:`~app.gui.panels.Panel`
 (display, Correct, the Visualize page, Trace GT; the dashboards are appended after them).
-While a dashboard is on screen the library is collapsed, so the dashboard gets the width.
+While a dashboard is on screen the library is collapsed, so the dashboard gets the width;
+the keyboard focus the library held goes to the dashboard page meanwhile, and comes back
+with the library (V2).
 
 These are functions of the window, bound as :class:`~app.gui.main_window.MainWindow`
 methods under their old names (``MainWindow.init_ui`` is :func:`init_ui`,
@@ -186,6 +188,7 @@ def build_body(window: "MainWindow") -> QWidget:
     # prior width) on the way out. Driven off currentChanged so every path
     # (ribbon switch, toggle, close) is covered.
     window._pre_viz_splitter_sizes = None
+    window._library_focus = None  # the library widget that had the focus when it hid
     window.right_panel.currentChanged.connect(window._sync_library_for_panel)
     window.right_panel.currentChanged.connect(window._show_selection_on_display)
     return body
@@ -203,7 +206,13 @@ def current_widget_is_viz(window: "MainWindow") -> bool:
 def sync_library_for_panel(window: "MainWindow", *_args):
     """Collapse the library panel while a visualization is shown; restore it
     (and its previous width) otherwise. Idempotent and safe to call before
-    any viz exists."""
+    any viz exists.
+
+    The keyboard focus follows (V2). A panel that hides with the focus inside (the tree,
+    after an image was picked) hands it to the dashboard page first: Qt passed it to the
+    first stage button, which then looked highlighted beside Visualize and took Space and
+    the arrow keys. When the panel returns, the widget that had the focus gets it back.
+    """
     left = getattr(window, "left_panel", None)
     splitter = getattr(window, "body_splitter", None)
     if left is None or splitter is None:
@@ -211,6 +220,7 @@ def sync_library_for_panel(window: "MainWindow", *_args):
     if window._current_widget_is_viz():
         if left.isVisible():
             window._pre_viz_splitter_sizes = splitter.sizes()
+            _hand_focus_to_page(window, left)
             left.setVisible(False)
     else:
         if not left.isVisible():
@@ -218,9 +228,37 @@ def sync_library_for_panel(window: "MainWindow", *_args):
             if window._pre_viz_splitter_sizes:
                 splitter.setSizes(window._pre_viz_splitter_sizes)
                 window._pre_viz_splitter_sizes = None
+            _return_library_focus(window, left)
     toasts = getattr(window, "toasts", None)
     if toasts is not None:
         toasts.reposition()  # the editor dock under the toasts may have changed
+
+
+def _hand_focus_to_page(window: "MainWindow", left: QWidget) -> None:
+    """The library is about to hide: when it holds the window's focus, the page on screen
+    takes it, and the library keeps the name of the widget that had it.
+
+    The window's own focus widget, not the application's: while another window is active,
+    the focus the window gets back on activation must not be inside a hidden panel either.
+    """
+    focused = window.focusWidget()
+    if focused is None or not left.isAncestorOf(focused):
+        return
+    window._library_focus = focused
+    window.right_panel.currentWidget().setFocus(Qt.FocusReason.OtherFocusReason)
+
+
+def _return_library_focus(window: "MainWindow", left: QWidget) -> None:
+    """The library is back: the widget that had the focus when it hid gets it again, as if
+    the stage had been entered from the Library. An editor page keeps the focus it took
+    itself when it showed (its canvas takes the keys), as it does from the Library."""
+    widget = getattr(window, "_library_focus", None)
+    window._library_focus = None
+    if widget is None or not left.isAncestorOf(widget) or not widget.isVisible():
+        return
+    if window.right_panel.currentIndex() in window._editors():
+        return
+    widget.setFocus(Qt.FocusReason.OtherFocusReason)
 
 
 def toast_bottom_offset(window: "MainWindow") -> int:

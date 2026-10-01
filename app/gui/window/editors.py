@@ -2,7 +2,8 @@
 
 The right panel shows one page at a time (:class:`~app.gui.panels.Panel`); leaving an
 editor first offers to save its pending edits, and an editor the user keeps editing
-refuses the switch. The window follows the editors' reports: the title's unsaved marker,
+refuses the switch. The window follows the editors' reports: their notices (toasts; a
+save's toast, worded alike in both editors, updates in place), the title's unsaved marker,
 a saved or removed mask (the Library badge and the metrics), B held on the Correct canvas,
 and the corrected skeleton of the image open in Correct (display only, FR-03).
 
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: The one toast of the editors' saves: a newer save updates it in place (V6).
+SAVED_TOAST = "editor-saved"
+
 
 def editors(window: "MainWindow") -> dict:
     """The editor pages that hold unsaved work, by right-panel index."""
@@ -42,6 +46,19 @@ def editor_canvas(window: "MainWindow"):
     view = getattr(editor, "graphics_view", None)
     scope = getattr(editor, "SHORTCUT_SCOPE", None)
     return (view, scope) if view is not None and scope else None
+
+
+def on_editor_notice(window: "MainWindow", message: str, kind: str) -> None:
+    """An editor's notice as a toast. A save's summary ("Saved mask · X.jpg") is the one
+    keyed save toast: saving again, or paging on with PgDn, updates it in place instead of
+    stacking copies (V6). Every other notice, a failed save's among them, shows as is."""
+    key = SAVED_TOAST if kind == "success" and message.startswith("Saved ") else None
+    window.notify(message, kind, key=key)
+
+
+def on_gt_saved(window: "MainWindow", image_path: str) -> None:
+    """Trace GT wrote a tracing: the editors' save toast, worded as Correct's (V6)."""
+    window.notify(f"Saved GT · {os.path.basename(image_path)}", key=SAVED_TOAST)
 
 
 def sync_window_modified(window: "MainWindow", *_args) -> None:

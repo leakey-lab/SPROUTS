@@ -165,10 +165,11 @@ class MainWindow(QMainWindow):
         self.mask_saved.connect(self.highlight_saved_mask)
         self.mask_cleared.connect(self.unhighlight_cleared_mask)
 
-        # Transient editor feedback (fill hints, clear/undo notes, saves) -> toasts;
-        # unsaved edits -> the title's modified marker; PgDn / PgUp after a save.
+        # Transient editor feedback (fill hints, clear/undo notes, saves) -> toasts, a
+        # save's in place; unsaved edits -> the title's modified marker; PgDn / PgUp after
+        # a save.
         for editor in self._editors().values():
-            editor.notice.connect(self.notify)
+            editor.notice.connect(self._on_editor_notice)
             editor.dirty_changed.connect(self._on_editor_dirty_changed)
             editor.navigate_requested.connect(self.navigate_image)
         # The Correct page reports every mask it writes or removes, on every save path
@@ -179,9 +180,7 @@ class MainWindow(QMainWindow):
         correct.mask_cleared.connect(self.on_mask_cleared)
         correct.b_key_status_changed.connect(self.on_b_key_status_changed)
         correct.set_generated_skeleton_resolver(self._generated_skeleton_for)
-        self.gt_tracing_interface.gt_saved.connect(
-            lambda p: self.toasts.show(f"GT saved for {os.path.basename(p)}", key="gt-saved")
-        )
+        self.gt_tracing_interface.gt_saved.connect(self._on_gt_saved)
 
         # Keyboard browsing: the image whose row was last loaded, and the debounce
         # that loads the tree's current row once the arrow keys come to rest.
@@ -210,8 +209,8 @@ class MainWindow(QMainWindow):
         # (the skeleton's thinning, ~0.2 s, in the thread pool) starts once the event loop
         # runs, i.e. after main.py showed the window: neither the start-up nor the first
         # Correct open waits for it. torch and the dashboards' libraries (each on a thread
-        # of its own) wait for the user to head for Generate / Visualize (entering a stage,
-        # resting on its buttons).
+        # of its own) wait for the user to head for Generate / Visualize (staying in a
+        # stage for a second, resting on its buttons).
         self.warmups = warmup.WarmupQueue(
             self,
             jobs={
@@ -236,12 +235,14 @@ class MainWindow(QMainWindow):
     # ==================== Warm-ups (app.gui.warmup) ====================
 
     def _install_warmup_intents(self) -> None:
-        """Resting on a run button (or the Visualize stage button) asks for its warm-up."""
+        """Resting on a run button (or the Visualize stage button) asks for its warm-up,
+        and so does staying in Generate or Measure for a second (on_stage_changed)."""
         self._hover_intent = warmup.HoverIntent(self, self._request_warmup)
         for attr, keys in warmup.BUTTON_WARMUPS.items():
             self._hover_intent.watch(getattr(self, attr, None), keys)
         visualize = (getattr(self, "ribbon_buttons", None) or {}).get("Visualize")
         self._hover_intent.watch(visualize, warmup.VISUALIZE)
+        self._stage_intent = warmup.StageIntent(self, self._request_warmup)
 
     def _request_warmup(self, keys: tuple[str, ...] | None) -> None:
         """Queue the ``keys`` warm-ups (torch and the models / the dashboards), in order,
@@ -660,6 +661,8 @@ class MainWindow(QMainWindow):
 
     _editors = editors.editors
     _editor_canvas = editors.editor_canvas
+    _on_editor_notice = editors.on_editor_notice
+    _on_gt_saved = editors.on_gt_saved
     _sync_window_modified = editors.sync_window_modified
     _on_editor_dirty_changed = editors.on_editor_dirty_changed
     _sync_open_correction = editors.sync_open_correction

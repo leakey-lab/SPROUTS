@@ -1,12 +1,14 @@
-"""The main window's warm-up policy (W3-WARM W2-W4, X-RUNTIME F1-F3).
+"""The main window's warm-up policy (W3-WARM W2-W4, X-RUNTIME F1-F3, W5-D V9).
 
-torch loads when the user heads for Generate (entering it, resting on its run buttons),
-dash/plotly/pandas when they head for Visualize (entering Measure, resting on Measure's run
-buttons or on the Visualize stage button); never on a timer after start-up or a project
-load, never while a folder loads or settles, a Measure CSV is parsed or a job runs, and a
-warm-up that has not started when the window closes is dropped. Headless windows warm
-nothing unless asked (``warm_up=True`` here). The warm-ups are stubs, and the heap is never
-frozen in the test process (the suite frees Qt wrappers with gc.collect()).
+torch loads when the user heads for Generate (staying in it, resting on its run buttons),
+dash/plotly/pandas when they head for Visualize (staying in Measure, resting on Measure's
+run buttons or on the Visualize stage button); passing through a stage warms nothing (the
+torch import stalled the work that followed, V9); never on a timer after start-up or a
+project load, never while a folder loads or settles, a Measure CSV is parsed or a job runs,
+and a warm-up that has not started when the window closes is dropped. Headless windows warm
+nothing unless asked (``warm_up=True`` here). The warm-ups are stubs, the stage dwell is
+:data:`DWELL_MS` instead of a second, and the heap is never frozen in the test process (the
+suite frees Qt wrappers with gc.collect()).
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ from app.gui import (  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
 
 STEMS = tuple(f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (31, 32, 33))
+#: The stage dwell here (warmup.STAGE_DWELL_MS, read when the window is built).
+DWELL_MS = 150
 
 
 @pytest.fixture(scope="module")
@@ -75,6 +79,7 @@ def warmups(monkeypatch):
     monkeypatch.setattr(gc_policy, "hold_full_collections", lambda: None)
     monkeypatch.setattr(gc_policy, "release_full_collections", lambda: None)
     monkeypatch.setattr(main_window, "WARMUP_SETTLE_MS", 150)
+    monkeypatch.setattr(warmup, "STAGE_DWELL_MS", DWELL_MS)
     return stub
 
 
@@ -151,7 +156,7 @@ def rest_on(widget) -> None:
 
 
 # ------------------------------------------------------------------ the policy
-def test_entering_generate_warms_up_torch_once_off_the_gui_thread(make_window, warmups):
+def test_staying_in_generate_warms_up_torch_once_off_the_gui_thread(make_window, warmups):
     window = make_window(warm_up=True)
     window.on_stage_changed("Generate")
     assert wait(lambda: warmups.keys() == [warmup.TORCH, warmup.MODELS])
@@ -159,17 +164,74 @@ def test_entering_generate_warms_up_torch_once_off_the_gui_thread(make_window, w
     assert warmups.runs[1][2] >= warmups.runs[0][2]  # torch first, then the models
     window.on_stage_changed("Library")
     window.on_stage_changed("Generate")
-    QTest.qWait(150)
+    QTest.qWait(3 * DWELL_MS)
     assert warmups.keys() == [warmup.TORCH, warmup.MODELS]  # once per session
 
 
 def test_measure_warms_up_the_dashboards_and_never_torch(make_window, warmups):
     window = make_window(warm_up=True)
-    for stage in ("Library", "Trace GT", "Correct", "Measure", "Visualize"):
+    for stage in ("Library", "Trace GT", "Correct", "Measure"):
         window.on_stage_changed(stage)
     assert wait(lambda: warmups.keys() == [warmup.DASHBOARDS])
-    QTest.qWait(150)
+    window.on_stage_changed("Visualize")
+    QTest.qWait(3 * DWELL_MS)
     assert warmups.keys() == [warmup.DASHBOARDS]
+
+
+# ------------------------------------------------------------------ the stage dwell (V9)
+def test_passing_through_generate_warms_nothing(make_window, warmups):
+    """Generate on the way to Correct: the torch import used to start at once and stall
+    the zooming that followed (52-69 ms)."""
+    window = make_window(warm_up=True)
+    window.on_stage_changed("Generate")
+    QApplication.processEvents()
+    window.on_stage_changed("Correct")
+    QTest.qWait(3 * DWELL_MS)
+    assert warmups.runs == [] and window.warmups.pending() == ()
+    assert window.warmups.state(warmup.TORCH) == "idle"
+
+
+def test_passing_through_measure_on_the_way_to_visualize_warms_nothing(make_window, warmups):
+    """The dashboard Visualize opens imports its libraries itself."""
+    window = make_window(warm_up=True)
+    window.on_stage_changed("Measure")
+    window.on_stage_changed("Visualize")
+    QTest.qWait(3 * DWELL_MS)
+    assert warmups.runs == [] and window.warmups.pending() == ()
+
+
+def test_generate_warms_up_once_the_user_has_stayed_for_the_dwell(make_window, warmups):
+    window = make_window(warm_up=True)
+    entered = time.perf_counter()
+    window.on_stage_changed("Generate")
+    QApplication.processEvents()
+    assert warmups.runs == [] and window.warmups.pending() == ()  # entering is not enough
+    assert wait(lambda: warmups.keys() == [warmup.TORCH, warmup.MODELS])
+    assert warmups.runs[0][2] - entered >= 0.9 * DWELL_MS / 1000
+
+
+def test_resting_on_a_run_button_does_not_wait_for_the_stage_dwell(
+    make_window, warmups, monkeypatch
+):
+    """The run buttons keep their 200 ms dwell, and leaving the stage afterwards keeps
+    what they asked for (only the stage's own dwell is dropped)."""
+    monkeypatch.setattr(warmup, "STAGE_DWELL_MS", 60_000)
+    window = make_window(warm_up=True)
+    window._loading_project = True  # holds what is asked in the queue
+    window.on_stage_changed("Generate")
+    rest_on(window.generate_all_button)
+    assert wait(lambda: window.warmups.pending() == (warmup.TORCH, warmup.MODELS), 2.0)
+    window.on_stage_changed("Correct")
+    window._loading_project = False
+    assert wait(lambda: warmups.keys() == [warmup.TORCH, warmup.MODELS])
+
+
+def test_closing_the_window_during_the_dwell_starts_nothing(make_window, warmups):
+    window = make_window(warm_up=True)
+    window.on_stage_changed("Generate")
+    window.close()
+    QTest.qWait(3 * DWELL_MS)
+    assert warmups.runs == [] and window.warmups.pending() == ()
 
 
 @pytest.mark.parametrize(
@@ -266,8 +328,7 @@ def test_closing_the_window_drops_a_warmup_that_has_not_started(make_window, war
     window = make_window(warm_up=True)
     window._loading_project = True
     window.on_stage_changed("Generate")
-    QTest.qWait(100)
-    assert window.warmups.pending() == (warmup.TORCH, warmup.MODELS)
+    assert wait(lambda: window.warmups.pending() == (warmup.TORCH, warmup.MODELS))
     window.close()
     window._loading_project = False
     QTest.qWait(400)

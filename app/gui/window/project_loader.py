@@ -50,7 +50,8 @@ def open_path(window: "MainWindow", dir_name):
 
     Shared by ``load_images`` (after the dialog) and the Welcome screen's
     recent-projects rows. A missing folder is reported and changes nothing,
-    and so does an editor that keeps unsaved edits. Otherwise flips to the
+    and so does an editor that keeps unsaved edits. Otherwise drops what the
+    status line and the toasts say about the project being left, flips to the
     working shell, shows the loading overlay, and kicks off
     ``image_manager.load_images``; the current library stays until the scan
     delivers images.
@@ -79,6 +80,9 @@ def open_path(window: "MainWindow", dir_name):
 
     # Show progress before loading.
     window.task_progress.start("Loading images")
+    # Then the previous project's messages go (V3): the status line shows the load's
+    # progress at once, without recounting the project being left for its idle text.
+    _clear_project_messages(window)
 
     # The editors are clean now: drop their image and history (no prompt).
     for editor in window._editors().values():
@@ -92,6 +96,19 @@ def open_path(window: "MainWindow", dir_name):
     reset_viz = getattr(window.ribbon, "reset_visualize_selection", None)
     if callable(reset_viz):
         reset_viz()
+
+
+def _clear_project_messages(window: "MainWindow") -> None:
+    """Drop the status line's message and the toasts: they are about the project being
+    left (V3). A Measure run's "Saved <its CSV path>" stays on the status line for 15 s
+    (``SAVED_PATH_STATUS_MS``) and its toast for a few seconds; kept, they named the
+    previous project's file in the next one and hid its own summary of what a run would
+    work on. Done when the open starts, not when the scan ends: the status line shows
+    under the loading card."""
+    window.status_bar.clearMessage()
+    toasts = getattr(window, "toasts", None)
+    for toast in toasts.toasts() if toasts is not None else ():
+        toast.dismiss()
 
 
 def update_loading_progress(window: "MainWindow", value):

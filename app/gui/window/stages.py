@@ -2,9 +2,10 @@
 status line's summary of a stage, and the Visualize stage's entry.
 
 A change of stage (any path: a stage button, Alt+1…6, an editor handing over) refreshes
-Measure's freshness counts, the status line's idle text (W12), asks for the stage's
-warm-up and tells the dashboards. Visualize opens the highlighted dashboard, or, before
-there is anything to chart, a page that names the next step with a button to it (W5).
+Measure's freshness counts and the status line's idle text (W12), asks for the stage's
+warm-up once the user has stayed in it for a second, and tells the dashboards. Visualize
+opens the highlighted dashboard, or, before there is anything to chart, a page that names
+the next step with a button to it (W5).
 
 These are functions of the window, bound as :class:`~app.gui.main_window.MainWindow`
 methods under their old names (``MainWindow.on_stage_changed`` is
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
 
-from .. import visualization_manager, warmup
+from .. import visualization_manager
 from ..image_manager import project_layout_of
 from ..panels import Panel
 
@@ -44,13 +45,15 @@ def current_stage(window: "MainWindow") -> str | None:
 
 def on_stage_changed(window: "MainWindow", key: str) -> None:
     """The highlighted stage changed (any path): the status line says what Generate or
-    Measure would work on (W12), the stage's warm-up is asked for (torch for Generate,
-    the dashboards' libraries for Measure), and the dashboards are told, when they
-    want to know (they are released a while after Visualize is left)."""
+    Measure would work on (W12), the stage's warm-up is asked for once the user has
+    stayed in it for a second (torch for Generate, the dashboards' libraries for
+    Measure; passing through asks for nothing: :class:`~app.gui.warmup.StageIntent`),
+    and the dashboards are told, when they want to know (they are released a while
+    after Visualize is left)."""
     if key == "Measure":
         window.metrics.check_freshness()
     window._refresh_idle_text()
-    window._request_warmup(warmup.STAGE_WARMUPS.get(key))
+    window._stage_intent.stage_changed(key)
     changed = getattr(visualization_manager, "stage_changed", None)
     if callable(changed):
         try:
@@ -107,8 +110,10 @@ def missing_dashboard_data(
     noun = "root length" if kind == "length" else "root area"
     is_busy = getattr(getattr(window, "skeleton_handler", None), "is_busy", None)
     if callable(is_busy) and is_busy(kind):  # a run rewrites what it would chart
-        running = window.jobs.running_name() or "A run"
-        return f"{running} is running", f"The {noun} dashboard opens when it ends.", "", None
+        # The job's name says what is going ("Measuring root length…", V11).
+        running = window.jobs.running_name()
+        title = f"{running}…" if running else "Waiting for a run to finish"
+        return title, f"The {noun} dashboard opens when it has finished.", "", None
     try:
         if spec.find_csv(layout).path:
             return None
