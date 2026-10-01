@@ -105,7 +105,7 @@ class Job:
         self.started.set()
         self.release.wait(10)
         self.runs.append((threading.get_ident(), start, time.perf_counter()))
-        if isinstance(self.result, Exception):
+        if isinstance(self.result, BaseException):
             raise self.result
         return self.result
 
@@ -227,6 +227,31 @@ def test_a_failing_job_reports_its_error_and_the_queue_goes_on(made, pool, caplo
         ("after", ""),
     ]
     assert "Warm-up broken failed" in caplog.text
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["own-thread", "pooled"])
+@pytest.mark.parametrize("ending", [SystemExit(3), KeyboardInterrupt()], ids=["exit", "interrupt"])
+def test_a_job_ended_by_a_base_exception_still_ends_its_warmup(made, pool, ending, pooled):
+    """SystemExit and KeyboardInterrupt are not Exceptions: the job's thread used to end
+    without a word, so the queue kept that warm-up running for good (none after it ever
+    started) and, with ``freeze``, automatic full collections stayed off for the rest of
+    the session (the hold is released when the warm-up reports back)."""
+    broken = Job("broken", result=ending)
+    after = Job("after")
+    queue = make_queue(
+        made,
+        pool,
+        {"broken": broken, "after": after},
+        freeze=True,
+        pooled=("broken",) if pooled else (),
+    )
+    queue.request("broken")
+    queue.request("after")
+    assert wait(lambda: len(queue.finished_log) == 2)
+    (key, error), after_result = queue.finished_log
+    assert key == "broken" and error  # reported as a failure, with a reason
+    assert after_result == ("after", "")  # the queue went on
+    assert not gc_policy.full_collections_held()
 
 
 # ------------------------------------------------------------------ threads

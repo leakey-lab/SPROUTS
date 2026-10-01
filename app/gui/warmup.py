@@ -165,7 +165,8 @@ class WarmupQueue(QObject):
     """Runs the requested warm-ups one at a time, off the GUI thread (see the module doc).
 
     ``jobs``: warm-up key -> a callable run off the GUI thread, returning "" or an error
-    (``None`` counts as ""); it must not raise. ``blocked``: why a warm-up must wait now,
+    (``None`` counts as ""); it should not raise (one that does, even with ``SystemExit``,
+    ends as a failure with that reason). ``blocked``: why a warm-up must wait now,
     or None; asked again every :data:`RETRY_MS` while one waits. ``ungated``: keys that
     never wait for ``blocked`` (the start-up warm-up). ``pooled``: keys run in ``pool``
     (the global QThreadPool by default); every other key gets a fresh thread (see the
@@ -309,7 +310,9 @@ class WarmupQueue(QObject):
                 gc_policy.hold_full_collections()  # released on the GUI thread (_on_done)
             try:
                 error = job() or ""
-            except Exception as exc:  # noqa: BLE001 - a job must never raise off the GUI
+            except BaseException as exc:  # noqa: BLE001 - SystemExit too: it must report back
+                # Unreported, the warm-up would stay "running" (none after it would start)
+                # and the hold on full collections would last the whole session.
                 logger.exception("Warm-up %s failed", key)
                 error = str(exc) or type(exc).__name__
             fresh = fresh and marker in sys.modules
