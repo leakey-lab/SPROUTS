@@ -3,8 +3,9 @@
 * RB-01 / PI-04 / FR-04 / UXS-01: before starting, ``mask/`` is scanned once and
   existing masks are classified (hand-corrected = RGBA PNG, model = greyscale).
   If any exist the user chooses "Keep existing masks (generate missing only)"
-  (default), "Overwrite all (N hand-corrected)" or Cancel. Cancel starts no
-  thread, so ``main_window.generate_all`` chains no skeleton pass.
+  (default), "Overwrite all (N hand-corrected)" ("Overwrite all" when none are)
+  or Cancel. Cancel starts no thread, so ``main_window.generate_all`` chains no
+  skeleton pass.
 * PG-04 / PI-11: importing or constructing the handler loads neither torch nor
   the model; the worker loads the cached model on first use ("Loading mask model").
 * PI-12 / UXS-02 / AR-07: progress, completion and failures go through
@@ -118,8 +119,9 @@ class MaskGenerationThread(GuardedThread):
 def _wait_cursor() -> Iterator[None]:
     """A wait cursor for GUI-thread work that takes a noticeable moment (R6).
 
-    Reading every mask header before a run takes about 1 s for 46k masks; the
-    cursor shows the click was taken. Restored on the way out, also on errors.
+    Listing the folder and reading every mask header before a run takes about
+    0.7 s for 46k masks; the cursor shows the click was taken. Restored on the way
+    out, also on errors.
     """
     if QApplication.instance() is None:
         yield
@@ -152,9 +154,9 @@ def ask_overwrite_policy(
     keep = box.addButton(
         "Keep existing masks (generate missing only)", QMessageBox.ButtonRole.AcceptRole
     )
-    box.addButton(
-        f"Overwrite all ({manual:,} hand-corrected)", QMessageBox.ButtonRole.DestructiveRole
-    )
+    # The count only when some are hand-corrected: "(0 hand-corrected)" read oddly.
+    overwrite = f"Overwrite all ({manual:,} hand-corrected)" if manual else "Overwrite all"
+    box.addButton(overwrite, QMessageBox.ButtonRole.DestructiveRole)
     cancel = box.addButton(QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(keep)
     box.setEscapeButton(cancel)

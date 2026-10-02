@@ -4,8 +4,14 @@ Generated masks and hand-corrected masks share one file name (``mask/<stem>.png`
 so a blind re-run of Generate would overwrite manual work. The two kinds differ in
 their PNG header: the Correct Mask editor saves ARGB32 (white on transparent ->
 PNG colour type 6) while the mask model writes 8-bit greyscale (colour type 0).
-Reading the 26-byte header is enough to tell them apart (about 1.0 s for 46k files
-with ``os.read``; a buffered ``open`` read 8 KB per file and took 1.6 s, R6).
+Reading the 26-byte header is enough to tell them apart; no pixel is decoded (a
+buffered ``open`` read 8 KB per file, R6).
+
+Opening a file costs far more than reading its header: of about 1.4 s for 46k masks
+(warm cache, NTFS), the opens took 0.85 s, the reads 0.3 s and the folder listing
+0.1 s. ``os.open`` and ``os.read`` release the GIL, so a large folder reads its
+headers on a few threads (about 0.6 s for 46k). The scan still returns only once
+every header is read.
 
 Qt-free and torch-free, so the pre-flight scan is cheap and unit-testable.
 """
@@ -15,6 +21,7 @@ from __future__ import annotations
 import enum
 import os
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from app.project_layout import ProjectLayout
@@ -23,6 +30,12 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _IHDR_COLOUR_TYPE_OFFSET = 25  # 8 signature + 4 length + 4 "IHDR" + 4 w + 4 h + 1 depth
 _HEADER_BYTES = _IHDR_COLOUR_TYPE_OFFSET + 1
 _OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0)  # O_BINARY: Windows only
+
+# Masks per thread-pool task; a folder of one chunk or less is read on the calling
+# thread (a pool would cost more than it saves). Six threads were the fastest for
+# 46k masks; more contend for the GIL and the file system.
+_SCAN_CHUNK = 1024
+_SCAN_WORKERS = 6
 
 # PNG colour types with an alpha channel: what the mask editor writes.
 _MANUAL_COLOUR_TYPES = frozenset({4, 6})  # grey+alpha, RGBA
@@ -103,6 +116,20 @@ class ExistingMasks:
         return self.count > 0
 
 
+def _classify_chunk(paths: list[str]) -> list[MaskOrigin]:
+    return [classify_mask(path) for path in paths]
+
+
+def _classify_all(paths: list[str]) -> list[MaskOrigin]:
+    """``classify_mask`` of every path, in order; many paths are read on a thread pool."""
+    if len(paths) <= _SCAN_CHUNK:
+        return _classify_chunk(paths)
+    chunks = [paths[i : i + _SCAN_CHUNK] for i in range(0, len(paths), _SCAN_CHUNK)]
+    workers = min(_SCAN_WORKERS, len(chunks))
+    with ThreadPoolExecutor(workers, thread_name_prefix="mask-origin") as pool:
+        return [origin for part in pool.map(_classify_chunk, chunks) for origin in part]
+
+
 def scan_existing_masks(layout: ProjectLayout, stems: Iterable[str] | None = None) -> ExistingMasks:
     """Scan ``layout.mask_dir`` once and classify every mask by origin.
 
@@ -114,8 +141,8 @@ def scan_existing_masks(layout: ProjectLayout, stems: Iterable[str] | None = Non
         wanted = set(stems)
         found = {stem: path for stem, path in found.items() if stem in wanted}
     groups: dict[MaskOrigin, set[str]] = {origin: set() for origin in MaskOrigin}
-    for stem, path in found.items():
-        groups[classify_mask(path)].add(stem)
+    for stem, origin in zip(found, _classify_all(list(found.values())), strict=True):
+        groups[origin].add(stem)
     return ExistingMasks(
         manual=frozenset(groups[MaskOrigin.MANUAL]),
         model=frozenset(groups[MaskOrigin.MODEL]),
