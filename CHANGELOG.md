@@ -11,8 +11,11 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
-Three passes, not yet released:
+Four passes, not yet released:
 
+- **Fix pass** (branch `feat/unified-correct-editor`, 2026-10-02): the engineering items
+  of `docs/KNOWN_ISSUES.md` #6 and #7 that need no owner decision, by parallel
+  packages, each reviewed and committed on its own. The owner questions stay open.
 - **UX and speed pass** (branch `feat/unified-correct-editor`, 2026-09-30): the open items
   of `docs/KNOWN_ISSUES.md` #5 and #6 worked through with the emphasis on UI/UX and speed,
   plus a bug hunt: per-area packages with a UI walkthrough and a measured runtime review,
@@ -31,6 +34,28 @@ Three passes, not yet released:
   a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- **Fix pass (2026-10-02).** None of these changes a CSV value or an output pixel.
+  - CI's `ruff check .` failed with 7 F811 errors: `ruff format` had put the fixtures'
+    `noqa` comments on the wrong parameter.
+  - A background job that ends with something other than an `Exception` (`SystemExit`,
+    `KeyboardInterrupt`, any other `BaseException`) now reports a failure: the Measure
+    CSV parse (the metrics stayed loading for good, blocking the warm-ups), the device
+    check (the chip stayed at "Checking GPU…"), the folder scan (it caught only
+    `OSError`, so any other error left the loading card up) and every batch job
+    (`GuardedThread`: the error reached the crash dialog while the progress row kept
+    spinning).
+  - A Measure CSV value that is not a finite number (`nan`, `inf`) shows the dash in the
+    failure colour, with a tooltip naming the CSV, instead of "nan mm".
+  - The progress row says "Generating masks — cancelling…" (was "Cancelling Generating
+    masks…"); the Generate prompt's button reads "Overwrite all" when no mask is
+    hand-corrected (was "Overwrite all (0 hand-corrected)").
+  - A save toast keeps one line: a long file name is elided in the middle (start and
+    extension kept), the full text in the tooltip. Toasts keep clear of the Welcome
+    screen's About button (a danger toast covered it at 1024 x 640).
+  - GT export: a drive-relative output folder (`D:out` with the project on `C:`) stayed
+    relative in the dialog, and the export used the raw string for every write, so a
+    change of working folder during an export could split its output. The dialog spells
+    the folder out and the export resolves it once, at the start.
 - **UX and speed pass (2026-09-30).** None of these changes a CSV value or an output pixel
   except the two entries under *Scientific output changes* (stem clash, GT export size
   check).
@@ -179,6 +204,21 @@ Three passes, not yet released:
     ... has been deleted", and the Measure Retry prompt is freed once answered.
 
 ### Performance
+- **Fix pass (2026-10-02).** Outputs are unchanged by all of these.
+  - The Library read-ahead counts a decoded photo against its 192 MiB as soon as the
+    decode finishes and enforces the bounds then (before, an unshown decode counted
+    0 bytes, so up to 3 of them could exceed the bound).
+  - The pre-Generate mask-origin scan reads the 26-byte headers on six threads for a
+    folder of more than 1024 masks: 46k masks 1.4 -> 0.6 s under the wait cursor (the
+    opens, not the reads, were 0.85 s of it). Same classification, and the scan still
+    ends before the prompt.
+  - Masks are read from disk once and decoded from those bytes (a model mask was read
+    twice), and model masks (8-bit grey) take the exact Pillow fast path editor masks
+    already took: a model mask reads 16 % faster at 640 x 480 and 19 % at 2048 x 1536, an
+    editor mask 12 % / 4 % faster (the bands are copied straight out of the RGBA pixels).
+    The fast path now accepts only files libpng reads the same way, so seven kinds of
+    crafted, CRC-valid broken PNG raise `MaskFileError` again instead of reading as a
+    mask; every real mask reads as before (3,001 checked).
 - **UX and speed pass (2026-09-30).** Outputs are unchanged by all of these.
   - Fifth wave: entering Generate on a 46k project 6.8 -> 1.4 ms to paint (the status text
     recounted every name on each refresh; the counts are now cached); stage warm-ups wait

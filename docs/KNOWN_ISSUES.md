@@ -202,10 +202,13 @@ Follow-ups:
 
 Limits measured during the build (not regressions):
 
-- Masks saved by the editor (RGBA) open about twice as slowly as model masks (8-bit
-  grey): 2.5-2.8 ms vs 1.1-1.3 ms at 640 x 480, 28-29 ms vs 14 ms at 2048 x 1536,
-  because `app/masks/store.py` decodes RGBA through libpng's grey conversion. An exact
-  fast path exists (decode unchanged, use one colour channel when R = G = B).
+- (Resolved 2026-09-29 and 2026-10-02) Masks saved by the editor (RGBA) opened about
+  twice as slowly as model masks (8-bit grey). The cost is inflating four bytes per pixel,
+  not libpng's grey conversion (OpenCV's unchanged decode is no faster). Both kinds now
+  take an exact Pillow fast path (zlib-ng) and are read from disk once: at 640 x 480 an
+  editor mask reads in 1.5 ms (2.4 ms through the reference decode) and a model mask in
+  0.7 ms (0.85 ms); at 2048 x 1536 16.5 ms (22 ms) and 7.4 ms (9.1 ms). The rest of the
+  gap is the four-channel inflate.
 - (Resolved 2026-09-30) Undo / redo of a large mask edit at 2048 x 1536 takes about 2 ms
   (was 15-22 ms): the patch box goes through `cv2.LUT` straight into the canvas, and large
   0/1 patches are stored bit-packed.
@@ -294,8 +297,8 @@ Owner questions (science or product scope; nothing here blocks use):
 - Wording and naming: the two dashboards name their views differently ("Faceted Depth
   Profile" vs "Area Profile by Position") and their date colours reuse the mask green and
   the skeleton orange (W19); the Measure buttons are nouns ("Root Length", "Root Area") and
-  re-measure every input even when nothing changed, and the Generate prompt says "Overwrite
-  all (0 hand-corrected)" (W12).
+  re-measure every input even when nothing changed (W12). (Resolved 2026-10-02: the Generate
+  prompt's button reads "Overwrite all" when no mask is hand-corrected.)
 
 Follow-ups:
 
@@ -322,11 +325,11 @@ Follow-ups:
   results until a full collection (46,178 images: 17.2 MB and 46,838 objects, freed by a
   41-51 ms pass), and a heap freeze made while that project was open kept it for the session
   (13.5 MB per freeze). It is now freed as soon as its scan has ended.
-- Same class as the warm-up fix, no known trigger: the Measure CSV parse
-  (`app/gui/window/metrics.py`) and the device check catch `Exception` only, so a
-  `BaseException` there would leave the metrics loading for good (warm-ups blocked, the bar
-  not refreshed) or the chip at "Checking GPU…"; a folder scan that fails with anything but
-  `OSError` reports neither outcome, and the loading card would stay up.
+- (Resolved 2026-10-02) Same class as the warm-up fix: the Measure CSV parse, the device
+  check, the folder scan (which caught only `OSError`) and `GuardedThread` (every batch job)
+  now report any `BaseException` as a failure, so the metrics no longer stay loading, the
+  chip no longer stays at "Checking GPU…", the loading card goes and a job's progress row
+  stops.
 - (Resolved 2026-09-30) Photo and raster layer items were freed only by the cyclic garbage
   collector (`TiledLevels` held a bound method of the item); they are now freed as soon as
   their scene lets go of them (browse at 2048 px: peak 1374 -> 657 MB, no GC pause).
@@ -336,9 +339,9 @@ Follow-ups:
   budget is enforced when reads complete; `LayerPrefs` writes only changed values (it
   synced on every Correct hide, 54 ms with an INI file); `PgDn` drops a picked branch that
   was not moved instead of refusing; *Discard* with only a draft pending drops the draft
-  and keeps the skeleton's history (J2). Still open: the Library read-ahead counts a photo
-  against its 192 MiB only once it is shown; entering Correct still reads the first
-  image's mask and skeleton on the GUI thread.
+  and keeps the skeleton's history (J2). (Resolved 2026-10-02) The Library read-ahead
+  counts a decoded photo against its 192 MiB as soon as the decode finishes. Still open:
+  entering Correct reads the first image's mask and skeleton on the GUI thread.
 - (Resolved 2026-09-30) Correct's Tab order follows the screen (WCAG 2.4.3): canvas,
   polyline prompt (while shown), rail (at the chosen tool), Enhance popover (while open),
   the dock left to right, the zoom cluster, then Layers; `Shift+Tab` walks back. It was
@@ -354,8 +357,9 @@ Follow-ups:
   not affected.
 - (Resolved 2026-09-30) GT export: a source image or tracing over about 179 Mpx (Pillow's
   `DecompressionBombError`) is that image's entry in `errors.txt`, its partial outputs are
-  removed and the export goes on; it used to abort the whole export. Still open: a
-  drive-relative export folder (`D:out` with the project on `C:`) stays relative.
+  removed and the export goes on; it used to abort the whole export. (Resolved 2026-10-02)
+  A drive-relative export folder (`D:out` with the project on `C:`) is resolved once, when
+  the export starts, and the dialog shows it in full.
 - Dashboards: while one is alive the canvases use raster viewports (Qt cannot show a web
   view in a window that holds OpenGL viewports); hidden dashboards are now released
   5 minutes after Visualize is left, and OpenGL comes back then (the trade-off is a ~1 s
@@ -368,18 +372,21 @@ Follow-ups:
   first dashboard import; a clean install from `requirements.txt` has none.
 - `refresh_outputs` stays on the GUI thread at the end of a generation run (56-64 ms for 23k
   masks and 23k skeletons, once per run; an asynchronous scan would race with saves). The
-  pre-Generate mask-origin scan still runs on the GUI thread (about 1.0 s for 46k masks,
-  with a wait cursor).
+  pre-Generate mask-origin scan still blocks the GUI thread under a wait cursor, but reads
+  the headers on six threads since 2026-10-02: 46k masks 1.4 -> 0.6 s (opening the files
+  is most of it). Next step: scan ahead as a Generate warm-up, keyed by size and mtime from
+  `scandir`, so a click lists the two folders only (about 0.2 s).
 - "Changed since measured" compares file times, so a copied folder can report changes that
   did not happen. (`Ctrl+S` with nothing unsaved: see the owner question V1 above.)
 - Check that a normal launch gets hardware OpenGL: in the test sessions Qt picked its
   software renderer (the adapter read as vendor 0x0), which turns the OpenGL canvases off.
   The app log says "OpenGL canvas viewports available" or "off: software renderer"; raster
   frames are about 10x slower.
-- Small texts: "Cancelling Generating masks…" reads awkwardly; a danger toast can cover the
-  Welcome screen's About button at 1024 x 640; a metric CSV edited to hold `nan` shows
-  "nan mm". (Resolved 2026-09-30: the status line elides a long message in the middle,
-  so a saved file's name stays readable; the full text is in the tooltip.)
+- (Resolved 2026-10-02) Small texts: the progress row says "Generating masks —
+  cancelling…"; toasts keep clear of the Welcome screen's About button; a metric CSV
+  value that is not a number shows the dash in the failure colour, not "nan mm".
+  (Resolved 2026-09-30: the status line elides a long message in the middle, so a saved
+  file's name stays readable; the full text is in the tooltip.)
 
 Second walkthrough (V1-V11, 2026-09-30); V1 is the owner question above, the rest:
 
@@ -410,5 +417,5 @@ Second walkthrough (V1-V11, 2026-09-30); V1 is the owner question above, the res
   have a GT tracing" reworded.
 - Still open from that walkthrough: a batch job that finishes after another folder was
   opened still reports the previous project (refuse or ask before opening while a job
-  runs, or name the project in the job's toasts?); a long file name wraps the Correct
-  save toast onto two lines.
+  runs, or name the project in the job's toasts?). (Resolved 2026-10-02: a long file name
+  is elided in the middle so the save toast keeps one line.)
