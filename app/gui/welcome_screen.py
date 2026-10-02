@@ -15,6 +15,9 @@ Presentation-only landing page shown at ``app_stack`` index 0.
 * The stage line names the ribbon's stages (``app.gui.shell_chrome.STAGES``) as
   plain text (not controls), and the footer shows ``app.__version__`` and the
   model files — no hardcoded device or version claims.
+* ``about_button`` is named to the window's toast clearance, so toasts keep clear
+  of it while this screen is shown
+  (:meth:`app.gui.toast_clearance.ToastClearance.keep_clear_of`).
 """
 
 from __future__ import annotations
@@ -448,6 +451,12 @@ class WelcomeWidget(QWidget):
             self._about_button = about
         row.addStretch(1)
         return row
+
+    @property
+    def about_button(self) -> QWidget | None:
+        """The footer's About button (``None`` without ``on_about``). On a 1024 x 640
+        window the toast column reaches it, so the window's toasts keep clear of it."""
+        return self._about_button
 
     # ------------------------------------------------------------------ recents
     def recent_rows(self) -> list[RecentRow]:

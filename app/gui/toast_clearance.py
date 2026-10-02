@@ -12,12 +12,18 @@ Lifting the stack above an editor's dock and zoom cluster moves it up the right 
 where the editor's side panel sits (Correct's Layers, Trace GT's Classes). The optional
 ``side`` chrome keeps the stack in its corner while it fits below such a panel and moves
 it to the panel's left when it does not (more toasts, longer ones, a shorter window).
+
+A screen can name chrome of its own with :meth:`ToastClearance.keep_clear_of`: the Welcome
+screen's About button, which the toast column reaches on a 1024 x 640 window. Such chrome
+counts while it is visible, so it stops counting when its screen is left.
 """
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable, Iterable
 
+from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, QTimer
 from PyQt6.QtWidgets import QWidget
 
@@ -56,6 +62,8 @@ class ToastClearance(QObject):
         self._toasts = toasts
         self._chrome = chrome
         self._side = side
+        # Chrome named by keep_clear_of (weak: a deleted screen takes its chrome with it).
+        self._kept: list[tuple[weakref.ref, int]] = []
         # One reposition per event-loop turn, after the layouts placed the chrome.
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -97,6 +105,15 @@ class ToastClearance(QObject):
             if widget is not None:
                 widget.installEventFilter(self)
 
+    def keep_clear_of(self, widget: QWidget, gap: int = FLOATING_GAP) -> None:
+        """Count ``widget`` as bottom chrome too, while it is visible, and follow it.
+        Naming the same widget again changes nothing."""
+        if any(ref() is widget for ref, _gap in self._kept):
+            return
+        self._kept.append((weakref.ref(widget), int(gap)))
+        self.watch(widget)
+        self._timer.start()
+
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override
         if event.type() in self._EVENTS:
             self._timer.start()
@@ -108,7 +125,7 @@ class ToastClearance(QObject):
         column_left = self._toasts.column_left(right_offset)
         column_right = window.width() - self._toasts.margin() - right_offset
         offset = 0
-        for widget, gap in self._chrome():
+        for widget, gap in [*self._chrome(), *self._kept_chrome()]:
             if widget is None or not widget.isVisible():
                 continue
             top_left = widget.mapTo(window, QPoint(0, 0))
@@ -116,3 +133,12 @@ class ToastClearance(QObject):
                 continue  # entirely left or right of the toasts
             offset = max(offset, window.height() - top_left.y() + gap)
         return offset
+
+    def _kept_chrome(self) -> list[tuple[QWidget, int]]:
+        """``(widget, gap)`` of the chrome named by :meth:`keep_clear_of` that still exists."""
+        kept = [(ref(), gap) for ref, gap in self._kept]
+        return [
+            (widget, gap)
+            for widget, gap in kept
+            if widget is not None and not sip.isdeleted(widget)
+        ]

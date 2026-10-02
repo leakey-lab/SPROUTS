@@ -89,6 +89,8 @@ def init_ui(window: "MainWindow"):
     window.toast_clearance = ToastClearance(
         window, window.toasts, window._bottom_chrome, side=window._side_chrome
     )
+    if window.welcome.about_button is not None:  # counts only while Welcome shows
+        window.toast_clearance.keep_clear_of(window.welcome.about_button)
     window.toast_clearance.watch(
         window.statusline,
         window.metrics_bar,

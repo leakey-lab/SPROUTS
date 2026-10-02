@@ -119,7 +119,7 @@ def test_cancel_calls_the_callback_once(app):
     tp.cancel_button.click()
     assert calls == [1] and signals == [1]
     assert not tp.cancel_button.isEnabled()
-    assert "Cancelling" in tp.label.text()
+    assert tp.label.text() == "Generating masks — cancelling…"
 
 
 def test_cancel_hidden_when_not_cancelable(app):

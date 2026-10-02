@@ -1,11 +1,12 @@
-"""The status line keeps saying "Cancelling …" until a cancelled job has stopped (R-SHELL-B).
+"""The status line keeps saying "cancelling…" until a cancelled job has stopped (R-SHELL-B).
 
 A worker checks for Cancel between batches, so the batch in flight still reports progress
-after the click. Each report used to overwrite "Cancelling Generating masks…" with
+after the click. Each report used to overwrite the cancelling text with
 "Generating masks — 1,235 / 46,178 · ETA 12 min" (Cancel greyed out), which read as if the
 click had been ignored. Mask generation also restarts the task at each stage
 (``begin_task`` per stage): a stage reported after the click re-enabled Cancel and dropped
-the "Cancelling" text. Both now keep the cancelling state until the job ends.
+the cancelling text. Both now keep the cancelling state until the job ends. The text reads
+"Generating masks — cancelling…" (it was "Cancelling Generating masks…").
 """
 
 from __future__ import annotations
@@ -49,11 +50,11 @@ def test_progress_after_cancel_keeps_the_cancelling_text(progress):
     progress.start("Generating masks", cancelable=True, on_cancel=worker.cancel)
     progress.set_counts(1_234, 46_178)
     progress.cancel_button.click()
-    assert progress.label.text() == "Cancelling Generating masks…"
+    assert progress.label.text() == "Generating masks — cancelling…"
 
     progress.set_counts(1_235, 46_178)  # the batch in flight still reports
     progress.set_progress(3)
-    assert progress.label.text() == "Cancelling Generating masks…"
+    assert progress.label.text() == "Generating masks — cancelling…"
     assert progress.bar.value() == 3  # the bar still follows the last batch
     assert not progress.cancel_button.isEnabled()
     assert worker.cancels == 1
@@ -65,7 +66,7 @@ def test_a_new_stage_of_the_cancelled_job_stays_cancelling(progress):
     progress.cancel_button.click()
     # The worker reports its next stage before it sees the cancel (same job, same cancel).
     progress.start("Generating masks", cancelable=True, on_cancel=worker.cancel)
-    assert progress.label.text() == "Cancelling Generating masks…"
+    assert progress.label.text() == "Generating masks — cancelling…"
     assert not progress.cancel_button.isEnabled()
     assert not progress.cancel_button.isHidden()
     assert worker.cancels == 1

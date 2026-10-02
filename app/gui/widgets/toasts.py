@@ -6,6 +6,8 @@
   on every PgDn used to stack a new toast each time).
 - Text wraps at ``min(460, host width - 2 * margin)``; an unbreakable token such as a path
   is elided in the middle, and the full message is in the tooltip and accessible name.
+  A save's toast, "<what> · <file name>", keeps one line: a name too long for it is elided
+  in the middle (its start and extension stay) instead of wrapping onto a second line.
 - Lifetimes by kind: success / info expire (3.2 s by default), warn lasts at least 6 s,
   danger stays until closed. Warn and danger toasts have a close button; a click on any
   toast dismisses it.
@@ -20,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -44,6 +47,30 @@ _KIND_COLOR = {
     "danger": tokens.DANGER,
 }
 _CLOSABLE = ("warn", "danger")
+#: A save's toast names its file after this: "Saved mask · <file name>".
+NAME_SEPARATOR = " · "
+#: The least width a file name keeps when it is shortened to keep its toast on one line.
+MIN_NAME_PX = 80
+
+
+def name_on_one_line(message: str, metrics: QFontMetrics, room: int) -> str | None:
+    """``message`` on one line of ``room`` px, its file name elided in the middle, for a
+    "<what> · <name>" message that would wrap. ``None`` when it fits as it is, when the part
+    after the last " · " is not one word, or when the name would keep under MIN_NAME_PX."""
+    if metrics.horizontalAdvance(message) <= room:
+        return None
+    lead, separator, name = message.rpartition(NAME_SEPARATOR)
+    if not separator or not name or any(char.isspace() for char in name):
+        return None
+    lead += separator
+    name_room = room - metrics.horizontalAdvance(lead)
+    while name_room >= MIN_NAME_PX:
+        line = lead + metrics.elidedText(name, Qt.TextElideMode.ElideMiddle, name_room)
+        overshoot = metrics.horizontalAdvance(line) - room
+        if overshoot <= 0:
+            return line
+        name_room -= overshoot  # the joined line can measure a pixel wider than its parts
+    return None
 
 
 def toast_timeout(kind: str, requested: int | None) -> int | None:
@@ -140,7 +167,8 @@ class Toast(QWidget):
         return self._message
 
     def set_message(self, message: str) -> None:
-        """Show ``message`` (wrapped, long words elided); full text in tooltip and name."""
+        """Show ``message`` (wrapped, long words elided, a save's file name elided to keep
+        one line); full text in tooltip and name."""
         self._message = message
         self.setToolTip(message)
         self.setAccessibleName(message)
@@ -216,13 +244,14 @@ class Toast(QWidget):
     def _fit_text(self, room: int) -> None:
         self._label.ensurePolished()
         metrics = self._label.fontMetrics()
-        self._label.setText(
-            elide_long_words(
+        line = name_on_one_line(self._message, metrics, room)
+        if line is None:
+            line = elide_long_words(
                 self._message,
                 lambda word: metrics.horizontalAdvance(word) <= room,
                 lambda word: metrics.elidedText(word, Qt.TextElideMode.ElideMiddle, room),
             )
-        )
+        self._label.setText(line)
         wrap_label(self._label, room)
         self._adjust_size()
 

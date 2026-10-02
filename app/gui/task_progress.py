@@ -18,7 +18,7 @@ API (``app.gui.ui_feedback.QtUiFeedback`` adapts ``UiFeedback`` onto it):
 It is hidden by default; ``start`` shows it, ``finish``/``fail`` hide it after a
 short confirmation. ``state_changed`` reports "working" / "idle" / "error" for
 the statusline's state dot; a failure goes back to "idle" when its row hides (the
-failure's toast keeps the message). After Cancel the row says "Cancelling <operation>…"
+failure's toast keeps the message). After Cancel the row says "<operation> — cancelling…"
 until ``finish`` / ``fail`` (the batch in flight still moves the bar). The remaining time
 comes from :class:`EtaEstimator` (pure Python, injectable clock).
 """
@@ -211,7 +211,7 @@ class TaskProgressWidget(QWidget):
         """Begin an operation at 0%; show Cancel when ``cancelable`` or ``on_cancel``.
 
         A job that reports a new stage after its Cancel was clicked (the same ``on_cancel``)
-        stays "Cancelling …" with Cancel greyed out.
+        stays "<operation> — cancelling…" with Cancel greyed out.
         """
         same_cancelled_job = (
             self._cancelling and on_cancel is not None and on_cancel == self._on_cancel
@@ -288,7 +288,9 @@ class TaskProgressWidget(QWidget):
 
     def _render(self, progress_text: str) -> None:
         if self._cancelling:  # the batch in flight still reports: keep saying so
-            self.label.setText(f"Cancelling {self._operation or 'task'}…")
+            self.label.setText(
+                f"{self._operation} — cancelling…" if self._operation else "Cancelling…"
+            )
         elif self._operation:
             self.label.setText(f"{self._operation} — {progress_text}")
         else:

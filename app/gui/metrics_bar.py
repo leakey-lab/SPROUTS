@@ -15,7 +15,8 @@ computes anything. Measured values come from the Measure CSVs through
 :class:`app.data_processing.measurement_index.MeasurementIndex` (read by the
 caller); a failed measurement shows ``failed`` with its message, and a value
 whose inputs changed after it was measured is shown in the warning colour with a
-"Measure again" tooltip. The FOV text is derived from
+"Measure again" tooltip. A value that is not a number (a CSV edited to hold ``nan``
+or ``inf``) shows ``—`` in the failure colour, never "nan mm". The FOV text is derived from
 :data:`app.config.CALIBRATION` (the single source of the field of view). The
 value QLabels keep their ``—`` fallback text (and their ``_length_value`` /
 ``_area_value`` / ``_status_value`` names) so existing callers and tests are
@@ -39,6 +40,8 @@ _DASH = "—"
 _FAILED = "failed"
 #: The input a value was measured from changed after the Measure run (``{}``: which one).
 _OUTDATED_TIP = "{} changed after this measurement — run Measure again for a current value."
+#: The CSV row holds no number to show (``nan``, ``inf``): ``{}`` the CSV, ``{}`` the value.
+_NO_NUMBER_TIP = "{} holds no valid number for this image ({})"
 _LENGTH_INPUT = "The generated skeleton"
 _ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
 _AREA_INPUT = "The mask"
@@ -338,8 +341,16 @@ class MetricsBar(QWidget):
         note: str | None = None,
     ) -> None:
         """Fill one metric cell: a value, ``failed`` + message, or hidden. ``changed`` names
-        the input an outdated value was measured from; ``note`` is one more tooltip line."""
-        if value is not None:
+        the input an outdated value was measured from; ``note`` is one more tooltip line.
+        A value that is not a finite number shows the dash in the failure colour."""
+        if value is not None and not math.isfinite(value):
+            label.setText(_DASH)
+            outdated = False
+            color = tokens.DANGER
+            tips = [_NO_NUMBER_TIP.format(source or "The measurement CSV", value)]
+            if note:
+                tips.append(note)
+        elif value is not None:
             label.setText(f"{value:.2f} {unit}")
             outdated = bool(stale)
             color = tokens.WARN if outdated else label.property("baseColor")
