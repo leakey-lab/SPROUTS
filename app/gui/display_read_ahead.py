@@ -10,21 +10,27 @@ Rules (the same as the Correct page's read-ahead):
 
 - a decode is used only while the file on disk is the one that was read: its
   ``(path, mtime, size)`` stamp is taken before the read and compared at :meth:`get`;
-- a few photos are kept, bounded by count and by bytes, oldest dropped first;
+- a few photos are kept, bounded by count and by bytes. A decode counts towards the bytes
+  as soon as it finishes, shown or not, and the bounds are enforced then too. The oldest
+  go first (the photo shown before its neighbours were asked for, then the reads in the
+  order asked); a decode queued or running holds nothing yet, so it is never dropped for
+  bytes; the photo just decoded, kept or asked for always stays;
 - a read still queued when its photo is asked for is dropped (the caller decodes it
   itself); one already running is waited for, since it is partly done;
 - decoded arrays are made read-only: they are shared with the photo item, and with the
   Correct page, which takes the photos it opens or reads ahead (:meth:`DisplayReadAhead.take`
   hands one over and forgets it, never waiting), so this cache empties while it is shown.
 
-Only the GUI thread calls the object; the worker runs the decode jobs and touches
-nothing else.
+Only the GUI thread calls the object; the worker runs the decode jobs, and the end of one
+only re-checks the bounds, under a lock.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from concurrent.futures import CancelledError, Executor, Future, ThreadPoolExecutor
@@ -74,6 +80,14 @@ def _read(decode: Decode, path: str) -> tuple[tuple, np.ndarray | None]:
     return stamp, image
 
 
+def _decoded(future: Future) -> tuple[tuple | None, np.ndarray | None]:
+    """A finished decode's ``(stamp, photo)``; ``(None, None)`` while it is queued or
+    running, or when it was cancelled or failed (never waits)."""
+    if not future.done() or future.cancelled() or future.exception() is not None:
+        return None, None
+    return future.result()
+
+
 @dataclass
 class _Entry:
     stamp: tuple | None = None
@@ -82,7 +96,12 @@ class _Entry:
 
     @property
     def nbytes(self) -> int:
-        return 0 if self.image is None else int(self.image.nbytes)
+        """Bytes of the photo held: a kept one, or a finished decode (shown or not); a
+        decode queued or running holds nothing yet."""
+        image = self.image
+        if image is None and self.future is not None:
+            image = _decoded(self.future)[1]
+        return 0 if image is None else int(image.nbytes)
 
 
 class DisplayReadAhead:
@@ -110,51 +129,69 @@ class DisplayReadAhead:
             max_workers=1, thread_name_prefix="sprouts-library-read-ahead"
         )
         self._entries: OrderedDict[str, _Entry] = OrderedDict()  # oldest first
+        self._lock = threading.Lock()  # the end of a decode trims on the worker
         self._closed = False
 
     # ------------------------------------------------------------------ API
     def get(self, path: str) -> np.ndarray | None:
         """The photo of ``path`` if it was decoded ahead (or kept) and its file is
-        unchanged; None otherwise (the caller decodes it). It stays kept."""
+        unchanged; None otherwise (the caller decodes it). It stays kept, as the newest."""
         key = _key(path)
-        entry = self._entries.get(key)
-        if entry is None or not self._settle(key, entry):
-            return None
-        if entry.image is None or file_stamp(path) != entry.stamp:
-            self._entries.pop(key, None)
-            return None
-        self._entries.move_to_end(key)
-        self._trim()  # after the move: the photo handed over is the newest, which stays
-        return entry.image
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            future = entry.future
+            if future is not None and future.cancel():  # still queued: the caller is quicker
+                del self._entries[key]
+                return None
+        if future is None:
+            stamp, image = entry.stamp, entry.image
+        else:
+            try:
+                stamp, image = future.result()  # a running decode is waited for, unlocked
+            except CancelledError:
+                stamp, image = None, None
+        current = image is not None and file_stamp(path) == stamp
+        with self._lock:
+            if self._entries.get(key) is entry:
+                del self._entries[key]
+            if not current or self._closed:
+                return None
+            # Kept as the newest even when a bound check dropped it while it was waited for.
+            self._entries[key] = _Entry(stamp=stamp, image=image)
+            self._trim(stay=key)
+        return image
 
     def take(self, path: str) -> tuple[tuple, np.ndarray] | None:
         """Hand over the photo of ``path`` with its stamp and forget it (another page holds
         it now); None when there is none, its file changed or its decode has not finished
         (never waits: that decode is forgotten too)."""
-        entry = self._entries.pop(_key(path), None)
+        with self._lock:
+            entry = self._entries.pop(_key(path), None)
         if entry is None:
             return None
         future = entry.future
-        if future is not None:
-            if not future.done():
-                future.cancel()  # a decode already running ends on its own; it is dropped
-                return None
-            try:
-                entry.stamp, entry.image = future.result()
-            except CancelledError:
-                return None
-        stamp = entry.stamp
-        if entry.image is None or stamp is None or not _readable(stamp):
+        if future is None:
+            stamp, image = entry.stamp, entry.image
+        elif not future.done():
+            future.cancel()  # a decode already running ends on its own; it is dropped
             return None
-        return (stamp, entry.image) if file_stamp(path)[1:] == stamp[1:] else None
+        else:
+            stamp, image = _decoded(future)
+        if image is None or stamp is None or not _readable(stamp):
+            return None
+        return (stamp, image) if file_stamp(path)[1:] == stamp[1:] else None
 
     def holds(self, path: str) -> bool:
         """True when ``path``'s photo is kept or being decoded (never waits)."""
-        return _key(path) in self._entries
+        with self._lock:
+            return _key(path) in self._entries
 
     def is_ready(self, path: str) -> bool:
         """True when a decode of ``path`` has finished (a test hook; never waits)."""
-        entry = self._entries.get(_key(path))
+        with self._lock:
+            entry = self._entries.get(_key(path))
         if entry is None:
             return False
         return entry.future is None or entry.future.done()
@@ -166,72 +203,87 @@ class DisplayReadAhead:
             return
         image.flags.writeable = False
         key = _key(path)
-        self._drop(key)
-        self._entries[key] = _Entry(stamp=stamp, image=image)
-        self._trim()
+        with self._lock:
+            self._drop(key)
+            self._entries[key] = _Entry(stamp=stamp, image=image)
+            self._trim(stay=key)
 
     def request(self, paths: Iterable[str]) -> None:
         """Decode ``paths`` ahead, in order, unless kept or already being decoded."""
-        if self._closed:
-            return
-        for path in paths:
-            key = _key(path)
-            if key in self._entries:
-                self._entries.move_to_end(key)
-                continue
-            future = self._executor.submit(_read, self._decode, path)
-            self._entries[key] = _Entry(future=future)
-            self._trim()
+        queued: list[tuple[str, Future]] = []
+        with self._lock:
+            if self._closed:
+                return
+            for path in paths:
+                key = _key(path)
+                if key in self._entries:
+                    self._entries.move_to_end(key)
+                    continue
+                future = self._executor.submit(_read, self._decode, path)
+                self._entries[key] = _Entry(future=future)
+                self._trim()
+                queued.append((key, future))
+        for key, future in queued:  # unlocked: a decode done already reports at once
+            future.add_done_callback(functools.partial(self._completed, key))
 
     def retain(self, paths: Iterable[str]) -> None:
         """Forget every photo but those of ``paths`` (a queued decode is cancelled)."""
         keep = {_key(path) for path in paths}
-        for key in [key for key in self._entries if key not in keep]:
-            self._drop(key)
+        with self._lock:
+            for key in [key for key in self._entries if key not in keep]:
+                self._drop(key)
 
     def pending(self) -> list[str]:
         """Keys (normalised paths) of the photos kept or being decoded, oldest first."""
-        return list(self._entries)
+        with self._lock:
+            return list(self._entries)
 
     def clear(self) -> None:
         """Forget every photo (another folder); queued decodes are cancelled."""
-        for key in list(self._entries):
-            self._drop(key)
+        with self._lock:
+            for key in list(self._entries):
+                self._drop(key)
 
     def close(self) -> None:
         """Forget everything and stop the worker (a running decode ends on its own)."""
         self.clear()
-        self._closed = True
+        with self._lock:
+            self._closed = True
         if self._owns_executor:
             self._executor.shutdown(wait=False, cancel_futures=True)
 
     # ------------------------------------------------------------- internals
-    def _settle(self, key: str, entry: _Entry) -> bool:
-        """Turn a decode into its result: waits for a running one, drops a queued one."""
-        future = entry.future
-        if future is None:
-            return True
-        if future.cancel():  # still queued: the caller is quicker decoding it now
-            self._entries.pop(key, None)
-            return False
-        try:
-            entry.stamp, entry.image = future.result()
-        except CancelledError:
-            self._entries.pop(key, None)
-            return False
-        entry.future = None  # the caller trims once this entry is the newest
-        return True
+    def _completed(self, key: str, future: Future) -> None:
+        """A decode ended (on the worker, or at once): its photo now counts towards the
+        bytes, and it stays. A cancelled one holds nothing, and ``cancel`` calls this with
+        the lock held: it must return before taking the lock."""
+        if future.cancelled():
+            return
+        with self._lock:
+            entry = self._entries.get(key)
+            if not self._closed and entry is not None and entry.future is future:
+                self._trim(stay=key)
 
     def _drop(self, key: str) -> None:
+        """Forget ``key`` (lock held); a queued decode is cancelled."""
         entry = self._entries.pop(key, None)
         if entry is not None and entry.future is not None:
             entry.future.cancel()
 
-    def _trim(self) -> None:
-        """Drop the oldest entries beyond the count and byte bounds (the newest stays)."""
+    def _trim(self, stay: str | None = None) -> None:
+        """Drop entries beyond the count and byte bounds (lock held), oldest first. ``stay``
+        (by default the newest) always stays, and a decode not finished holds no bytes, so
+        it is never dropped for them."""
+        if stay is None:
+            stay = next(reversed(self._entries), None)
+        order = [key for key in self._entries if key != stay]  # oldest first
         while len(self._entries) > self._max_images:
-            self._drop(next(iter(self._entries)))
-        while len(self._entries) > 1 and sum(e.nbytes for e in self._entries.values()) > (
-            self._max_bytes
-        ):
-            self._drop(next(iter(self._entries)))
+            self._drop(order.pop(0))
+        held = {key: self._entries[key].nbytes for key in self._entries}
+        total = sum(held.values())
+        for key in order:
+            if total <= self._max_bytes:
+                break
+            if held[key]:
+                total -= held[key]
+                self._drop(key)
