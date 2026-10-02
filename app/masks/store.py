@@ -69,10 +69,14 @@ def _is_plain_rgba8_png(data: bytes) -> bool:
 def _decode_grey_rgba(data: bytes) -> np.ndarray | None:
     """The grey plane of a plain 8-bit RGBA PNG whose R == G == B everywhere, else None.
 
-    Exact: for such a file the reference decode (``IMREAD_GRAYSCALE``: libpng drops alpha
-    and converts RGB to grey, which returns the shared value itself when R == G == B)
-    gives the same plane. Pillow inflates with zlib-ng and splits the channels in C, about
-    40 % faster than the reference decode of an editor-saved mask (640 and 2048 px).
+    Exact: for such a file the reference decode (``IMREAD_GRAYSCALE``: libpng strips the
+    alpha channel, it does not composite it, and converts RGB to grey, which returns the
+    shared value itself when R == G == B) gives the same plane, whatever the alpha.
+    Most of the time goes into inflating four bytes per pixel, not into the grey
+    conversion: OpenCV's ``IMREAD_UNCHANGED`` decode is no faster than its grey decode.
+    Pillow inflates with zlib-ng, about twice as fast as OpenCV's zlib, so an editor-saved
+    mask reads about 35 % faster than through the reference decode at 640 x 480 and about
+    20 % faster at 2048 x 1536.
     Anything else (another PNG kind, another chunk, a colour pixel, a decode error)
     returns None and the reference decode decides, errors included.
     """
@@ -86,8 +90,10 @@ def _decode_grey_rgba(data: bytes) -> np.ndarray | None:
             if img.mode != "RGBA" or (max_pixels and img.width * img.height > max_pixels):
                 return None
             img.load()
-            red = img.getchannel(0).tobytes()
-            if red != img.getchannel(1).tobytes() or red != img.getchannel(2).tobytes():
+            # The raw packer copies one band straight out of the RGBA pixels, without
+            # the one-band image that getchannel() makes first.
+            red = img.tobytes("raw", "R")
+            if red != img.tobytes("raw", "G") or red != img.tobytes("raw", "B"):
                 return None
             return np.frombuffer(red, np.uint8).reshape(img.height, img.width)
     except Exception:  # noqa: BLE001 - Pillow refused it: the reference decode decides
