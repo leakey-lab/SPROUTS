@@ -12,14 +12,13 @@ compression level 0: 1.2 MiB per 640x480 mask instead of a few KiB).
 Writes are atomic (temp file + ``os.replace``, see :mod:`app.io_utils`): a
 failed save never leaves a truncated mask behind and keeps the previous file.
 
-Reads are a grayscale decode thresholded at :data:`MASK_THRESHOLD`. A file shaped like
-the ones :func:`write_mask_file` makes (a plain 8-bit RGBA PNG whose R == G == B) takes
-an exact faster path: see :func:`_decode_grey_rgba`.
+Reads are a grayscale decode thresholded at :data:`MASK_THRESHOLD`, of the bytes read
+once. A plain 8-bit grey PNG (a model mask) and a plain 8-bit RGBA PNG whose R == G == B
+(an editor mask) take an exact faster path: see :func:`_decode_plain_png`.
 """
 
 from __future__ import annotations
 
-import io
 import os
 import zlib
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from app.io_utils import atomic_write_bytes, imread_unicode
+from app.io_utils import atomic_write_bytes
 from app.project_layout import ProjectLayout
 
 # Grayscale value above which a stored mask pixel counts as foreground.
@@ -39,72 +38,155 @@ class MaskFileError(OSError):
 
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-# Chunks that never change the decoded pixels. Any other chunk (gAMA, sRGB, iCCP, sBIT,
-# eXIf - OpenCV rotates by its orientation - ...) sends the file to the reference decode.
+# Chunks that never change the decoded pixels. Any other chunk (tRNS, gAMA, sRGB, iCCP,
+# cHRM, sBIT, eXIf - OpenCV rotates by its orientation - ...) sends the file to the
+# reference decode.
 _PLAIN_CHUNKS = frozenset({b"IHDR", b"IDAT", b"IEND", b"pHYs", b"tEXt", b"zTXt", b"iTXt", b"tIME"})
+# PNG colour type -> (Pillow mode, bytes per pixel) of the files the fast path reads.
+_FAST_KINDS = {0: ("L", 1), 6: ("RGBA", 4)}
+# Bounds of the fast path, far inside what libpng, OpenCV and Pillow accept. OpenCV
+# refuses some chunks over 8,000,000 bytes, and libpng limits chunk lengths too.
+_MAX_SIDE = 1 << 16
+_MAX_PIXELS = 1 << 26
+_MAX_CHUNK = 1 << 22
+# The rows decoded past the image hold at least this many random pixels (see below).
+_SPARE_PIXELS = 16
+# What the last image row holds before the decode: a ramp for grey, and for RGBA a
+# pixel whose R != G, which no row the fast path keeps can equal.
+_LAST_ROW_GREY = bytes(range(1, 256)) + b"\x00"
+_LAST_ROW_RGBA = b"\x01\x02\x03\x04"
 
 
-def _is_plain_rgba8_png(data: bytes) -> bool:
-    """True for a PNG like the ones :func:`write_mask_file` writes: 8-bit RGBA, not
-    interlaced, only :data:`_PLAIN_CHUNKS`, every chunk CRC right, IEND present."""
-    if data[:8] != _PNG_SIGNATURE or data[12:16] != b"IHDR" or len(data) < 33:
-        return False
-    if (data[24], data[25], data[28]) != (8, 6, 0):  # bit depth, colour type, interlace
-        return False
+def _plain_png(data: bytes) -> tuple[int, int, int, bytes] | None:
+    """``(width, height, colour type, zlib stream)`` of a PNG the fast path may read.
+
+    The file must be laid out the way libpng (the reference decode) reads it without an
+    error: one IHDR of 13 bytes, first (8-bit grey or RGBA, compression 0, filter 0, not
+    interlaced, sides of 1 to ``_MAX_SIDE``), only :data:`_PLAIN_CHUNKS` of at most
+    ``_MAX_CHUNK`` bytes, every CRC right, then IEND. The zlib stream is the data of the
+    first run of IDAT chunks: libpng takes the image from that run alone. Else None.
+    """
+    if len(data) < 45 or data[:16] != _PNG_SIGNATURE + b"\x00\x00\x00\x0dIHDR":
+        return None
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    depth, colour, compression, filtering, interlace = data[24:29]
+    if (depth, compression, filtering, interlace) != (8, 0, 0, 0) or colour not in _FAST_KINDS:
+        return None
+    if not (0 < width <= _MAX_SIDE and 0 < height <= _MAX_SIDE and width * height <= _MAX_PIXELS):
+        return None
+    view = memoryview(data)
+    run: list[memoryview] = []
+    in_run = None  # None before the first IDAT, True inside the first run, False after it
     pos = 8
     while pos + 12 <= len(data):
         length = int.from_bytes(data[pos : pos + 4], "big")
-        end = pos + 8 + length
         kind = data[pos + 4 : pos + 8]
-        if kind not in _PLAIN_CHUNKS or end + 4 > len(data):
-            return False
-        if zlib.crc32(data[pos + 4 : end]) != int.from_bytes(data[end : end + 4], "big"):
-            return False
+        end = pos + 8 + length
+        if kind not in _PLAIN_CHUNKS or length > _MAX_CHUNK or end + 4 > len(data):
+            return None
+        if kind == b"IHDR" and pos != 8:
+            return None
+        if zlib.crc32(view[pos + 4 : end]) != int.from_bytes(data[end : end + 4], "big"):
+            return None
+        if kind == b"IDAT":
+            if in_run is not False:
+                run.append(view[pos + 8 : end])
+                in_run = True
+        elif in_run:
+            in_run = False
         if kind == b"IEND":
-            return True
+            return (width, height, colour, b"".join(run)) if run else None
         pos = end + 4
-    return False
+    return None
 
 
-def _decode_grey_rgba(data: bytes) -> np.ndarray | None:
-    """The grey plane of a plain 8-bit RGBA PNG whose R == G == B everywhere, else None.
+def _decode_plain_png(data: bytes) -> np.ndarray | None:
+    """The grey plane of a plain 8-bit grey PNG, or of a plain 8-bit RGBA PNG whose
+    R == G == B everywhere, decoded by Pillow; None for anything else.
 
-    Exact: for such a file the reference decode (``IMREAD_GRAYSCALE``: libpng strips the
-    alpha channel, it does not composite it, and converts RGB to grey, which returns the
-    shared value itself when R == G == B) gives the same plane, whatever the alpha.
-    Most of the time goes into inflating four bytes per pixel, not into the grey
-    conversion: OpenCV's ``IMREAD_UNCHANGED`` decode is no faster than its grey decode.
-    Pillow inflates with zlib-ng, about twice as fast as OpenCV's zlib, so an editor-saved
-    mask reads about 35 % faster than through the reference decode at 640 x 480 and about
-    20 % faster at 2048 x 1536.
-    Anything else (another PNG kind, another chunk, a colour pixel, a decode error)
-    returns None and the reference decode decides, errors included.
+    Exact: for such a file the reference decode (``IMREAD_GRAYSCALE``) gives the same
+    plane. A grey PNG is not transformed at all. For RGBA, libpng strips the alpha channel
+    (it does not composite it) and converts RGB to grey, which returns the shared value
+    itself when R == G == B, whatever the alpha. Pillow inflates with zlib-ng, about twice
+    as fast as OpenCV's zlib, so the fast path is faster although it checks every channel.
+
+    Pillow's decoder stops as soon as the image is full, or when the zlib stream ends,
+    without telling which, and does not mind a stream that ends early. libpng refuses a
+    stream that ends before the image or that does not end in the IDAT run. So the image
+    is decoded with spare rows of random bytes after it, its last row holding a pattern:
+    the file is kept only when the stream ended (zlib checked its checksum) right after
+    the last row, which then changed while the spare rows did not.
+    Anything else (another PNG kind or chunk, a colour pixel, a decode error) returns
+    None and the reference decode decides, errors included.
     """
-    if not _is_plain_rgba8_png(data):
+    png = _plain_png(data)
+    if png is None:
         return None
+    width, height, colour, stream = png
+    mode, size = _FAST_KINDS[colour]
+    row = width * size
+    # libpng inflates with the window the zlib header declares, Pillow always with 32 KiB.
+    # They agree on every stream when the window covers the whole image or is 32 KiB.
+    if stream and 1 << ((stream[0] >> 4) + 8) < min(1 << 15, height * (row + 1)):
+        return None
+    # Random, so that no file can decode into the spare rows exactly what they hold.
+    spare_rows = -(-_SPARE_PIXELS // width)
+    noise = np.frombuffer(os.urandom(2 * spare_rows * width), np.uint8).reshape(-1, 2)
+    if mode == "L":
+        last = (_LAST_ROW_GREY * (width // 256 + 1))[:width]
+        spare = noise[:, 0].tobytes()
+    else:
+        last = _LAST_ROW_RGBA * width
+        spare = noise[:, [0, 0, 0, 1]].tobytes()  # random grey with a random alpha
     try:
         from PIL import Image
 
-        with Image.open(io.BytesIO(data)) as img:
-            max_pixels = Image.MAX_IMAGE_PIXELS
-            if img.mode != "RGBA" or (max_pixels and img.width * img.height > max_pixels):
-                return None
-            img.load()
+        # Not filled: rows are written in order, so once the last row changed, every row
+        # above it holds decoded pixels.
+        img = Image.new(mode, (width, height + spare_rows), None)
+        img.paste(Image.frombytes(mode, (width, 1 + spare_rows), last + spare), (0, height - 1))
+        decoder = Image._getdecoder(mode, "zip", mode)
+        decoder.setimage(img.im, (0, 0, width, height + spare_rows))
+        try:
+            status, error = decoder.decode(stream)
+        finally:
+            decoder.cleanup()
+        if status != -1 or error != 0:
+            return None  # the stream is broken, or it needs more data than the run holds
+        tail = img.crop((0, height - 1, width, height + spare_rows)).tobytes()
+        if tail[:row] == last or tail[row:] != spare:
+            return None  # the stream ended before the last row, or ran past it
+        if mode == "L":
+            plane = img.tobytes()
+        else:
             # The raw packer copies one band straight out of the RGBA pixels, without
             # the one-band image that getchannel() makes first.
-            red = img.tobytes("raw", "R")
-            if red != img.tobytes("raw", "G") or red != img.tobytes("raw", "B"):
+            plane = img.tobytes("raw", "R")
+            if plane != img.tobytes("raw", "G") or plane != img.tobytes("raw", "B"):
                 return None
-            return np.frombuffer(red, np.uint8).reshape(img.height, img.width)
+        return np.frombuffer(plane, np.uint8, count=width * height).reshape(height, width)
     except Exception:  # noqa: BLE001 - Pillow refused it: the reference decode decides
         return None
 
 
-def _read_bytes(path: str) -> bytes | None:
+def _decode_reference(data: bytes) -> np.ndarray | None:
+    """The reference decode of a file's bytes: what ``imread_unicode(path,
+    cv2.IMREAD_GRAYSCALE)`` returns for the file, without reading it a second time."""
+    if not data:
+        return None
     try:
-        with open(path, "rb") as fh:
-            return fh.read()
-    except OSError:
+        return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+    except cv2.error:
+        return None
+
+
+def _read_bytes(path: str) -> bytes | None:
+    """The file's bytes, read as :func:`app.io_utils.imread_unicode` reads a file; None
+    when it cannot be read (gone, locked), where that returns None too."""
+    try:
+        return np.fromfile(path, np.uint8).tobytes()
+    except (OSError, ValueError):
         return None
 
 
@@ -160,10 +242,12 @@ class MaskStore:
         path = self.find(stem)
         if path is None:
             return None
-        data = _read_bytes(path)
-        gray = None if data is None else _decode_grey_rgba(data)
-        if gray is None:  # the reference decode
-            gray = imread_unicode(path, cv2.IMREAD_GRAYSCALE)
+        gray = None
+        data = _read_bytes(path)  # None when the file is gone or locked: a MaskFileError
+        if data is not None:
+            gray = _decode_plain_png(data)
+            if gray is None:
+                gray = _decode_reference(data)
         if gray is None:
             raise MaskFileError(f"cannot decode {path}")
         return gray > MASK_THRESHOLD

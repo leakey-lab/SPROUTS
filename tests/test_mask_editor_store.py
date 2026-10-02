@@ -176,7 +176,7 @@ def test_read_of_a_legacy_jpg_mask(tmp_path):
 
 
 # ------------------------------------------------------------ the fast path for saved masks
-# An editor-saved mask (8-bit RGBA, R == G == B) skips the grayscale transform of the
+# An editor-saved mask (8-bit RGBA, R == G == B) and a model mask (8-bit grey) skip the
 # reference decode. Every file must still read exactly as the reference decode reads it:
 # ``imread(IMREAD_GRAYSCALE) > MASK_THRESHOLD``, or MaskFileError where that returns None.
 def _png_chunks(data: bytes) -> list[tuple[bytes, bytes]]:
@@ -284,7 +284,7 @@ def _mask_file_cases() -> dict[str, tuple[bytes, str]]:
         "one_coloured_pixel": (_encoded(nearly), "reference"),
         "one_bluish_pixel": (_encoded(blue), "reference"),
         "rgb_grey": (_encoded(rgb_grey), "reference"),
-        "grey_model_mask": (_encoded(_grey_rgba()[:, :, 0]), "reference"),
+        "grey_model_mask": (_encoded(_grey_rgba()[:, :, 0]), "fast"),
         "grey_alpha": (grey_alpha, "reference"),
         "palette": (pal_buf.getvalue(), "reference"),
         "rgba_16_bit": (_encoded(rgba16), "reference"),
@@ -361,9 +361,9 @@ def test_only_plain_grey_rgba_pngs_skip_the_reference_decode(tmp_path, monkeypat
     with open(os.path.join(store.directory, "a" + ext), "wb") as fh:
         fh.write(data)
     calls = []
-    real = store_module.imread_unicode
+    real = store_module._decode_reference
     monkeypatch.setattr(
-        store_module, "imread_unicode", lambda *a, **k: calls.append(a) or real(*a, **k)
+        store_module, "_decode_reference", lambda *a, **k: calls.append(a) or real(*a, **k)
     )
     try:
         store.read("a")

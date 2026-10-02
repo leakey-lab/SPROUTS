@@ -4,7 +4,8 @@ The old read (before any fast path) was a grayscale decode thresholded at
 ``MASK_THRESHOLD``, and ``MaskFileError`` where the decode returned None. For an RGBA
 PNG libpng strips the alpha channel (it is not composited) and turns RGB into grey with
 the luma weights; a pixel with R == G == B keeps its value. An editor-saved mask (8-bit
-RGBA, R == G == B) takes a faster path that must give the same grey plane.
+RGBA, R == G == B) and a model mask (8-bit grey) take a faster path that must give
+the same grey plane.
 
 These tests write many kinds of mask file (grey, RGBA with every alpha pattern, colour,
 RGB, 16-bit, palette, every PNG row filter, odd sizes) and compare the store with a copy
@@ -152,13 +153,15 @@ def _cases() -> dict[str, tuple[bytes, bool]]:
         nearly[y, x, channel] ^= 1
         cases[f"rgba_one_pixel_channel_{channel}_differs"] = (_cv2_png(nearly), False)
 
-    # Other kinds: the reference decode reads them.
-    cases["grey8_cv2"] = (_cv2_png(grey), False)
+    # 8-bit grey (model masks) takes the fast path too.
+    cases["grey8_cv2"] = (_cv2_png(grey), True)
     cases["grey8_pillow_model_mask"] = (
         _pil_png(Image.fromarray(_strokes(48, 64, 9).astype(np.uint8) * 255, "L")),
-        False,
+        True,
     )
-    cases["grey8_pillow_levels"] = (_pil_png(Image.fromarray(grey, "L")), False)
+    cases["grey8_pillow_levels"] = (_pil_png(Image.fromarray(grey, "L")), True)
+
+    # Other kinds: the reference decode reads them.
     cases["grey1_bilevel"] = (_pil_png(Image.fromarray(grey > 127)), False)
     cases["grey16"] = (_cv2_png(grey.astype(np.uint16) * 257), False)
     cases["grey_alpha_la"] = (_pil_png(Image.fromarray(np.dstack([grey, alpha]), "LA")), False)
@@ -212,7 +215,7 @@ def test_read_is_the_old_read(tmp_path, name):
 def test_fast_grey_plane_is_the_reference_grey_plane(name):
     """Stronger than the thresholded mask: the fast plane equals the decoded grey plane."""
     data, fast = CASES[name]
-    plane = store_module._decode_grey_rgba(data)
+    plane = store_module._decode_plain_png(data)
     assert (plane is not None) == fast
     if plane is not None:
         reference = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
