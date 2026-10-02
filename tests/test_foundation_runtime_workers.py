@@ -204,6 +204,31 @@ def test_raising_job_cancelled_directly_counts_as_cancel(qapp):
     assert rec.failed == []
 
 
+class _Abort(BaseException):
+    """A BaseException that is not an Exception, SystemExit or KeyboardInterrupt."""
+
+
+@pytest.mark.parametrize(
+    ("exc", "message"),
+    [
+        (_Abort("stopped"), "_Abort: stopped"),
+        (KeyboardInterrupt(), "KeyboardInterrupt"),
+        (SystemExit(3), "SystemExit: 3"),
+    ],
+)
+def test_a_base_exception_in_work_emits_failed(qapp, caplog, exc, message):
+    # Unreported, the job registry would hold the job for good and refuse every later one.
+    thread = _RaisingThread(exc)
+    rec = _Recorder(thread)
+    with caplog.at_level(logging.ERROR, logger="app.handlers.worker_base"):
+        thread.start()
+        assert thread.wait(5000)
+        _pump_until(lambda: rec.failed)
+    assert rec.failed == [message]
+    assert rec.cancelled == 0
+    assert any(r.exc_info and r.exc_info[0] is type(exc) for r in caplog.records)
+
+
 def test_work_must_be_implemented(qapp):
     thread = GuardedThread()
     rec = _Recorder(thread)

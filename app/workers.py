@@ -9,8 +9,9 @@ therefore subclass ``GuardedThread`` and implement ``work()``:
   result signal (a custom ``finished = pyqtSignal(...)`` may shadow QThread's);
 * ``work()`` raises ``JobCancelled`` (``check_cancelled()`` does that once
   ``cancel()`` was requested) -> ``cancelled`` is emitted;
-* ``work()`` raises anything else -> the traceback is logged and ``failed`` is
-  emitted with a user-facing one-line message (``describe_error``).
+* ``work()`` raises anything else (``SystemExit`` and ``KeyboardInterrupt`` too)
+  -> the traceback is logged and ``failed`` is emitted with a user-facing one-line
+  message (``describe_error``).
 
 Exactly one of those outcomes happens per run.
 
@@ -93,7 +94,8 @@ class GuardedThread(QThread):
         except JobCancelled:
             logger.info("%s cancelled", type(self).__name__)
             self.cancelled.emit()
-        except Exception as exc:
+        except BaseException as exc:  # noqa: BLE001 - SystemExit too: it must report back
+            # Unreported, the job would stay running for good and block every later one.
             if is_user_condition(exc):
                 logger.warning("%s failed: %s", type(self).__name__, exc)
             else:
