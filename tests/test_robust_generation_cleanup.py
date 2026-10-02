@@ -60,9 +60,9 @@ def test_release_cuda_cache_logs_a_failure_instead_of_raising(monkeypatch, caplo
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_failing_cache_release_never_replaces_the_run_error(
     tmp_path,
-    cpu_runtime,
+    cpu_runtime,  # noqa: F811 - fixture
     monkeypatch,
-    kind,  # noqa: F811 - fixture
+    kind,
 ):
     src = _images(str(tmp_path / "imgs"), [f"i{k}.jpg" for k in range(5)])
     out = _folder_with_stale_manifest(tmp_path / "imgs" / "out")
@@ -81,9 +81,9 @@ def test_a_failing_cache_release_never_replaces_the_run_error(
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_failing_cache_release_never_fails_a_finished_run(
     tmp_path,
-    cpu_runtime,
+    cpu_runtime,  # noqa: F811 - fixture
     monkeypatch,
-    kind,  # noqa: F811 - fixture
+    kind,
 ):
     src = _images(str(tmp_path / "imgs"), [f"i{k}.jpg" for k in range(3)])
     out = _folder_with_stale_manifest(tmp_path / "imgs" / "out")

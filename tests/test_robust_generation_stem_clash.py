@@ -61,8 +61,8 @@ def test_the_library_shows_one_image_per_stem(tmp_path):
 @pytest.mark.parametrize("run", range(5))
 def test_mask_generation_takes_the_librarys_image_for_a_shared_stem(
     tmp_path,
-    cpu_runtime,
-    run,  # noqa: F811 - fixture
+    cpu_runtime,  # noqa: F811 - fixture
+    run,
 ):
     src = _folder(tmp_path)
     out = str(tmp_path / "mask")
@@ -78,8 +78,8 @@ def test_mask_generation_takes_the_librarys_image_for_a_shared_stem(
 @pytest.mark.parametrize("run", range(5))
 def test_skeleton_generation_takes_the_librarys_image_for_a_shared_stem(
     tmp_path,
-    cpu_runtime,
-    run,  # noqa: F811 - fixture
+    cpu_runtime,  # noqa: F811 - fixture
+    run,
 ):
     src = _folder(tmp_path)
     out = str(tmp_path / "skeletons")

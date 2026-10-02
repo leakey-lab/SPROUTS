@@ -61,10 +61,10 @@ def _run_kind(kind):
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_record_that_cannot_be_built_is_replaced_by_a_minimal_one(
     tmp_path,
-    cpu_runtime,
+    cpu_runtime,  # noqa: F811 - fixture
     monkeypatch,
     caplog,
-    kind,  # noqa: F811 - fixture
+    kind,
 ):
     monkeypatch.setattr(provenance, "build_record", _broken_build_record)
     src = _images(str(tmp_path / "imgs"), ["a.jpg", "bad.jpg", "c.jpg"], corrupt={"bad.jpg"})
@@ -88,9 +88,9 @@ def test_a_record_that_cannot_be_built_is_replaced_by_a_minimal_one(
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_failed_run_whose_record_cannot_be_built_still_says_it_failed(
     tmp_path,
-    cpu_runtime,
+    cpu_runtime,  # noqa: F811 - fixture
     monkeypatch,
-    kind,  # noqa: F811 - fixture
+    kind,
 ):
     monkeypatch.setattr(provenance, "build_record", _broken_build_record)
     src = _images(str(tmp_path / "imgs"), [f"i{k}.jpg" for k in range(5)])
@@ -109,10 +109,10 @@ def test_a_failed_run_whose_record_cannot_be_built_still_says_it_failed(
 @pytest.mark.parametrize("kind", KINDS)
 def test_when_no_record_can_be_written_the_outdated_one_is_removed(
     tmp_path,
-    cpu_runtime,
+    cpu_runtime,  # noqa: F811 - fixture
     monkeypatch,
     caplog,
-    kind,  # noqa: F811 - fixture
+    kind,
 ):
     attempts = []
 
