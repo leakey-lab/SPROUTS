@@ -66,7 +66,8 @@ class ExportError(ValueError):
 class ExportOptions:
     """What to export and how to split it.
 
-    ``out_dir`` must be empty or absent. ``val_fraction`` (0-1) is the target
+    ``out_dir`` must be empty or absent; a relative or drive-relative one (``D:out``) is
+    resolved once, when the export starts. ``val_fraction`` (0-1) is the target
     share of exported images in the validation split; ``group_by_tube`` keeps
     every image of one tube in the same split; ``only_complete`` exports only
     images whose every active class was reviewed; ``seed`` makes the split
@@ -241,9 +242,11 @@ def export_dataset(
     held open by another program raises ``FileLockedError`` (R1). ``mask/``,
     ``skeletons/`` and the GT files themselves are never modified: an
     ``out_dir`` inside ``mask/``, ``skeletons/``, ``skeleton_corrections/`` or
-    ``gt/`` raises ``ExportError``.
+    ``gt/`` raises ``ExportError``. The folder is resolved to an absolute path once, at
+    the start (``D:out`` is the current folder of drive D then), and every file, check,
+    message and the result use it.
     """
-    out_dir = options.out_dir
+    out_dir = os.path.abspath(options.out_dir)
     _check_out_dir(project_dir, out_dir)
     if os.path.exists(out_dir):
         if not os.path.isdir(out_dir):

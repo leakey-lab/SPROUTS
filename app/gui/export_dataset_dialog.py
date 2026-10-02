@@ -283,12 +283,13 @@ class ExportDatasetDialog(QDialog):
 
         Surrounding double quotes are dropped (Explorer's "Copy as path" adds them), and a
         relative path is taken from the project folder, not from wherever the app was
-        started.
+        started. A drive-relative path on another drive (``D:out`` with the project on
+        ``C:``) is that drive's current folder, spelled out.
         """
         text = self.output_edit.text().strip().strip('"').strip()
         if not text:
             return ""
-        return os.path.normpath(os.path.join(self.project_dir, text))
+        return os.path.abspath(os.path.join(self.project_dir, text))
 
     def _sync_export_enabled(self) -> None:
         """Export needs an output folder and a traced image; Close is always offered once
