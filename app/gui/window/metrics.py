@@ -175,7 +175,9 @@ class MetricsController:
         def work(index=index, signals=signals):
             try:
                 index.prewarm()
-            except Exception:
+            except BaseException:  # noqa: BLE001 - SystemExit too: it must report back
+                # Unreported, the metrics would stay loading for good: no parse after it,
+                # the warm-ups blocked and the bar never refreshed.
                 logger.exception("Could not read the measurement CSVs")
             try:
                 signals.ready.emit(index)

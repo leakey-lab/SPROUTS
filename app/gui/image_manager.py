@@ -28,6 +28,7 @@ from app.gui.library_index import index_names
 from app.io_utils import sweep_stale_temp_files
 from app.naming import image_stem, parse_image_name
 from app.project_layout import ProjectLayout
+from app.workers import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,8 @@ class ImageLoaderThread(QThread):
         progress(int): percent, per scan phase.
         finished(images, fake_images, masks, has_fake_real_pairs): the scan result
             (``fake_images`` is always empty; skeleton paths are resolved lazily).
-        failed(str): the folder is missing or unreadable (``finished`` is not emitted).
+        failed(str): the folder is missing or unreadable, or the scan failed otherwise
+            (any exception, ``SystemExit`` too; ``finished`` is not emitted).
 
     An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
     ``hierarchy``, ``labels`` (library row texts), ``skeleton_stems`` and
@@ -78,11 +80,11 @@ class ImageLoaderThread(QThread):
         self.corrected_stems: set[str] = set()
 
     def run(self):
-        if not os.path.isdir(self.folder_path):
-            self.failed.emit(f"Folder not found: {self.folder_path}")
-            return
-        layout = ProjectLayout(self.folder_path)
         try:
+            if not os.path.isdir(self.folder_path):
+                self.failed.emit(f"Folder not found: {self.folder_path}")
+                return
+            layout = ProjectLayout(self.folder_path)
             images = layout.scan_images()
             if self._stop(50):
                 return
@@ -97,6 +99,11 @@ class ImageLoaderThread(QThread):
         except OSError as exc:
             logger.exception("Failed to scan image folder %s", self.folder_path)
             self.failed.emit(f"Cannot read {self.folder_path}: {exc.strerror or exc}")
+            return
+        except BaseException as exc:  # noqa: BLE001 - SystemExit too: it must report back
+            # Unreported, neither outcome would come and the loading card would stay up.
+            logger.exception("Failed to scan image folder %s", self.folder_path)
+            self.failed.emit(f"Could not scan {self.folder_path}: {describe_error(exc)}")
             return
         if self._stop(100):
             return

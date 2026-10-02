@@ -132,8 +132,8 @@ def resolve_device_logged():
 
     Returns ``""`` when the runtime is resolved already (the chip shows it), else the
     :class:`~app.inference.device_probe.DeviceGuess` of the driver and the torch build; if
-    even that fails, the reason (logged). Never raises: an exception must never leave the
-    pool thread.
+    even that fails, the reason (logged). Never raises an ``Exception``; the job around it
+    reports any other ``BaseException`` the same way (none may leave the pool thread).
     """
     try:
         from app.inference import device_probe, runtime
@@ -267,7 +267,12 @@ class DeviceCheck(QObject):
         signals = self._signals
 
         def work() -> None:
-            result = resolve()
+            try:
+                result = resolve()
+            except BaseException as exc:  # noqa: BLE001 - SystemExit too: it must report back
+                # Unreported, the chip would read "Checking GPU…" for good.
+                logger.exception("Could not detect the inference device")
+                result = str(exc) or type(exc).__name__
             try:
                 signals.resolved.emit(result)
             except RuntimeError:
