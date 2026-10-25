@@ -46,12 +46,12 @@ sha256sum checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skeletoniz
 
 | | |
 |---|---|
-| Code | `app/mask_model/model.py`, class `ResNetSkeleton` (despite its name, the *mask* network); run by `app/handlers/mask_generation_handler.py` |
+| Code | `app/mask_model/model.py`, class `ResNetSkeleton` (despite its name, the *mask* network); run by `app/inference/mask_inference.py` (started by `app/handlers/mask_generation_handler.py`) |
 | Architecture | ResNet-18 encoder (torchvision layout, no fully connected head). The stage-2, -3 and -4 features each go through three parallel dilated 3x3 convolutions (dilation 2, 4, 8) and a DualAttention block (position attention plus channel attention, fused by a 1x1 convolution). A decoder of 2x2 transposed convolutions concatenates the stage-3 and stage-2 attention features, applies dilated refinement at 1/4 and 1/2 resolution, and ends in two 1x1 convolutions and a sigmoid. |
 | Parameters | 84,558,217. The checkpoint stores the shared encoder twice (as `resnet18.*` and `layer0-4.*`), hence 338 MB. ImageNet weights are not used at inference (`pretrained=False`); every weight comes from the checkpoint. |
-| Input | The original image as RGB, resized to 480 x 640 (height x width, bilinear, antialiased), scaled to [0, 1], normalised per channel with mean (0.5514, 0.4094, 0.3140) and std (0.1299, 0.1085, 0.0914) (R, G, B; constants in `mask_generation_handler.py`). |
+| Input | The original image as RGB, resized to 480 x 640 (height x width, bilinear, antialiased), scaled to [0, 1], normalised per channel with mean (0.5514, 0.4094, 0.3140) and std (0.1299, 0.1085, 0.0914) (R, G, B; `MASK_MEAN` and `MASK_STD` in `app/inference/mask_inference.py`). |
 | Output | One 480 x 640 probability map. Pixels with probability `> MASK_THRESHOLD` (0.5, `app/config.py`) are root. Saved as `mask/<stem>.png`, 8-bit grayscale, values 0/255, always 640 x 480 whatever the input size (see `docs/DATA_DICTIONARY.md`). |
-| Precision | fp32, no autocast. On CUDA the runtime (`app/inference/runtime.py`) may enable cuDNN autotuning, TF32 and the channels-last memory format; outputs can then differ by a few pixels between runs and from CPU (see Known limits). |
+| Precision | fp32, no autocast. On CUDA the runtime (`app/inference/runtime.py`) uses TF32 and the channels-last memory format; cuDNN autotuning is off and deterministic algorithms are on by default (since `abc34fa`; `SPROUTS_CUDNN_BENCHMARK=1` opts out). Outputs can still differ by a few pixels from CPU and between batch sizes (see Known limits). |
 | Training data | TODO(owner): not documented in the repository. |
 
 ## Skeleton model (skeletonizer)
@@ -79,9 +79,11 @@ enhanced generator with batch normalisation and aspect ratio 3/4.
   mapped onto the actual output resolution, so they are valid for images of that field
   of view; a camera with a different field of view needs `Calibration` changed.
 - **Domain.** Behaviour on other cameras, soils, crops or lighting is untested.
-- **GPU reproducibility.** Depending on the runtime settings (cuDNN autotuning, TF32),
-  repeated GPU runs are not bit-identical. In a 2026-09-28 audit of 12 images, 18 of 24
-  output files differed between two identical runs and one image's CSV values moved
-  (length 60.75 vs 60.77 mm, area 126.62 vs 126.63 mm²); strict fp32 on CUDA matched CPU.
+- **GPU reproducibility.** cuDNN autotuning is off by default, so repeated GPU runs at the
+  same batch size reproduce; a different batch size can flip a few pixels (the batch
+  shape decides which kernel runs), and GPU and CPU differ slightly.
+  `SPROUTS_CUDNN_BENCHMARK=1` brings back the run-to-run noise measured in a 2026-09-28
+  audit of 12 images: 18 of 24 output files differed between two identical runs and one
+  image's CSV values moved (length 60.75 vs 60.77 mm, area 126.62 vs 126.63 mm²).
 - **Two independent predictions.** Skeletons are not derived from masks, so the two can
   disagree for the same image; hand corrections apply to one output only.
