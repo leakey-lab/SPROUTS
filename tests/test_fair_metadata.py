@@ -8,6 +8,7 @@ bump, a new author or a license decision cannot leave one file behind.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -120,3 +121,7 @@ def test_the_pix2pix_bsd_notice_is_reproduced():
         "Redistributions of source code must retain the above copyright notice",
     ):
         assert needle in text
+    # The derived module names its origin and points at the notice.
+    source = (ROOT / "app" / "inference" / "skeleton_inference.py").read_text(encoding="utf-8")
+    docstring = ast.get_docstring(ast.parse(source)) or ""
+    assert "THIRD_PARTY_NOTICES.md" in docstring and "pix2pix" in docstring

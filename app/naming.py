@@ -21,7 +21,13 @@ import os
 import re
 from dataclasses import dataclass
 
-__all__ = ["ImageName", "image_stem", "parse_image_name"]
+__all__ = [
+    "LEGACY_IMAGE_EXTENSIONS",
+    "ImageName",
+    "image_stem",
+    "parse_image_name",
+    "stem_key",
+]
 
 # General parser: each part searched on its own, for any name.
 _TUBE = re.compile(r"(?<![A-Za-z0-9])T(\d+)(?![A-Za-z0-9])")
@@ -39,9 +45,15 @@ _CANONICAL = re.compile(
     r"_(?P<date>\d{4}\.\d{2}\.\d{2})_(?P<time>\d{6})(?:_|$)"
 )
 
-# Extensions image_stem() strips. Anything else after the last dot (e.g.
-# ".18_111618_001_SMM" in a bare stem ending in a dotted date) is part of the name.
-_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".ppm"})
+#: Image formats the app no longer reads (O6: PNG and JPEG only). image_stem() still
+#: strips them, so rows written for such images keep their stems, and the folder scan
+#: names files with them as not supported.
+LEGACY_IMAGE_EXTENSIONS: tuple[str, ...] = (".bmp", ".ppm", ".tif", ".tiff")
+
+# Extensions image_stem() strips: the readable ones (config.IMAGE_EXTENSIONS) and the
+# legacy ones. Anything else after the last dot (e.g. ".18_111618_001_SMM" in a bare
+# stem ending in a dotted date) is part of the name.
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", *LEGACY_IMAGE_EXTENSIONS})
 _SEPARATORS = tuple({"/", os.sep, os.altsep or "/"})
 
 
@@ -80,6 +92,15 @@ def image_stem(path_or_name: str | os.PathLike[str]) -> str:
     if dot > 0 and name[dot:].lower() in _IMAGE_EXTENSIONS and name[:dot].lstrip("."):
         return name[:dot]
     return name
+
+
+def stem_key(stem: str) -> str:
+    """The key under which two stems are the same image: ``stem.lower()`` (O7).
+
+    On every platform, so ``A.png`` and ``a.jpg`` are one image on a case-sensitive
+    disk too. ``lower()``, not ``casefold()``: ``straße`` and ``strasse`` stay two.
+    """
+    return stem.lower()
 
 
 def _format_time(hhmmss: str) -> str:

@@ -105,15 +105,15 @@ def test_a_superseded_scan_frees_its_thread_when_it_ends(app, tmp_path, monkeypa
     kept until its thread ends, then freed; the new one delivers and is freed too."""
     a, b = _project(tmp_path / "a", A_STEMS), _project(tmp_path / "b", B_STEMS)
     held, release = threading.Event(), threading.Event()
-    real_scan = im.ProjectLayout.scan_images
+    real_scan = im.ProjectLayout.scan_image_folder
 
-    def scan_images(layout):
+    def scan_image_folder(layout):
         if os.path.normcase(layout.root) == os.path.normcase(a):
             held.set()
             release.wait(10)  # the first scan is still running when b is opened
         return real_scan(layout)
 
-    monkeypatch.setattr(im.ProjectLayout, "scan_images", scan_images)
+    monkeypatch.setattr(im.ProjectLayout, "scan_image_folder", scan_image_folder)
     manager = im.ImageManager(None)
     manager.load_images(a)
     first = weakref.ref(manager.loader_thread)

@@ -12,6 +12,11 @@ All constants are hardcoded for the skeletonizer model.
 Numerics: fp32 tensors and weights, no autocast (the pix2pix generator drifts
 visibly under fp16/bf16). On CUDA with an Ampere+ GPU, cuDNN convolutions use TF32
 tensor-core math (``runtime.RuntimeConfig.precision`` records which one ran).
+
+`make_dataset`, `save_image`, `get_transform`, `Identity`, `get_norm_layer`,
+`ResnetBlock` and `EnhancedResnetGenerator` (after upstream `ResnetGenerator`) derive
+from pytorch-CycleGAN-and-pix2pix (https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix),
+BSD licence; the notice is in THIRD_PARTY_NOTICES.md.
 """
 
 from __future__ import annotations
@@ -56,51 +61,21 @@ USE_DROPOUT = True  # no_dropout is False by default
 EPOCH = "latest"
 SKELETON_SUFFIX = "_fake.png"
 
-IMG_EXTENSIONS = [
-    ".jpg",
-    ".JPG",
-    ".jpeg",
-    ".JPEG",
-    ".png",
-    ".PNG",
-    ".ppm",
-    ".PPM",
-    ".bmp",
-    ".BMP",
-    ".tif",
-    ".TIF",
-    ".tiff",
-    ".TIFF",
-]
-
-
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
 
 
-def is_image_file(filename):
-    """Check if a file is an image based on extension (case-insensitive)."""
-    ext = os.path.splitext(filename)[1].lower()
-    return ext in {e.lower() for e in IMG_EXTENSIONS}
-
-
-# The extensions make_dataset reads, in stem-clash priority: the Library's
-# (config.IMAGE_EXTENSIONS) first, then the formats only skeleton generation reads.
-_INPUT_EXTENSIONS = tuple(
-    dict.fromkeys((*config.IMAGE_EXTENSIONS, *(e.lower() for e in IMG_EXTENSIONS)))
-)
-
-
 def make_dataset(directory):
-    """Find all image files in a directory (sorted), one per stem.
+    """The images of ``directory`` (sorted): the ones the Library shows.
 
-    Two files with one stem (``a.png`` and ``a.jpg``) would race for one
-    ``<stem>_fake.png``; the one the Library shows is taken (R7).
+    ``ProjectLayout.scan_images``: PNG and JPEG only (O6: ``.bmp`` / ``.tif`` / ``.ppm``
+    gave skeletons and length rows the Library never listed, R3), one file per stem
+    without case, so two files never race for one ``<stem>_fake.png`` (R7, O7).
     """
     if not os.path.isdir(directory):
         raise ValueError(f"{directory} is not a valid directory")
-    chosen = ProjectLayout(directory).scan_images(extensions=_INPUT_EXTENSIONS)
+    chosen = ProjectLayout(directory).scan_images()
     return [
         os.path.join(directory, fname)
         for fname in sorted(os.path.basename(path) for path in chosen.values())

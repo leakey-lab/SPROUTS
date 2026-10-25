@@ -214,7 +214,7 @@ def loader_window(calls: list) -> SimpleNamespace:
     [
         ("index_names", ValueError("a name the index cannot place")),
         ("index_names", MemoryError()),
-        *(("scan_images", ending) for ending in ENDINGS),
+        *(("scan_image_folder", ending) for ending in ENDINGS),
     ],
     ids=["value-error", "memory-error", *ENDING_IDS],
 )
@@ -224,7 +224,7 @@ def test_a_scan_ended_by_anything_but_an_oserror_reports_a_failure(
     if where == "index_names":
         monkeypatch.setattr(im, "index_names", raiser(ending))
     else:
-        monkeypatch.setattr(im.ProjectLayout, "scan_images", raiser(ending))
+        monkeypatch.setattr(im.ProjectLayout, "scan_image_folder", raiser(ending))
     folder = str(tmp_path / "trial")
     os.mkdir(folder)
     calls: list = []
@@ -245,7 +245,7 @@ def test_a_scan_ended_by_anything_but_an_oserror_reports_a_failure(
 def test_an_unreadable_folder_keeps_its_message(tmp_path, monkeypatch):
     """An ``OSError`` still reads "Cannot read <folder>: <why>"."""
     monkeypatch.setattr(
-        im.ProjectLayout, "scan_images", raiser(PermissionError(13, "Access is denied"))
+        im.ProjectLayout, "scan_image_folder", raiser(PermissionError(13, "Access is denied"))
     )
     folder = str(tmp_path / "trial")
     os.mkdir(folder)

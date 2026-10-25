@@ -17,6 +17,7 @@ import pytest
 import torch
 from PIL import Image
 
+from app import config
 from app.inference import mask_inference as mi
 from app.inference import skeleton_inference as si
 from app.project_layout import ProjectLayout
@@ -91,16 +92,16 @@ def test_skeleton_generation_takes_the_librarys_image_for_a_shared_stem(
     assert report.failed == [] and report.total == 7
 
 
-def test_skeleton_generation_still_reads_its_other_formats(tmp_path):
-    # Skeleton generation has always read .bmp / .tif / .ppm too (the Library does not):
-    # kept, so a folder of TIFFs still gets its skeletons. A stem shared with a .png
-    # still goes to the .png.
+def test_skeleton_generation_reads_png_and_jpeg_only(tmp_path):
+    # O6: skeleton generation reads the Library's formats (config.IMAGE_EXTENSIONS) only;
+    # it read .bmp / .tif / .ppm too, so a mixed folder had more skeletons and length rows
+    # than Library images (R3). A stem shared with a .png goes to the .png.
     src = tmp_path / "imgs"
     src.mkdir()
     for name in ("t.tif", "u.bmp", "v.ppm", "w.TIFF", "x.png", "x.tif"):
         Image.new("RGB", (8, 6)).save(src / name)
     names = [os.path.basename(p) for p in si.make_dataset(str(src))]
-    assert names == ["t.tif", "u.bmp", "v.ppm", "w.TIFF", "x.png"]
+    assert names == ["x.png"]
 
 
 def test_inputs_without_a_shared_stem_are_unchanged(tmp_path):
@@ -113,7 +114,7 @@ def test_inputs_without_a_shared_stem_are_unchanged(tmp_path):
         n for n in os.listdir(src) if n.lower().endswith((".png", ".jpg", ".jpeg"))
     )
     legacy_skeletons = [
-        os.path.join(str(src), n) for n in sorted(os.listdir(src)) if si.is_image_file(n)
+        os.path.join(str(src), n) for n in sorted(os.listdir(src)) if config.is_image_file(n)
     ]
 
     all_names, todo, skipped = mi.list_inputs(str(src))

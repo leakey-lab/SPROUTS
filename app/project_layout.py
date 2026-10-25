@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass, field
 from typing import TypeVar
 
 from app.config import (
@@ -37,7 +37,7 @@ from app.config import (
     SKELETON_CORRECTIONS_DIRNAME,
     SKELETONS_DIRNAME,
 )
-from app.naming import image_stem
+from app.naming import LEGACY_IMAGE_EXTENSIONS, image_stem, stem_key
 
 logger = logging.getLogger(__name__)
 
@@ -45,22 +45,27 @@ __all__ = [
     "CORRECTED_SKELETON_SUFFIX",
     "MASK_EXTENSIONS",
     "SKELETON_SUFFIX",
+    "ImageScan",
     "ProjectLayout",
+    "find_by_stem",
     "find_test_latest_dir",
+    "key_to_stems",
 ]
 
 #: File-name suffix of a generated skeleton (skeleton_inference output).
 SKELETON_SUFFIX = "_fake.png"
 #: File-name suffix of a skeleton saved by the skeleton-correction editor.
 CORRECTED_SKELETON_SUFFIX = "_skeleton.png"
-#: Mask file types the app reads, in lookup priority. Masks are written as .png.
-MASK_EXTENSIONS = (".png", ".jpg", ".jpeg")
+#: Mask file types the app reads, in lookup priority: the image formats, as masks use
+#: the same scan (one mask per stem without case). Masks are written as .png.
+MASK_EXTENSIONS = IMAGE_EXTENSIONS
 
 # Mask lookup order of the mask editor (find_mask_path); the case variants
 # matter on case-sensitive file systems.
 _MASK_LOOKUP = tuple(v for ext in MASK_EXTENSIONS for v in (ext, ext.upper()))
 
 _K = TypeVar("_K")
+_V = TypeVar("_V")
 
 _TEST_LATEST = "test_latest"
 _LEGACY_MASK_DIR = ("output", MASK_DIRNAME)
@@ -95,15 +100,31 @@ def _suffix_stem(suffix: str) -> Callable[[str], str | None]:
     return stem_of
 
 
-def _scan_ranked(directory: str, extensions: tuple[str, ...]) -> dict[str, str]:
-    """``stem -> path`` for files with ``extensions``; earlier extensions win a stem clash.
+@dataclass
+class _Skips:
+    """What a ranked scan did not list: ``(key, file name)`` of each file that lost its
+    stem to another, and the names with a :data:`LEGACY_IMAGE_EXTENSIONS` suffix."""
+
+    losers: list[tuple[str, str]] = field(default_factory=list)
+    unsupported: list[str] = field(default_factory=list)
+
+
+def _scan_ranked(
+    directory: str, extensions: tuple[str, ...], skips: _Skips | None = None
+) -> dict[str, str]:
+    """``stem -> path`` for files with ``extensions``, one file per stem without case.
+
+    Stems that differ only in case are one stem (:func:`app.naming.stem_key`, O7): the
+    lowest ``(extension rank, file name)`` wins (earlier ``extensions`` first, then the
+    name that sorts first) and the result keeps the winner's real stem. With ``skips``
+    the same listing also collects the losers and the unsupported image files.
 
     One ``os.scandir`` in a single loop (R6: 85 -> 59 ms for 46k files). The stem
     and extension follow ``os.path.splitext``: the last dot splits, unless only
     dots come before it (``.png`` and ``..png`` have no extension).
     """
     rank = {ext.lower(): i for i, ext in enumerate(extensions)}
-    best: dict[str, tuple[int, str]] = {}
+    best: dict[str, tuple[int, str, str, str]] = {}  # key -> (rank, name, stem, path)
     try:
         with os.scandir(directory) as entries:
             for entry in entries:
@@ -112,15 +133,124 @@ def _scan_ranked(directory: str, extensions: tuple[str, ...]) -> dict[str, str]:
                 if dot <= 0:
                     continue
                 r = rank.get(name[dot:].lower())
-                if r is None or not name[:dot].lstrip(".") or not entry.is_file():
+                if r is None:
+                    if (
+                        skips is not None
+                        and name[dot:].lower() in LEGACY_IMAGE_EXTENSIONS
+                        and name[:dot].lstrip(".")
+                        and entry.is_file()
+                    ):
+                        skips.unsupported.append(name)
+                    continue
+                if not name[:dot].lstrip(".") or not entry.is_file():
                     continue
                 stem = name[:dot]
-                held = best.get(stem)
-                if held is None or r < held[0]:
-                    best[stem] = (r, entry.path)
+                key = stem_key(stem)
+                held = best.get(key)
+                if held is None or (r, name) < held[:2]:
+                    best[key] = (r, name, stem, entry.path)
+                    if held is not None and skips is not None:
+                        skips.losers.append((key, held[1]))
+                elif skips is not None:
+                    skips.losers.append((key, name))
     except (FileNotFoundError, NotADirectoryError):
         return {}
-    return {stem: path for stem, (_, path) in best.items()}
+    return {stem: path for _, _, stem, path in best.values()}
+
+
+# Folders known to ignore case (one probe each): a lookup that misses there lists nothing.
+_CASE_FOLDING_DIRS: dict[str, bool] = {}
+
+
+def _ignores_case(directory: str) -> bool:
+    """True when ``directory``'s file system ignores case (Windows, macOS by default).
+
+    Probed once per folder: its own name with the case of every letter swapped names the
+    same folder. A folder whose name has no letters counts as case-sensitive.
+    """
+    directory = os.path.normpath(directory)  # a trailing separator would hide its name
+    known = _CASE_FOLDING_DIRS.get(directory)
+    if known is not None:
+        return known
+    head, name = os.path.split(directory)
+    swapped = os.path.join(head, name.swapcase())
+    try:
+        here = os.stat(directory)
+    except OSError:
+        return False  # missing: nothing to find, and nothing worth remembering
+    try:
+        folds = swapped != directory and os.path.samestat(here, os.stat(swapped))
+    except OSError:
+        folds = False
+    _CASE_FOLDING_DIRS[directory] = folds
+    return folds
+
+
+def _find_without_case(
+    directory: str, stem: str, endings: tuple[str, ...], *, fold_endings: bool
+) -> str | None:
+    """A file of ``directory`` named ``<stem'><ending>`` where ``stem'`` has ``stem``'s
+    :func:`~app.naming.stem_key`; the lowest ``(ending rank, file name)`` wins, as in the
+    ranked scan. ``fold_endings`` matches the endings without case too (extensions).
+
+    One ``os.scandir``, skipped where the file system ignores case: there the exact-name
+    lookup has already found any case variant.
+    """
+    if _ignores_case(directory):
+        return None
+    key = stem_key(stem)
+    rank = {(e.lower() if fold_endings else e): i for i, e in enumerate(endings)}
+    best: tuple[int, str, str] | None = None
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                name = entry.name
+                for ending, r in rank.items():
+                    tail = name[-len(ending) :]
+                    if (tail.lower() if fold_endings else tail) != ending:
+                        continue
+                    if stem_key(name[: -len(ending)]) != key or not entry.is_file():
+                        continue
+                    if best is None or (r, name) < best[:2]:
+                        best = (r, name, entry.path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return best[2] if best is not None else None
+
+
+def find_by_stem(directory: str, stem: str, suffix: str) -> str | None:
+    """The file ``<directory>/<stem><suffix>``, else one whose stem differs only in case
+    (O7; the exact name wins); None when there is neither."""
+    path = os.path.join(directory, stem + suffix)
+    if os.path.isfile(path):
+        return path
+    return _find_without_case(directory, stem, (suffix,), fold_endings=False)
+
+
+def key_to_stems(found: Mapping[str, _V], stems: Iterable[str]) -> dict[str, _V]:
+    """``found`` with each key replaced by the stem of ``stems`` with the same
+    :func:`~app.naming.stem_key` (``{"a": m}`` with stems ``["A"]`` -> ``{"A": m}``).
+
+    Keys without such a stem are kept as they are. A mask or skeleton whose name differs
+    from its image's only in case is then found under the image's stem (O7).
+    """
+    by_key = {stem_key(stem): stem for stem in stems}
+    return {by_key.get(stem_key(key), key): value for key, value in found.items()}
+
+
+@dataclass(frozen=True)
+class ImageScan:
+    """One listing of an image folder: what the Library shows, and what it does not.
+
+    ``images`` is ``stem -> path`` (as :meth:`ProjectLayout.scan_images`); ``hidden``
+    holds ``(file not listed, file listed instead)`` for each file whose stem another
+    file took (sorted); ``unsupported`` the file names with a
+    :data:`~app.naming.LEGACY_IMAGE_EXTENSIONS` suffix, in any case (sorted).
+    """
+
+    images: dict[str, str]
+    hidden: tuple[tuple[str, str], ...] = ()
+    unsupported: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -201,14 +331,26 @@ class ProjectLayout:
         return target == GT_CLASSES_FILENAME or target.endswith(".png")
 
     # ------------------------------------------------------------------ images
-    def scan_images(self, *, extensions: tuple[str, ...] = IMAGE_EXTENSIONS) -> dict[str, str]:
+    def scan_images(self) -> dict[str, str]:
         """``stem -> path`` of the source images in ``root`` (one scandir).
 
-        One file per stem: when two share it (``a.png`` and ``a.jpg``), the earlier
-        of ``extensions`` wins (``.png``, then ``.jpg``, then ``.jpeg`` by default).
-        That is the image the Library shows, so generation reads it too (R7).
+        PNG and JPEG only (``IMAGE_EXTENSIONS``, any letter case; O6). One file per
+        stem without case (O7): when two share it (``a.png`` and ``A.jpg``), ``.png``
+        wins over ``.jpg`` over ``.jpeg``, then the name that sorts first. That is the
+        image the Library shows, so mask and skeleton generation read it too (R7).
         """
-        return _scan_ranked(self.root, extensions)
+        return _scan_ranked(self.root, IMAGE_EXTENSIONS)
+
+    def scan_image_folder(self) -> ImageScan:
+        """:meth:`scan_images` plus the files it does not list (the same one scandir)."""
+        skips = _Skips()
+        images = _scan_ranked(self.root, IMAGE_EXTENSIONS, skips)
+        winners = {stem_key(stem): os.path.basename(path) for stem, path in images.items()}
+        return ImageScan(
+            images=images,
+            hidden=tuple(sorted((name, winners[key]) for key, name in skips.losers)),
+            unsupported=tuple(sorted(skips.unsupported)),
+        )
 
     # ------------------------------------------------------------------ masks
     def mask_path(self, stem: str) -> str:
@@ -221,16 +363,24 @@ class ProjectLayout:
         return tuple(self._path(MASK_DIRNAME, stem + ext) for ext in _MASK_LOOKUP)
 
     def find_mask(self, stem: str) -> str | None:
-        """Existing mask file for ``stem`` (``.png`` first, then legacy types), else None."""
-        return next((p for p in self.mask_candidates(stem) if os.path.isfile(p)), None)
+        """Existing mask file for ``stem`` (``.png`` first, then ``.jpg`` / ``.jpeg``), else
+        None. A file named exactly ``<stem>.<ext>`` wins; else one whose stem differs only
+        in case (O7), ranked as :meth:`scan_masks` ranks them."""
+        found = next((p for p in self.mask_candidates(stem) if os.path.isfile(p)), None)
+        if found is None:
+            found = _find_without_case(
+                self.mask_dir, self.stem(stem), MASK_EXTENSIONS, fold_endings=True
+            )
+        return found
 
     def scan_masks(
         self, directory: str | None = None, *, extensions: tuple[str, ...] = MASK_EXTENSIONS
     ) -> dict[str, str]:
         """``stem -> path`` of the masks in ``directory`` (default ``mask/``).
 
-        A ``.png`` wins over a ``.jpg``/``.jpeg`` with the same stem. Pass
-        ``extensions=(".png",)`` to keep only PNG masks (what Measure reads).
+        The same scan as the images: one mask per stem without case, a ``.png`` wins
+        over a ``.jpg``/``.jpeg``. Pass ``extensions=(".png",)`` to keep only PNG masks
+        (what Measure reads).
         """
         return _scan_ranked(directory or self.mask_dir, extensions)
 
@@ -248,8 +398,8 @@ class ProjectLayout:
         return self._path(SKELETONS_DIRNAME, self.stem(stem) + SKELETON_SUFFIX)
 
     def find_skeleton(self, stem: str) -> str | None:
-        path = self.skeleton_path(stem)
-        return path if os.path.isfile(path) else None
+        """Existing ``skeletons/<stem>_fake.png``, its stem compared without case (O7)."""
+        return find_by_stem(self.skeletons_dir, self.stem(stem), SKELETON_SUFFIX)
 
     def scan_skeletons(self, directory: str | None = None) -> dict[str, str]:
         """``stem -> path`` of ``*_fake.png`` in ``directory`` (default ``skeletons/``)."""
@@ -279,8 +429,9 @@ class ProjectLayout:
         return self._path(SKELETON_CORRECTIONS_DIRNAME, self.stem(stem) + CORRECTED_SKELETON_SUFFIX)
 
     def find_corrected_skeleton(self, stem: str) -> str | None:
-        path = self.corrected_skeleton_path(stem)
-        return path if os.path.isfile(path) else None
+        """Existing ``skeleton_corrections/<stem>_skeleton.png``, its stem compared without
+        case (O7)."""
+        return find_by_stem(self.corrections_dir, self.stem(stem), CORRECTED_SKELETON_SUFFIX)
 
     def scan_corrected_skeletons(self) -> dict[str, str]:
         return dict(_scan(self.corrections_dir, _suffix_stem(CORRECTED_SKELETON_SUFFIX)))

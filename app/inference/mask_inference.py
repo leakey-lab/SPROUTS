@@ -27,6 +27,7 @@ from app.inference import runtime
 from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
 from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
+from app.naming import stem_key
 from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,17 @@ def list_inputs(input_dir: str, skip_stems: frozenset[str] = frozenset()):
     """``(all image names, paths to process, skipped stems)``, names sorted.
 
     One image per stem, the one the Library shows (``ProjectLayout.scan_images``):
-    two files with one stem would otherwise race for one ``<stem>.png`` (R7).
+    two files with one stem would otherwise race for one ``<stem>.png`` (R7). Stems
+    compare without case (O7), with the skip list too: a kept ``mask/a.png`` keeps
+    ``A.png`` from being written over it.
     """
     chosen = ProjectLayout(input_dir).scan_images()
     names = sorted(os.path.basename(path) for path in chosen.values())
+    skip_keys = {stem_key(stem) for stem in skip_stems}
     todo, skipped = [], []
     for name in names:
         stem = os.path.splitext(name)[0]
-        if stem in skip_stems:
+        if stem_key(stem) in skip_keys:
             skipped.append(stem)
         else:
             todo.append(os.path.join(input_dir, name))

@@ -20,7 +20,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog
 
 from app import APP_NAME
+from app.config import IMAGE_EXTENSIONS
 from app.data_processing.measurement_index import MeasurementIndex
+from app.project_layout import ImageScan
 
 from .. import visualization_manager
 from ..image_manager import project_layout_of
@@ -35,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 #: The one toast of a folder load (loaded / empty / failed): a newer load replaces it.
 _LOAD_TOAST = "project-load"
+#: The second toast of a load: the files the Library does not list (O6, O7).
+_SKIPPED_TOAST = "project-load-skipped"
+#: How many hidden file names the skipped toast spells out.
+_HIDDEN_NAMED = 3
 
 #: Opening a folder while a batch job runs is refused (R7, O15): the job's outputs
 #: belong to the project it started in, and the progress row keeps its name and Cancel.
@@ -132,6 +138,43 @@ def _clear_project_messages(window: "MainWindow") -> None:
         toast.dismiss()
 
 
+def skipped_text(scan: ImageScan) -> str:
+    """What the Library does not list of ``scan``'s folder, as one sentence per kind
+    (``""`` when it lists every image): files whose stem another file took (O7) and
+    files of a format the app does not read (O6)."""
+    parts = []
+    hidden = scan.hidden
+    if len(hidden) == 1:
+        ((name, shown),) = hidden
+        parts.append(f"1 image is not listed: {name} has the same name as {shown}")
+    elif hidden:
+        names = ", ".join(name for name, _ in hidden[:_HIDDEN_NAMED])
+        more = ", …" if len(hidden) > _HIDDEN_NAMED else ""
+        parts.append(
+            f"{len(hidden)} images are not listed: each has the same name as another "
+            f"image ({names}{more})"
+        )
+    unsupported = scan.unsupported
+    if unsupported:
+        suffixes = ", ".join(sorted({os.path.splitext(n)[1].lower() for n in unsupported}))
+        if len(unsupported) == 1:
+            parts.append(
+                f"1 file ({suffixes}) is not supported and is not listed; convert it to PNG or JPEG"
+            )
+        else:
+            parts.append(
+                f"{len(unsupported)} files ({suffixes}) are not supported and are not "
+                "listed; convert them to PNG or JPEG"
+            )
+    return ". ".join(parts)
+
+
+def _skipped_of(window: "MainWindow") -> str:
+    """:func:`skipped_text` of the scan just delivered (``""`` without one)."""
+    scan = getattr(window.image_manager, "last_scan", None)
+    return skipped_text(scan) if scan is not None else ""
+
+
 def update_loading_progress(window: "MainWindow", value):
     """Update the loading progress bar"""
     window.task_progress.set_progress(value)
@@ -140,7 +183,12 @@ def update_loading_progress(window: "MainWindow", value):
 
 
 def on_loading_finished(window: "MainWindow", images, fake_images, masks, has_fake_real_pairs):
-    """Show a freshly scanned folder: build the library, then drop the overlay."""
+    """Show a freshly scanned folder: build the library, then drop the overlay.
+
+    A failure up to the library tree propagates: the manager then loads nothing and the
+    load ends as failed (see :func:`end_failed_load`). Once the tree shows the folder, it
+    is open: a later failure is logged and the loading card still goes.
+    """
     window._loading_project = False
     window._shown_leaf_name = None
     layout = project_layout_of(window.image_manager)
@@ -151,6 +199,22 @@ def on_loading_finished(window: "MainWindow", images, fake_images, masks, has_fa
         project = os.path.basename(os.path.normpath(folder)) or folder
         window.setWindowTitle(f"{project} — {APP_NAME}[*]")
     window.populate_file_list()
+    try:
+        _after_the_library_is_shown(window, images)
+    except Exception:
+        logger.exception("Opening %s: a step after the library was shown failed", folder)
+        _drop_loading_card(window, f"Loaded {count_label(len(images))}")
+
+
+def _drop_loading_card(window: "MainWindow", message: str) -> None:
+    if getattr(window, "loading_overlay", None) is not None:
+        window.loading_overlay.hide()
+    window.empty_state.set_loading(None)
+    window.task_progress.finish(message)
+
+
+def _after_the_library_is_shown(window: "MainWindow", images) -> None:
+    """The rest of :func:`on_loading_finished`, once the tree shows the new folder."""
     reset = getattr(window.display_controller, "reset", None)
     if callable(reset):
         reset()  # never keep showing the previous folder's image
@@ -162,13 +226,13 @@ def on_loading_finished(window: "MainWindow", images, fake_images, masks, has_fa
     if released or window.right_panel.currentIndex() == Panel.VISUALIZATION:
         window._go_to_stage("Library")
     window.metrics.refresh(None)
-    if getattr(window, "loading_overlay", None) is not None:
-        window.loading_overlay.hide()
-    window.empty_state.set_loading(None)
     message = f"Loaded {count_label(len(images))}"
-    window.task_progress.finish(message)
+    _drop_loading_card(window, message)
     window.statusline.refresh_idle()  # "Ready · N images" names this folder's count
     window.notify(message, key=_LOAD_TOAST)  # opening again updates it, never stacks
+    skipped = _skipped_of(window)
+    if skipped:  # its own toast: the success toast stays "Loaded N images"
+        window.notify(skipped, "warn", key=_SKIPPED_TOAST)
 
     # Swap the index-0 display page from the empty state to the real display
     # area now that images exist.
@@ -186,9 +250,13 @@ def on_loading_finished(window: "MainWindow", images, fake_images, masks, has_fa
 
 
 def on_loading_empty(window: "MainWindow", folder):
-    """The scanned folder has no images: warn and keep whatever was loaded."""
+    """The scanned folder has no images: warn (naming the files of formats the app does
+    not read, if any) and keep whatever was loaded."""
     name = os.path.basename(os.path.normpath(folder or "")) or folder
-    window._end_failed_load(f"No .jpg/.png images in {name} — nothing loaded", "warn")
+    formats = "/".join(IMAGE_EXTENSIONS)
+    message = f"No {formats} images in {name} — nothing loaded"
+    skipped = _skipped_of(window)
+    window._end_failed_load(f"{message}. {skipped}" if skipped else message, "warn")
 
 
 def on_loading_failed(window: "MainWindow", folder, message):
@@ -198,7 +266,9 @@ def on_loading_failed(window: "MainWindow", folder, message):
 
 def end_failed_load(window: "MainWindow", message, kind):
     """A load that delivered no images ends: the card goes, ``message`` is shown (a
-    ``kind`` toast), and the Welcome screen returns when nothing was loaded before."""
+    ``kind`` toast), and the Welcome screen returns when nothing is loaded (before, or
+    any more after a failed adoption: then the tree, the measured values and the title
+    drop what a half-adopted folder left)."""
     window._loading_project = False
     if getattr(window, "loading_overlay", None) is not None:
         window.loading_overlay.hide()
@@ -208,8 +278,28 @@ def end_failed_load(window: "MainWindow", message, kind):
     else:
         window.task_progress.finish(message)
     window.notify(message, kind, key=_LOAD_TOAST)
-    if not window.image_manager.images and getattr(window, "app_stack", None) is not None:
+    if window.image_manager.images:
+        return
+    _forget_project(window)
+    if getattr(window, "app_stack", None) is not None:
         window.app_stack.setCurrentIndex(0)  # nothing to show: back to Welcome
+
+
+def _forget_project(window: "MainWindow") -> None:
+    """Nothing is loaded: the tree, the measured values and the title say so too (a
+    partial window, as in tests, has only some of them)."""
+    metrics = getattr(window, "metrics", None)
+    if metrics is not None:
+        metrics.index = None
+    populate = getattr(window, "populate_file_list", None)
+    if callable(populate):
+        try:
+            populate()  # the manager's empty library: an empty tree
+        except Exception:  # the failed load must still end (and the jobs start again)
+            logger.exception("Could not clear the library tree")
+    set_title = getattr(window, "setWindowTitle", None)
+    if callable(set_title):
+        set_title(f"{APP_NAME}[*]")
 
 
 def record_recent_project(window: "MainWindow", count):

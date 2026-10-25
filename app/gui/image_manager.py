@@ -27,7 +27,13 @@ from PyQt6.QtWidgets import QFileDialog
 from app.gui.library_index import index_names
 from app.io_utils import sweep_stale_temp_files
 from app.naming import image_stem, parse_image_name
-from app.project_layout import ProjectLayout
+from app.project_layout import (
+    SKELETON_SUFFIX,
+    ImageScan,
+    ProjectLayout,
+    find_by_stem,
+    key_to_stems,
+)
 from app.workers import describe_error
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,12 @@ logger = logging.getLogger(__name__)
 # as the scan (+15 % scan time when both ran at once) and should not compete with the
 # first image either (R8).
 TEMP_SWEEP_DELAY_MS = 2000
+
+
+def _stems_of(found: set[str], images) -> set[str]:
+    """``found`` (output stems) under the Library's stems: an output whose name differs
+    from its image's only in case belongs to that image (O7)."""
+    return set(key_to_stems(dict.fromkeys(found), images))
 
 
 def sweep_project_temp_files(layout: ProjectLayout) -> list[str]:
@@ -63,8 +75,10 @@ class ImageLoaderThread(QThread):
             (any exception, ``SystemExit`` too; ``finished`` is not emitted).
 
     An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
-    ``hierarchy``, ``labels`` (library row texts), ``skeleton_stems`` and
-    ``corrected_stems`` (images with a skeleton correction) hold the extra results.
+    ``scan`` (the folder listing, with the files it does not list), ``hierarchy``,
+    ``labels`` (library row texts), ``skeleton_stems`` and ``corrected_stems`` (images
+    with a skeleton correction) hold the extra results. Masks, skeletons and
+    corrections are keyed by the Library's stems (O7: ``mask/a.png`` is ``A.png``'s).
     """
 
     progress = pyqtSignal(int)
@@ -74,6 +88,7 @@ class ImageLoaderThread(QThread):
     def __init__(self, folder_path):
         super().__init__()
         self.folder_path = folder_path
+        self.scan: ImageScan | None = None
         self.hierarchy = None
         self.labels: dict[str, str] = {}
         self.skeleton_stems: set[str] = set()
@@ -85,14 +100,15 @@ class ImageLoaderThread(QThread):
                 self.failed.emit(f"Folder not found: {self.folder_path}")
                 return
             layout = ProjectLayout(self.folder_path)
-            images = layout.scan_images()
+            self.scan = layout.scan_image_folder()
+            images = self.scan.images
             if self._stop(50):
                 return
-            masks = layout.scan_masks()
+            masks = key_to_stems(layout.scan_masks(), images)
             if self._stop(70):
                 return
-            self.skeleton_stems = layout.scan_skeleton_stems()
-            self.corrected_stems = layout.scan_corrected_stems()
+            self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), images)
+            self.corrected_stems = _stems_of(layout.scan_corrected_stems(), images)
             if self._stop(85):
                 return
             self.hierarchy, self.labels = index_names(images)
@@ -138,6 +154,9 @@ class ImageManager:
     def __init__(self, main_window=None):
         self.images = {}
         self.fake_images = {}
+        # (folder, stem) of overlay skeletons not found (case-sensitive disks list the
+        # folder for a miss): not looked for again until the outputs are re-read.
+        self._fake_misses: set[tuple[str, str]] = set()
         self.masks = {}
         self.skeleton_stems: set[str] = set()
         # Images with a skeleton correction (display only: Measure reads the generated
@@ -145,6 +164,8 @@ class ImageManager:
         self.corrected_stems: set[str] = set()
         self.has_fake_real_pairs = False
         self.original_folder = None
+        # The newest delivered scan's listing (what it did not list too); None before one.
+        self.last_scan: ImageScan | None = None
         self.loader_thread = None  # the newest scan until its thread ends
         self.main_window = main_window
         self.current_view_mode = None
@@ -232,13 +253,14 @@ class ImageManager:
         if generation != self._generation:
             return  # a newer folder was opened meanwhile
         folder, self._pending_folder = self._pending_folder, None
+        # Alive: the manager holds the newest scan until its thread has ended, after this.
+        thread = ref()
+        self.last_scan = thread.scan if thread is not None else None
         if not images:
             if self.main_window:
                 self.main_window.on_loading_empty(folder)
             return
         self.original_folder = folder
-        # Alive: the manager holds the newest scan until its thread has ended, after this.
-        thread = ref()
         extra = {}
         if thread is not None:  # else they are computed here (on_loading_finished)
             extra = {
@@ -247,7 +269,22 @@ class ImageManager:
                 "skeleton_stems": thread.skeleton_stems,
                 "corrected_stems": thread.corrected_stems,
             }
-        self.on_loading_finished(images, fake_images, masks, pairs, **extra)
+        try:
+            self.on_loading_finished(images, fake_images, masks, pairs, **extra)
+        except BaseException as exc:  # noqa: BLE001 - the load must end, or no job starts
+            # Unreported, the window would keep loading (W1-T1: every Generate / Measure
+            # run refused) and keep its loading card up. Half adopted, the Library could
+            # show one project while project_layout_of names another: nothing is loaded
+            # (the window clears its tree when the failed load ends with no images).
+            logger.exception("Failed to open image folder %s", folder)
+            self._clear_images()
+            self.original_folder = None
+            self.last_scan = None
+            if self.main_window:
+                self.main_window.on_loading_failed(
+                    folder, f"Could not open {folder}: {describe_error(exc)}"
+                )
+            return
         QTimer.singleShot(TEMP_SWEEP_DELAY_MS, partial(self._start_temp_sweep, folder))
 
     def _on_scan_failed(self, generation, message):
@@ -285,11 +322,11 @@ class ImageManager:
         if skeleton_stems is not None:
             self.skeleton_stems = set(skeleton_stems)
         elif self.original_folder:
-            self.skeleton_stems = self._layout().scan_skeleton_stems()
+            self.skeleton_stems = _stems_of(self._layout().scan_skeleton_stems(), images)
         if corrected_stems is not None:
             self.corrected_stems = set(corrected_stems)
         elif self.original_folder:
-            self.corrected_stems = self._layout().scan_corrected_stems()
+            self.corrected_stems = _stems_of(self._layout().scan_corrected_stems(), images)
         if self.main_window:
             self.main_window.on_loading_finished(
                 images, self.fake_images, masks, self.has_fake_real_pairs
@@ -298,6 +335,7 @@ class ImageManager:
     def _clear_images(self):
         self.images = {}
         self.fake_images.clear()
+        self._fake_misses.clear()
         self.has_fake_real_pairs = False
         self.masks = {}
         self.skeleton_stems = set()
@@ -328,13 +366,15 @@ class ImageManager:
         self.processed_base_path = skeletons if os.path.isdir(skeletons) else None
 
     def refresh_outputs(self):
-        """Re-read mask/ and skeletons/ after a generation run (two scandirs)."""
+        """Re-read mask/ and skeletons/ after a generation run (two scandirs), keyed by
+        the Library's stems (O7)."""
         if not self.original_folder:
             return
         layout = self._layout()
-        self.masks = layout.scan_masks()
-        self.skeleton_stems = layout.scan_skeleton_stems()
+        self.masks = key_to_stems(layout.scan_masks(), self.images)
+        self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), self.images)
         self.fake_images.clear()
+        self._fake_misses.clear()
         self._find_processed_base_path()
 
     def mask_path_for(self, name) -> str | None:
@@ -374,11 +414,13 @@ class ImageManager:
             self.corrected_stems.discard(stem)
 
     def corrected_skeleton_path(self, name) -> str | None:
-        """``skeleton_corrections/<stem>_skeleton.png`` of ``name`` when one was found."""
+        """``skeleton_corrections/<stem>_skeleton.png`` of ``name`` when one was found (its
+        stem compared without case, O7; the save path while the file is not there yet)."""
         stem = image_stem(name)
         if stem not in self.corrected_stems or not self.original_folder:
             return None
-        return self._layout().corrected_skeleton_path(stem)
+        layout = self._layout()
+        return layout.find_corrected_skeleton(stem) or layout.corrected_skeleton_path(stem)
 
     # ------------------------------------------------------------ view / lookup
     def get_fake_image_path(self, name):
@@ -386,8 +428,15 @@ class ImageManager:
             return self.fake_images[name]
 
         if self.current_view_mode in ["Overlay", "Side by Side"] and self.processed_base_path:
-            fake_path = os.path.join(self.processed_base_path, f"{name}_fake.png")
-            if os.path.exists(fake_path):
+            base = self.processed_base_path
+            fake_path = os.path.join(base, name + SKELETON_SUFFIX)
+            if not os.path.isfile(fake_path):  # the exact name: checked every time
+                if (base, name) in self._fake_misses:
+                    return None
+                fake_path = find_by_stem(base, name, SKELETON_SUFFIX)
+                if fake_path is None:
+                    self._fake_misses.add((base, name))
+            if fake_path is not None:
                 self.fake_images[name] = fake_path
                 self.has_fake_real_pairs = True
                 return fake_path

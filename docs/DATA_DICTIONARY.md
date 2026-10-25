@@ -25,14 +25,16 @@ orientation (EXIF orientation ignored). Older projects may have skeletons
 in `output/skeletonizer/test_latest/images/` or masks in `output/mask/`; Measure still
 finds them there.
 
-When two images share a stem (`a.png` and `a.jpg`), SPROUTS uses one of them everywhere,
-the one the Library shows: `.png` first, then `.jpg`, then `.jpeg` (since 2026-09-30;
-before, generation processed both, and either could end up in `mask/a.png` or
-`skeletons/a_fake.png`). On Windows, stems that differ only in case (`A.png`, `a.jpg`) are
-still two images that share one output file. Skeleton generation also reads `.bmp`,
-`.tif`, `.tiff` and `.ppm` images, which the Library, mask generation and Measure-area
-ignore: such an image gets a skeleton and a `root_lengths.csv` row but no mask (an open
-question, `docs/KNOWN_ISSUES.md` #7).
+Stems compare without case, on every platform: `A.png`, `a.jpg` and `a.png` are one
+image. When several files share a stem, SPROUTS uses one of them everywhere: the one the
+Library shows. It is ranked by extension (`.png`, then `.jpg`, then `.jpeg`), and with
+equal extensions the file name that sorts first wins (`A.png` before `a.png`). The
+others get no mask, skeleton or CSV row. SPROUTS reads PNG and JPEG images only
+(`.png`, `.jpg`, `.jpeg`, in any letter case). `.bmp`, `.tif`, `.tiff` and `.ppm` files
+are not read; opening a folder names the files it does not list, both the hidden
+duplicates and the unsupported formats (since 2026-10-25; before, stems differing only
+in case were two images sharing one output file on Windows, and skeleton generation
+also read `.bmp` / `.tif` / `.tiff` / `.ppm`).
 
 ## File-name convention
 

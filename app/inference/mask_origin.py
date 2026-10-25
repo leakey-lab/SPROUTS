@@ -24,7 +24,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from app.project_layout import ProjectLayout
+from app.project_layout import ProjectLayout, key_to_stems
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _IHDR_COLOUR_TYPE_OFFSET = 25  # 8 signature + 4 length + 4 "IHDR" + 4 w + 4 h + 1 depth
@@ -134,12 +134,14 @@ def scan_existing_masks(layout: ProjectLayout, stems: Iterable[str] | None = Non
     """Scan ``layout.mask_dir`` once and classify every mask by origin.
 
     ``stems`` limits the result to masks of those images (orphan masks of images
-    that are no longer in the folder are irrelevant to a generation run).
+    that are no longer in the folder are irrelevant to a generation run), and a mask
+    whose name differs from its image's only in case is reported under the image's
+    stem (O7: ``mask/a.png`` is the mask of ``A.png``).
     """
     found = layout.scan_masks()  # {} when mask/ does not exist
     if stems is not None:
         wanted = set(stems)
-        found = {stem: path for stem, path in found.items() if stem in wanted}
+        found = {s: p for s, p in key_to_stems(found, wanted).items() if s in wanted}
     groups: dict[MaskOrigin, set[str]] = {origin: set() for origin in MaskOrigin}
     for stem, origin in zip(found, _classify_all(list(found.values())), strict=True):
         groups[origin].add(stem)

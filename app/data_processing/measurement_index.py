@@ -43,7 +43,7 @@ from app.inference.measure_inputs import (
     inputs_record_path,
     load_inputs_record,
 )
-from app.naming import image_stem
+from app.naming import image_stem, stem_key
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,29 @@ def _key(name: str) -> str:
     return image_stem(str(name).strip())
 
 
+class _Rows:
+    """One CSV's rows by exact stem, with a fallback by stem key (O7) for a stem that has
+    no exact row; a key that two rows share (``Ab`` and ``aB``) finds nothing there, so
+    a lookup never returns another image's value."""
+
+    __slots__ = ("exact", "_by_key")
+
+    def __init__(self, exact: dict[str, _Row]):
+        self.exact = exact
+        by_key: dict[str, _Row | None] = {}
+        for stem, row in exact.items():
+            key = stem_key(stem)
+            by_key[key] = None if key in by_key else row
+        self._by_key = by_key
+
+    def get(self, stem: str) -> _Row | None:
+        row = self.exact.get(stem)
+        return row if row is not None else self._by_key.get(stem_key(stem))
+
+
+_NO_ROWS = _Rows({})
+
+
 def _signature(path: str) -> _Signature | None:
     try:
         st = os.stat(path)
@@ -89,8 +112,9 @@ def _table_signature(path: str) -> _TableSignature | None:
     return None if sig is None else (sig, _signature(inputs_record_path(path)))
 
 
-def _read_metric_csv(path: str, value_column: str) -> dict[str, _Row]:
-    """``stem -> _Row`` for one metric CSV; ``{}`` (logged) when it is unreadable."""
+def _read_metric_csv(path: str, value_column: str) -> _Rows:
+    """The rows of one metric CSV by stem (:class:`_Rows`); none (logged) when it is
+    unreadable."""
     rows: dict[str, _Row] = {}
     try:
         with open(path, newline="", encoding="utf-8-sig") as fh:
@@ -110,8 +134,8 @@ def _read_metric_csv(path: str, value_column: str) -> dict[str, _Row]:
                 rows[_key(rec[i_img])] = _Row(value, err)
     except (OSError, UnicodeDecodeError, csv.Error, ValueError) as exc:
         logger.warning("Cannot read measurements from %s: %s", path, exc)
-        return {}
-    return rows
+        return _NO_ROWS
+    return _Rows(rows)
 
 
 class MetricTable:
@@ -144,7 +168,7 @@ class MetricTable:
         self._searched_at: float | None = None  # the last search (either kind)
         self._searched_full_at: float | None = None  # the last full search
         self._loaded_sig: _TableSignature | None = None
-        self._rows: dict[str, _Row] = {}
+        self._rows: _Rows = _NO_ROWS
         self._record: InputsRecord | None = None
 
     @property
@@ -162,7 +186,7 @@ class MetricTable:
         """Forget the located path and the parsed rows (e.g. after a Measure run)."""
         with self._lock:
             self._path, self._searched_at, self._searched_full_at = None, None, None
-            self._loaded_sig, self._rows, self._record = None, {}, None
+            self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
 
     def _resolve(self, full: bool) -> tuple[str, _TableSignature] | None:
         """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
@@ -189,13 +213,13 @@ class MetricTable:
         self._path = path
         return self._path, sig
 
-    def _current(self, load: bool) -> dict[str, _Row] | None:
+    def _current(self, load: bool) -> _Rows | None:
         """Rows matching the CSV on disk, or ``None`` (absent, or cold with ``load=False``).
 
         ``load=False`` (the GUI thread) searches with ``locate_fast`` only."""
         found = self._resolve(full=load)
         if found is None:
-            self._loaded_sig, self._rows, self._record = None, {}, None
+            self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
             return None
         path, sig = found
         if sig != self._loaded_sig:
@@ -208,7 +232,8 @@ class MetricTable:
         return self._rows
 
     def get(self, stem: str, *, load: bool = True) -> _Row | None:
-        """Row for ``stem``; with ``load=False`` never parses and never blocks."""
+        """Row for ``stem`` (its exact stem first, then without case, O7); with
+        ``load=False`` never parses and never blocks."""
         if not self._lock.acquire(blocking=load):
             return None  # a worker is parsing: report nothing rather than wait
         try:

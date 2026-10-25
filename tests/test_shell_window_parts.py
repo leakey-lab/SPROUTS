@@ -415,7 +415,7 @@ def test_a_folder_without_images_keeps_what_was_loaded(tmp_path):
     window.task_progress = SimpleNamespace(finish=done.append, fail=lambda m: calls.append(m))
     window._end_failed_load = lambda m, k: project_loader.end_failed_load(window, m, k)
     project_loader.on_loading_empty(window, str(tmp_path / "trial"))
-    message = "No .jpg/.png images in trial — nothing loaded"
+    message = "No .png/.jpg/.jpeg images in trial — nothing loaded"
     assert window._loading_project is False and done == [message]
     # Nothing was loaded before: back to the Welcome screen.
     assert calls == [("empty", None), (message, "warn", "project-load"), ("page", 0)]

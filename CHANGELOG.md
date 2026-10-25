@@ -38,6 +38,17 @@ Five passes, not yet released:
   a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- **One image per stem, PNG and JPEG only (2026-10-25, W1-T5, R4, R3, O6, O7).** Stems
+  compare without case on every platform (`app.naming.stem_key`). `A.png` and `a.jpg` were
+  two Library images racing for one `mask/A.png`: a run reported 3 written for 2 files,
+  and *Keep existing masks* replaced a hand-corrected mask of `A.png` with `a.jpg`'s. Now
+  they are one image (`.png` before `.jpg` before `.jpeg`, then the name that sorts first),
+  and a mask, skeleton or correction whose name differs only in case is found for it.
+  Mask and skeleton generation, the Library and the measured-value lookup read the same
+  PNG / JPEG files; skeleton generation no longer reads `.bmp` / `.tif` / `.tiff` / `.ppm`.
+  Opening a folder names the files it does not list in a second toast. A failure while
+  the Library adopts a scan ends the load as failed (nothing loaded), so Generate and
+  Measure are never refused for good. See "Scientific output changes".
 - **Owner-decisions build (2026-10-25).** None of these changes a CSV value or an output
   pixel.
   - Start-up: the D3D11 / ANGLE flags are set on Windows only; Linux and macOS take Qt's
@@ -609,6 +620,13 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Case-variant stems and unsupported formats (2026-10-25, W1-T5).** Folders with
+  case-variant stems (`A.png`, `a.jpg`): one image, ranked, on every platform; the hidden
+  one gets no new mask, skeleton or CSV row (outputs already on disk are still measured).
+  Folders with `.bmp` / `.tif` / `.tiff` / `.ppm` next to supported files: those get no new
+  skeleton or `root_lengths.csv` row. Before / after on the audit folders: `r4_case` 3 -> 2
+  written, the mask from `A.png` in 20 of 20 runs; `r3_formats` skeleton inputs 7 -> 3. The
+  3000-pair real sample (JPEG only, no case-variant stems): identical.
 - **Stem clash (2026-09-30).** When two image files in a project share a stem (`a.jpg` and
   `a.png`), Generate now uses only the image the Library shows (`.png` before `.jpg` before
   `.jpeg`) for `mask/a.png` and `skeletons/a_fake.png`. Before, both images were processed
