@@ -38,6 +38,7 @@ def _skeletons(folder):
 
 
 def test_a_cancelled_skeleton_run_refreshes_the_window(project, qapp, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("SPROUTS_BATCH_POLICY", "auto")  # (O4) the fixture sizes auto batches
     handler = gsh.GenerateSkeletonHandler(project.window)
 
     def cancel_after_the_first_batch(n):
@@ -59,6 +60,8 @@ def test_a_cancelled_skeleton_run_refreshes_the_window(project, qapp, monkeypatc
 
 
 def test_a_failed_skeleton_run_refreshes_the_window(project, qapp, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("SPROUTS_BATCH_POLICY", "auto")  # (O4) the fixture sizes auto batches
+
     def fail_on_the_second_batch(n):
         if n == 2:
             raise RuntimeError("CUDA error: unspecified launch failure (simulated)")

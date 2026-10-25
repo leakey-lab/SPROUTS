@@ -188,14 +188,25 @@ chose last (root length at first); with nothing to chart yet it says what to run
 
 Generating masks into a folder that already has masks asks first: keep them and
 generate only the missing ones (the default), or replace every mask. On a GPU, outputs
-are reproducible run to run at the same batch size (cuDNN autotuning is off, deterministic
-algorithms on); a different batch size, for example after running out of GPU memory, can
-flip a few pixels (the run file records `effective_batch_size`). They are numerically
+are reproducible run to run (cuDNN autotuning is off, deterministic algorithms on, batches
+at one fixed size, see below). They are numerically
 equivalent to earlier versions, not bit-identical: root length is unchanged and area moves
 by under 0.1 % (see `CHANGELOG.md`). On
 Ampere and newer GPUs convolutions use TF32, recorded as `precision` in the run file.
 Set `SPROUTS_CUDNN_BENCHMARK=1` to allow cuDNN autotuning (faster on some GPUs, not
 bit-reproducible).
+
+Batches run at one fixed size (masks 4, skeletons 64 on a GPU; 4 and 8 on the CPU), the
+last one padded with blank images whose outputs are dropped, so a mask or skeleton does not
+depend on how many images were in the folder or how much GPU memory was free. Before the
+first batch a GPU run checks free GPU memory (3.6 GiB for masks, 3.8 GiB for skeletons,
+after the model has loaded) and stops with a message if there is less, because under memory
+pressure the GPU can silently switch to other kernels and change a few pixels. If the GPU
+runs out of memory at the fixed size, the run stops with a message (no smaller retry).
+`SPROUTS_BATCH_POLICY=auto` restores the earlier behaviour (masks in batches of 16, skeleton
+batch sized to free memory, batches halved on out of memory; a few pixels can then differ).
+Outputs are reproducible on one machine and software stack, not across GPUs, drivers or
+PyTorch / cuDNN versions.
 
 Tube, position, date and time come from the image file name,
 `<field>_T<tube>_L<position>_<YYYY.MM.DD>_<HHMMSS>_...`. A row that could not be measured

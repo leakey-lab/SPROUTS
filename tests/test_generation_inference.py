@@ -116,7 +116,7 @@ def test_mask_generation_skips_existing_stems_without_inference(tmp_path, cpu_ru
     model = _StubMaskModel().eval()
 
     report = mask_inference.generate_masks(
-        src, out, model=model, batch_size=4, skip_stems=frozenset({"a"})
+        src, out, model=model, batch_size=4, skip_stems=frozenset({"a"}), batch_policy="auto"
     )
     assert open(traced, "rb").read() == before
     assert report.skipped == ["a"]
@@ -160,7 +160,9 @@ def test_mask_run_loads_model_lazily_with_a_stage(tmp_path, cpu_runtime, monkeyp
     monkeypatch.setattr(runtime, "get_mask_model", lambda device=None: stub)
     stages = []
     src = _images(str(tmp_path / "imgs"), ["a.jpg"])
-    mask_inference.generate_masks(src, str(tmp_path / "imgs" / "mask"), on_stage=stages.append)
+    mask_inference.generate_masks(
+        src, str(tmp_path / "imgs" / "mask"), on_stage=stages.append, batch_policy="auto"
+    )
     assert stages == [mask_inference.STAGE_LOADING, mask_inference.STAGE_RUNNING]
     assert stub.items == 1
 

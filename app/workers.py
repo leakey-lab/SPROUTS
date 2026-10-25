@@ -46,14 +46,21 @@ class JobCancelled(Exception):
 def is_user_condition(exc: BaseException) -> bool:
     """True for errors that are an expected user condition, not a bug.
 
-    ``app.io_utils.FileLockedError`` (an output file open in another program)
-    carries its own user-facing message and needs no traceback in the log.
+    ``app.io_utils.FileLockedError`` (an output file open in another program) and
+    ``app.inference.batch_engine.FixedBatchOutOfMemory`` (a fixed-batch generation run
+    stopped for GPU memory, O4; covers ``FixedBatchMemoryTooLow``) carry their own
+    user-facing message and need no traceback in the log.
     """
     try:  # lazy: io_utils is optional here and must never break the error path
         from app.io_utils import FileLockedError
     except Exception:
-        return False
-    return isinstance(exc, FileLockedError)
+        FileLockedError = None
+    try:  # lazy as well; batch_engine imports no torch at import
+        from app.inference.batch_engine import FixedBatchOutOfMemory
+    except Exception:
+        FixedBatchOutOfMemory = None
+    kinds = tuple(kind for kind in (FileLockedError, FixedBatchOutOfMemory) if kind is not None)
+    return bool(kinds) and isinstance(exc, kinds)
 
 
 def describe_error(exc: BaseException) -> str:

@@ -531,8 +531,17 @@ def make_skeleton_spec(model: Any, output_dir: str) -> BatchSpec:
     return BatchSpec(load=load, step=step, save=save)
 
 
-def default_skeleton_batch_size(device_type: str) -> int:
-    """VRAM-sized batch on a GPU; at most ``SKELETON_BATCH_SIZE_CPU`` on the CPU fallback."""
+def default_skeleton_batch_size(device_type: str, *, policy: str | None = None) -> int:
+    """The batch size of a skeleton run under ``policy`` (default: ``runtime.batch_policy()``).
+
+    ``fixed`` (O4): ``runtime.fixed_batch_size("skeleton", ...)``, 64 on a GPU, 8 on the
+    CPU; free VRAM is never asked. ``auto``: VRAM-sized on a GPU; at most
+    ``SKELETON_BATCH_SIZE_CPU`` on the CPU fallback.
+    """
+    from app.inference import runtime
+
+    if runtime.resolve_batch_policy(policy) == "fixed":
+        return runtime.fixed_batch_size("skeleton", device_type)
     batch_size = config.get_skeleton_batch_size(refresh=True)
     if device_type == "cuda":
         return batch_size
@@ -547,6 +556,7 @@ def run_skeleton_generation(
     model: Any = None,
     progress: ProgressCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
+    batch_policy: str | None = None,
 ) -> BatchReport:
     """Generate ``<output_dir>/<stem>_fake.png`` for every image in ``input_dir``.
 
@@ -557,14 +567,20 @@ def run_skeleton_generation(
     (``status`` "failed", R7) and its error then propagates unchanged.
 
     Args:
-        batch_size: default: auto-sized from free VRAM once the model is loaded;
-            at most ``config.SKELETON_BATCH_SIZE_CPU`` on CPU, so Cancel is
-            honoured within a second or two.
+        batch_size: default ``default_skeleton_batch_size(device, policy=batch_policy)``
+            once the model is loaded. Under ``fixed`` an explicit size is the fixed size.
         model: a ready SkeletonModel-like object with ``run_batch`` (tests);
             default: the cached ``runtime.get_skeleton_model()``.
+        batch_policy: "fixed" or "auto" (O4); default ``runtime.batch_policy()``.
+            ``fixed``: every forward at ``batch_size`` (the tail zero-padded), a GPU
+            run first checks free memory (``FixedBatchMemoryTooLow``), and out of
+            memory stops the run (``FixedBatchOutOfMemory``). ``auto``: the batch is
+            sized to free VRAM and halved on out of memory, as before.
     """
     from app.inference import runtime
 
+    batch_policy = runtime.resolve_batch_policy(batch_policy)
+    fixed = batch_policy == "fixed"
     os.makedirs(output_dir, exist_ok=True)
     image_paths = make_dataset(input_dir)
     # (R7) Filled in place by run_batches, so a run that raises still knows what it wrote.
@@ -580,6 +596,7 @@ def run_skeleton_generation(
             models={"skeleton": runtime.skeleton_weights_path()},
             parameters={
                 "batch_size": batch_size,
+                "batch_policy": batch_policy,
                 "load_size": LOAD_SIZE,
                 "aspect_ratio": ASPECT_RATIO,
                 "output_size_wh": list(config.SKELETON_OUTPUT_SIZE),
@@ -591,7 +608,7 @@ def run_skeleton_generation(
         if model is None and image_paths:
             model = runtime.get_skeleton_model(rt.device)
         if batch_size is None:
-            batch_size = default_skeleton_batch_size(rt.device.type)
+            batch_size = default_skeleton_batch_size(rt.device.type, policy=batch_policy)
         logger.info(
             "Skeleton generation: input=%s output=%s images=%d batch_size=%d",
             input_dir,
@@ -600,6 +617,10 @@ def run_skeleton_generation(
             batch_size,
         )
         if image_paths:
+            if fixed:
+                report.free_vram_gib = runtime.check_fixed_batch_memory(
+                    "skeleton", batch_size, rt.device.type
+                )
             run_batches(
                 image_paths,
                 make_skeleton_spec(model, output_dir),
@@ -609,6 +630,7 @@ def run_skeleton_generation(
                 progress=progress,
                 should_stop=should_stop,
                 report=report,
+                fixed=fixed,
             )
         else:
             logger.warning("No images found in input directory: %s", input_dir)

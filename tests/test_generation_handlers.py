@@ -150,7 +150,8 @@ def test_constructing_the_handler_loads_no_model(project, monkeypatch):
     assert calls == []
 
 
-def test_existing_masks_keep_is_the_default_choice(project, qapp):
+def test_existing_masks_keep_is_the_default_choice(project, qapp, monkeypatch):
+    monkeypatch.setenv("SPROUTS_BATCH_POLICY", "auto")  # (O4) no padding rows in stub.items
     mask_dir = project.folder / "mask"
     mask_dir.mkdir()
     _save_traced(mask_dir / "a.png")
@@ -305,6 +306,7 @@ def test_on_success_is_not_called_after_cancel_or_failure(project, qapp, monkeyp
 
 
 def test_cancel_stops_the_run_and_keeps_finished_masks(project, qapp, monkeypatch):
+    monkeypatch.setenv("SPROUTS_BATCH_POLICY", "auto")  # (O4) MASK_BATCH_SIZE sizes auto runs
     monkeypatch.setattr(config, "MASK_BATCH_SIZE", 1)
     handler = mgh.MaskGenerationHandler(project.window)
     project.stub.on_forward = lambda: handler.generation_thread.cancel()

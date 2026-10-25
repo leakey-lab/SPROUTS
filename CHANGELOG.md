@@ -371,6 +371,8 @@ Five passes, not yet released:
     O21).
   - `THIRD_PARTY_NOTICES.md` reproduces the pytorch-CycleGAN-and-pix2pix BSD licence for
     the skeleton generator code derived from it (W1-T7, F1).
+  - `SPROUTS_BATCH_POLICY` (`fixed` default, `auto`); run records gain
+    `parameters.batch_policy` and `outputs.free_vram_gib` (W3-T3, O4).
   - Licence: GPL-3.0-or-later for the code (`LICENSE`), CC-BY-4.0 for the model weights,
     copyright "the SPROUTS authors"; the bundle ships both licence files; About shows the
     licence (W5-T1, O32).
@@ -630,6 +632,20 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Fixed-shape batches (2026-10-25, W3-T3, O4).** Generation runs every batch at one fixed
+  size (masks 4, skeletons 64 on a GPU; 4 and 8 on the CPU), the last batch padded with zeros
+  whose outputs are dropped; a GPU run checks free memory first (3.6 GiB for masks, 3.8 GiB
+  for skeletons, after the model loads) and stops on out of memory instead of halving.
+  `SPROUTS_BATCH_POLICY=auto` keeps the former behaviour. Measured on 300 real 640 x 480
+  images (RTX 5070 Ti, `.claude/handoff/owner-decisions-2026-10-25/research/o4-gpu-batch.md`):
+  at one batch shape every output is bit-identical whatever the composition, order, slot, zero
+  padding or process. Masks at 4 against today's 16: 96 of 300 mask files differ (199 pixels,
+  a few per image), 9 of 300 CSV areas change at 2 dp, by at most 0.003 mm² (median of the
+  changed ones 0.026 %). Skeletons at 64: identical to 128 and to 32 (0 of 300 files); the
+  auto size in a Generate run on this card was already 64. Today's unpadded mask tail (12
+  images) against the padded one differed in 4 files / 5 pixels; that dependence on folder
+  size is gone. CPU tails are now padded too (not measured). The owner chose N = 4 over the
+  proposed 16 because masks at 16 need about 12 GiB free.
 - **`Error` cells name the file only (2026-10-25, W3-T7, O38).** The `Error` cell of a row
   that could not be measured names the file, not its absolute path, so a shared CSV no
   longer carries user or folder names. Values and every other cell are unchanged.

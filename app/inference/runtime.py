@@ -32,6 +32,11 @@ Public API:
   get_skeleton_model(device) -> SkeletonModel  (cached singleton)
   get_mask_model(device) -> torch.nn.Module     (cached singleton)
   release_cuda_cache() -> None            (call once when a batch job ends)
+  batch_policy() -> str                   ("fixed" | "auto", SPROUTS_BATCH_POLICY; O4)
+  resolve_batch_policy(policy) -> str     (a caller's explicit policy, else batch_policy())
+  fixed_batch_size(model, device_type) -> int   (never queries the GPU)
+  check_fixed_batch_memory(model, batch_size, device_type) -> float | None
+                                          (pre-flight: free GiB, stops below the floor)
 
 Before torch is loaded, the status line names the device through the NVIDIA driver
 instead (``app.inference.device_probe``); it never reaches a run record.
@@ -58,6 +63,38 @@ logger = logging.getLogger(__name__)
 
 CUDNN_BENCHMARK_ENV = "SPROUTS_CUDNN_BENCHMARK"
 
+# (O4, R1) Batch policy. "fixed": every forward runs at one batch size (the last batch
+# zero-padded), so an image's output does not depend on the folder or on free memory;
+# out of GPU memory stops the run. "auto": the former path (skeleton batch sized to
+# free VRAM, batches halved on out of memory).
+BATCH_POLICY_ENV = "SPROUTS_BATCH_POLICY"
+BATCH_POLICIES = ("fixed", "auto")
+DEFAULT_BATCH_POLICY = "fixed"
+
+# Fixed GPU batch sizes (research/o4-gpu-batch.md, Recommendation): masks at 16 need about
+# 12 GiB free to keep their kernel, 4 fits a 6 GB card at no speed cost; skeletons at 64
+# give the same output as every N >= 3 and are not slower than 128. Off the GPU the
+# fixed sizes are config.MASK_BATCH_SIZE_CPU / SKELETON_BATCH_SIZE_CPU (as before).
+FIXED_MASK_BATCH_SIZE_CUDA = 4
+FIXED_SKELETON_BATCH_SIZE_CUDA = 64
+
+# Pre-flight floors (GiB) of a fixed-size GPU run (research/o4-gpu-batch.md, Exp 1c /
+# Exp 4). Below them cuDNN can switch kernels without an error and outputs change. They
+# are compared with the DRIVER's free memory (torch.cuda.mem_get_info) read after the
+# model has loaded and the cache was released, so the weights (mask 0.32 GiB, skeleton
+# 0.05 GiB) are not part of it. The memo's allocator caps include the weights; cap minus
+# weights is what a run needs free here:
+#   masks 4:     identical down to 3600 MiB (about 3.2 GiB free); floor 3.6 leaves ~0.4 GiB.
+#   skeletons 64: identical down to 3500 MiB, OOM at 3300 (about 3.37 GiB free); floor 3.8
+#                 leaves ~0.4 GiB, the margin for the cuDNN / cuBLAS handles that load after
+#                 the pre-flight (a Generate run, mask model loaded, needs about 3.8 GiB).
+#   masks 16:    only for a caller's explicit 16: identical down to 12 000 MiB; floor 12.0.
+FIXED_MASK_VRAM_FLOOR_GIB = 3.6
+FIXED_SKELETON_VRAM_FLOOR_GIB = 3.8
+FIXED_MASK_16_VRAM_FLOOR_GIB = 12.0
+
+_GIB = 1024**3
+
 # TF32 tensor cores exist from compute capability 8.0 (Ampere) on.
 _TF32_MIN_CAPABILITY = (8, 0)
 
@@ -82,6 +119,96 @@ def skeleton_weights_path() -> str:
     from app import config
 
     return config.SKELETON_WEIGHTS_PATH
+
+
+def batch_policy() -> str:
+    """``SPROUTS_BATCH_POLICY`` (stripped, lower-cased) if valid, else the default (O4).
+
+    Read on every call: unlike ``RuntimeConfig`` it is not cached. An unknown value
+    logs a warning and falls back to ``DEFAULT_BATCH_POLICY``.
+    """
+    raw = os.environ.get(BATCH_POLICY_ENV)
+    if raw is None:
+        return DEFAULT_BATCH_POLICY
+    value = raw.strip().lower()
+    if value in BATCH_POLICIES:
+        return value
+    logger.warning(
+        "Unknown %s=%r; using %r (expected one of %s)",
+        BATCH_POLICY_ENV,
+        raw,
+        DEFAULT_BATCH_POLICY,
+        ", ".join(BATCH_POLICIES),
+    )
+    return DEFAULT_BATCH_POLICY
+
+
+def resolve_batch_policy(policy: str | None) -> str:
+    """A caller's explicit policy (validated), or :func:`batch_policy` for ``None``."""
+    if policy is None:
+        return batch_policy()
+    if policy not in BATCH_POLICIES:
+        raise ValueError(f"Unknown batch policy {policy!r}; expected one of {BATCH_POLICIES}")
+    return policy
+
+
+def fixed_batch_size(model: str, device_type: str) -> int:
+    """The fixed batch size of ``model`` ("mask" / "skeleton") on ``device_type`` (O4).
+
+    Never queries the GPU.
+    """
+    from app import config
+
+    sizes = {
+        "mask": (FIXED_MASK_BATCH_SIZE_CUDA, config.MASK_BATCH_SIZE_CPU),
+        "skeleton": (FIXED_SKELETON_BATCH_SIZE_CUDA, config.SKELETON_BATCH_SIZE_CPU),
+    }
+    if model not in sizes:
+        raise ValueError(f"Unknown model {model!r}; expected 'mask' or 'skeleton'")
+    gpu, cpu = sizes[model]
+    return gpu if device_type == "cuda" else cpu
+
+
+def check_fixed_batch_memory(model: str, batch_size: int, device_type: str) -> float | None:
+    """Pre-flight of a fixed-policy run (O4): free GPU memory in GiB, None off the GPU.
+
+    Call it once the model is loaded, before the first batch. Garbage is collected
+    and the cache emptied (``release_cuda_cache``), then the driver's free memory
+    (``torch.cuda.mem_get_info()``) read. Below the measured floor of the size
+    (``FIXED_*_VRAM_FLOOR_GIB``) it raises ``FixedBatchMemoryTooLow``: the
+    run would stop on out of memory, or worse change outputs without an error. A
+    caller's other size has no measured floor and is only measured. A failed query
+    returns None (logged): the check never breaks a run by itself.
+    """
+    if device_type != "cuda":
+        return None
+    import torch
+
+    from app.inference import batch_engine
+
+    release_cuda_cache()  # collected + emptied: this process's cached blocks count as free
+    try:
+        free_bytes, _total = torch.cuda.mem_get_info()
+    except Exception as exc:  # noqa: BLE001 - a failed query must not stop the run
+        logger.warning("Could not read the free GPU memory: %s", exc)
+        return None
+    free_gib = free_bytes / _GIB
+    floors = {
+        ("mask", FIXED_MASK_BATCH_SIZE_CUDA): FIXED_MASK_VRAM_FLOOR_GIB,
+        ("skeleton", FIXED_SKELETON_BATCH_SIZE_CUDA): FIXED_SKELETON_VRAM_FLOOR_GIB,
+        ("mask", 16): FIXED_MASK_16_VRAM_FLOOR_GIB,
+    }
+    needed = floors.get((model, batch_size))
+    logger.info(
+        "Fixed %s batch %d: %.2f GiB free GPU memory (floor %s)",
+        model,
+        batch_size,
+        free_gib,
+        "none measured" if needed is None else f"{needed} GiB",
+    )
+    if needed is not None and free_gib < needed:
+        raise batch_engine.FixedBatchMemoryTooLow(batch_size, free_gib=free_gib, needed_gib=needed)
+    return free_gib
 
 
 # ---------------------------------------------------------------------------
@@ -411,8 +538,20 @@ def release_cuda_cache() -> None:
 
 
 __all__ = [
+    "BATCH_POLICIES",
+    "BATCH_POLICY_ENV",
     "CUDNN_BENCHMARK_ENV",
+    "DEFAULT_BATCH_POLICY",
+    "FIXED_MASK_16_VRAM_FLOOR_GIB",
+    "FIXED_MASK_BATCH_SIZE_CUDA",
+    "FIXED_MASK_VRAM_FLOOR_GIB",
+    "FIXED_SKELETON_BATCH_SIZE_CUDA",
+    "FIXED_SKELETON_VRAM_FLOOR_GIB",
     "ModelUnavailableError",
+    "batch_policy",
+    "check_fixed_batch_memory",
+    "fixed_batch_size",
+    "resolve_batch_policy",
     "RuntimeConfig",
     "RuntimeSummary",
     "describe_runtime",

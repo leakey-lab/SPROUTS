@@ -19,6 +19,12 @@ One loop for both models, so their failure, memory and cancel policies cannot dr
 * R7 -- a save that finds the disk full ends the run with that error at the next
   batch boundary (every later save would fail too); other save errors stay
   per-image failures.
+* R1 (O4) -- ``run_batches(..., fixed=True)``: every forward gets exactly
+  ``batch_size`` rows, so an image's output no longer depends on how many images
+  share its batch. A short last batch is padded with zero rows whose outputs are
+  never saved. CUDA out-of-memory stops the run (``FixedBatchOutOfMemory``): no
+  halving and no retry, because a retry can succeed on another cuDNN kernel and
+  change outputs without an error (``research/o4-gpu-batch.md``, Exp 1c).
 
 torch is imported lazily (only a running job needs it).
 """
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import errno
 import logging
+import math
 import os
 import threading
 import time
@@ -61,10 +68,13 @@ class BatchReport:
     elapsed_s: float = 0.0
     error: str | None = None  # (R7) "<ExceptionType>: <message>" when the run raised
     # (R1) forward size (rows of the stacked tensor, zero-filled slots included) -> number of
-    # input slots that ran at that size; only forwards that returned a result count.
+    # input slots that ran at that size; only forwards that returned a result count. (O4)
+    # Under ``fixed`` the size includes the tail's padding rows; the count never does.
     batch_shapes: dict[int, int] = field(default_factory=dict)
     # (R1) one {"at": first input of the slice, "from": length, "to": retry length} per backoff
     oom_events: list[dict[str, Any]] = field(default_factory=list)
+    # (O4) free GPU memory (GiB) the pre-flight of a fixed-policy GPU run measured, else None
+    free_vram_gib: float | None = None
 
     @property
     def failed_names(self) -> list[str]:
@@ -106,6 +116,7 @@ class BatchReport:
                 for size in sorted(self.batch_shapes, reverse=True)
             },
             "oom_events": [dict(event) for event in self.oom_events],
+            "free_vram_gib": None if self.free_vram_gib is None else round(self.free_vram_gib, 2),
             "elapsed_s": round(self.elapsed_s, 3),
             "failed": [{"input": name, "reason": reason} for name, reason in self.failed],
             "skipped": sorted(self.skipped),
@@ -148,6 +159,48 @@ def is_disk_full(exc: BaseException) -> bool:
 
 class ItemOutOfMemory(Exception):
     """One image that ran out of GPU memory even alone (a recorded failure, no traceback)."""
+
+
+_FIXED_WAY_OUT = (
+    "Close other GPU programs, or set SPROUTS_BATCH_POLICY=auto to let SPROUTS use "
+    "smaller batches (a few pixels can then differ)."
+)
+#: (O4) A fixed-policy run that ran out of GPU memory; wording from research/o4-gpu-batch.md.
+FIXED_OOM_MESSAGE = "Out of GPU memory at the fixed batch size ({n}). " + _FIXED_WAY_OUT
+#: (O4) The pre-flight check found less free GPU memory than the fixed size needs.
+FIXED_MEMORY_MESSAGE = (
+    "Not enough free GPU memory for the fixed batch size ({n}): {free:.1f} GiB free, "
+    "{needed:.1f} GiB needed. " + _FIXED_WAY_OUT
+)
+
+
+class FixedBatchOutOfMemory(RuntimeError):
+    """A fixed-policy run ran out of GPU memory: the run stops (O4, no smaller retry)."""
+
+    def __init__(self, batch_size: int) -> None:
+        self.batch_size = int(batch_size)
+        super().__init__(FIXED_OOM_MESSAGE.format(n=self.batch_size))
+
+
+class FixedBatchMemoryTooLow(FixedBatchOutOfMemory):
+    """The pre-flight check stopped a fixed-policy GPU run before its first batch (O4).
+
+    ``free_gib`` / ``needed_gib`` are GiB; the message shows them with one decimal,
+    the free amount rounded down so it never reads as enough.
+    """
+
+    def __init__(self, batch_size: int, *, free_gib: float, needed_gib: float) -> None:
+        self.batch_size = int(batch_size)
+        self.free_gib = float(free_gib)
+        self.needed_gib = float(needed_gib)
+        RuntimeError.__init__(
+            self,
+            FIXED_MEMORY_MESSAGE.format(
+                n=self.batch_size,
+                free=math.floor(self.free_gib * 10) / 10,
+                needed=self.needed_gib,
+            ),
+        )
 
 
 def is_out_of_memory(exc: BaseException) -> bool:
@@ -239,6 +292,24 @@ class OomBackoff:
         )
 
 
+def _run_fixed(step: Callable[[Any], Any], x: Any, n_real: int) -> list[tuple[slice, Any]]:
+    """Run one fixed-size forward; ``[(slice(0, n_real), result)]`` (padding rows dropped).
+
+    CUDA out-of-memory raises ``FixedBatchOutOfMemory`` after leaving the ``except``
+    block (its traceback would keep the failed forward's activations alive) and
+    freeing the cache. Any other error propagates unchanged.
+    """
+    try:
+        return [(slice(0, n_real), step(x))]
+    except Exception as exc:
+        if not is_out_of_memory(exc):
+            raise
+        reason = _describe(exc)
+    _free_cuda_cache()
+    logger.error("Out of memory at the fixed batch size %d; stopping: %s", len(x), reason)
+    raise FixedBatchOutOfMemory(len(x))
+
+
 class _Progress:
     """Thread-safe done counter that reports only when the integer percent grows.
 
@@ -288,11 +359,14 @@ def run_batches(
     progress: ProgressCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
     report: BatchReport | None = None,
+    fixed: bool = False,
 ) -> BatchReport:
     """Run ``spec`` over ``paths`` in fixed-size batches; see the module docstring.
 
     ``report`` (R7): filled in place and returned when given, so a caller still
     has the partial outcome (the outputs on disk) when a step raises.
+    ``fixed`` (R1, O4): every forward runs at exactly ``batch_size`` rows (the last
+    batch zero-padded); out of GPU memory raises ``FixedBatchOutOfMemory``.
     """
     started = time.perf_counter()
     if report is None:
@@ -360,7 +434,10 @@ def run_batches(
             if not good:
                 return None, bad
             template = good[0]
-            x = torch.stack([t if err is None else torch.zeros_like(template) for t, err in loaded])
+            rows = [t if err is None else torch.zeros_like(template) for t, err in loaded]
+            if fixed and len(batch_paths) < batch_size:  # (O4) pad the tail; never saved
+                rows.extend(torch.zeros_like(template) for _ in range(batch_size - len(rows)))
+            x = torch.stack(rows)
             return (x.pin_memory() if pin_memory else x), bad
 
         try:
@@ -379,12 +456,16 @@ def run_batches(
                     if x is None:
                         continue
                     current_paths = batch_paths
-                    results = backoff.run(spec.step, x)
-                    flush_oom_events()
+                    if fixed:
+                        results = _run_fixed(spec.step, x, len(batch_paths))
+                    else:
+                        results = backoff.run(spec.step, x)
+                        flush_oom_events()
                     for chunk, result in results:
                         if not isinstance(result, BaseException):
                             n = chunk.stop - chunk.start
-                            shapes[n] = shapes.get(n, 0) + n
+                            size = batch_size if fixed else n  # (O4) padding rows not counted
+                            shapes[size] = shapes.get(size, 0) + n
                         for offset, i in enumerate(range(chunk.start, chunk.stop)):
                             if i in bad:
                                 continue  # zero-filled slot: never written
@@ -410,8 +491,12 @@ def run_batches(
 
 
 __all__ = [
+    "FIXED_MEMORY_MESSAGE",
+    "FIXED_OOM_MESSAGE",
     "BatchReport",
     "BatchSpec",
+    "FixedBatchMemoryTooLow",
+    "FixedBatchOutOfMemory",
     "ItemOutOfMemory",
     "OomBackoff",
     "is_disk_full",

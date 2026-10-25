@@ -131,7 +131,8 @@ def _unreadable(folder, *names):
 
 
 # --------------------------------------------------------------------------- every input failed
-def test_mask_run_where_every_image_failed_is_a_failure(project, qapp):
+def test_mask_run_where_every_image_failed_is_a_failure(project, qapp, monkeypatch):
+    monkeypatch.setenv("SPROUTS_BATCH_POLICY", "auto")  # (O4) halving on out of memory
     project.stub.oom = True  # [oom-always]: even a single image runs out of memory
     chained = []
     handler = mgh.MaskGenerationHandler(project.window)

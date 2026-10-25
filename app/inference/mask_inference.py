@@ -112,9 +112,16 @@ def make_mask_spec(model: Any, output_dir: str, *, threshold: float = config.MAS
     return BatchSpec(load=load, step=step, save=save)
 
 
-def default_mask_batch_size() -> int:
-    """``MASK_BATCH_SIZE`` on a GPU; at most ``MASK_BATCH_SIZE_CPU`` on the CPU fallback."""
-    if runtime.get_runtime().device.type == "cuda":
+def default_mask_batch_size(*, policy: str | None = None) -> int:
+    """The batch size of a mask run under ``policy`` (default: ``runtime.batch_policy()``).
+
+    ``fixed`` (O4): ``runtime.fixed_batch_size("mask", ...)``, 4 on a GPU and on the CPU.
+    ``auto``: ``MASK_BATCH_SIZE`` on a GPU; at most ``MASK_BATCH_SIZE_CPU`` on the CPU.
+    """
+    device_type = runtime.get_runtime().device.type
+    if runtime.resolve_batch_policy(policy) == "fixed":
+        return runtime.fixed_batch_size("mask", device_type)
+    if device_type == "cuda":
         return config.MASK_BATCH_SIZE
     return min(config.MASK_BATCH_SIZE, config.MASK_BATCH_SIZE_CPU)
 
@@ -127,6 +134,7 @@ def generate_masks(
     model: Any = None,
     batch_size: int | None = None,
     policy: str | None = None,
+    batch_policy: str | None = None,
     progress: ProgressCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
     on_stage: Callable[[str], None] | None = None,
@@ -136,16 +144,22 @@ def generate_masks(
     Args:
         model: a ready model (tests); default: ``runtime.get_mask_model()``, loaded
             here on first use (``ModelUnavailableError`` if the weights are missing).
-        batch_size: default ``config.MASK_BATCH_SIZE`` on a GPU (halved on
-            out-of-memory), ``config.MASK_BATCH_SIZE_CPU`` on CPU so Cancel is
-            honoured within a second or two.
+        batch_size: default ``default_mask_batch_size(policy=batch_policy)``. Under
+            ``fixed`` an explicit size is the fixed size.
         policy: the overwrite choice, recorded in the manifest.
+        batch_policy: "fixed" or "auto" (O4); default ``runtime.batch_policy()``.
+            ``fixed``: every forward at ``batch_size`` (the tail zero-padded), a GPU
+            run first checks free memory (``FixedBatchMemoryTooLow``), and out of
+            memory stops the run (``FixedBatchOutOfMemory``). ``auto``: halved on
+            out of memory, as before.
         on_stage: called with ``STAGE_LOADING`` / ``STAGE_RUNNING``.
 
     A run that raises after writing masks still replaces the run manifest
     (``status`` "failed", R7); its error then propagates unchanged.
     """
-    batch_size = batch_size or default_mask_batch_size()
+    batch_policy = runtime.resolve_batch_policy(batch_policy)
+    fixed = batch_policy == "fixed"
+    batch_size = batch_size or default_mask_batch_size(policy=batch_policy)
     os.makedirs(output_dir, exist_ok=True)
     names, todo, skipped = list_inputs(input_dir, skip_stems)
     # (R7) Filled in place by run_batches, so a run that raises still knows what it wrote.
@@ -162,6 +176,7 @@ def generate_masks(
             parameters={
                 "mask_threshold": config.MASK_THRESHOLD,
                 "batch_size": batch_size,
+                "batch_policy": batch_policy,
                 "input_size_hw": list(MASK_INPUT_SIZE),
                 "overwrite_policy": policy,
             },
@@ -178,6 +193,10 @@ def generate_masks(
             on_stage(STAGE_RUNNING)
         if todo:
             rt = runtime.get_runtime()
+            if fixed:
+                report.free_vram_gib = runtime.check_fixed_batch_memory(
+                    "mask", batch_size, rt.device.type
+                )
             run_batches(
                 todo,
                 make_mask_spec(model, output_dir),
@@ -187,6 +206,7 @@ def generate_masks(
                 progress=progress,
                 should_stop=should_stop,
                 report=report,
+                fixed=fixed,
             )
     except BaseException as exc:
         record_failed_run(report, exc, write_manifest)
