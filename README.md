@@ -202,6 +202,9 @@ Tube, position, date and time come from the image file name,
 has value `0` **and** a non-empty `Error`; a genuine zero has an empty `Error`, so filter
 on `Error` before analysis. The CSVs are UTF-8: in Excel use *Data > From Text/CSV* with
 UTF-8, otherwise `mm²` shows as `mmÂ²`. Details: [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
+Measure skips a mask or skeleton whose image is no longer in the project (an image the
+Library lists: PNG or JPEG) and says how many in the end notice and in the CSV's provenance
+file; the files stay on disk.
 
 ## Calibration & measurement notes
 

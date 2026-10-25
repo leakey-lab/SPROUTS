@@ -71,6 +71,13 @@ dashboards.
 Each run rewrites the whole file. Rows are sorted by `Tube`, then `Date`, `Time` and
 `Position`; rows without a tube come last.
 
+A row exists only for an input whose image is in the project (an image the Library lists:
+PNG or JPEG, matched without letter case). Masks, skeletons and ground-truth files whose
+image is gone are skipped, never deleted; the sidecar `<csv>.provenance.json` has
+`inputs.n_without_image`, `inputs.without_image` (file names, first 100),
+`inputs.n_duplicate` and `inputs.duplicates` (files that share one image's name apart
+from letter case; only one of them is measured) (since 2026-10-25).
+
 Beside each CSV, Measure writes `<csv>.inputs.json` (e.g. `mask/root_areas.csv.inputs.json`):
 `{"csv_sha256": "<SHA-256 of the CSV bytes>", "inputs": {"mask/<stem>.png": [size, mtime_ns, "<SHA-256>"], ...}}`,
 one entry per file measured, keyed by its path relative to the project folder. "Changed since

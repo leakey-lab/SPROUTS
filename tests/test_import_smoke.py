@@ -113,6 +113,7 @@ APP_MODULES = [
     "app.inference.mask_inference",
     "app.inference.mask_origin",
     "app.inference.measure_inputs",
+    "app.inference.input_split",
     "app.inference.measure_run",
     "app.inference.metric_thread",
     "app.inference.metrics",

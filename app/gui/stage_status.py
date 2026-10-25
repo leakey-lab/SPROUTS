@@ -2,7 +2,8 @@
 
 The Qt side of :mod:`app.gui.stage_summary`: :meth:`StageStatus.text` phrases the library
 state for the stage on screen, and :meth:`StageStatus.check` counts, in the thread pool,
-each metric's inputs and those changed since its CSV (one ``os.scandir`` per folder,
+each metric's inputs and those changed since its CSV (one ``os.scandir`` per folder
+and one of the images,
 ~60 ms at 46k files, never on the GUI thread; against the CSV's record of its inputs when
 there is one, R5); ``changed`` is emitted once that count is in. A newer check, or
 :meth:`StageStatus.reset` (another project), makes an older count void.
@@ -125,15 +126,18 @@ class StageStatus(QObject):
         signals = self._signals
         root = layout.root
 
-        def freshness(folder, suffix, csv_path) -> Freshness:
+        def freshness(folder, suffix, csv_path, images) -> Freshness:
             record = load_inputs_record(csv_path) if csv_path else None
-            return input_freshness(folder, suffix, csv_path, record=record, project_root=root)
+            return input_freshness(
+                folder, suffix, csv_path, record=record, project_root=root, images=images
+            )
 
         def work() -> None:
             try:
+                images = layout.scan_images()  # inputs whose image is gone are skipped (O37)
                 result = {
-                    "length": freshness(length_dir, SKELETON_SUFFIX, length_csv),
-                    "area": freshness(area_dir, ".png", area_csv),
+                    "length": freshness(length_dir, SKELETON_SUFFIX, length_csv, images),
+                    "area": freshness(area_dir, ".png", area_csv, images),
                 }
             except Exception:  # noqa: BLE001 - the idle text then keeps the plain counts
                 logger.exception("Could not count the Measure inputs")

@@ -630,6 +630,16 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Inputs without an image (2026-10-25, W2-T11, O37).** Measure writes no row for a mask
+  or skeleton whose image is no longer in the project (an image the Library lists: PNG or
+  JPEG, any letter case; a mask whose image is `x.tif` counts as without an image); the
+  provenance lists them (`inputs.n_without_image`, up to 100 names in
+  `inputs.without_image`), the end notice counts them, and the files stay on disk. When
+  several files share one image's name apart from letter case (a case-sensitive disk), only
+  the one named exactly like the image (else the first by file name) is measured; the others
+  are recorded in `inputs.duplicates` / `inputs.n_duplicate`. Owner's project (46,178
+  photos): masks 0 of 46,175 and skeletons 0 of 46,178 rows dropped. Synthetic test set: 5 ->
+  4 rows.
 - **Case-variant stems and unsupported formats (2026-10-25, W1-T5).** Folders with
   case-variant stems (`A.png`, `a.jpg`): one image, ranked, on every platform; the hidden
   one gets no new mask, skeleton or CSV row (outputs already on disk are still measured).

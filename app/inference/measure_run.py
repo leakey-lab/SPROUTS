@@ -14,7 +14,7 @@ import hashlib
 import logging
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from app import provenance
@@ -27,12 +27,27 @@ from app.config import (
     ROOT_LENGTHS_CSV,
 )
 from app.inference import measure_inputs
+from app.inference.input_split import InputSplit, group_by_stem, split_by_image, split_inputs
 from app.inference.measure_inputs import Fingerprint
 from app.inference.metrics import area_row, length_row, run_metric_pool, write_metric_csv
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AREA", "LENGTH", "MeasureRun", "MetricSpec", "SPECS"]
+__all__ = [
+    "AREA",
+    "LENGTH",
+    "SPECS",
+    "WITHOUT_IMAGE_NAMES_LIMIT",
+    "InputSplit",
+    "MeasureRun",
+    "MetricSpec",
+    "scan_png_files",
+    "split_by_image",
+    "split_inputs",
+]
+
+#: File names of each kind of skipped input a run's provenance lists (counts are exact).
+WITHOUT_IMAGE_NAMES_LIMIT = 100
 
 
 @dataclass(frozen=True)
@@ -78,6 +93,30 @@ AREA = MetricSpec(
 SPECS: dict[str, MetricSpec] = {LENGTH.kind: LENGTH, AREA.kind: AREA}
 
 
+def scan_png_files(folder: str) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """``(stem -> path, shadowed)`` of the ``*.png`` files of ``folder`` (extension in any
+    case; one ``os.scandir``; a missing folder has none).
+
+    Unlike ``ProjectLayout.scan_masks`` it keeps each of several files whose stems differ
+    only in case, so :func:`split_inputs` can choose the one named like the image. Files
+    that share a whole stem (``a.png`` and ``a.PNG``) are listed once and the others
+    returned as ``shadowed`` (:func:`~app.inference.input_split.group_by_stem`).
+    """
+    files: list[tuple[str, str]] = []
+    try:
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                name = entry.name
+                dot = name.rfind(".")
+                if dot <= 0 or name[dot:].lower() != ".png" or not name[:dot].lstrip("."):
+                    continue
+                if entry.is_file():
+                    files.append((name[:dot], entry.path))
+    except (FileNotFoundError, NotADirectoryError):
+        return {}, []
+    return group_by_stem(files)
+
+
 class MeasureRun:
     """Measure ``images`` (``name -> path``) and write ``<output_dir>/<spec.csv_name>``.
 
@@ -87,6 +126,9 @@ class MeasureRun:
         output_dir: folder the CSV and its ``.provenance.json`` go to.
         project_root: folder paths in the provenance record are made relative
             to (default: the parent of ``output_dir``); keeps user names out.
+        without_image: file names of the inputs left out because their image is no longer
+            in the project (:func:`split_inputs`); recorded in the provenance (O37).
+        duplicates: file names left out because another file of the same image is measured.
     """
 
     def __init__(
@@ -96,11 +138,15 @@ class MeasureRun:
         output_dir: str,
         *,
         project_root: str | None = None,
+        without_image: Sequence[str] = (),
+        duplicates: Sequence[str] = (),
     ) -> None:
         self.spec = spec
         self.images = dict(images)
         self.output_dir = output_dir
         self.project_root = project_root or os.path.dirname(os.path.abspath(output_dir))
+        self.without_image = tuple(without_image)
+        self.duplicates = tuple(duplicates)
         self.rows: list[dict] | None = None  # set once every image was measured
         #: input key -> (size, mtime_ns, sha256) of each file measured (filled by compute()).
         self.fingerprints: dict[str, Fingerprint] = {}
@@ -198,6 +244,10 @@ class MeasureRun:
                     "folder": provenance.portable_path(self.output_dir, self.project_root),
                     "n_images": len(self.images),
                     "names_sha256": provenance.names_digest(self.images),
+                    "n_without_image": len(self.without_image),
+                    "n_duplicate": len(self.duplicates),
+                    "without_image": sorted(self.without_image)[:WITHOUT_IMAGE_NAMES_LIMIT],
+                    "duplicates": sorted(self.duplicates)[:WITHOUT_IMAGE_NAMES_LIMIT],
                 },
                 parameters=dict(self.spec.parameters),
                 outputs={

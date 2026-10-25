@@ -97,6 +97,8 @@ def test_the_full_csv_path_goes_to_the_status_line(tmp_path, qapp):
 
 def test_a_measure_with_unreadable_images_still_posts_the_full_path(tmp_path, qapp):
     root = _project(tmp_path / "proj")
+    # Its image is in the project, so the corrupt skeleton is measured and gets an Error row.
+    (root / "x_T9_L2_2024.01.02_010209_001.jpg").write_bytes(b"jpg")
     (root / "skeletons" / "x_T9_L2_2024.01.02_010209_001_fake.png").write_bytes(b"not a png")
 
     feedback = _measure_length(root, qapp)

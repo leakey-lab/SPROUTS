@@ -21,7 +21,15 @@ from app.gui.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
-from app.inference.measure_run import AREA, LENGTH, SPECS, MeasureRun, MetricSpec
+from app.inference.measure_run import (
+    AREA,
+    LENGTH,
+    SPECS,
+    MeasureRun,
+    MetricSpec,
+    scan_png_files,
+    split_inputs,
+)
 from app.inference.metric_thread import MetricCalculatorThread
 from app.project_layout import ProjectLayout
 
@@ -31,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 # Per metric kind: the attribute holding its running thread (read by other modules).
 _THREAD_ATTRS = {LENGTH.kind: "calculator_thread", AREA.kind: "area_calculator_thread"}
+
+
+def _noun(spec: MetricSpec, n: int) -> str:
+    """ "mask(s)" for the area metric, "skeleton(s)" for the length metric."""
+    noun = "mask" if spec.kind == AREA.kind else "skeleton"
+    return noun if n == 1 else noun + "s"
 
 
 def job_name(spec: MetricSpec) -> str:
@@ -91,7 +105,7 @@ class SkeletonHandler(HandlerDependencies):
         if folder is None:
             self._warn("No skeleton images found. Generate skeletons first.")
             return
-        self._measure(LENGTH, layout, folder, layout.scan_skeletons)
+        self._measure(LENGTH, layout, folder, lambda d: (layout.scan_skeletons(d), []))
 
     def calculate_root_area(self):
         """Measure root area of every ``*.png`` mask in the project's mask folder."""
@@ -111,7 +125,7 @@ class SkeletonHandler(HandlerDependencies):
                 f"Measuring the older {os.path.relpath(folder, layout.root)} folder: "
                 f"masks in {others} are not measured."
             )
-        self._measure(AREA, layout, folder, partial(layout.scan_masks, extensions=(".png",)))
+        self._measure(AREA, layout, folder, scan_png_files)
 
     def retry_measure(self, kind: str) -> bool:
         """Save the rows of ``kind``'s failed run again (no re-measuring); False if none."""
@@ -128,21 +142,48 @@ class SkeletonHandler(HandlerDependencies):
         return layout
 
     def _measure(self, spec: MetricSpec, layout: ProjectLayout, folder: str, scan) -> None:
+        """``scan(folder)`` -> ``(name -> path, shadowed)``; see :func:`split_inputs`."""
         if self.is_busy(spec.kind):
             self._warn(f"{job_name(spec)} is already running.")
             return
         try:
-            images = scan(folder)
+            images, shadowed = scan(folder)
         except OSError as exc:
-            logger.exception("Cannot list %s", folder)
-            QMessageBox.critical(
-                self._parent(), "Measure", f"Cannot read the folder:\n{folder}\n\n{exc}"
-            )
+            self._cannot_read(folder, exc)
             return
         if not images:
             self._warn(f"No images to measure in {folder}.")
             return
-        self._start(MeasureRun(spec, images, folder, project_root=layout.root))
+        try:
+            image_stems = layout.scan_images()
+        except OSError as exc:
+            self._cannot_read(layout.root, exc)
+            return
+        # O37: a mask or skeleton whose image is gone gets no row; the files stay on disk.
+        split = split_inputs(images, image_stems, shadowed)
+        if not split.kept:
+            n = len(split.without_image)
+            self._warn(
+                f"No images to measure in {folder}: its {n:,} {_noun(spec, n)} "
+                f"{'has' if n == 1 else 'have'} no image in the project."
+            )
+            return
+        self._start(
+            MeasureRun(
+                spec,
+                split.kept,
+                folder,
+                project_root=layout.root,
+                without_image=split.without_image,
+                duplicates=split.duplicates,
+            )
+        )
+
+    def _cannot_read(self, folder: str, exc: OSError) -> None:
+        logger.exception("Cannot list %s", folder)
+        QMessageBox.critical(
+            self._parent(), "Measure", f"Cannot read the folder:\n{folder}\n\n{exc}"
+        )
 
     def _start(self, job: MeasureRun) -> bool:
         if self.refuse_while_loading():  # R7: never while a folder loads
@@ -184,6 +225,25 @@ class SkeletonHandler(HandlerDependencies):
         else:
             folder = folder_label(os.path.dirname(csv_path), thread.job.project_root)
             self.feedback.notify(f"Saved {name} in the {folder} folder", "success")
+        self._notify_skipped(thread.job, name)
+
+    def _notify_skipped(self, job: MeasureRun, csv_name: str) -> None:
+        """Say how many inputs were left out (O37) and where they are named."""
+        spec = job.spec
+        if job.without_image:
+            n = len(job.without_image)
+            self._warn(
+                f"{n:,} {_noun(spec, n)} skipped: {'its' if n == 1 else 'their'} image is no "
+                f"longer in the project (named in {csv_name}.provenance.json)"
+            )
+        if job.duplicates:
+            n = len(job.duplicates)
+            self._warn(
+                f"{n:,} {_noun(spec, n)} skipped: "
+                f"{'a file' if n == 1 else 'files'} with the same name apart from letter case "
+                f"{'is' if n == 1 else 'are'} measured instead "
+                f"(named in {csv_name}.provenance.json)"
+            )
 
     def _on_failed(self, thread: MetricCalculatorThread, message: str) -> None:
         self._release(thread)
