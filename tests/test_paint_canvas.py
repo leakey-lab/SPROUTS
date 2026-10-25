@@ -6,6 +6,7 @@ The op-by-op identity with the deleted mask editor is carried by the pixel golde
 ``test_correct_goldens.py``).
 """
 
+import hashlib
 import os
 
 import numpy as np
@@ -336,3 +337,64 @@ def test_argb_array_to_image_owns_its_pixels(app):
     out = pixmap_to_argb_array(image)
     out[:] = 1  # a copy: the image is untouched
     assert pixmap_to_argb_array(image)[0, 0].tolist() == [200, 200, 200, 200]
+
+
+# --------------------------------------------------------------------------- 1 px dabs (O11)
+# sha256[:16] of the plane after one dab at (19, 17) on a 40 x 40 plane, captured before W3-T5:
+# sizes 2 and above must stay exactly as they were.
+DAB_SHA = {
+    (2, False): "04ad7f8a2be67837",
+    (3, False): "770b8e77db9ac324",
+    (4, False): "a47d91a5771d664b",
+    (5, False): "7f1ff7ffcfa1ba9c",
+    (6, False): "f7fbc55836f16aa5",
+    (7, False): "f0d6c30a9a45804b",
+    (8, False): "57768f883ee3dea4",
+    (9, False): "e6f941c821a27364",
+    (2, True): "a6f194924716dabe",
+    (3, True): "743a8c4629f12bb1",
+    (4, True): "9ad6bfdce6b94e98",
+    (5, True): "495d81834eea816e",
+    (6, True): "6a3067d00cc76a00",
+    (7, True): "68a49e42c1536a52",
+    (8, True): "f94b31cd517c936d",
+    (9, True): "b4f54e25e8a491a0",
+}
+# The (x, y) pixels a 1 px drag (3, 8) -> (8, 3) painted before W3-T5 (audit E4).
+ANTI_DIAGONAL_TODAY = {(3, 9), (4, 8), (5, 7), (6, 6), (7, 5), (8, 4)}
+
+
+def test_a_one_pixel_click_paints_exactly_its_pixel(app):
+    canvas, _ = make_canvas(np.zeros((20, 30), np.uint8))
+    patch = stroke(canvas, (7, 5), size=1)
+    plane = canvas.history.plane
+    assert plane.sum() == 1 and plane[5, 7] == 1
+    assert patch is not None and len(canvas.history.undo_stack) == 1
+    assert np.array_equal(shown(canvas), mask_lut()[plane])
+
+
+def test_a_one_pixel_eraser_click_clears_exactly_its_pixel(app):
+    canvas, _ = make_canvas(np.ones((20, 30), np.uint8))
+    stroke(canvas, (7, 5), size=1, erase=True)
+    plane = canvas.history.plane
+    assert plane.sum() == 599 and plane[5, 7] == 0
+    assert np.array_equal(shown(canvas), mask_lut()[plane])
+
+
+@pytest.mark.parametrize("erase", [False, True])
+@pytest.mark.parametrize("size", range(2, 10))
+def test_dabs_of_sizes_2_to_9_are_unchanged(app, size, erase):
+    base = np.ones((40, 40), np.uint8) if erase else np.zeros((40, 40), np.uint8)
+    canvas, _ = make_canvas(base)
+    stroke(canvas, (19, 17), size=size, erase=erase)
+    digest = hashlib.sha256(canvas.history.plane.tobytes()).hexdigest()[:16]
+    assert digest == DAB_SHA[(size, erase)]
+
+
+def test_a_one_pixel_anti_diagonal_drag_gains_its_pressed_pixel(app):
+    canvas, _ = make_canvas(np.zeros((20, 30), np.uint8))
+    stroke(canvas, (3, 8), (8, 3), size=1)
+    ys, xs = np.nonzero(canvas.history.plane)
+    painted = set(zip(xs.tolist(), ys.tolist(), strict=True))
+    assert canvas.history.plane[8, 3] == 1  # the pressed pixel, unpainted before
+    assert ANTI_DIAGONAL_TODAY <= painted

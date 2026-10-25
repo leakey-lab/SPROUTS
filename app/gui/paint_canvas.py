@@ -4,9 +4,9 @@ A raster editor's document is a ``(h, w)`` uint8 *plane* (mask: 0/1, GT: class i
 committed in a :class:`~app.gui.patch_history.PatchHistory`. :class:`PaintCanvas` shows it
 as an ARGB canvas, each plane value in its lookup-table colour (0 = transparent), and
 paints on it. The painting is today's ``MaskDrawingMixin`` moved verbatim: pixel centres,
-round caps, no antialiasing, ``CompositionMode_Source`` (``DestinationOut`` to erase), so
-the canvas always shows exactly the plane that gets saved; :meth:`PaintCanvas.commit`
-reads the painted box back into the plane as one undoable patch.
+round caps (a 1 px dab is exactly its pixel), no antialiasing, ``CompositionMode_Source``
+(``DestinationOut`` to erase), so the canvas always shows exactly the plane that gets saved;
+:meth:`PaintCanvas.commit` reads the painted box back into the plane as one undoable patch.
 
 The canvas is a ``QImage`` in ``Format_ARGB32_Premultiplied``, the raster engine's native
 format: a stroke segment paints in place (never copying the canvas) and reports only its
@@ -105,8 +105,8 @@ class PaintCanvas:
     """The editable ARGB canvas over a PatchHistory plane (Correct mask layer, Trace GT).
 
     Painting is today's MaskDrawingMixin, moved verbatim (mask_drawing_tools.py:85-223):
-    pixel centres, round caps, no antialiasing, CompositionMode_Source / DestinationOut,
-    dirty rect = segment box padded by r + 2. The canvas is a QImage in
+    pixel centres, round caps (a 1 px dab is exactly its pixel), no antialiasing,
+    CompositionMode_Source / DestinationOut, dirty rect = segment box padded by r + 2. The canvas is a QImage in
     Format_ARGB32_Premultiplied, so painting a segment never copies it.
 
     The owner supplies the plane's meaning: ``lut()`` is the ``(256, 4)`` B, G, R, A colour
@@ -184,7 +184,8 @@ class PaintCanvas:
 
     # ------------------------------------------------------------------ strokes
     def begin(self, pos: QPoint, color: QColor, size: int, *, erase: bool) -> None:
-        """Start a stroke at image pixel ``pos``: its first dab (a disc of ``size`` px).
+        """Start a stroke at image pixel ``pos``: its first dab (a disc of ``size`` px; at
+        size 1 exactly the pixel ``pos``).
 
         A stroke still in progress is committed first (there is no abort). Nothing happens
         while there is no canvas.
@@ -245,6 +246,10 @@ class PaintCanvas:
             start = QPointF(self._last.x() + 0.5, self._last.y() + 0.5)
             painter.drawLine(start, centre)
             box = QRectF(start, centre).normalized()
+        elif self._size <= 1:
+            # A 1 px dab is exactly its pixel (an ellipse of diameter 1 covers no pixel centre).
+            painter.fillRect(QRect(pos.x(), pos.y(), 1, 1), self._colour)
+            box = QRectF(centre, centre)
         else:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(self._colour))

@@ -648,6 +648,11 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **A 1 px click paints its pixel (2026-10-25, W3-T5, O11).** A click with the 1 px brush
+  paints (or erases) exactly the clicked pixel in *Correct* and in the GT classes; it
+  painted nothing and still added an empty undo step. A 1 px stroke along an exact
+  anti-diagonal also gains its pressed pixel. Sizes 2 and above, and every golden, are
+  unchanged.
 - **A prediction of another size opens stretched (2026-10-25, W3-T4, O8).** A prediction
   mask of another size than its photo (the model writes 640 x 480) opens in *Correct*
   stretched to the photo with nearest neighbour and says so, instead of not opening at all;

@@ -424,3 +424,13 @@ def test_a_pasted_quoted_path_is_unquoted(app, made, tmp_path):
     result = _run_export(dlg)
     assert result is not None and result.exported == 2
     assert os.path.isdir(tmp_path / "quoted_out" / "masks")
+
+
+# ------------------------------------------------------------------- 1 px brush (O11)
+def test_a_one_pixel_click_paints_its_class_pixel(app, made, tmp_path):
+    iface = _editor(made, _photo(tmp_path))
+    iface.size_slider.setValue(1)
+    iface.begin_stroke(QPoint(30, 20))
+    iface.end_stroke()
+    assert np.count_nonzero(iface.edits.plane) == 1
+    assert iface.edits.plane[20, 30] == default_registry().by_key("root").id

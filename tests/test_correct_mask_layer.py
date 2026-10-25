@@ -1260,3 +1260,15 @@ def test_file_stamps_are_the_documents_and_follow_a_save(scene, tmp_path):
     after = layer.file_stamps()
     assert after == layer.document.file_stamps()
     assert after != before
+
+
+def test_a_one_pixel_click_paints_its_pixel_as_one_undo_step(scene, tmp_path):
+    layer, _ = open_layer(scene, tmp_path)
+    layer.set_size(1)
+    click(layer, (70, 50))
+    assert plane_of(layer).sum() == 1
+    assert plane_of(layer)[50, 70] == 1
+    assert len(layer.document.history.undo_stack) == 1
+    assert layer.document.is_dirty()
+    layer.undo()
+    assert plane_of(layer).sum() == 0

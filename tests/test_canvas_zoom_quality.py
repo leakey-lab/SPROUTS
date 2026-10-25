@@ -325,7 +325,7 @@ def test_gt_layer_shows_exact_pixels_when_magnified(canvases, patterns, zoom):
     canvas.show("flat", patterns["flat"])
     editor.mask_visible_button.setChecked(True)
     editor.set_active_class("root")
-    editor.size_slider.setValue(2)  # one pixel per click (a 1 px click paints nothing, as before)
+    editor.size_slider.setValue(2)  # one pixel per click (size 2, the default of this test)
     rng = np.random.default_rng(zoom)
     x0, y0, n = 300, 220, 24
     for x, y in rng.integers(0, n, size=(80, 2)):
