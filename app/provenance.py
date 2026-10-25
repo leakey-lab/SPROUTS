@@ -41,10 +41,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "BUILD_INFO_FILENAME",
+    "RUN_HISTORY_FILENAME",
     "RUN_MANIFEST_FILENAME",
     "SCHEMA",
     "SIDECAR_SUFFIX",
     "app_info",
+    "append_run_history",
     "build_record",
     "calibration_info",
     "file_sha256",
@@ -52,6 +54,7 @@ __all__ = [
     "minimal_record",
     "names_digest",
     "portable_path",
+    "run_history_path",
     "run_manifest_path",
     "runtime_info",
     "sidecar_path",
@@ -63,6 +66,8 @@ SCHEMA = "sprouts-provenance/1"
 SIDECAR_SUFFIX = ".provenance.json"
 #: One record per batch run, inside the output folder (scanners ignore .json).
 RUN_MANIFEST_FILENAME = "_sprouts_run.json"
+#: One JSON line per run that wrote or failed an input, appended (the manifest holds the latest).
+RUN_HISTORY_FILENAME = "_sprouts_runs.jsonl"
 #: Written next to the code by frozen builds (no .git): ``{"git_commit": "<sha>"}``.
 BUILD_INFO_FILENAME = "build_info.json"
 
@@ -438,3 +443,17 @@ def run_manifest_path(output_dir: str | os.PathLike[str]) -> str:
 def write_run_manifest(output_dir: str | os.PathLike[str], record: Mapping[str, Any]) -> str:
     """Atomically write ``record`` as ``<output_dir>/_sprouts_run.json`` (replaces the last one)."""
     return _write_json(run_manifest_path(output_dir), record)
+
+
+def run_history_path(output_dir: str | os.PathLike[str]) -> str:
+    """Where the history of the batch runs into ``output_dir`` lives (one JSON line per run)."""
+    return os.path.join(os.fspath(output_dir), RUN_HISTORY_FILENAME)
+
+
+def append_run_history(output_dir: str | os.PathLike[str], entry: Mapping[str, Any]) -> str:
+    """Append ``entry`` as one compact JSON line to ``<output_dir>/_sprouts_runs.jsonl``."""
+    path = run_history_path(output_dir)
+    line = json.dumps(entry, separators=(",", ":"), ensure_ascii=False, default=_json_default)
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(line + "\n")
+    return path

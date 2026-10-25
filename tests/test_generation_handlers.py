@@ -207,6 +207,7 @@ def test_no_existing_masks_means_no_prompt(project, qapp):
     _wait(handler.generation_thread, qapp)
     assert sorted(os.listdir(project.folder / "mask")) == [
         "_sprouts_run.json",
+        "_sprouts_runs.jsonl",
         "a.png",
         "b.png",
         "c.png",

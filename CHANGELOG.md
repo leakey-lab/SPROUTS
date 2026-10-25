@@ -347,6 +347,8 @@ Five passes, not yet released:
     Depth Profile Grid; legend "Measurement date", ISO hover dates); dates are coloured on
     one blue ramp that keeps clear of the mask, skeleton and selection colours, the same
     colour for a date in every view and every tube (W4-T6, O27).
+  - A generation run that writes and fails nothing leaves `_sprouts_run.json` alone; every
+    other run is also appended to `_sprouts_runs.jsonl` in the same folder (W2-T1, R6, O16).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

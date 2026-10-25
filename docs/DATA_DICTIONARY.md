@@ -232,11 +232,17 @@ written atomically: each is complete or absent.
 `root_lengths.csv.provenance.json` / `root_areas.csv.provenance.json`, the GT export
 `manifest.csv.provenance.json`. Mask and skeleton generation write one
 `_sprouts_run.json` per output folder (`app/inference/run_record.py`) with the same
-keys, describing the latest run into that folder that ran to its end (completed or
-cancelled, even with no outputs, for example a *Keep existing masks* run with nothing
-missing) or that stopped with an error after writing outputs (`outputs.status` is then
-`failed`). A run that stops with an error before writing anything leaves the previous
-record in place. A full disk stops a generation run: the first save that finds no space
+keys, describing the latest run into that folder that wrote or failed an input (completed,
+cancelled, or stopped with an error after writing outputs: `outputs.status` is then
+`failed`). A run that did neither (a *Keep existing masks* run with nothing missing, a
+cancel before the first batch) leaves the record alone (since 2026-10-25, O16; before, it
+replaced it), and so does a run that stops with an error before writing anything.
+`<output folder>/_sprouts_runs.jsonl` holds one compact JSON line per run that wrote or
+failed an input, appended: `created_utc`, `kind`, `app_version`, `git_commit`, `models`
+(`{name: sha256}`; `{}` and `git_commit` `null` when only a minimal record could be
+built), `status` (`completed` / `cancelled` / `failed`), `n_written`, `n_failed`,
+`n_skipped`, and `written` (sorted input names) when at most 1,000 were written, else
+`written_count` and `written_sha256` (a digest of the names, as `inputs.names_sha256`). A full disk stops a generation run: the first save that finds no space
 left ends the run at the next batch boundary with that error (`status` `failed`), and the
 outputs already written are kept (since 2026-09-30; before, every remaining image failed on
 its own while the run went on). Other save errors stay per-image failures.

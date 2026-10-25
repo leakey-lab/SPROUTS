@@ -137,6 +137,7 @@ chose last (root length at first); with nothing to chart yet it says what to run
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
 | `mask/_sprouts_run.json`, `skeletons/_sprouts_run.json` | the latest generation run into that folder: model SHA-256, device and precision, parameters, failed inputs |
+| `mask/_sprouts_runs.jsonl`, `skeletons/_sprouts_runs.jsonl` | one line per generation run that wrote or failed an input (the run file holds the latest) |
 
 Generating masks into a folder that already has masks asks first: keep them and
 generate only the missing ones (the default), or replace every mask. On a GPU, outputs
