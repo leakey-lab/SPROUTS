@@ -52,7 +52,8 @@ $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
   fixed (memory `ci-deps-install-gotchas`): `requirements.txt` must stay UTF-8
   (was UTF-16), and `pywin32` was removed (O21: no Windows-only package; OpenCV is
   `opencv-python-headless`). `.pre-commit-config.yaml` mirrors the lint/format hooks.
-- Model checkpoints are **not** committed — place under `checkpoints/`
+- Model checkpoints are **not** committed (they are published as a Zenodo record, `docs/MODELS.md`;
+  `scripts/fetch_models.py` downloads and verifies them): place them under `checkpoints/`
   (`mask_weights/best_mask_model_V5.pth`, `skeletonizer/latest_net_G.pth`).
 
 ---

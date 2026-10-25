@@ -349,6 +349,10 @@ Five passes, not yet released:
   - Licence: GPL-3.0-or-later for the code (`LICENSE`), CC-BY-4.0 for the model weights,
     copyright "the SPROUTS authors"; the bundle ships both licence files; About shows the
     licence (W5-T1, O32).
+  - Weights: the model weights are published separately (a Zenodo record, CC-BY-4.0; the
+    DOI is added when the owner deposits them) and `checkpoints.zip` is no longer tracked
+    (it stays in the history); `scripts/fetch_models.py` downloads and verifies them and
+    never replaces a different file without `--replace` (W5-T2, O33).
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
   data dictionary (`docs/DATA_DICTIONARY.md`: every output file, column, unit and

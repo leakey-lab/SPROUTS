@@ -63,8 +63,8 @@ REQUIRED_DATAS: tuple[tuple[str, str], ...] = (
 )
 
 
-# Model weights are not in git (docs/MODELS.md): bundled at their registered path
-# (app.models) when present, else a warning.
+# Model weights are not in git (docs/MODELS.md; scripts/fetch_models.py): bundled at their
+# registered path (app.models) when present, else a warning.
 MODEL_DATAS: tuple[tuple[str, str], ...] = tuple(
     (spec.relpath, posixpath.dirname(spec.relpath)) for spec in MODELS.values()
 )

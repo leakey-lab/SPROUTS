@@ -24,23 +24,42 @@ certutil -hashfile checkpoints\skeletonizer\latest_net_G.pth SHA256             
 ```
 
 ```bash
-sha256sum checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skeletonizer/latest_net_G.pth
+sha256sum checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skeletonizer/latest_net_G.pth   # Linux
+shasum -a 256 checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skeletonizer/latest_net_G.pth   # macOS
 ```
 
 ### Where to get them
 
-- **Neither checkpoint is published** with a URL, DOI or license yet (`url`/`doi` are
-  `None` in `app/models.py`). TODO(owner): publish both as a versioned, licensed release
-  (for example Zenodo or a Hugging Face model repository), then fill in `url`/`doi`
-  there and here.
-- **Skeleton model:** the git repository tracks `checkpoints.zip` (47,935,331 bytes,
-  SHA-256 `6db9555891102e2eff148d22216b141589a28558ed8a6eb85248e4040510e037`, added
-  2024-10-18). It holds `checkpoints/skeletonizer/latest_net_G.pth` (the digest above)
-  and a stale `checkpoints/experiment_name/test_opt.txt`. Extract it at the repository
-  root to get the skeleton weights.
-- **Mask model:** not distributed anywhere; ask the maintainers. Without it, *Generate*
-  cannot produce masks and root area cannot be measured from model masks (hand-traced
-  masks still work).
+- **Both checkpoints** are released as one Zenodo record under CC-BY-4.0. The record does
+  not exist yet (`url` and `doi` are `None` in `app/models.py`); the checklist below is the
+  owner's to complete. Until then ask the maintainers.
+- **Download and check:** `./venv/Scripts/python.exe scripts/fetch_models.py` fetches what
+  is missing and verifies each file against the digests above; it discards a download
+  whose digest differs, and leaves a file you already have (for example retrained
+  weights) alone unless you pass `--replace`.
+- **Skeleton model from git history:** `checkpoints.zip` (47,935,331 bytes, SHA-256
+  `6db9555891102e2eff148d22216b141589a28558ed8a6eb85248e4040510e037`) was tracked until
+  this release; `git restore --source=2075568 -- checkpoints.zip` restores it. It holds
+  `checkpoints/skeletonizer/latest_net_G.pth` (the digest above) and a stale
+  `checkpoints/experiment_name/test_opt.txt`.
+- **Mask model:** not distributed in git. Without it, *Generate* cannot produce masks and
+  root area cannot be measured from model masks (corrected masks still work).
+
+### Zenodo deposit checklist (owner)
+
+1. Create a new upload on zenodo.org; resource type Software (or Dataset); title "SPROUTS
+   model weights (root mask and skeleton models)"; creators Kinjalk Parth, Sebastian
+   Varela, Andrew D. B. Leakey; licence **CC-BY-4.0**.
+2. Upload exactly `best_mask_model_V5.pth` (338,502,139 bytes) and `latest_net_G.pth`
+   (51,749,020 bytes). Check them against the table above before uploading.
+3. Description: what each model does (this card), the training data of each (the two
+   `TODO(owner)` rows below are still open), the software version that runs them, and a
+   related identifier "is supplement to" `https://github.com/leakey-lab/Root-Mask-and-Skeletons`.
+4. Publish. Copy the DOI and the two file URLs (`https://zenodo.org/records/<id>/files/<name>`).
+5. In `app/models.py` set `url` and `doi` of both `ModelSpec`s; in this file fill the
+   table of "Identity and verification" with the DOI; add the DOI as `references` or
+   `identifiers` in `CITATION.cff` if wanted.
+6. In a clean folder run `scripts/fetch_models.py --root <folder>`; both models must report ok.
 
 ## Licence of the weights
 

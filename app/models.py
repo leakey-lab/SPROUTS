@@ -7,8 +7,9 @@ exactly which weights produced an output, and a replaced or corrupted file is
 noticed. A mismatch is logged as a warning and never stops the app: labs may
 legitimately run retrained weights.
 
-The checkpoints are not in git; ``url``/``doi`` stay ``None`` until the weights
-are published (see docs/MODELS.md once it exists). Qt-free and torch-free.
+The checkpoints are not in git; ``url``/``doi`` stay ``None`` until the weights are
+published (docs/MODELS.md, "Zenodo deposit checklist"); scripts/fetch_models.py
+downloads and verifies them once they are. Qt-free and torch-free.
 """
 
 from __future__ import annotations
@@ -80,8 +81,9 @@ MODELS: dict[str, ModelSpec] = {
             relpath="checkpoints/mask_weights/best_mask_model_V5.pth",
             sha256="ca1f92d21609f9905bd407bd0562f8456cfff3987d1493c701a5585ee3a3a43f",
             description=(
-                "Root mask segmentation, ResNet generator with SE/DualAttention blocks "
-                "(app.mask_model); sigmoid output binarised at MASK_THRESHOLD 0.5."
+                "Root mask segmentation, ResNet-18 encoder with DualAttention blocks "
+                "(app.mask_model, class ResNetSkeleton); sigmoid output binarised at "
+                "MASK_THRESHOLD 0.5."
             ),
         ),
         ModelSpec(

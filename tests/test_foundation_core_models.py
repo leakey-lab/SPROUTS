@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 
 import pytest
 
@@ -102,3 +103,9 @@ def test_shipped_checkpoints_verify():
     statuses = verify_all()
     assert statuses["mask"].state == "ok"
     assert statuses["skeleton"].state == "ok"
+
+
+def test_model_url_and_doi_are_well_formed_when_set():
+    for spec in MODELS.values():
+        assert spec.doi is None or re.fullmatch(r"10\.\d{4,9}/\S+", spec.doi), spec.key
+        assert spec.url is None or spec.url.startswith("https://"), spec.key

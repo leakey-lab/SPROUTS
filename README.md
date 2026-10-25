@@ -70,7 +70,7 @@ record exists, and until then you can get them from the maintainers. With the re
 address registered, `./venv/Scripts/python.exe scripts/fetch_models.py` downloads both files
 into `checkpoints/` and checks their SHA-256 (the app also warns in its log when a
 checkpoint does not match). The skeleton model of earlier versions is still in the git
-history: `git show 2075568:checkpoints.zip > checkpoints.zip`.
+history: `git restore --source=2075568 -- checkpoints.zip`.
 
 To keep the weights somewhere else (required for a `pip install .` copy, whose
 application folder is `site-packages`), point `SPROUTS_CHECKPOINTS_DIR` at the folder
@@ -336,8 +336,7 @@ This runs PyInstaller on `scripts/build_executable.spec` and produces
 PyTorch it is about 6 GB). Run `scripts/fetch_models.py` first. The scripts work from any
 folder, stop if the model weights are missing (pass `-AllowMissingModels` /
 `/allow-missing-models` to build anyway) and exit with an error when the build fails.
-The app records its version and git commit in
-`_internal\build_info.json`.
+The app records its version and git commit in `_internal\build_info.json`.
 
 The bundle is distributed under the GPL: ship `LICENSE` and `THIRD_PARTY_NOTICES.md` (the
 build copies both into the bundle root) and, on request, the source of the commit recorded
