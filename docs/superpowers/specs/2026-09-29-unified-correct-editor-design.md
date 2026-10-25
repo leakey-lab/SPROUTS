@@ -683,7 +683,7 @@ Task Z dropped.
 | D20 | Reference layer | Inactive layer at opacity × 0.5; endpoint markers only when the skeleton is active | UX scout; no extra toggle in v1. |
 | D21 | Persistence | Opacity, visibility, active layer, last tool per layer: per session only | QSettings persistence would couple tests to user settings; follow-up. |
 | D22 | Skeleton save round trip | Bug-compatible in this merge | Hard rule 2 (pixel identity); the fix changes saved skeletons: Q1. |
-| D23 | Select tool | Keep today's topology pick | The faster local pick disagrees in 1-3 % of clicks next to junctions; follow-up. |
+| D23 | Select tool | Keep today's topology pick | The faster local pick disagrees in 1-3 % of clicks next to junctions; follow-up. Audit 2026-10-12: the first click after an open or an edit costs about 1.1 s on the dense 2048 px skeleton, later clicks 70 ms, and 11 ms on a real 640 x 480 one; the nearest-pixel pick differs in 2.4-3.4 % of clicks within 3 px of the skeleton. |
 | D24 | Skeleton latency | ROI skeletonize with the quiet-band check (full-frame fallback, gated by a randomized equality test); endpoint markers `DeviceCoordinateCache`; endpoints only when active; lazy skimage, prewarmed off the GUI thread after the window shows | Provably exact or falls back; 26 → 0.73 ms per commit at dense 2048; 7.8 → 0.14 ms per repaint with 191 markers; ~200 ms off startup without moving the ~217 ms import onto the first Correct open. |
 | D25 | Brush size keys | `[ ]` ±12 % of the current tool for both layers; hold B + wheel sizes the mask brush from either layer; B tap selects the mask brush | One rule; the skeleton eraser keeps ±2 px at its default size. |
 | D26 | Save toasts | One summary toast from the editor; `MainWindow.on_mask_saved` no longer toasts | One save, one toast. |
@@ -713,7 +713,7 @@ Task Z dropped.
   pre-merge gate?
 - **Q4 EXIF orientation in generation.** Generated masks come from cv2 (EXIF applied) while the
   editors use Qt geometry (EXIF ignored): an EXIF-rotated image would get a "mask size does not
-  match" warning. None of the 40 harness images carries the tag. Track it?
+  match" warning. None of the 40 harness images carries the tag. Track it? Closed 2026-10-12 as not an issue: no reader applies the EXIF orientation (`docs/KNOWN_ISSUES.md` Q4).
 - **Q5 Sequencing with the peer session's plan** (section 17): settled 2026-09-29 (the user
   delegated it): merge first; Track B in its own worktree or after W2; Task 0's API-surface freeze
   and Track A after the swap; Tracks C, D and Task Z dropped.
@@ -723,7 +723,7 @@ Task Z dropped.
 ## 20. Follow-ups (not in this build)
 
 Patch-based skeleton history (25 → 100 steps, 75 MiB → ~0.1 MiB at 2048); local branch pick for
-Select (1.5 s → 0.13 ms on dense 2048, with the semantics decision); windowed endpoints and a
+Select (1.5 s → 0.13 ms on dense 2048, with the semantics decision) (audit 2026-10-12: see D23); windowed endpoints and a
 dirty-rect skeleton overlay beyond what the layer item does; background prefetch of the next image
 (PgDn 9.6 → 2.0 ms GUI time at 640, 78.7 → 8.7 ms at 2048); zoom animation (120 ms, anchored) and
 `QNativeGestureEvent` pinch; a minimum zoom relative to fit; bicubic idle refine; QSettings
