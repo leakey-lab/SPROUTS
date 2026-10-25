@@ -239,6 +239,7 @@ def _sort_key(row: dict):
         row.get("Date") or "",
         row.get("Time") or "",
         row.get("Position") or float("inf"),
+        row.get("Image") or "",  # ties: the same order on every OS (scan order differs, WX-T9)
     )
 
 

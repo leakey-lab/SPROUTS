@@ -94,6 +94,7 @@ def _legacy_csv(images, kind, out_path):
             r.get("Date") or "",
             r.get("Time") or "",
             r.get("Position") or float("inf"),
+            r.get("Image") or "",  # tie order by image name (WX-T9)
         ),
     )
     with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -346,8 +347,9 @@ def test_the_record_does_not_touch_the_csv(tmp_path, monkeypatch):
     assert not os.path.exists(measure_inputs.inputs_record_path(recorded.csv_path))
 
 
-def test_rows_with_equal_sort_keys_keep_input_order():
-    """Legacy order of tied rows (e.g. error rows) depended on thread completion."""
+def test_rows_with_equal_sort_keys_come_out_by_image_name():
+    """Tied rows (no metadata, error rows) are ordered by image name, not by folder-scan
+    order (which differs per OS) or thread completion (WX-T9)."""
     import random
     import time
 
@@ -355,7 +357,7 @@ def test_rows_with_equal_sort_keys_keep_input_order():
         time.sleep(random.random() / 500)
         return {"Image": name}
 
-    images = {f"img{i:02d}": "" for i in range(12)}
+    images = {name: "" for name in ("img07", "img02", "img11", "IMG_0001")}
     for _ in range(3):
         rows = metrics.run_metric_pool(images, worker)
-        assert [r["Image"] for r in rows] == list(images)
+        assert [r["Image"] for r in rows] == sorted(images)

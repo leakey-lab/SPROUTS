@@ -630,6 +630,11 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Row order of tied rows (2026-10-25, WX-T9, O21).** Rows of `root_lengths.csv` /
+  `root_areas.csv` that tie on tube, date, time and position are now ordered by image name;
+  before, they kept the folder-scan order, which differs per OS. Library entries that tie are
+  ordered by (depth, name). No value changes; on the owner's project (46,178 skeleton and
+  46,175 mask names) and the synthetic set 0 rows move.
 - **Inputs without an image (2026-10-25, W2-T11, O37).** Measure writes no row for a mask
   or skeleton whose image is no longer in the project (an image the Library lists: PNG or
   JPEG, any letter case; a mask whose image is `x.tif` counts as without an image); the

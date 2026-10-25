@@ -59,6 +59,25 @@ def test_build_hierarchy_groups_by_field_tube_date_and_sorts_by_depth():
     assert h["loose"]["No Tube"]["No Date"] == [(float("inf"), "loose_image")]
 
 
+def test_entries_that_tie_on_depth_are_ordered_by_name_in_any_input_order():
+    """Same field / tube / date and no depth (or the same depth): scan order never shows (WX-T9)."""
+    names = [
+        "loose_b",
+        "loose_a",
+        "loose_c",
+        _name(2, 11, hhmmss="111530"),
+        _name(2, 11, "2024.07.18", "090000"),
+    ]
+    expected = build_hierarchy(sorted(names))
+    assert build_hierarchy(names) == expected
+    assert build_hierarchy(reversed(names)) == expected
+    assert [n for _, n in expected["loose"]["No Tube"]["No Date"]] == [
+        "loose_a",
+        "loose_b",
+        "loose_c",
+    ]
+
+
 def test_leaf_label_is_depth_and_time_with_stem_fallback():
     assert leaf_label(_name(1, 44, hhmmss="111530")) == "L44 · 11:15:30"
     assert leaf_label("24EF_T001_L007_nodate") == "L7 · 24EF_T001_L007_nodate"

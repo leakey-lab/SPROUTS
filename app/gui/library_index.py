@@ -88,7 +88,7 @@ def index_names(names: Iterable[str]) -> tuple[Hierarchy, dict[str, str]]:
     for tubes in hierarchy.values():
         for dates in tubes.values():
             for images in dates.values():
-                images.sort(key=lambda entry: entry[0])
+                images.sort(key=lambda entry: (entry[0], entry[1]))  # ties by name, not scan order
     return hierarchy, labels
 
 
