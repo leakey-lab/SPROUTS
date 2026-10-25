@@ -68,6 +68,12 @@ class GLSupport:
     supported: bool
     reason: str
     renderer: str = ""
+    checked: bool = True
+
+
+def _platform() -> str:
+    """``sys.platform``, read at call time (tests patch this, never the global ``sys``)."""
+    return sys.platform
 
 
 def opengl_viewport_requested() -> bool:
@@ -77,7 +83,7 @@ def opengl_viewport_requested() -> bool:
     """
     value = os.environ.get(ENV_VAR)
     if value is None:
-        return sys.platform != "darwin"
+        return _platform() != "darwin"
     return value.strip().lower() in _TRUE_VALUES
 
 
@@ -150,9 +156,21 @@ def _renderer_name(context) -> str:
         surface.destroy()
 
 
-@functools.cache
 def opengl_support() -> GLSupport:
-    """The probe result, computed once per process and logged."""
+    """The probe result, computed once per process and logged.
+
+    Without a ``QGuiApplication`` nothing is probed (a context cannot be made) and the
+    unchecked answer is not cached.
+    """
+    from PyQt6.QtGui import QGuiApplication
+
+    if QGuiApplication.instance() is None:
+        return GLSupport(False, "not checked: no application yet", checked=False)
+    return _probed_support()
+
+
+@functools.cache
+def _probed_support() -> GLSupport:
     support = probe_opengl_support()
     if support.supported:
         logger.info("OpenGL canvas viewports available (%s)", support.renderer or support.reason)
@@ -181,6 +199,8 @@ def canvas_line() -> tuple[str, bool]:
             return f"Software drawing · {DARWIN_REASON}", False
         return f"Software drawing · turned off by {ENV_VAR}", False
     support = opengl_support()
+    if not support.checked:
+        return "OpenGL not checked yet", False
     if support.supported:
         return f"OpenGL · {support.renderer or support.reason}", False
     return f"Software drawing (slower) · {support.reason}", True

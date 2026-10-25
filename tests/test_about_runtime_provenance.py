@@ -161,6 +161,22 @@ def test_details_take_the_runtime_line_they_are_given(monkeypatch):
     assert "Runtime: Device not detected yet\n" in about_dialog.details_text({})
 
 
+def test_details_without_an_application_neither_probe_nor_crash(monkeypatch):
+    from PyQt6.QtGui import QGuiApplication
+
+    from app.gui import canvas_gl
+
+    def probe():
+        raise AssertionError("details_text must not probe")
+
+    monkeypatch.setattr(canvas_gl, "probe_opengl_support", probe)
+    monkeypatch.setattr(QGuiApplication, "instance", staticmethod(lambda: None))
+    _runtime(monkeypatch, UNRESOLVED)
+
+    assert "Canvas: not checked\n" in about_dialog.details_text({})
+    assert "Canvas: OpenGL · GPU\n" in about_dialog.details_text({}, canvas="OpenGL · GPU")
+
+
 # ---------------------------------------------------------------- the dialog
 def test_the_dialog_names_the_driver_device_off_the_gui_thread(app, dialogs, monkeypatch):
     _runtime(monkeypatch, UNRESOLVED)

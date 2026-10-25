@@ -23,7 +23,7 @@ def app():
 @pytest.fixture(autouse=True)
 def _not_macos(monkeypatch):
     """Default platform for these tests; the macOS tests patch it again."""
-    monkeypatch.setattr(canvas_gl.sys, "platform", "linux")
+    monkeypatch.setattr(canvas_gl, "_platform", lambda: "linux")
 
 
 def test_env_flag_unset_requests_opengl(monkeypatch):
@@ -33,20 +33,20 @@ def test_env_flag_unset_requests_opengl(monkeypatch):
 
 def test_macos_defaults_to_the_raster_viewport(monkeypatch):
     monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
-    monkeypatch.setattr(canvas_gl.sys, "platform", "darwin")
+    monkeypatch.setattr(canvas_gl, "_platform", lambda: "darwin")
     assert canvas_gl.opengl_viewport_requested() is False
 
 
 def test_macos_can_opt_in_to_opengl(monkeypatch):
     monkeypatch.setenv(canvas_gl.ENV_VAR, "1")
-    monkeypatch.setattr(canvas_gl.sys, "platform", "darwin")
+    monkeypatch.setattr(canvas_gl, "_platform", lambda: "darwin")
     assert canvas_gl.opengl_viewport_requested() is True
 
 
 @pytest.mark.parametrize("platform", ["linux", "win32"])
 def test_other_platforms_still_default_on(monkeypatch, platform):
     monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
-    monkeypatch.setattr(canvas_gl.sys, "platform", platform)
+    monkeypatch.setattr(canvas_gl, "_platform", lambda: platform)
     assert canvas_gl.opengl_viewport_requested() is True
 
 
@@ -56,7 +56,7 @@ def test_macos_default_is_a_chosen_path_not_a_slow_one(monkeypatch):
 
     monkeypatch.setattr(canvas_gl, "opengl_support", probe)
     monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
-    monkeypatch.setattr(canvas_gl.sys, "platform", "darwin")
+    monkeypatch.setattr(canvas_gl, "_platform", lambda: "darwin")
     assert canvas_gl.canvas_line() == (f"Software drawing · {canvas_gl.DARWIN_REASON}", False)
     assert canvas_gl.slow_path_notice("cocoa") is None
 
@@ -192,3 +192,17 @@ def test_the_canvas_notice_is_one_warn_toast(monkeypatch):
     monkeypatch.setattr(canvas_gl, "slow_path_notice", lambda platform: None)
     assert body.notify_canvas_path(window) is False
     assert calls == []
+
+
+def test_no_application_means_no_probe_and_no_cache(monkeypatch):
+    from PyQt6.QtGui import QGuiApplication
+
+    def probe():
+        raise AssertionError("must not probe without an application")
+
+    monkeypatch.setattr(canvas_gl, "probe_opengl_support", probe)
+    monkeypatch.setattr(QGuiApplication, "instance", staticmethod(lambda: None))
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    assert canvas_gl.opengl_support().checked is False
+    assert canvas_gl.canvas_line() == ("OpenGL not checked yet", False)
+    assert canvas_gl.slow_path_notice("windows") is None

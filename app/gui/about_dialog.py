@@ -200,17 +200,20 @@ def _model_line(key: str, status: ModelStatus | None) -> str:
 
 
 def details_text(
-    statuses: Mapping[str, ModelStatus] | None = None, runtime: str | None = None
+    statuses: Mapping[str, ModelStatus] | None = None,
+    runtime: str | None = None,
+    canvas: str | None = None,
 ) -> str:
     """Plain-text provenance block for a methods section or lab notebook; ``runtime`` is
-    the Runtime line (:func:`runtime_text` without a device guess when None)."""
+    the Runtime line (:func:`runtime_text` without a device guess when None), ``canvas``
+    the Canvas line (the dialog fills it; None means not checked, never probed here)."""
     statuses = statuses or {}
     lines = [
         f"{APP_FULL_NAME} v{__version__}",
         f"Commit: {_commit()}",
         f"Calibration FOV: {_fov()}",
         f"Runtime: {runtime_text() if runtime is None else runtime}",
-        f"Canvas: {canvas_gl.canvas_line()[0]}",
+        f"Canvas: {canvas or 'not checked'}",
         f"Python {platform.python_version()} · {platform.system()} {platform.release()}",
     ]
     lines += [f"Model {key}: {_model_line(key, statuses.get(key))}" for key in MODELS]
@@ -368,7 +371,9 @@ class AboutDialog(QDialog):
         runtime = runtime_text(self._guess)
         if self._runtime_label.text() not in (runtime, _CHECKING):  # not while asking the driver
             self._runtime_label.setText(runtime)
-        QGuiApplication.clipboard().setText(details_text(self._statuses, runtime))
+        QGuiApplication.clipboard().setText(
+            details_text(self._statuses, runtime, canvas_gl.canvas_line()[0])
+        )
 
     def copy_citation(self) -> None:
         if self._citation:
