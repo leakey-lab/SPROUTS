@@ -15,11 +15,13 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QStatusBar  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
+from app.gui import canvas_gl  # noqa: E402
 from app.gui.shell_chrome import StatusLine, runtime_label  # noqa: E402
 from app.gui.task_progress import TaskProgressWidget  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
 
 RUNTIME = "app.inference.runtime"
+CANVAS = "OpenGL · Fake GPU"
 
 
 @pytest.fixture(scope="module")
@@ -120,13 +122,16 @@ def test_runtime_label_prefers_describe_runtime(monkeypatch):
 
 
 def test_runtime_summary_object_and_missing_models_warn(app, monkeypatch):
+    monkeypatch.setattr(canvas_gl, "canvas_line", lambda: (CANVAS, False))
     mod = _fake_runtime(monkeypatch, resolved=True, cuda=False)
     mod.describe_runtime = lambda: types.SimpleNamespace(
         text="CPU · FP32 · mask model missing", models_ok=False
     )
     _win, line, _bar, _tp = _window()
     line.refresh_runtime()
-    assert line.info.toolTip().endswith("CPU · FP32 · mask model missing")
+    assert line.info.toolTip() == (
+        f"Inference runtime: CPU · FP32 · mask model missing\nCanvas: {CANVAS}"
+    )
     assert line.info.property("models_ok") is False
 
 
@@ -147,7 +152,8 @@ def test_statusline_chip_is_not_hard_coded(app, monkeypatch):
     assert "CUDA 12.8" not in line.info.text()
 
 
-def test_main_window_uses_one_status_surface(app):
+def test_main_window_uses_one_status_surface(app, monkeypatch):
+    monkeypatch.setattr(canvas_gl, "canvas_line", lambda: (CANVAS, False))
     from app.gui.main_window import MainWindow
     from app.gui.shell_chrome import install_status_surface
 
@@ -162,7 +168,9 @@ def test_main_window_uses_one_status_surface(app):
         assert mw.statusline_message.text() == "Mask saved for a.png"
         assert mw.task_progress.parentWidget() is mw.statusline
         mw.statusline.refresh_runtime()
-        assert mw.statusline_info.toolTip().endswith(runtime_label())  # real, not hard-coded
+        tip = mw.statusline_info.toolTip().splitlines()  # real, not hard-coded
+        assert tip[0] == f"Inference runtime: {runtime_label()}"
+        assert tip[-1] == f"Canvas: {CANVAS}"
         assert mw.statusline.height() == 28
     finally:
         mw.close()
