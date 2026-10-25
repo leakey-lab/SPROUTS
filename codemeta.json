@@ -5,6 +5,7 @@
   "alternateName": "root-mask-and-skeletons",
   "description": "Desktop application (PyQt6 and PyTorch) for plant-root phenotyping from minirhizotron images: model-predicted root masks and skeletons with hand-correction editors, calibrated root area (mm²) and root length (mm) exported as CSV, interactive dashboards, and a multi-class ground-truth tracing tool that exports segmentation training datasets.",
   "version": "3.0.0",
+  "license": "https://spdx.org/licenses/GPL-3.0-or-later",
   "author": [
     {
       "@type": "Person",

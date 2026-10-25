@@ -333,6 +333,11 @@ are missing (pass `-AllowMissingModels` / `/allow-missing-models` to build anywa
 exit with an error when the build fails. The app records its version and git commit in
 `_internal\build_info.json`.
 
+The bundle is distributed under the GPL: ship `LICENSE` and `THIRD_PARTY_NOTICES.md` (the
+build copies both into the bundle root) and, on request, the source of the commit recorded
+in `_internal\build_info.json`. A CPU-only PyTorch (README "Installation") makes a much
+smaller bundle.
+
 ## Tests
 
 ```bash
@@ -354,9 +359,13 @@ A DOI will be added when the first release is archived.
 
 ## License
 
-**Pending.** No license has been chosen yet, so no rights to copy, modify or
-redistribute this software or the model weights are granted at this time. The
-maintainers will add a `LICENSE` file; until then please contact them before reuse.
+SPROUTS is free software under the **GNU General Public License v3.0 or later**
+(`GPL-3.0-or-later`, see [`LICENSE`](LICENSE)); PyQt6, which it imports, is GPL-3.0 too.
+Copyright (c) 2026 the SPROUTS authors. Third-party code and assets keep their licences:
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
+[`app/assets/THIRD_PARTY.md`](app/assets/THIRD_PARTY.md). The **model weights** are not
+part of the source and are licensed separately under **CC-BY-4.0**
+([`docs/MODELS.md`](docs/MODELS.md)).
 
 ## Changelog
 

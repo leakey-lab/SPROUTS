@@ -4,11 +4,11 @@
 #
 # TODO(owner) before the first release:
 #   - confirm the author list; add ORCIDs, affiliations and any co-authors;
-#   - add `license:` (SPDX id) once LICENSE exists (README "License");
 #   - add `date-released:` and the Zenodo DOI (`doi:` / `identifiers:`) when v3.0.0 is tagged.
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata from this file."
 type: software
+license: GPL-3.0-or-later
 title: "SPROUTS (Root-Mask-and-Skeletons)"
 abstract: >-
   SPROUTS is a desktop application (PyQt6 and PyTorch) for plant-root phenotyping

@@ -40,3 +40,7 @@ def test_model_card_states_every_registered_checkpoint_and_digest():
 
 def test_data_dictionary_documents_every_metric_csv_column():
     assert undocumented_columns(_read("docs/DATA_DICTIONARY.md")) == []
+
+
+def test_model_card_states_the_weights_licence():
+    assert "CC-BY-4.0" in (ROOT / "docs" / "MODELS.md").read_text(encoding="utf-8")

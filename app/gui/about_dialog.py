@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app import APP_FULL_NAME, __version__
+from app import APP_FULL_NAME, LICENSE_SPDX, __version__
 from app.config import PROJECT_ROOT
 from app.gui import canvas_gl
 from app.gui.widgets import tokens
@@ -211,6 +211,7 @@ def details_text(
     lines = [
         f"{APP_FULL_NAME} v{__version__}",
         f"Commit: {_commit()}",
+        f"License: {LICENSE_SPDX} (weights CC-BY-4.0)",
         f"Calibration FOV: {_fov()}",
         f"Runtime: {runtime_text() if runtime is None else runtime}",
         f"Canvas: {canvas or 'not checked'}",
@@ -289,6 +290,7 @@ class AboutDialog(QDialog):
         self._grid.setVerticalSpacing(6)
         self._grid.setColumnStretch(1, 1)
         self._add_fact("Commit", _commit())
+        self._add_fact("License", f"{LICENSE_SPDX} · weights CC-BY-4.0")
         self._add_fact("Calibration", f"FOV {_fov()}")
         self._runtime_label = self._add_fact("Runtime", _CHECKING if ask_driver else runtime_text())
         self._add_fact("Canvas", canvas_gl.canvas_line()[0])

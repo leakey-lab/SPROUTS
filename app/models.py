@@ -42,6 +42,9 @@ class ModelSpec:
     url: str | None = None
     doi: str | None = None
     description: str = ""
+    license: str = (
+        "CC-BY-4.0"  # the weights' licence; the code is GPL-3.0-or-later (app.LICENSE_SPDX)
+    )
 
     def path(self, root: str | None = None) -> str:
         """Absolute path of the checkpoint under ``root`` (default: the app folder).

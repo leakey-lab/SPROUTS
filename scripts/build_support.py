@@ -58,6 +58,8 @@ REQUIRED_DATAS: tuple[tuple[str, str], ...] = (
     ("resources/app_icon.png", "resources"),
     ("app/assets", "app/assets"),
     ("config/normalization_defaults.json", "config"),
+    ("LICENSE", "."),
+    ("THIRD_PARTY_NOTICES.md", "."),
 )
 
 

@@ -19,4 +19,18 @@ APP_FULL_NAME = "SPROUTS – Root Mask and Skeletons"
 #: Organisation used for QSettings (matches the existing QSettings store).
 ORGANIZATION_NAME = "LeakeyLab"
 
-__all__ = ["APP_FULL_NAME", "APP_NAME", "ORGANIZATION_NAME", "__version__"]
+#: SPDX id of the code licence (the model weights are CC-BY-4.0, docs/MODELS.md); keep in step
+#: with pyproject.toml, CITATION.cff and codemeta.json (tests/test_license_file.py).
+LICENSE_SPDX = "GPL-3.0-or-later"
+
+#: Copyright holder named in LICENSE and the README.
+COPYRIGHT_HOLDER = "the SPROUTS authors"
+
+__all__ = [
+    "APP_FULL_NAME",
+    "APP_NAME",
+    "COPYRIGHT_HOLDER",
+    "LICENSE_SPDX",
+    "ORGANIZATION_NAME",
+    "__version__",
+]

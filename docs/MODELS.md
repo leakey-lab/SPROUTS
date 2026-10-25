@@ -42,6 +42,13 @@ sha256sum checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skeletoniz
   cannot produce masks and root area cannot be measured from model masks (hand-traced
   masks still work).
 
+## Licence of the weights
+
+Both checkpoints are released under **CC-BY-4.0** (https://creativecommons.org/licenses/by/4.0/):
+you may share and adapt them if you give credit (cite SPROUTS, see the README). The licence
+of the weights is separate from the GPL-3.0-or-later licence of the code. `ModelSpec.license`
+in `app/models.py` records it for each checkpoint.
+
 ## Mask model (root segmentation)
 
 | | |

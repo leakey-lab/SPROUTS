@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 import app
 
@@ -63,6 +64,9 @@ def _raw_pyproject() -> dict:
 @pytest.fixture(scope="module")
 def expanded() -> dict:
     """pyproject.toml as setuptools resolves it (dynamic version, package discovery)."""
+    setuptools = pytest.importorskip("setuptools")
+    if Version(setuptools.__version__) < Version("77"):
+        pytest.skip("setuptools < 77 cannot read the PEP 639 licence fields of pyproject.toml")
     pyprojecttoml = pytest.importorskip("setuptools.config.pyprojecttoml")
     with warnings.catch_warnings():  # older setuptools flags [tool.setuptools] as "beta"
         warnings.filterwarnings("ignore", message=r".*\[tool\.setuptools\].*beta")

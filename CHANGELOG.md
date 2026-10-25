@@ -337,6 +337,9 @@ Five passes, not yet released:
     O21).
   - `THIRD_PARTY_NOTICES.md` reproduces the pytorch-CycleGAN-and-pix2pix BSD licence for
     the skeleton generator code derived from it (W1-T7, F1).
+  - Licence: GPL-3.0-or-later for the code (`LICENSE`), CC-BY-4.0 for the model weights,
+    copyright "the SPROUTS authors"; the bundle ships both licence files; About shows the
+    licence (W5-T1, O32).
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
   data dictionary (`docs/DATA_DICTIONARY.md`: every output file, column, unit and

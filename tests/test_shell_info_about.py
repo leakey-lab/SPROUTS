@@ -78,6 +78,12 @@ def test_details_text_has_version_commit_fov_and_models():
     assert "Commit:" in text
 
 
+def test_dialog_and_details_show_the_licence(app):
+    dlg = about_dialog.AboutDialog()
+    assert "GPL-3.0-or-later" in _texts(dlg)
+    assert "License: GPL-3.0-or-later" in about_dialog.details_text()
+
+
 def test_details_and_dialog_name_the_canvas_path(app, monkeypatch):
     from app.gui import canvas_gl
 
