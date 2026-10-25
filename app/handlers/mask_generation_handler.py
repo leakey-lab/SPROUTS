@@ -228,6 +228,8 @@ class MaskGenerationHandler(GenerationHandlerBase):
                 f"{runtime.mask_weights_path()}",
             )
             return False
+        if self.refuse_while_loading():  # R7: before the scan and the overwrite prompt
+            return False
         input_dir = self.project_folder()
         if input_dir is None:
             QMessageBox.warning(parent, "No images", "Load an image folder first.")

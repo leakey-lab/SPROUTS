@@ -66,8 +66,10 @@ class SkeletonHandler(HandlerDependencies):
         self._retry_box: QMessageBox | None = None
 
     # ------------------------------------------------------------------ public API
-    def generate_skeleton(self):
-        self.skeleton_handler.generate_skeleton()
+    def generate_skeleton(self, input_dir: str | None = None) -> bool:
+        """Start skeleton generation on ``input_dir`` (None: the open project, else the
+        folder dialog); True if a run started."""
+        return self.skeleton_handler.generate_skeleton(input_dir=input_dir)
 
     def is_busy(self, kind: str | None = None) -> bool:
         """True while a run that writes (or invalidates) ``kind``'s CSV is going.
@@ -143,6 +145,8 @@ class SkeletonHandler(HandlerDependencies):
         self._start(MeasureRun(spec, images, folder, project_root=layout.root))
 
     def _start(self, job: MeasureRun) -> bool:
+        if self.refuse_while_loading():  # R7: never while a folder loads
+            return False
         spec = job.spec
         thread = MetricCalculatorThread(job)
         thread.finished.connect(partial(self._on_finished, thread))

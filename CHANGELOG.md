@@ -48,6 +48,10 @@ Five passes, not yet released:
     `Ctrl+S`. The mask row reads *Mask not shown*, the open warns, a save with nothing
     painted keeps the file, a save after painting asks **Replace** / **Keep it**, and
     `PgDn` stays on the image with a warning (W1-T2, M1 part A).
+  - Generate: opening another folder while a job runs is refused (the chained skeleton pass
+    of *Generate all* went to the newly opened folder and replaced its skeletons); the
+    skeleton pass is bound to the folder the mask pass ran on, and a job is refused while a
+    folder loads (W1-T1, R7, O15).
   - Dependencies: `pywin32` is no longer a dependency (nothing imported it) and OpenCV is
     `opencv-python-headless` (no OpenCV window is ever opened; avoids a second Qt on
     Linux); Linux and macOS are listed as supported (WX-T2, O21).

@@ -10,6 +10,7 @@ their old names (a call or a slot costs what it did before, a slot stays a metho
 window); the metrics controller owns its state and the window holds it as ``metrics``.
 """
 
+import functools
 import logging
 import os
 import time
@@ -206,11 +207,12 @@ class MainWindow(QMainWindow):
             self.window_state.apply_default_geometry(self)
 
         # The heavy imports, one at a time off the GUI thread (app.gui.warmup). scikit-image
-        # (the skeleton's thinning, ~0.2 s, in the thread pool) starts once the event loop
-        # runs, i.e. after main.py showed the window: neither the start-up nor the first
-        # Correct open waits for it. torch and the dashboards' libraries (each on a thread
-        # of its own) wait for the user to head for Generate / Visualize (staying in a
-        # stage for a second, resting on its buttons).
+        # (the skeleton's thinning, about 0.2 s from a warm disk cache, 1.8 to 2.5 s in the
+        # logged launches, in the thread pool) starts once the event loop runs, i.e. after
+        # main.py showed the window: neither the start-up nor the first Correct open waits
+        # for it. torch and the dashboards' libraries (each on a thread of its own) wait
+        # for the user to head for Generate / Visualize (staying in a stage for a second,
+        # resting on its buttons).
         self.warmups = warmup.WarmupQueue(
             self,
             jobs={
@@ -600,10 +602,13 @@ class MainWindow(QMainWindow):
 
         The skeleton pass starts only after a completed mask run (never after
         Cancel or a failure); a second click while a job runs is refused by the
-        handler / job registry, so the chain is never doubled.
+        handler / job registry, so the chain is never doubled. Both passes run on the
+        folder open when Generate was pressed: the skeleton pass is bound to it here,
+        not read again once the masks are done (R7).
         """
+        folder = self.mask_generation_handler.project_folder()
         return self.mask_generation_handler.generate_masks(
-            on_success=self.skeleton_handler.generate_skeleton
+            on_success=functools.partial(self.skeleton_handler.generate_skeleton, input_dir=folder)
         )
 
     def calculate_root_length(self):

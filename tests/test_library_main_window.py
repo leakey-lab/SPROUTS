@@ -295,3 +295,40 @@ def test_skeleton_tooltips_do_not_claim_masks_are_the_input(mw):
     # generate_button's tooltip is re-set by shell_chrome (see notes/library.md).
     tip = mw.generate_all_button.toolTip().lower()
     assert "from the masks" not in tip and "original images" in tip
+
+
+# ------------------------------------------------------------------ R7 / O15
+def test_open_path_is_refused_while_a_job_runs(mw, tmp_path, monkeypatch):
+    _open(mw, _project(tmp_path / "a"))
+    # The busy registry is undone before the fixture closes the window: closing with a
+    # job running asks, in a modal box, whether to stop it.
+    with monkeypatch.context() as patch:
+        patch.setattr(mw.jobs, "is_busy", lambda: True)
+        patch.setattr(mw.jobs, "running_name", lambda: "Generating masks")
+        mw.task_progress.start("Generating masks", on_cancel=lambda: None)
+        mw.open_path(str(_project(tmp_path / "b", STEMS[:2])))
+        QTest.qWait(50)
+    assert (
+        "warn",
+        "Generating masks is running. Cancel it or wait before opening another folder.",
+    ) in mw.toasts_seen
+    assert os.path.normcase(mw.image_manager.original_folder) == os.path.normcase(
+        str(tmp_path / "a")
+    )
+    assert mw.task_progress._operation == "Generating masks"
+    assert not mw.task_progress.cancel_button.isHidden()
+
+
+def test_the_folder_dialog_is_not_opened_while_a_job_runs(mw, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    with monkeypatch.context() as patch:  # undone before the window closes (as above)
+        patch.setattr(mw.jobs, "is_busy", lambda: True)
+        patch.setattr(mw.jobs, "running_name", lambda: "Generating masks")
+        patch.setattr(
+            QFileDialog,
+            "getExistingDirectory",
+            lambda *a, **k: pytest.fail("the folder dialog opened during a job"),
+        )
+        mw.load_images()
+    assert mw.toasts_seen[-1][0] == "warn"

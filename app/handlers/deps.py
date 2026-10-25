@@ -18,6 +18,9 @@ from app.handlers.job_registry import JobRegistry
 #: file and its folder: long enough to hover it for the tooltip with the whole path (W13).
 SAVED_PATH_STATUS_MS = 15_000
 
+#: Every batch job's refusal while a folder loads (``refuse_while_loading``).
+LOADING_REFUSED = "A folder is loading. Try again when it has loaded."
+
 
 def folder_label(folder: str, root: str | None = None) -> str:
     """``folder`` as a toast names it: relative to the project ``root`` when inside it
@@ -38,7 +41,8 @@ def folder_label(folder: str, root: str | None = None) -> str:
 
 
 class HandlerDependencies:
-    """Mixin: ``feedback`` and ``jobs`` resolved from injection, the window, or a stand-in."""
+    """Mixin: ``feedback`` and ``jobs`` resolved from injection, the window, or a stand-in;
+    ``refuse_while_loading`` keeps every job from starting while a folder loads."""
 
     def __init__(
         self,
@@ -70,6 +74,17 @@ class HandlerDependencies:
         if self._fallback_jobs is None:  # serializes at least this handler's jobs
             self._fallback_jobs = JobRegistry()
         return self._fallback_jobs
+
+    def refuse_while_loading(self) -> bool:
+        """True (and a warning toast) while the window loads a folder (R7, O15).
+
+        A job started then would bind to the project being left, or to a half-scanned
+        one: no job starts until the folder has loaded.
+        """
+        if getattr(self.main_window, "_loading_project", False) is True:
+            self.feedback.notify(LOADING_REFUSED, "warn")
+            return True
+        return False
 
 
 __all__ = ["HandlerDependencies"]

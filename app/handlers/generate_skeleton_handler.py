@@ -108,9 +108,16 @@ class GenerateSkeletonHandler(GenerationHandlerBase):
     ) -> None:
         super().__init__(main_window, feedback=feedback, jobs=jobs)
 
-    def generate_skeleton(self) -> bool:
-        """Start skeleton generation; True if a run started."""
-        input_dir = self.project_folder()
+    def generate_skeleton(self, input_dir: str | None = None) -> bool:
+        """Start skeleton generation on ``input_dir``; True if a run started.
+
+        ``input_dir`` None means the open project, else the folder dialog. Generate
+        passes the mask pass's folder, so the chained pass stays with the project it
+        started in even when another folder was opened meanwhile (R7).
+        """
+        if self.refuse_while_loading():  # before the dialog and the skeletons/ folder
+            return False
+        input_dir = input_dir or self.project_folder()
         if input_dir is None:
             input_dir = QFileDialog.getExistingDirectory(
                 self.parent_widget(), "Select Input Folder"

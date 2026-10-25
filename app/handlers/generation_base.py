@@ -91,9 +91,10 @@ class GenerationHandlerBase(HandlerDependencies):
         after a cancel (even one that landed during the last batch) or a failure,
         including a run in which every input failed (R6). A value that is not
         callable chains nothing: a button's ``clicked`` connected straight to a
-        handler passes its ``checked`` flag (False) as ``on_success``.
+        handler passes its ``checked`` flag (False) as ``on_success``. Refused (False)
+        while a folder loads (R7).
         """
-        if self.refuse_if_busy():
+        if self.refuse_while_loading() or self.refuse_if_busy():
             thread.deleteLater()
             return False
         if not self.jobs.try_start(self.job_label, thread):

@@ -214,13 +214,29 @@ def test_selection_follows_an_editor_that_kept_its_image(mw, tmp_path):
 # --------------------------------------------------------------------------- #
 #  Jobs (RB-04 / RB-07)
 # --------------------------------------------------------------------------- #
-def test_generate_all_chains_skeletons_only_on_success(mw):
+def test_generate_all_chains_skeletons_only_on_success(mw, monkeypatch, tmp_path):
     seen = {}
     mw.mask_generation_handler.generate_masks = lambda on_success=None: seen.setdefault(
         "on_success", on_success
     )
+    folder = str(tmp_path / "project_a")
+    monkeypatch.setattr(mw.mask_generation_handler, "project_folder", lambda: folder)
     mw.generate_all()
-    assert seen["on_success"] == mw.skeleton_handler.generate_skeleton
+    # The skeleton pass is the mask pass's on_success (it runs only after a completed
+    # mask run), bound to the folder the mask pass started in (R7).
+    chained = seen["on_success"]
+    assert chained.func == mw.skeleton_handler.generate_skeleton
+    assert chained.keywords == {"input_dir": folder}
+    started = []
+    monkeypatch.setattr(
+        mw.skeleton_handler.skeleton_handler,
+        "generate_skeleton",
+        lambda input_dir=None: started.append(input_dir) or True,
+    )
+    # Another folder opened meanwhile changes nothing: the folder was read at the start.
+    monkeypatch.setattr(mw.mask_generation_handler, "project_folder", lambda: "elsewhere")
+    assert chained() is True
+    assert started == [folder]
 
 
 def test_job_buttons_are_disabled_while_a_job_runs(mw):

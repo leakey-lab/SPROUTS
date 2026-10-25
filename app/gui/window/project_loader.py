@@ -36,9 +36,26 @@ logger = logging.getLogger(__name__)
 #: The one toast of a folder load (loaded / empty / failed): a newer load replaces it.
 _LOAD_TOAST = "project-load"
 
+#: Opening a folder while a batch job runs is refused (R7, O15): the job's outputs
+#: belong to the project it started in, and the progress row keeps its name and Cancel.
+JOB_RUNNING_OPEN = "{name} is running. Cancel it or wait before opening another folder."
+
+
+def _refuse_while_job_runs(window: "MainWindow") -> bool:
+    """True (and a warning toast) while a batch job runs: no folder opens then."""
+    jobs = getattr(window, "jobs", None)  # a partial window (tests) runs no jobs
+    if jobs is None or not jobs.is_busy():
+        return False
+    window.notify(JOB_RUNNING_OPEN.format(name=jobs.running_name() or "A task"), "warn")
+    return True
+
 
 def load_images(window: "MainWindow"):
-    """Open the directory dialog (at the last folder), then load the chosen folder."""
+    """Open the directory dialog (at the last folder), then load the chosen folder.
+
+    Refused, without the dialog, while a batch job runs (R7)."""
+    if _refuse_while_job_runs(window):
+        return
     start = window.window_state.last_folder() if window._persist_window_state else ""
     dir_name = QFileDialog.getExistingDirectory(window, "Select Image Directory", start)
     if dir_name:
@@ -50,13 +67,17 @@ def open_path(window: "MainWindow", dir_name):
 
     Shared by ``load_images`` (after the dialog) and the Welcome screen's
     recent-projects rows. A missing folder is reported and changes nothing,
-    and so does an editor that keeps unsaved edits. Otherwise drops what the
+    and so does an editor that keeps unsaved edits, and so does a running batch
+    job (R7, O15: refused before the edits prompt and the loading card, so the
+    progress row keeps the job's name and Cancel). Otherwise drops what the
     status line and the toasts say about the project being left, flips to the
     working shell, shows the loading overlay, and kicks off
     ``image_manager.load_images``; the current library stays until the scan
     delivers images.
     """
     if not dir_name:
+        return
+    if _refuse_while_job_runs(window):
         return
     if not os.path.isdir(dir_name):
         window.notify(f"Folder not found: {dir_name}", "danger", key=_LOAD_TOAST)
