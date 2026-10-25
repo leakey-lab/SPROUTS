@@ -11,30 +11,17 @@ QApplication is created.
 import os
 import sys
 
-# NOTE (Qt6 / Windows):
-# - QWebEngineView is backed by a QQuickWidget internally.
-# - QQuickWidget requires a QRhi-backed composition path (D3D11 by default on Windows).
-# - Forcing Qt to use OpenGL (e.g. via QT_OPENGL=software) or mixing in QOpenGLWidget
-#   in the same top-level window can lead to a black WebEngine surface and warnings like:
-#   "OpenGL is not compatible with this QQuickWidget" / "Failed to get a QRhi".
-#
-# We prefer the default D3D11 RHI path for stability.
-os.environ.setdefault("QSG_RHI_BACKEND", "d3d11")
+# Qt / Chromium start-up flags per OS (D3D11 / ANGLE on Windows only); see
+# app/qt_environment.py. Qt reads them once, when it loads.
+from app.qt_environment import (
+    DESKTOP_FILE_NAME,
+    configure_qt_environment,
+    qt_style_for,
+)
 
-# Hardware WebGL path: let Chromium use its default ANGLE renderer, translating
-# GLES -> Direct3D 11 (matches QSG_RHI_BACKEND=d3d11 above). We previously forced
-# --disable-gpu here, which disabled ANGLE and dropped WebEngine to software GLES2
-# ("Failed to create GLES3 context, fallback to GLES2") and slow plotly WebGL.
-# Re-enabling the GPU + pinning the D3D11 ANGLE backend restores hardware GLES3.
-# If this regresses to a black WebEngine surface on some GPU/driver combos, the
-# fallback is to disable WebGL at the Plotly layer (render_mode="svg") rather
-# than re-disabling the whole GPU.
-_chromium_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
-for _flag in ("--use-angle=d3d11",):
-    if _flag not in _chromium_flags:
-        _chromium_flags = f"{_chromium_flags} {_flag}".strip()
-if _chromium_flags:
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
+_QT_ENV_SET = configure_qt_environment(
+    os.environ, euid=os.geteuid() if hasattr(os, "geteuid") else None
+)
 
 # Logging must be configured before any app module is imported so that
 # module-level loggers (e.g. config._auto_skeleton_batch) are captured.
@@ -169,9 +156,17 @@ def main(argv: list[str] | None = None) -> int:
         enable_fault_log(log_file.with_name("fault.log"))
 
     logger.info(
-        "Starting %s %s (QSG_RHI_BACKEND=%s)", name, version, os.environ.get("QSG_RHI_BACKEND")
+        "Starting %s %s (QSG_RHI_BACKEND=%s; start-up environment set: %s)",
+        name,
+        version,
+        os.environ.get("QSG_RHI_BACKEND"),
+        _QT_ENV_SET,
     )
     _apply_window_icon(app)
+    app.setDesktopFileName(DESKTOP_FILE_NAME)
+    style = qt_style_for()
+    if style:
+        app.setStyle(style)
     try:
         apply_stylesheet(app)
     except OSError:

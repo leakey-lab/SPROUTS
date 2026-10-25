@@ -59,9 +59,11 @@ $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
 
 ## Architecture map
 
-Entry: `main.py` — sets Qt6 D3D11 RHI + ANGLE flags (WebEngine stability, see
-`gles3-error-from-disable-gpu`), loads `resources/themes/dark_theme.qss`, applies
-the SPROUTS dark palette, opens `MainWindow`.
+Entry: `main.py` — sets the Qt / Chromium start-up flags per OS through the Qt-free
+`app/qt_environment.py` (Windows: D3D11 RHI + ANGLE, see `gles3-error-from-disable-gpu`;
+Linux / macOS: Qt defaults, Chromium sandbox off only as root, macOS `QT_FONT_DPI=96`),
+sets Fusion off Windows and the desktop file name `sprouts`, loads
+`resources/themes/dark_theme.qss`, applies the SPROUTS dark palette, opens `MainWindow`.
 
 | Area | Path | Notes |
 |---|---|---|
