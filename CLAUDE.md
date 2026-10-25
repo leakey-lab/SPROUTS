@@ -50,8 +50,8 @@ $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
   vectorization, the CSV schema, and an import-smoke of every app module.
 - CI: `.github/workflows/ci.yml` runs that suite on push. Two CI gotchas already
   fixed (memory `ci-deps-install-gotchas`): `requirements.txt` must stay UTF-8
-  (was UTF-16), and `pywin32` is gated to `platform_system == "Windows"` (no
-  Linux wheel). `.pre-commit-config.yaml` mirrors the lint/format hooks.
+  (was UTF-16), and `pywin32` was removed (O21: no Windows-only package; OpenCV is
+  `opencv-python-headless`). `.pre-commit-config.yaml` mirrors the lint/format hooks.
 - Model checkpoints are **not** committed — place under `checkpoints/`
   (`mask_weights/best_mask_model_V5.pth`, `skeletonizer/latest_net_G.pth`).
 

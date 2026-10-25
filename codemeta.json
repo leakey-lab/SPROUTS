@@ -22,7 +22,7 @@
     "version": "3.10"
   },
   "runtimePlatform": "Python 3.10",
-  "operatingSystem": "Microsoft Windows",
+  "operatingSystem": ["Windows", "Linux", "macOS"],
   "applicationCategory": "Plant phenotyping / image analysis",
   "keywords": [
     "plant phenotyping",

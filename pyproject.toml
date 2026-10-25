@@ -25,10 +25,11 @@ keywords = [
 ]
 classifiers = [
     "Environment :: GPU :: NVIDIA CUDA",
-    "Environment :: Win32 (MS Windows)",
     "Intended Audience :: Science/Research",
     "Natural Language :: English",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
@@ -46,14 +47,13 @@ dependencies = [
     "numpy~=2.2",
     "scipy~=1.15",
     "scikit-image~=0.25",
-    "opencv-python~=4.13",
+    "opencv-python-headless~=4.13",
     "pillow~=12.2",
     "pandas~=2.3",
     "dash~=4.1",
     "dash-bootstrap-components~=2.0",
     "plotly~=6.7",
     "requests~=2.34",
-    "pywin32>=308; sys_platform == \"win32\"",
 ]
 
 [project.urls]

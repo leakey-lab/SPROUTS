@@ -43,6 +43,9 @@ Five passes, not yet released:
   - Start-up: the D3D11 / ANGLE flags are set on Windows only; Linux and macOS take Qt's
     default RHI (on Linux Qt failed to create its RHI and the dashboards were black). Fusion
     style off Windows; desktop file name `sprouts` for Wayland icons (WX-T1, O21).
+  - Dependencies: `pywin32` is no longer a dependency (nothing imported it) and OpenCV is
+    `opencv-python-headless` (no OpenCV window is ever opened; avoids a second Qt on
+    Linux); Linux and macOS are listed as supported (WX-T2, O21).
 - **Fix pass (2026-10-02).** None of these changes a CSV value or an output pixel.
   - CI's `ruff check .` failed with 7 F811 errors: `ruff format` had put the fixtures'
     `noqa` comments on the wrong parameter.

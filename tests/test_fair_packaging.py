@@ -127,3 +127,12 @@ def test_sprouts_command_points_at_a_main_function():
     tree = ast.parse((ROOT / f"{module}.py").read_text(encoding="utf-8"))
     top_level_functions = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
     assert func in top_level_functions
+
+
+def test_no_windows_only_runtime_dependency():
+    declared = [Requirement(d) for d in _raw_pyproject()["project"]["dependencies"]]
+    pinned = list(_requirements(ROOT / "requirements.txt"))
+    for req in declared + pinned:
+        assert canonicalize_name(req.name) != "pywin32"
+        assert "win32" not in str(req.marker or ""), req
+        assert canonicalize_name(req.name) != "opencv-python", "use opencv-python-headless"
