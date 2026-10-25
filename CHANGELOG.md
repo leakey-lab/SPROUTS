@@ -644,8 +644,9 @@ Five passes, not yet released:
   changed ones 0.026 %). Skeletons at 64: identical to 128 and to 32 (0 of 300 files); the
   auto size in a Generate run on this card was already 64. Today's unpadded mask tail (12
   images) against the padded one differed in 4 files / 5 pixels; that dependence on folder
-  size is gone. CPU tails are now padded too (not measured). The owner chose N = 4 over the
-  proposed 16 because masks at 16 need about 12 GiB free.
+  size is gone. CPU tails are now padded too (not measured). Masks run at N = 4 instead of
+  the proposed 16 (a build decision from the GPU session, to be confirmed by the owner):
+  masks at 16 need about 12 GiB free.
 - **`Error` cells name the file only (2026-10-25, W3-T7, O38).** The `Error` cell of a row
   that could not be measured names the file, not its absolute path, so a shared CSV no
   longer carries user or folder names. Values and every other cell are unchanged.
