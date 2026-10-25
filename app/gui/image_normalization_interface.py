@@ -9,7 +9,10 @@ Qt-free :mod:`app.enhancement`; this module is the thin Qt adapter the editors u
 * ``controls.source_image(path)`` - the one cached, read-only decode of the photo;
   ``controls.display_image(path)`` - that decode as shown (enhanced when active);
   ``controls.display_pixmap(path)`` - the same as a ``QPixmap``;
-* ``controls.settings()`` / ``controls.set_settings(settings)``.
+* ``controls.settings()`` / ``controls.set_settings(settings)``;
+* ``controls.set_source_path(path)`` - names the photo on screen: the "Smooth JPEG blocks"
+  box (``deblock_check``) is offered, and applied, only for a ``.jpg`` / ``.jpeg`` source. It
+  works without the enhancement being on.
 
 Enhancement is display-only: it never changes masks, skeletons or measurements.
 """
@@ -17,6 +20,7 @@ Enhancement is display-only: it never changes masks, skeletons or measurements.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -42,6 +46,7 @@ from app.enhancement import (
     clahe,
     contrast_stretch,
     enhance,
+    is_jpeg_path,
 )
 
 from .widgets.buttons import ghost_button, primary_button
@@ -95,6 +100,8 @@ class NormalizationControls(QWidget):
     once the controls have been still for ``preview_delay_ms`` (live preview). "Apply"
     turns it on at once; "Show original" shows the untouched image while checked. The
     on/off state stays across image switches, so editors re-render on every image load.
+    "Smooth JPEG blocks" is a separate switch: it needs a JPEG source (:meth:`set_source_path`)
+    and does not turn the enhancement on.
     """
 
     #: The displayed image should be re-rendered (``display_pixmap`` / ``apply_to``).
@@ -112,6 +119,7 @@ class NormalizationControls(QWidget):
         self._sources = SourceImageCache()
         self._enabled = False
         self._updating = False
+        self._jpeg_source = False
         self.current_image = None
 
         self._preview_timer = QTimer(self)
@@ -133,10 +141,12 @@ class NormalizationControls(QWidget):
             tile=self.tile_slider.value(),
             lower=self.lower_slider.value(),
             upper=self.upper_slider.value(),
+            deblock=self.deblock_check.isChecked(),
         )
 
     def set_settings(self, settings: EnhanceSettings) -> None:
-        """Show ``settings`` (re-renders when the enhancement is on)."""
+        """Show ``settings`` (re-renders when the enhancement is on, or the JPEG box took effect)."""
+        deblock_before = self._deblock_effective()
         self._updating = True
         try:
             self.method_combo.setCurrentText(settings.method)
@@ -144,19 +154,31 @@ class NormalizationControls(QWidget):
             self.tile_slider.setValue(settings.tile)
             self.lower_slider.setValue(settings.lower)
             self.upper_slider.setValue(settings.upper)
+            self.deblock_check.setChecked(settings.deblock)
         finally:
             self._updating = False
         self.on_method_changed(settings.method)
-        if self._enabled:
+        if self._enabled or self._deblock_effective() != deblock_before:
             self._preview_timer.start()
 
+    def set_source_path(self, path: str | None) -> None:
+        """Name the photo on screen: "Smooth JPEG blocks" is offered only for a JPEG file."""
+        self._jpeg_source = is_jpeg_path(path)
+        self.deblock_check.setVisible(self._jpeg_source)
+
+    def _deblock_effective(self) -> bool:
+        return self.deblock_check.isChecked() and self._jpeg_source
+
     def is_active(self) -> bool:
-        """True when the displayed image should be enhanced."""
-        return self._enabled and not self.original_check.isChecked()
+        """True when the displayed image should be enhanced or its JPEG blocks smoothed."""
+        return (self._enabled or self._deblock_effective()) and not self.original_check.isChecked()
 
     def apply_to(self, image: np.ndarray) -> np.ndarray:
         """``image`` enhanced when active, else ``image`` itself (never modified)."""
-        return enhance(image, self.settings()) if self.is_active() else image
+        if not self.is_active():
+            return image
+        settings = replace(self.settings(), deblock=self._deblock_effective())
+        return enhance(image, settings, tone=self._enabled)
 
     def source_image(self, path: str) -> np.ndarray | None:
         """The decoded BGR image at ``path`` (None if unreadable): the editor's one decode.
@@ -170,8 +192,10 @@ class NormalizationControls(QWidget):
         """What the editor should show for ``path`` as a BGR array (None if unreadable).
 
         The cached :meth:`source_image` itself while the enhancement is off, else a new
-        enhanced array; the source is never modified.
+        enhanced array; the source is never modified. Names ``path`` as the source first
+        (:meth:`set_source_path`).
         """
+        self.set_source_path(path)
         source = self.source_image(path)
         return None if source is None else self.apply_to(source)
 
@@ -214,6 +238,14 @@ class NormalizationControls(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+
+        self.deblock_check = QCheckBox("Smooth JPEG blocks")
+        self.deblock_check.setToolTip(
+            "Soften the 8 x 8 blocks of a JPEG photo when zoomed in.\n"
+            "Display only: nothing saved changes."
+        )
+        self.deblock_check.setVisible(False)  # offered once a JPEG source is named
+        layout.addWidget(self.deblock_check)
 
         self.method_label = QLabel("Method")
         self.method_combo = QComboBox()
@@ -293,6 +325,7 @@ class NormalizationControls(QWidget):
             signal.connect(self._on_control_changed)
         self.apply_button.clicked.connect(self._on_apply)
         self.original_check.toggled.connect(self._on_original_toggled)
+        self.deblock_check.toggled.connect(self._on_deblock_toggled)
         self.save_defaults_button.clicked.connect(self.save_current_as_defaults)
         self._save_feedback_timer = QTimer(self)
         self._save_feedback_timer.setSingleShot(True)
@@ -340,9 +373,11 @@ class NormalizationControls(QWidget):
         self.lower_label.setText(f"Black point: {self.lower_slider.value()}%")
         self.upper_label.setText(f"White point: {self.upper_slider.value()}%")
 
-    def _show_enhanced(self) -> None:
-        """Turn the enhancement on and leave "Show original" without a second re-render."""
-        self._enabled = True
+    def _show_enhanced(self, *, tone: bool = True) -> None:
+        """Leave "Show original" without a second re-render, and turn the enhancement on
+        unless ``tone`` is false (the JPEG switch works without it)."""
+        if tone:
+            self._enabled = True
         if self.original_check.isChecked():
             self.original_check.blockSignals(True)
             self.original_check.setChecked(False)
@@ -353,6 +388,12 @@ class NormalizationControls(QWidget):
             return
         self._show_enhanced()
         self._preview_timer.start()  # restarts: one render once the slider rests
+
+    def _on_deblock_toggled(self, _checked: bool):
+        if self._updating:
+            return
+        self._show_enhanced(tone=False)
+        self._preview_timer.start()
 
     def _on_apply(self):
         self._preview_timer.stop()

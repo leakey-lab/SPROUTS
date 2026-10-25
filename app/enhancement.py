@@ -2,6 +2,8 @@
 
 * :class:`EnhanceSettings` - the one immutable description of an enhancement (method + slider
   values) and its validation (:meth:`EnhanceSettings.from_dict` never raises).
+* :func:`deblock` - the "Smooth JPEG blocks" switch: an H.264-style weak filter over the 8 x 8
+  block boundaries of a JPEG photo (:func:`is_jpeg_path` says which sources it is offered for).
 * :func:`clahe`, :func:`contrast_stretch`, :func:`enhance` - the math. ``contrast_stretch`` is
   bit-exact with the former float64 ``np.percentile`` implementation but takes the percentiles
   from a 256-bin histogram and applies a ``cv2.LUT`` for uint8 images (~10x faster, audit PE-08);
@@ -39,6 +41,7 @@ __all__ = [
     "DECODE_FLAGS",
     "DEFAULT_SETTINGS",
     "DEFAULTS_FILE_NAME",
+    "JPEG_EXTENSIONS",
     "METHODS",
     "METHOD_CLAHE",
     "METHOD_STRETCH",
@@ -47,13 +50,17 @@ __all__ = [
     "SourceImageCache",
     "clahe",
     "contrast_stretch",
+    "deblock",
     "enhance",
+    "is_jpeg_path",
 ]
 
 METHOD_CLAHE = "CLAHE"
 METHOD_STRETCH = "Contrast Stretching"
 METHODS = (METHOD_CLAHE, METHOD_STRETCH)
 DEFAULTS_FILE_NAME = "normalization_defaults.json"
+#: Source files the "Smooth JPEG blocks" switch is offered for (compared lower-cased).
+JPEG_EXTENSIONS = (".jpg", ".jpeg")
 
 
 @dataclass(frozen=True)
@@ -61,7 +68,8 @@ class EnhanceSettings:
     """Enhancement parameters in slider units.
 
     ``clip`` is the CLAHE clip limit in tenths (20 = 2.0), ``tile`` the CLAHE grid size,
-    ``lower`` / ``upper`` the contrast-stretch percentiles.
+    ``lower`` / ``upper`` the contrast-stretch percentiles, ``deblock`` the "Smooth JPEG
+    blocks" switch (:func:`deblock`; independent of ``method``, off by default).
     """
 
     method: str = METHOD_CLAHE
@@ -69,6 +77,7 @@ class EnhanceSettings:
     tile: int = 8
     lower: int = 2
     upper: int = 98
+    deblock: bool = False
 
     #: Inclusive slider range of every integer field (the controls use the same ranges).
     RANGES: ClassVar[dict[str, tuple[int, int]]] = {
@@ -84,6 +93,7 @@ class EnhanceSettings:
         "lower": "contrast_lower",
         "upper": "contrast_upper",
         "method": "last_method",
+        "deblock": "jpeg_deblock",
     }
 
     @property
@@ -92,7 +102,8 @@ class EnhanceSettings:
         return self.clip / 10.0
 
     def to_dict(self) -> dict[str, Any]:
-        """The JSON form (``clahe_clip``, ``clahe_tile``, ``contrast_*``, ``last_method``)."""
+        """The JSON form (``clahe_clip``, ``clahe_tile``, ``contrast_*``, ``last_method``,
+        ``jpeg_deblock``)."""
         return {key: getattr(self, field) for field, key in self._KEYS.items()}
 
     @classmethod
@@ -119,6 +130,11 @@ class EnhanceSettings:
                     values["method"] = raw
                 else:
                     problems.append(f"{key}={raw!r} is not one of {list(METHODS)}")
+            elif field == "deblock":
+                if type(raw) is bool:
+                    values["deblock"] = raw
+                else:
+                    problems.append(f"{key}={raw!r} is not true or false")
             else:
                 number = _as_int(raw)
                 if number is None:
@@ -213,11 +229,76 @@ def contrast_stretch(img: np.ndarray, lower_p: float = 2, upper_p: float = 98) -
     return stretch(img, lower_p, upper_p)
 
 
-def enhance(img: np.ndarray, settings: EnhanceSettings) -> np.ndarray:
-    """``img`` enhanced with ``settings`` (a new array; the input is never modified)."""
+def is_jpeg_path(path: str | os.PathLike[str] | None) -> bool:
+    """True for a ``.jpg`` / ``.jpeg`` file name, in any case (None and "" are not)."""
+    if not path:
+        return False
+    return os.path.splitext(os.fspath(path))[1].lower() in JPEG_EXTENSIONS
+
+
+def deblock(img: np.ndarray, threshold: float = 14.0) -> np.ndarray:
+    """Soften the block boundaries of a JPEG photo (display only; a new array).
+
+    The weak filter of H.264: luma at every 8 px boundary, Cr and Cb at every 16 px boundary
+    (4:2:0). A boundary step ``d = q0 - p0`` is spread over six pixels (taps ``d/8, d/4, 3d/8``
+    on each side) only when ``|d| < threshold`` and both sides are flat (``|p1 - p0|`` and
+    ``|q1 - q0|`` < ``threshold / 2``): a real edge, a larger step or a textured side, is left
+    alone. A 2-D gray input is filtered as luma only; anything but uint8 gray or BGR comes back
+    as a copy. Only pixels whose YCrCb value changed are written back, so the rest stay
+    bit-identical (a whole-image YCrCb round trip is off by one on colours). The input is
+    never modified (the source cache hands out read-only arrays).
+    """
+    if img.dtype != np.uint8 or not (img.ndim == 2 or (img.ndim == 3 and img.shape[2] == 3)):
+        return img.copy()
+    if img.ndim == 2:
+        luma = img.astype(np.float32)
+        _deblock_axis(luma, 8, threshold)  # vertical boundaries (columns)
+        _deblock_axis(luma.T, 8, threshold)  # horizontal boundaries (rows), via a view
+        return np.clip(luma + 0.5, 0, 255).astype(np.uint8)
+    base = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+    ycc = base.astype(np.float32)
+    for c, block in ((0, 8), (1, 16), (2, 16)):
+        ch = ycc[:, :, c]
+        _deblock_axis(ch, block, threshold)
+        _deblock_axis(ch.T, block, threshold)
+    new = np.clip(ycc + 0.5, 0, 255).astype(np.uint8)
+    changed = (new != base).any(axis=2)
+    out = img.copy()
+    if changed.any():
+        out[changed] = cv2.cvtColor(new, cv2.COLOR_YCrCb2BGR)[changed]
+    return out
+
+
+def _deblock_axis(ch: np.ndarray, block: int, t: float) -> None:
+    """Filter the boundaries between columns ``block`` apart of ``ch`` in place (float32)."""
+    xs = np.arange(block, ch.shape[1] - 2, block)  # q0 columns
+    if xs.size == 0:
+        return
+    p2, p1, p0 = ch[:, xs - 3], ch[:, xs - 2], ch[:, xs - 1]
+    q0, q1, q2 = ch[:, xs], ch[:, xs + 1], ch[:, xs + 2]
+    d = q0 - p0
+    m = (np.abs(d) < t) & (np.abs(p1 - p0) < t / 2) & (np.abs(q1 - q0) < t / 2)
+    d = np.where(m, d, np.float32(0))
+    ch[:, xs - 3] = p2 + d / 8
+    ch[:, xs - 2] = p1 + d / 4
+    ch[:, xs - 1] = p0 + 3 * d / 8
+    ch[:, xs] = q0 - 3 * d / 8
+    ch[:, xs + 1] = q1 - d / 4
+    ch[:, xs + 2] = q2 - d / 8
+
+
+def enhance(img: np.ndarray, settings: EnhanceSettings, *, tone: bool = True) -> np.ndarray:
+    """``img`` enhanced with ``settings`` (a new array; the input is never modified).
+
+    The JPEG block smoothing runs first when ``settings.deblock`` is set (CLAHE would amplify
+    the block steps); the CLAHE / stretch step runs only when ``tone`` is true.
+    """
+    out = deblock(img) if settings.deblock else img
+    if not tone:
+        return out if out is not img else img.copy()
     if settings.method == METHOD_STRETCH:
-        return contrast_stretch(img, settings.lower, settings.upper)
-    return clahe(img, settings.clip_limit, settings.tile)
+        return contrast_stretch(out, settings.lower, settings.upper)
+    return clahe(out, settings.clip_limit, settings.tile)
 
 
 # --------------------------------------------------------------------------- source cache

@@ -226,6 +226,7 @@ class CorrectEditor(PagingApi, QWidget):
         height, width = photo.shape[:2]
         self._size, self._photo = QSize(width, height), photo
         session.open(image_path, (width, height), images_base_folder, ahead.layers)
+        self.norm_controls.set_source_path(image_path)
         self.photo_item.set_image(self.norm_controls.apply_to(photo))
         view = self.graphics_view
         view.set_content_rect(QRectF(0, 0, width, height))

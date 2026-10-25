@@ -1,1 +1,1 @@
-{"clahe_clip": 20, "clahe_tile": 8, "contrast_lower": 2, "contrast_upper": 98, "last_method": "Contrast Stretching"}
+{"clahe_clip": 20, "clahe_tile": 8, "contrast_lower": 2, "contrast_upper": 98, "last_method": "Contrast Stretching", "jpeg_deblock": false}

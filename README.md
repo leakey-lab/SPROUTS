@@ -192,7 +192,9 @@ are kept across restarts.
   file…** in the dock opens another file; if it differs from the skeleton shown, it counts
   as unsaved. Corrected skeletons are not measured.
 - **Enhance** (the contrast button on the tool rail) changes how the photo is shown, for
-  every image while it is on; it never changes a mask, a skeleton or a measurement.
+  every image while it is on; it never changes a mask, a skeleton or a measurement. For
+  `.jpg` / `.jpeg` photos, **Smooth JPEG blocks** (off by default) softens the 8 x 8
+  compression blocks you see when zoomed in; like the rest of Enhance it is display only.
 
 | Key | Action |
 |---|---|

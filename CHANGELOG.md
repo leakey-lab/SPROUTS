@@ -309,6 +309,12 @@ Five passes, not yet released:
   3-7x faster; first GPU run no longer spends 40-70 s in cuDNN autotuning.
 
 ### Added
+- **Owner-decisions build (2026-10-25).**
+  - Enhance popover: **Smooth JPEG blocks** (off by default, shown only for `.jpg` /
+    `.jpeg` photos) softens the 8 x 8 compression blocks when zoomed in. Display only:
+    masks, skeletons, ground truth and measurements are untouched (pinned by the Correct
+    goldens replayed with the box on and an import scan). Saved in the Enhance defaults as
+    `jpeg_deblock` (W4-T5, O22).
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
   data dictionary (`docs/DATA_DICTIONARY.md`: every output file, column, unit and

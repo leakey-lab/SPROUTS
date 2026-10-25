@@ -110,6 +110,7 @@ def test_settings_legacy_dict_round_trip():
         "contrast_lower": 3,
         "contrast_upper": 97,
         "last_method": METHOD_STRETCH,
+        "jpeg_deblock": False,
     }
     assert EnhanceSettings.from_dict(data)[0] == s
     assert s.clip_limit == 0.8
@@ -259,3 +260,118 @@ def test_source_cache_decodes_once_and_invalidates_on_change(tmp_path, monkeypat
     assert cache.get(str(path)).shape == (6, 5, 3)
     assert len(calls) == 2
     assert cache.get(str(tmp_path / "missing.png")) is None
+
+
+# --------------------------------------------------------------------------- JPEG deblock (O22)
+def _gray_step(left=100, right=108, width=24, height=16):
+    img = np.full((height, width), left, np.uint8)
+    img[:, 8:] = right
+    return img
+
+
+def test_deblock_turns_a_flat_step_below_the_threshold_into_a_ramp():
+    out = enh.deblock(_gray_step(100, 108))
+    assert out[0, 5:11].tolist() == [101, 102, 103, 105, 106, 107]
+    assert out.shape == (16, 24) and out.dtype == np.uint8  # gray in, gray out
+    bgr = enh.deblock(cv2.merge([_gray_step(100, 108)] * 3))
+    for channel in range(3):
+        assert bgr[0, 5:11, channel].tolist() == [101, 102, 103, 105, 106, 107]
+
+
+@pytest.mark.parametrize("right", [114, 120])  # the step equals / exceeds the threshold 14
+def test_deblock_leaves_a_step_at_or_above_the_threshold_alone(right):
+    img = _gray_step(100, right)
+    assert np.array_equal(enh.deblock(img), img)
+
+
+def test_deblock_leaves_a_textured_side_alone():
+    img = _gray_step(100, 108)
+    img[:, 6] = 92  # |p1 - p0| = 8 >= 7
+    assert np.array_equal(enh.deblock(img), img)
+
+
+def test_deblock_flat_image_is_unchanged_and_a_second_pass_changes_nothing():
+    flat = np.full((32, 32, 3), (30, 120, 200), np.uint8)
+    assert np.array_equal(enh.deblock(flat), flat)
+    assert np.array_equal(enh.deblock(enh.deblock(flat)), flat)
+    gray = np.full((16, 24), 77, np.uint8)
+    assert np.array_equal(enh.deblock(gray), gray)
+
+
+def test_deblock_filters_chroma_on_a_16_px_grid_only():
+    ycc = np.full((16, 40, 3), 128, np.uint8)
+    ycc[:, 16:, 1] = 136  # a Cr step of 8 on the 16 px grid
+    bgr = cv2.cvtColor(ycc, cv2.COLOR_YCrCb2BGR)
+
+    def cr(a):
+        return cv2.cvtColor(a, cv2.COLOR_BGR2YCrCb)[0, :, 1].astype(int)
+
+    before, after = cr(bgr), cr(enh.deblock(bgr))
+    assert after[15] > before[15] and after[16] < before[16]
+    ycc8 = np.full((16, 40, 3), 128, np.uint8)
+    ycc8[:, 8:, 1] = 136  # the same step on the 8 px (luma) grid
+    bgr8 = cv2.cvtColor(ycc8, cv2.COLOR_YCrCb2BGR)
+    assert np.array_equal(enh.deblock(bgr8), bgr8)
+
+
+def test_deblock_never_modifies_its_input_and_keeps_shape_and_dtype():
+    img = cv2.merge([_gray_step(100, 108)] * 3)
+    img.flags.writeable = False  # what SourceImageCache hands out
+    out = enh.deblock(img)
+    assert out is not img and out.shape == img.shape and out.dtype == np.uint8
+    assert np.array_equal(img, cv2.merge([_gray_step(100, 108)] * 3))
+    assert enh.deblock(np.zeros((5, 5, 3), np.uint8)).shape == (5, 5, 3)  # too small to filter
+
+
+def test_deblock_returns_a_copy_of_a_non_uint8_input():
+    img = np.full((16, 24), 3.5, np.float32)
+    out = enh.deblock(img)
+    assert out is not img and np.array_equal(out, img) and out.dtype == np.float32
+
+
+def test_enhance_runs_the_deblock_first_and_tone_false_skips_clahe():
+    img = cv2.merge([_gray_step(100, 108)] * 3)
+    on = EnhanceSettings(deblock=True)
+    assert np.array_equal(enh.enhance(img, on, tone=False), enh.deblock(img))
+    assert np.array_equal(enh.enhance(img, on), enh.clahe(enh.deblock(img), 2.0, 8))
+    off = EnhanceSettings()
+    assert np.array_equal(enh.enhance(img, off), enh.clahe(img, 2.0, 8))  # unchanged path
+    assert enh.enhance(img, off, tone=False) is not img  # always a new array
+
+
+def test_is_jpeg_path_is_case_insensitive_and_jpeg_only():
+    for name in ("a.jpg", "a.JPG", "a.jpeg", "A.Jpeg", "C:/x y/é.jpg"):
+        assert enh.is_jpeg_path(name)
+    for name in ("a.png", "a.jpg.png", "a", "", None):
+        assert not enh.is_jpeg_path(name)
+
+
+def test_deblock_setting_defaults_off_loads_from_an_old_file_and_round_trips():
+    assert DEFAULT_SETTINGS.deblock is False
+    old = {"clahe_clip": 12, "clahe_tile": 4, "last_method": "CLAHE"}  # no jpeg_deblock
+    loaded, problems = EnhanceSettings.from_dict(old)
+    assert loaded.deblock is False and problems == []
+    s = EnhanceSettings(deblock=True)
+    assert s.to_dict()["jpeg_deblock"] is True
+    assert EnhanceSettings.from_dict(s.to_dict())[0] == s
+    bad, problems = EnhanceSettings.from_dict({"jpeg_deblock": "yes"})
+    assert bad.deblock is False and any("jpeg_deblock" in p for p in problems)
+    kept, _ = EnhanceSettings.from_dict({"jpeg_deblock": 1}, base=s)  # an int is not a bool
+    assert kept.deblock is True
+
+
+def test_deblock_core_imports_no_torch_or_qt():
+    import subprocess
+    import sys
+
+    from tests.test_layering_contract import ROOT
+
+    code = (
+        "import sys, numpy as np; from app.enhancement import deblock; "
+        "deblock(np.zeros((16, 24, 3), np.uint8)); "
+        "print('torch' in sys.modules, any(m.startswith('PyQt6') for m in sys.modules))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert out == ["False", "False"]

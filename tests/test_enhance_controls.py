@@ -14,9 +14,15 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QImage  # noqa: E402
+from PyQt6.QtGui import QGuiApplication, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QPushButton, QWidget  # noqa: E402
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QCheckBox,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
 
 from app.enhancement import (  # noqa: E402
     METHOD_CLAHE,
@@ -132,6 +138,21 @@ def test_every_button_fits_inside_the_264px_popover_with_the_app_theme(app):
                 if button.isVisible():
                     assert button.width() >= button.sizeHint().width(), button.text()
                     assert button.toolTip(), button.text()
+        # The JPEG box: never clipped. The headless (offscreen) platform has no real fonts and
+        # draws text far wider than Windows does, so there the popover may grow past 264 px
+        # (UI-07: it is "wider when the content needs more"); with real fonts it stays 264.
+        controls.set_source_path("a.jpg")
+        QApplication.processEvents()
+        check = controls.deblock_check
+        assert check.isVisible() and check.width() >= check.sizeHint().width()
+        if QGuiApplication.platformName() != "offscreen":
+            assert popover.width() == 264
+        # Font-independent: the new label needs no more width than text already in the popover.
+        fm = check.fontMetrics()
+        existing = [controls.method_combo.itemText(i) for i in range(controls.method_combo.count())]
+        for widget_type in (QLabel, QPushButton, QCheckBox):
+            existing += [w.text() for w in controls.findChildren(widget_type) if w is not check]
+        assert fm.horizontalAdvance(check.text()) <= max(fm.horizontalAdvance(t) for t in existing)
     finally:
         host.close()
         app.setStyleSheet(previous)
@@ -248,3 +269,112 @@ def test_legacy_public_surface_is_kept(app, tmp_path):
     assert not controls.apply_button.isEnabled()
     controls.set_image(_image())
     assert controls.apply_button.isEnabled()
+
+
+# --------------------------------------------------------------------------- Smooth JPEG blocks (O22)
+def _blocky():
+    """48 x 64 BGR whose 8 x 8 blocks differ from their neighbours by 6 to 10 grey levels."""
+    rng = np.random.default_rng(11)
+    levels = np.empty((6, 8), np.int32)
+    levels[0, 0] = 120
+    for r in range(6):
+        for c in range(8):
+            if r == 0 and c == 0:
+                continue
+            ref = levels[r, c - 1] if c else levels[r - 1, c]
+            step = int(rng.integers(6, 11)) * int(rng.choice((-1, 1)))
+            levels[r, c] = ref + step
+            if c and r:  # keep the step to the block above below 14 as well
+                while abs(int(levels[r, c]) - int(levels[r - 1, c])) >= 14:
+                    levels[r, c] += 2 if levels[r, c] < levels[r - 1, c] else -2
+    plane = np.kron(levels, np.ones((8, 8), np.int32)).clip(0, 255).astype(np.uint8)
+    return cv2.merge([plane, plane, plane])
+
+
+def _jpeg(tmp_path):
+    path = tmp_path / "a.jpg"
+    ok, buf = cv2.imencode(".jpg", _blocky(), [cv2.IMWRITE_JPEG_QUALITY, 90])
+    assert ok
+    buf.tofile(str(path))
+    return path
+
+
+def test_the_box_is_offered_only_for_jpeg_sources(app, tmp_path):
+    controls = NormalizationControls(store=_store(tmp_path))
+    assert not controls.deblock_check.isVisibleTo(controls)  # no source yet
+    for name, shown in (("a.jpg", True), ("a.JPEG", True), ("a.png", False), (None, False)):
+        controls.set_source_path(name)
+        assert controls.deblock_check.isVisibleTo(controls) is shown, name
+    assert (
+        controls.deblock_check.text() == "Smooth JPEG blocks" and controls.deblock_check.toolTip()
+    )
+
+
+def test_checking_the_box_smooths_blocks_without_turning_on_clahe(app, tmp_path):
+    controls = NormalizationControls(store=_store(tmp_path))
+    img = _blocky()  # 48 x 64 BGR with 8 px block steps of 6 to 10
+    controls.set_source_path("a.jpg")
+    hits = []
+    controls.enhancement_changed.connect(lambda: hits.append(1))
+    assert not controls.is_active() and controls.apply_to(img) is img
+    controls.deblock_check.setChecked(True)
+    QTest.qWait(120)  # past the 80 ms preview delay
+    assert controls.is_active() and hits == [1]
+    assert np.array_equal(controls.apply_to(img), enhance(img, controls.settings(), tone=False))
+    assert not np.array_equal(controls.apply_to(img), img)
+    controls.original_check.setChecked(True)  # "Show original" bypasses it
+    assert not controls.is_active() and controls.apply_to(img) is img
+    controls.deblock_check.setChecked(False)  # a control change shows the result again
+    assert not controls.original_check.isChecked() and not controls.is_active()
+
+
+def test_deblock_is_not_applied_to_a_png_even_when_checked(app, tmp_path):
+    controls = NormalizationControls(store=_store(tmp_path, user={"jpeg_deblock": True}))
+    img = _blocky()
+    assert controls.settings().deblock is True  # the saved default is kept
+    controls.set_source_path("a.png")
+    assert not controls.is_active() and controls.apply_to(img) is img
+    controls.set_source_path("a.jpg")
+    assert controls.is_active() and not np.array_equal(controls.apply_to(img), img)
+
+
+def test_deblock_then_stretch_applies_both_in_order(app, tmp_path):
+    controls = NormalizationControls(store=_store(tmp_path))
+    controls.set_source_path("a.jpg")
+    controls.deblock_check.setChecked(True)
+    controls.method_combo.setCurrentText(METHOD_STRETCH)
+    controls.apply_button.click()
+    img = _blocky()
+    assert np.array_equal(controls.apply_to(img), enhance(img, controls.settings()))
+
+
+def test_the_box_is_saved_with_the_defaults_and_reset_restores_it(app, user_config):
+    controls = NormalizationControls()
+    controls.set_source_path("a.jpg")
+    controls.deblock_check.setChecked(True)
+    controls.save_current_as_defaults()
+    saved = json.loads((user_config / "normalization_defaults.json").read_text("utf-8"))
+    assert saved["jpeg_deblock"] is True
+    again = NormalizationControls()
+    assert again.deblock_check.isChecked() and again.settings().deblock
+    again.set_source_path("a.jpg")
+    again.deblock_check.setChecked(False)
+    QTest.qWait(120)  # let the toggle's own preview go first
+    hits = []
+    again.enhancement_changed.connect(lambda: hits.append(1))
+    again.reset_to_defaults()
+    assert again.deblock_check.isChecked()
+    QTest.qWait(120)
+    assert hits == [1]  # only the box is in effect, and the picture follows it
+    again.reset_to_defaults()
+    QTest.qWait(120)
+    assert hits == [1]  # nothing effective changed: no re-render
+
+
+def test_display_image_follows_the_path_it_is_given(app, tmp_path):
+    jpg, png = _jpeg(tmp_path), tmp_path / "p.png"
+    cv2.imencode(".png", _blocky())[1].tofile(str(png))
+    controls = NormalizationControls(store=_store(tmp_path))
+    controls.deblock_check.setChecked(True)
+    assert not np.array_equal(controls.display_image(str(jpg)), controls.source_image(str(jpg)))
+    assert controls.display_image(str(png)) is controls.source_image(str(png))
