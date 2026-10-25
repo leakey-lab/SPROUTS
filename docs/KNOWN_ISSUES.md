@@ -16,14 +16,14 @@ end of each wave.
 | O | Decision | Built by |
 |---|---|---|
 | O1 | Measure reads GT first for both length and area; last column `Source` (`gt` or `prediction`) | WG-T8 |
-| O2 | An unedited Save is not acceptance; a layer is written only when it differs from what it would otherwise read | W1-T3 (done, 4850564), WG-T2, WG-T3 |
+| O2 | An unedited Save is not acceptance; a layer is written only when it differs from what it would otherwise read | W1-T3 (done, 4850564), WG-T2 (done, 93a88d4), WG-T3 |
 | O3 | Same camera model (Bartz BTC-100X); 18 x 13.5 mm, confirmed by Rajurkar et al. 2022 (Plant Methods 18:39); one calibration per project file | W3-T2 |
 | O4 | Fixed-shape batches; stop on out-of-memory; default on after a GPU session; masks run at N = 4 (16 needs about 12 GiB free), a build decision to be confirmed by the owner | W2-T3 (done, 41f371e: batch shapes and out-of-memory events in the run record), W3-T3 (done, 1fbc34c) |
 | O5 | Deterministic cuDNN stays the default | W0-T2 (docs only; done, 705377d..dc67e12) |
 | O6 | PNG and JPEG only, any case | W1-T5 (done, 1ff9d6c) |
 | O7 | Stems compare without case on every platform | W1-T5 (done, 1ff9d6c) |
-| O8 | Generate keeps the model size; nearest on display | W3-T4 |
-| O9 | A cleared mask stays as an empty GT mask; Generate never touches GT | WG-T2, WG-T7 |
+| O8 | Generate keeps the model size; nearest on display | W3-T4 (done, 28203c0) |
+| O9 | A cleared mask stays as an empty GT mask; Generate never touches GT | WG-T2 (done, 93a88d4), WG-T7 (done, 6ce8e8d) |
 | O10 | One mask threshold, 127 | W2-T6 |
 | O11 | A click with the 1 px brush paints one pixel | W3-T5 |
 | O12 | Keep the 8-connected arc length; pixels are square; fix the 4.4 % bias with the Vossepoel-Smeulders corner-count estimator (research memo) | W3-T8 |
@@ -40,12 +40,12 @@ end of each wave.
 | O23 | One unified editor: Trace GT becomes a layer of Correct | WG-T4, WG-T5 |
 | O24 | Restore retired classes; Remove GT; GT in the Library; per-class pixel counts; no COCO | WG-T6, WG-T9 |
 | O25 | Accept the compact top bar | closed (table 3) |
-| O26 | "Prediction" for model output, "GT" for a human-saved result; a third Library mark | WG-T6, WG-T10 |
+| O26 | "Prediction" for model output, "GT" for a human-saved result; a third Library mark | WG-T2 (done, 93a88d4: mask states), WG-T6, WG-T10 |
 | O27 | One naming scheme for dashboard views; one blue date ramp | W4-T6 (done, 1c9f043) |
 | O28 | Pre-Generate scan as a warm-up only together with other Generate work | W6-T3 (optional) |
 | O29 | Canvas indicator: warn toast and About row | W2-T9 (done, 28b71f3) |
 | O30 | Do not build the editor pages after the first paint | closed (table 3) |
-| O31 | Uninstall `pipreqs` and `ipython` from the runtime venv (the owner runs it) | W6-T4 |
+| O31 | Uninstall `pipreqs` and `ipython` from the runtime venv (the owner runs it) | W6-T4 (done, 6dbb6c5) |
 | O32 | GPL-3.0-or-later code, CC-BY-4.0 weights; copyright "the SPROUTS authors" | W5-T1 (done, 758f161) |
 | O33 | Only the weights go to Zenodo; `checkpoints.zip` is untracked | W5-T2 (done, f5031db) |
 | O34 | Cite as "SPROUTS"; authors Kinjalk Parth, Sebastian Varela, Andrew D. B. Leakey; the tag is the owner's | W5-T3 (done, 5c329e3) |
@@ -53,7 +53,7 @@ end of each wave.
 | O36 | Delete `docs/Architecture_2 useful.*` and `docs/BUILD_EXECUTABLE.md` | W5-T7 |
 | O37 | Masks, skeletons and GT files whose image is gone are skipped and recorded, never deleted | W2-T11 (done, 280ff95) |
 | O38 | Only the file name in `Error` cells | W3-T7 (done, 3ca1576) |
-| Chat | GT design = "GT folder": Trace GT becomes a third layer of Correct; human-saved edits go to `gt/`, predictions are never overwritten, Measure reads GT first with a `Source` column; existing hand-corrected files are copied into `gt/` once (originals kept) | Wave G (WG-T*) |
+| Chat | GT design = "GT folder": Trace GT becomes a third layer of Correct; human-saved edits go to `gt/`, predictions are never overwritten, Measure reads GT first with a `Source` column; no migration: the app is not used on old data (owner, 2026-10-25) | Wave G: WG-T0 (done, b8bb6e4), WG-T1 (done, b17302f), WG-T2 (done, 93a88d4), WG-T7 (done, 6ce8e8d), WG-T3 to WG-T11 |
 
 ## Open: engineering
 
@@ -63,9 +63,9 @@ end of each wave.
 | L2 | V1 | Save with nothing unsaved writes a correction | O2, W1-T3 (done, 4850564) |
 | L3 | | Mask and skeleton are independent and the pages do not say so | O14, W2-T8a, WG-T10 |
 | L5 | Q1 leftover | Two thinning paths; old 341 x 256 corrections | O13, WG-T3, WG-T8 |
-| M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2 (done, 7d5ae3e), W3-T4 |
+| M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2 (done, 7d5ae3e), W3-T4 (done, 28203c0) |
 | M2 | | One field of view for every image | O3, W2-T4, W3-T2 |
-| M4 | | Mask origin by PNG colour type; a cleared mask is regenerated | O9, WG-T2, WG-T7 |
+| M4 | | Mask origin by PNG colour type; a cleared mask is regenerated | O9, WG-T2 (done, 93a88d4), WG-T7 (done, 6ce8e8d) |
 | M5 | | Area of editor masks; two thresholds | O10, W2-T6 |
 | R1 | batch-size item of section 7 | Batch size changes GPU outputs | O4, W2-T3 (done, 41f371e: step 1, batch shapes in the run record), W3-T3 (done, 1fbc34c) |
 | R3 | supported formats | Formats differ per reader | O6, W1-T5 (done, 1ff9d6c) |
@@ -87,7 +87,7 @@ end of each wave.
 | P3 | | Deflate in the skeleton history | not built now (only for large images): W6-T2 |
 | P6 | | Hardware OpenGL check; no indicator | O29, W2-T9 (done, 28b71f3) |
 | D2 | | Pre-Generate scan as a warm-up | O28, W6-T3 (optional) |
-| D5 | | IPython in the venv | O31, W6-T4 |
+| D5 | | IPython in the venv | O31, W6-T4 (done, 6dbb6c5; the owner runs the uninstall) |
 | D7 | W19 | Dashboard view names and date colours | O27, W4-T6 (done, 1c9f043) |
 | F1 | FR-01 | No licence; Pix2Pix notice missing | O32, W1-T7 (done, 73cd67f), W5-T1 (done, 758f161) |
 | F2 | FR-07 | `checkpoints.zip` tracked; no DOI; no mask model | O33, W5-T2 (done, f5031db) |
