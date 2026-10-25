@@ -50,6 +50,9 @@ _SOFTWARE_RENDERERS = (
 
 _GL_RENDERER = 0x1F01
 
+# Qt platforms that have no OpenGL by design: no slow-path warning there.
+_NO_GL_PLATFORMS = frozenset({"offscreen", "minimal"})
+
 
 @dataclass(frozen=True)
 class GLSupport:
@@ -143,6 +146,8 @@ def opengl_support() -> GLSupport:
     support = probe_opengl_support()
     if support.supported:
         logger.info("OpenGL canvas viewports available (%s)", support.renderer or support.reason)
+    elif opengl_viewport_requested():
+        logger.warning("OpenGL canvas viewports off (slower drawing): %s", support.reason)
     else:
         logger.info("OpenGL canvas viewports off: %s", support.reason)
     return support
@@ -154,3 +159,27 @@ def opengl_viewports_allowed() -> bool:
     The env opt-out is checked first, so an opted-out session never loads GL.
     """
     return opengl_viewport_requested() and opengl_support().supported
+
+
+def canvas_line() -> tuple[str, bool]:
+    """Which canvas path is active, as ``(text, slow)``; ``slow`` when the user did not choose it.
+
+    The env opt-out answers first, so an opted-out session never probes.
+    """
+    if not opengl_viewport_requested():
+        return f"Software drawing · turned off by {ENV_VAR}", False
+    support = opengl_support()
+    if support.supported:
+        return f"OpenGL · {support.renderer or support.reason}", False
+    return f"Software drawing (slower) · {support.reason}", True
+
+
+def slow_path_notice(platform: str) -> str | None:
+    """The warning toast text when the canvases draw slowly without the user's say-so.
+
+    ``None`` on the ``offscreen`` / ``minimal`` platforms (no GL by design) and when the
+    path is OpenGL or was turned off by the user.
+    """
+    if platform in _NO_GL_PLATFORMS or not canvas_line()[1]:
+        return None
+    return f"Canvases draw without OpenGL (slower): {opengl_support().reason}. See About."

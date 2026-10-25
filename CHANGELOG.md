@@ -315,6 +315,8 @@ Five passes, not yet released:
     masks, skeletons, ground truth and measurements are untouched (pinned by the Correct
     goldens replayed with the box on and an import scan). Saved in the Enhance defaults as
     `jpeg_deblock` (W4-T5, O22).
+  - About, the device chip's tooltip and, when OpenGL was not turned off by the user, one
+    warning at start-up say whether the canvases draw with OpenGL (W2-T9, P6, O29).
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
   data dictionary (`docs/DATA_DICTIONARY.md`: every output file, column, unit and

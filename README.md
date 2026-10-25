@@ -96,6 +96,10 @@ Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log` (set `SPROUTS_LOG_DIR` to use a
 folder). A native crash writes the stacks of every thread to `fault.log` next to it; an
 unexpected Python error is logged and shown in a dialog instead of closing the app.
 
+Set `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0` to draw the canvases without OpenGL; About (row
+`Canvas`) and the device chip's tooltip say which path is active, and a warning appears at
+start-up when OpenGL is unavailable and you did not turn it off.
+
 The status line names the GPU (or CPU) it will use without waiting for a first run; the
 check asks the NVIDIA driver directly, so it does not load PyTorch. The heavy libraries
 load when you head for the stage that needs them (entering Generate loads PyTorch;

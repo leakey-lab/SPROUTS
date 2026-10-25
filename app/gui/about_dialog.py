@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
 
 from app import APP_FULL_NAME, __version__
 from app.config import PROJECT_ROOT
+from app.gui import canvas_gl
 from app.gui.widgets import tokens
 from app.gui.widgets.buttons import ghost_button
 from app.models import MODELS, ModelStatus
@@ -209,6 +210,7 @@ def details_text(
         f"Commit: {_commit()}",
         f"Calibration FOV: {_fov()}",
         f"Runtime: {runtime_text() if runtime is None else runtime}",
+        f"Canvas: {canvas_gl.canvas_line()[0]}",
         f"Python {platform.python_version()} · {platform.system()} {platform.release()}",
     ]
     lines += [f"Model {key}: {_model_line(key, statuses.get(key))}" for key in MODELS]
@@ -286,6 +288,7 @@ class AboutDialog(QDialog):
         self._add_fact("Commit", _commit())
         self._add_fact("Calibration", f"FOV {_fov()}")
         self._runtime_label = self._add_fact("Runtime", _CHECKING if ask_driver else runtime_text())
+        self._add_fact("Canvas", canvas_gl.canvas_line()[0])
         self._model_labels = {
             key: self._add_fact(f"Model · {key}", _model_line(key, None)) for key in MODELS
         }

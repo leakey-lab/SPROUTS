@@ -216,7 +216,10 @@ def test_headless_windows_skip_the_check_by_default(app, make_window, runtime, m
     assert window.statusline_info.text() == "Device not detected yet"
 
 
-def test_the_statusline_state_api(app, runtime):
+def test_the_statusline_state_api(app, runtime, monkeypatch):
+    from app.gui import canvas_gl
+
+    monkeypatch.setattr(canvas_gl, "canvas_line", lambda: ("OpenGL · Fake GPU", False))
     line = shell_chrome.StatusLine()
     line.set_device_check("checking")
     assert line.info.text() == DEVICE_CHECKING
@@ -225,6 +228,8 @@ def test_the_statusline_state_api(app, runtime):
     assert "no CUDA driver" in line.info.toolTip()
     runtime.describe(resolve=True)
     line.set_device_check(None)
-    assert line.info.toolTip() == "Inference runtime: GPU · Fake RTX · CUDA 12.8 · TF32"
+    assert line.info.toolTip() == (
+        "Inference runtime: GPU · Fake RTX · CUDA 12.8 · TF32\nCanvas: OpenGL · Fake GPU"
+    )
     assert tokens.WARN not in line.info.styleSheet()
     line.deleteLater()

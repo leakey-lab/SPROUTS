@@ -23,7 +23,7 @@ from PyQt6.QtCore import QSettings, QThreadPool  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
 
-from app.gui import device_check, shell_chrome  # noqa: E402
+from app.gui import canvas_gl, device_check, shell_chrome  # noqa: E402
 from app.gui.device_check import DeviceCheck  # noqa: E402
 from app.gui.shell_chrome import DEVICE_CHECK_FAILED, DEVICE_CHECKING  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
@@ -81,6 +81,12 @@ class FakeRuntime:
 
 
 @pytest.fixture
+def canvas(monkeypatch):
+    """The canvas path is fixed: the chip's tooltip ends with its line."""
+    monkeypatch.setattr(canvas_gl, "canvas_line", lambda: ("OpenGL · Fake GPU", False))
+
+
+@pytest.fixture
 def runtime(monkeypatch):
     fake = FakeRuntime()
     monkeypatch.setitem(sys.modules, RUNTIME, fake.module)
@@ -113,7 +119,7 @@ def wait(predicate, timeout: float = 5.0) -> bool:
 
 
 # ------------------------------------------------------------------ the chip
-def test_the_chip_names_the_guessed_gpu_with_why_in_the_tooltip(runtime, line):
+def test_the_chip_names_the_guessed_gpu_with_why_in_the_tooltip(runtime, canvas, line):
     line.set_device_check(shell_chrome.CHECKING)
     assert line.info.text() == DEVICE_CHECKING
     line.set_device_guess(GPU)
@@ -121,6 +127,7 @@ def test_the_chip_names_the_guessed_gpu_with_why_in_the_tooltip(runtime, line):
     assert line.info.text().startswith("GPU")
     assert line.info.toolTip() == (
         "Inference runtime: GPU · Fake RTX 9000 · CUDA 12.8\nNamed by the NVIDIA driver."
+        "\nCanvas: OpenGL · Fake GPU"
     )
     assert tokens.WARN not in line.info.styleSheet()
 
@@ -139,12 +146,14 @@ def test_the_guess_keeps_the_missing_model_warning(monkeypatch, line):
     assert tokens.WARN in line.info.styleSheet()
 
 
-def test_the_resolved_runtime_replaces_the_guess(runtime, line):
+def test_the_resolved_runtime_replaces_the_guess(runtime, canvas, line):
     line.set_device_guess(GPU)
     runtime.describe(resolve=True)  # torch loaded (the Generate warm-up, or a job)
     line.refresh_runtime()
     assert shown(line) == "GPU · Fake RTX 9000 · CUDA 12.8 · TF32"
-    assert line.info.toolTip() == "Inference runtime: GPU · Fake RTX 9000 · CUDA 12.8 · TF32"
+    assert line.info.toolTip() == (
+        "Inference runtime: GPU · Fake RTX 9000 · CUDA 12.8 · TF32\nCanvas: OpenGL · Fake GPU"
+    )
 
 
 def test_a_failure_after_the_guess_wins_and_drops_its_note(runtime, line):

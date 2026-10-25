@@ -15,7 +15,8 @@ methods under their old names (``MainWindow.init_ui`` is :func:`init_ui`,
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QSplitter,
@@ -25,7 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .. import shell_chrome, ui_panels
+from .. import canvas_gl, shell_chrome, ui_panels
 from ..task_progress import TaskProgressWidget
 from ..toast_clearance import FLOATING_GAP, ToastClearance
 from ..ui_feedback import QtUiFeedback
@@ -109,6 +110,17 @@ def init_ui(window: "MainWindow"):
         notifier=lambda message, kind: window.notify(message, kind),
         on_task_end=window.statusline.refresh_runtime,
     )
+    # After the first paint: one warning when the canvases draw without OpenGL by accident.
+    QTimer.singleShot(0, lambda: notify_canvas_path(window))
+
+
+def notify_canvas_path(window: "MainWindow") -> bool:
+    """Warn once (a toast) when the canvases draw slowly and the user did not choose it."""
+    text = canvas_gl.slow_path_notice(QGuiApplication.platformName())
+    if text is None:
+        return False
+    window.notify(text, "warn")
+    return True
 
 
 def build_shell(window: "MainWindow") -> QWidget:

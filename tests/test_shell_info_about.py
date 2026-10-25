@@ -78,6 +78,16 @@ def test_details_text_has_version_commit_fov_and_models():
     assert "Commit:" in text
 
 
+def test_details_and_dialog_name_the_canvas_path(app, monkeypatch):
+    from app.gui import canvas_gl
+
+    monkeypatch.setattr(canvas_gl, "canvas_line", lambda: ("OpenGL · Fake GPU", False))
+    assert "Canvas: OpenGL · Fake GPU" in about_dialog.details_text()
+    dlg = about_dialog.AboutDialog()
+    assert "OpenGL · Fake GPU" in _texts(dlg)
+    dlg.close()
+
+
 def test_dialog_shows_version_and_verifies_models_off_the_gui_thread(app, monkeypatch):
     import threading
 

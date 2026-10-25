@@ -88,3 +88,71 @@ def test_probe_finds_no_opengl_on_the_offscreen_platform(app):
     support = canvas_gl.probe_opengl_support()
     assert support.supported is False
     assert support.reason
+
+
+def _fake_support(monkeypatch, support):
+    monkeypatch.setattr(canvas_gl, "opengl_support", lambda: support)
+
+
+def test_canvas_line_names_the_renderer(monkeypatch):
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    _fake_support(
+        monkeypatch,
+        canvas_gl.GLSupport(True, "hardware OpenGL", "NVIDIA GeForce RTX 5070 Ti"),
+    )
+    assert canvas_gl.canvas_line() == ("OpenGL · NVIDIA GeForce RTX 5070 Ti", False)
+
+
+def test_canvas_line_says_the_user_turned_opengl_off(monkeypatch):
+    def probe():
+        raise AssertionError("an opted-out session must not probe")
+
+    monkeypatch.setattr(canvas_gl, "opengl_support", probe)
+    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
+    assert canvas_gl.canvas_line() == (
+        "Software drawing · turned off by ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT",
+        False,
+    )
+
+
+def test_canvas_line_flags_an_unchosen_slow_path(monkeypatch):
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    _fake_support(
+        monkeypatch, canvas_gl.GLSupport(False, "software renderer 'llvmpipe'", "llvmpipe")
+    )
+    assert canvas_gl.canvas_line() == (
+        "Software drawing (slower) · software renderer 'llvmpipe'",
+        True,
+    )
+
+
+def test_slow_path_notice_only_off_offscreen(monkeypatch):
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    _fake_support(
+        monkeypatch, canvas_gl.GLSupport(False, "software renderer 'llvmpipe'", "llvmpipe")
+    )
+    assert canvas_gl.slow_path_notice("windows") == (
+        "Canvases draw without OpenGL (slower): software renderer 'llvmpipe'. See About."
+    )
+    assert canvas_gl.slow_path_notice("offscreen") is None
+    assert canvas_gl.slow_path_notice("minimal") is None
+    _fake_support(monkeypatch, canvas_gl.GLSupport(True, "hardware OpenGL", "GPU"))
+    assert canvas_gl.slow_path_notice("windows") is None
+    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
+    assert canvas_gl.slow_path_notice("windows") is None
+
+
+def test_the_canvas_notice_is_one_warn_toast(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.gui.window import body
+
+    calls = []
+    window = SimpleNamespace(notify=lambda text, kind: calls.append((text, kind)))
+    monkeypatch.setattr(canvas_gl, "slow_path_notice", lambda platform: "slow canvases")
+    assert body.notify_canvas_path(window) is True
+    assert calls == [("slow canvases", "warn")]
+    calls.clear()
+    monkeypatch.setattr(canvas_gl, "slow_path_notice", lambda platform: None)
+    assert body.notify_canvas_path(window) is False
+    assert calls == []

@@ -54,7 +54,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.gui import shortcuts
+from app.gui import canvas_gl, shortcuts
 from app.gui.library_index import count_label
 from app.gui.panels import Panel
 from app.gui.task_progress import TaskProgressWidget
@@ -855,6 +855,7 @@ class StatusLine(QFrame):
             tip += f"\n{note}"
         if failed and self._device_check_detail:
             tip += f"\nCould not detect the inference device: {self._device_check_detail}"
+        tip += f"\nCanvas: {canvas_gl.canvas_line()[0]}"
         self.info.setToolTip(tip)
         self.info.setProperty("models_ok", models_ok)
 
