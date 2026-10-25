@@ -56,7 +56,10 @@ def library(app):
     tree = QTreeWidget()
     tree.setStyleSheet(library_tree_qss())
     index = LibraryIndex(
-        tree, path_of=lambda n: n, has_mask=lambda n: True, has_skeleton=lambda n: True
+        tree,
+        path_of=lambda n: n,
+        mask_state=lambda n: "prediction",
+        skeleton_state=lambda n: "prediction",
     )
     index.build(*index_names(STEMS))
     tree.expandAll()
@@ -108,11 +111,19 @@ def test_the_selected_row_keeps_its_accent_bar(library):
     ), [c.name() for c in left]
 
 
-@pytest.mark.parametrize("state", [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize(
+    "state",
+    [
+        ("none", "none", False),
+        ("prediction", "none", False),
+        ("none", "gt", False),
+        ("gt", "prediction", True),
+    ],
+)
 def test_the_status_badge_is_not_tinted_when_selected(library, state):
     _tree, index = library
     icon = index._delegate.status_icon(*state)
-    size = QSize(22, 12)
+    size = QSize(32, 12)
     normal = icon.pixmap(size, QIcon.Mode.Normal).toImage()
     for mode in (QIcon.Mode.Selected, QIcon.Mode.Active):
         assert icon.pixmap(size, mode).toImage() == normal, mode

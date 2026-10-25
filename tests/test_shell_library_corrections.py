@@ -161,14 +161,20 @@ def test_the_library_row_marks_a_gt_skeleton(window, tmp_path):
 
     assert window.image_manager.has_gt_skeleton(STEMS[0])
     assert not window.image_manager.has_gt_skeleton(STEMS[1])
-    assert index.status_of(STEMS[0]) == (True, True)  # (mask, generated skeleton) unchanged
-    assert index.corrected_of(STEMS[0]) is True
-    assert "corrected" in index.tooltip_for(STEMS[0]).lower()
-    assert "corrected" not in index.tooltip_for(STEMS[1]).lower()
+    assert index.status_of(STEMS[0]) == ("prediction", "gt", False)
+    assert index.status_of(STEMS[1]) == ("none", "none", False)
+    assert "Skeleton: GT" in index.tooltip_for(STEMS[0])
+    assert "Skeleton: GT" not in index.tooltip_for(STEMS[1])
     delegate = index._delegate
-    size = QSize(22, 12)
-    plain = delegate.status_icon(True, True).pixmap(size, QIcon.Mode.Normal).toImage()
-    marked = delegate.status_icon(True, True, True).pixmap(size, QIcon.Mode.Normal).toImage()
+    size = QSize(32, 12)
+    plain = (
+        delegate.status_icon("prediction", "prediction", False)
+        .pixmap(size, QIcon.Mode.Normal)
+        .toImage()
+    )
+    marked = (
+        delegate.status_icon("prediction", "gt", False).pixmap(size, QIcon.Mode.Normal).toImage()
+    )
     assert plain != marked
     assert leaf(window, 0) is not None
 
@@ -188,7 +194,7 @@ def test_a_skeleton_saved_in_correct_reaches_the_library(window, tmp_path):
 
     assert os.path.isfile(project.correction(1))
     assert window.image_manager.has_gt_skeleton(STEMS[1])
-    assert window.library_index.corrected_of(STEMS[1]) is True
+    assert window.library_index.status_of(STEMS[1])[1] == "gt"
     # FR-03 unchanged: nothing listens to skeleton_saved, and it is not a generated skeleton.
     assert editor.receivers(editor.skeleton_saved) == 0
     assert not window.image_manager.has_skeleton(STEMS[1])
@@ -207,7 +213,7 @@ def test_a_gt_skeleton_edited_back_to_the_prediction_leaves_the_library(window, 
     select(window, 0)
     enter(window, "Correct")
     editor = window.correct_editor
-    assert window.library_index.corrected_of(STEMS[0]) is True
+    assert window.library_index.status_of(STEMS[0])[1] == "gt"
 
     editor.layers[SKELETON].load_file(project.generated(0))
     editor.session.forget(SKELETON)  # Load clears the layer's own history
@@ -216,4 +222,4 @@ def test_a_gt_skeleton_edited_back_to_the_prediction_leaves_the_library(window, 
 
     assert not os.path.isfile(project.correction(0))
     assert not window.image_manager.has_gt_skeleton(STEMS[0])
-    assert window.library_index.corrected_of(STEMS[0]) is False
+    assert window.library_index.status_of(STEMS[0])[1] == "prediction"

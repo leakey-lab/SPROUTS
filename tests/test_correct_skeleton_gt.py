@@ -248,7 +248,7 @@ def test_the_library_follows_a_skeleton_save_and_its_removal(window_with_project
 
     assert window.image_manager.has_gt_skeleton(stem)
     assert window.image_manager.gt_skeleton_path_for(stem) == layout.gt_skeleton_path(stem)
-    assert window.library_index.corrected_of(stem) is True
+    assert window.library_index.status_of(stem)[1] == "gt"
 
     editor.load_prediction()
     assert editor.save()
@@ -257,7 +257,7 @@ def test_the_library_follows_a_skeleton_save_and_its_removal(window_with_project
     assert not os.path.exists(layout.gt_skeleton_path(stem))
     assert not window.image_manager.has_gt_skeleton(stem)
     assert window.image_manager.gt_skeleton_path_for(stem) is None
-    assert window.library_index.corrected_of(stem) is False
+    assert window.library_index.status_of(stem)[1] == "prediction"
     enter(window, "Library")
     window.view_mode_combo.setCurrentIndex(1)  # Overlay
     settle()

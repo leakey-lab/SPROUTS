@@ -611,8 +611,8 @@ def test_a_mask_save_badges_the_image_and_refreshes_the_metrics_without_stat_per
 
     other_images = [p for p in stats if any(stem in p for stem in STEMS if stem != STEMS[1])]
     assert stats and other_images == []  # the spy saw the save; no other image was looked up
-    # The save is GT (WG-T2): recorded as a GT mask, never as a prediction. The badge and
-    # the metrics bar words for GT come with WG-T6 / WG-T8.
+    # The save is GT (WG-T2): recorded as a GT mask, never as a prediction; the Library
+    # badge shows it (WG-T6).
     assert window.image_manager.has_gt_mask(STEMS[1])
     assert not window.image_manager.has_mask(STEMS[1])
     assert window.image_manager.mask_state(STEMS[1]) == "gt"
@@ -726,7 +726,7 @@ def test_a_skeleton_save_changes_neither_has_skeleton_nor_the_metrics_bar(
     assert os.path.isfile(project.correction(1))
     assert editor.receivers(editor.skeleton_saved) == 0
     assert not window.image_manager.has_skeleton(STEMS[1])
-    assert window.library_index.status_of(STEMS[1]) == (False, False)
+    assert window.library_index.status_of(STEMS[1]) == ("none", "gt", False)
     assert calls == [] and window.metrics_bar._status_value.text() == before
 
 

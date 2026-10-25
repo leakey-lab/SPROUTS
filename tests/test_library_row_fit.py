@@ -140,7 +140,7 @@ class _NoFit(LibraryItemDelegate):
 def drawn_as(tree: QTreeWidget, index: LibraryIndex, item, text: str) -> str:
     """What the style draws in ``item``'s row for ``text`` as it is (no shorter form)."""
     fitting = tree.itemDelegate()
-    plain = _NoFit(index.status_of, index.tooltip_for, tree, corrected_of=index.corrected_of)
+    plain = _NoFit(index.status_of, index.tooltip_for, tree)
     full = item.text(0)
     tree.setItemDelegate(plain)
     item.setText(0, text)

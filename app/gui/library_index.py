@@ -7,8 +7,8 @@ per window, what those walks used to recompute:
 - leaves in display order, ``name -> position`` (O(1) lookup and next/previous step);
 - lower-case match keys and group spans, so a search touches only rows whose
   visibility changes;
-- no per-row status colour: :class:`LibraryItemDelegate` draws a small mask / skeleton
-  badge from the injected status callables at paint time (only visible rows), so a
+- no per-row status colour: :class:`LibraryItemDelegate` draws a small mask / skeleton /
+  class-label badge from the injected status callables at paint time (only visible rows), so a
   status change is one repaint and the tree never needs a recolour pass. Row colours
   set with ``setForeground`` are ignored under the app stylesheet; decoration icons
   are not.
@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
 )
 
+from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.gui.widgets import tokens
 from app.naming import image_stem, parse_image_name
 
@@ -174,30 +175,42 @@ def match_count_label(count: int, query: str) -> str:
 
 
 # -------------------------------------------------------------------- status badge
-StatusOf = Callable[[str], tuple[bool, bool]]
+#: ``(mask, skeleton, labels)``: where the mask and the skeleton come from
+#: (``"none"`` / ``"prediction"`` / ``"gt"``) and whether the image has class labels.
+StatusOf = Callable[[str], tuple[str, str, bool]]
 
-_BADGE = QSize(22, 12)
+_BADGE = QSize(32, 12)
+_MARK_BOXES = (1.5, 11.5, 21.5)  # x of the mask, skeleton and class-label marks (9 x 9 each)
 
 
-def _badge_pixmap(
-    has_mask: bool, has_skeleton: bool, corrected: bool = False, dpr: float = 2.0
-) -> QPixmap:
-    """Two marks: mask (left) and skeleton (right). Filled = present, ring = absent; a
-    corrected skeleton is a filled diamond (display only: Measure reads the generated one).
+def _badge_pixmap(mask: str, skeleton: str, labels: bool, dpr: float = 2.0) -> QPixmap:
+    """Three marks: mask (green), skeleton (orange), class labels (purple).
 
-    Shape carries the state as well as colour, so it reads without colour vision.
+    The shape carries the state, so it reads without colour vision: a ring is "none", a
+    filled circle a model prediction, a filled diamond GT (for the class labels: traced).
+    The class-label mark has no prediction, so it is a ring or a diamond.
     """
     pixmap = QPixmap(round(_BADGE.width() * dpr), round(_BADGE.height() * dpr))
     pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    for x, present, colour in ((1.5, has_mask, tokens.MASK), (11.5, has_skeleton, tokens.SKEL)):
+    marks = (
+        (mask, tokens.MASK),
+        (skeleton, tokens.SKEL),
+        (SOURCE_GT if labels else SOURCE_NONE, tokens.ACCENT),
+    )
+    for x, (state, colour) in zip(_MARK_BOXES, marks, strict=True):
         rect = QRectF(x, 1.5, 9, 9)
-        if corrected and colour == tokens.SKEL:
+        if state == SOURCE_NONE:
+            painter.setPen(QPen(QColor(tokens.TEXT_FAINT), 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+            continue
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(colour))
+        if state == SOURCE_GT:
             c = rect.center()
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(colour))
             painter.drawPolygon(
                 QPolygonF(
                     [
@@ -208,26 +221,25 @@ def _badge_pixmap(
                     ]
                 )
             )
-        elif present:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(colour))
-            painter.drawEllipse(rect)
         else:
-            painter.setPen(QPen(QColor(tokens.TEXT_FAINT), 1.2))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+            painter.drawEllipse(rect)
     painter.end()
     return pixmap
 
 
-def status_text(has_mask: bool, has_skeleton: bool, corrected: bool = False) -> str:
-    """Words for the badge (tooltip / accessibility)."""
-    mask = "Mask saved" if has_mask else "No mask"
-    if corrected:
-        skeleton = "skeleton corrected (the generated one is measured)"
-    else:
-        skeleton = "skeleton ready" if has_skeleton else "no skeleton"
-    return f"{mask} · {skeleton}"
+_MASK_WORDS = {SOURCE_GT: "Mask: GT", SOURCE_PREDICTION: "Mask: prediction", SOURCE_NONE: "No mask"}
+_SKELETON_WORDS = {
+    SOURCE_GT: "Skeleton: GT",
+    SOURCE_PREDICTION: "Skeleton: prediction",
+    SOURCE_NONE: "No skeleton",
+}
+
+
+def status_text(mask: str, skeleton: str, labels: bool) -> str:
+    """Words for the badge (tooltip / accessibility / metrics bar):
+    ``"Mask: GT · Skeleton: prediction · No classes"``."""
+    classes = "Classes: traced" if labels else "No classes"
+    return f"{_MASK_WORDS[mask]} · {_SKELETON_WORDS[skeleton]} · {classes}"
 
 
 class LibraryItemDelegate(QStyledItemDelegate):
@@ -239,27 +251,19 @@ class LibraryItemDelegate(QStyledItemDelegate):
     unchanged); a shortened group row shows its full text as tooltip.
     """
 
-    def __init__(
-        self,
-        status_of: StatusOf,
-        tooltip_of: Callable[[str], str],
-        parent=None,
-        *,
-        corrected_of: Callable[[str], bool] | None = None,
-    ):
+    def __init__(self, status_of: StatusOf, tooltip_of: Callable[[str], str], parent=None):
         super().__init__(parent)
         self._status_of = status_of
         self._tooltip_of = tooltip_of
-        self._corrected_of = corrected_of or (lambda _name: False)
-        self._icons: dict[tuple[bool, bool, bool], QIcon] = {}
+        self._icons: dict[tuple[str, str, bool], QIcon] = {}
 
-    def status_icon(self, has_mask: bool, has_skeleton: bool, corrected: bool = False) -> QIcon:
+    def status_icon(self, mask: str, skeleton: str, labels: bool) -> QIcon:
         """The badge, the same in every icon mode: Qt tints a Selected-mode pixmap it has to
         make itself with the highlight colour (W10), so the badge brings its own."""
-        key = (has_mask, has_skeleton, corrected)
+        key = (mask, skeleton, labels)
         icon = self._icons.get(key)
         if icon is None:
-            pixmap = _badge_pixmap(has_mask, has_skeleton, corrected)
+            pixmap = _badge_pixmap(mask, skeleton, labels)
             icon = QIcon()
             for mode in (QIcon.Mode.Normal, QIcon.Mode.Selected, QIcon.Mode.Active):
                 icon.addPixmap(pixmap, mode)
@@ -270,8 +274,7 @@ class LibraryItemDelegate(QStyledItemDelegate):
         super().initStyleOption(option, index)
         name = index.data(USER_ROLE)
         if name:
-            corrected = bool(self._corrected_of(name))
-            option.icon = self.status_icon(*self._status_of(name), corrected)
+            option.icon = self.status_icon(*self._status_of(name))
             option.decorationSize = _BADGE
             option.features |= QStyleOptionViewItem.ViewItemFeature.HasDecoration
         self._fit_text(option)
@@ -333,7 +336,9 @@ class LibraryIndex:
     Args:
         tree: the library tree (``main_window.file_list``).
         path_of: image name -> path, for the hover tooltip.
-        has_mask / has_skeleton: image name -> status; read when a row is painted.
+        mask_state / skeleton_state: image name -> ``"none"`` / ``"prediction"`` / ``"gt"``;
+        has_labels: image name -> whether it has class labels. All three are read when a
+        row is painted.
     """
 
     def __init__(
@@ -341,18 +346,16 @@ class LibraryIndex:
         tree: QTreeWidget,
         *,
         path_of: Callable[[str], str | None] | None = None,
-        has_mask: Callable[[str], bool] | None = None,
-        has_skeleton: Callable[[str], bool] | None = None,
-        has_gt_skeleton: Callable[[str], bool] | None = None,
+        mask_state: Callable[[str], str] | None = None,
+        skeleton_state: Callable[[str], str] | None = None,
+        has_labels: Callable[[str], bool] | None = None,
     ) -> None:
         self._tree = tree
         self._path_of = path_of or (lambda _name: None)
-        self._has_mask = has_mask or (lambda _name: False)
-        self._has_skeleton = has_skeleton or (lambda _name: False)
-        self._has_gt_skeleton = has_gt_skeleton or (lambda _name: False)
-        self._delegate = LibraryItemDelegate(
-            self.status_of, self.tooltip_for, tree, corrected_of=self.corrected_of
-        )
+        self._mask_state = mask_state or (lambda _name: SOURCE_NONE)
+        self._skeleton_state = skeleton_state or (lambda _name: SOURCE_NONE)
+        self._has_labels = has_labels or (lambda _name: False)
+        self._delegate = LibraryItemDelegate(self.status_of, self.tooltip_for, tree)
         tree.setItemDelegate(self._delegate)
 
         self._leaves: list[QTreeWidgetItem] = []
@@ -583,17 +586,14 @@ class LibraryIndex:
         return out
 
     # -------------------------------------------------------------------- status
-    def status_of(self, name: str) -> tuple[bool, bool]:
-        """(has mask, has skeleton) of image ``name``, from the injected providers."""
-        return bool(self._has_mask(name)), bool(self._has_skeleton(name))
-
-    def corrected_of(self, name: str) -> bool:
-        """True when image ``name`` has a GT skeleton (display only, FR-03)."""
-        return bool(self._has_gt_skeleton(name))
+    def status_of(self, name: str) -> tuple[str, str, bool]:
+        """``(mask, skeleton, labels)`` of image ``name``, from the injected providers: the
+        mask and skeleton states are ``"none"`` / ``"prediction"`` / ``"gt"``."""
+        return self._mask_state(name), self._skeleton_state(name), bool(self._has_labels(name))
 
     def tooltip_for(self, name: str) -> str:
         """Full stem, status in words, and the image path."""
-        lines = [name, status_text(*self.status_of(name), self.corrected_of(name))]
+        lines = [name, status_text(*self.status_of(name))]
         path = self._path_of(name)
         if path:
             lines.append(path)

@@ -177,6 +177,11 @@ after a click in the library tree. In the Library, `Ctrl+0`, `Ctrl+1` and `Ctrl+
 `Ctrl+-` fit the photo, show it at 100 % and zoom. *Visualize* opens the dashboard you
 chose last (root length at first); with nothing to chart yet it says what to run first.
 
+Each Library row shows a badge of three marks: mask (green), skeleton (orange) and class
+labels (purple). A ring means none, a filled circle a model prediction, a filled diamond
+your GT (`gt/mask/`, `gt/skeletons/`, `gt/<stem>.png`); the class-label mark is a ring or
+a diamond. Hover a row for the words, e.g. `Mask: GT · Skeleton: prediction · No classes`.
+
 ## Outputs
 
 | File | Content |

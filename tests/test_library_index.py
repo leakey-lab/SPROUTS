@@ -187,17 +187,17 @@ def test_tooltip_names_the_full_stem_path_and_status(app):
         app,
         [name],
         path_of=lambda n: f"D:/p/{n}.jpg",
-        has_mask=lambda n: True,
-        has_skeleton=lambda n: False,
+        mask_state=lambda n: "prediction",
+        skeleton_state=lambda n: "none",
     )
     text = index.tooltip_for(name)
-    assert name in text and f"D:/p/{name}.jpg" in text and "Mask saved" in text
+    assert name in text and f"D:/p/{name}.jpg" in text and "Mask: prediction" in text
 
 
 def test_status_is_drawn_by_the_delegate_from_the_providers(app):
     masked = set()
     name = _name(1, 11)
-    tree, index = _built(app, [name], has_mask=lambda n: n in masked)
+    tree, index = _built(app, [name], mask_state=lambda n: "prediction" if n in masked else "none")
     delegate = tree.itemDelegate()
     model_index = tree.indexFromItem(index.item_for(name))
 
@@ -229,7 +229,7 @@ def test_status_icon_renders_under_the_app_stylesheet(app):
     with open(qss_path, encoding="utf-8") as fh:
         qss = fh.read()
     name = _name(1, 11)
-    tree, index = _built(app, [name], has_mask=lambda n: True)
+    tree, index = _built(app, [name], mask_state=lambda n: "prediction")
     tree.setStyleSheet(qss)
     tree.resize(320, 200)
     tree.expandAll()
