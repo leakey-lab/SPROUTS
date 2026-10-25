@@ -112,9 +112,7 @@ or an output pixel there. Saved mask and skeleton pixels are pinned by golden te
 
 ---
 
-## Memory — two layers (use both)
-
-### 1. Local auto-memory (file-based, per-project)
+## Memory — local auto-memory (file-based, per-project)
 
 Path: `~/.claude/projects/D--Root-Mask-and-Skeletons/memory/`
 
@@ -127,19 +125,6 @@ Path: `~/.claude/projects/D--Root-Mask-and-Skeletons/memory/`
 - Write here for durable decisions, debugging insights, user preferences, env
   gotchas. Update the matching file instead of duplicating; delete memories
   proven wrong.
-
-### 2. mem0 (semantic memory, MCP server)
-
-Self-hosted mem0 MCP (`~/mem0-mcp/`, local Ollama + Qdrant, no cloud). Requires
-the Qdrant container + Ollama running.
-
-- **At start of coding work:** `mcp__mem0__search_coding_memory` to recall prior
-  context, conventions, decisions.
-- **When you learn** architecture, conventions, key decisions, debugging
-  insights, or user preferences: `mcp__mem0__add_coding_memory`.
-
-Rule of thumb: **file-memory = pinned, human-curated facts**; **mem0 = semantic
-recall across everything learned**. Significant decisions go in both.
 
 ---
 
@@ -155,11 +140,6 @@ Graph at `graphify-out/` (built AST-only, no API cost).
   (check staleness: graph header lists its build commit vs `git rev-parse HEAD`).
 - `/graphify` for a fresh build of any input.
 
----
-
-## MCP servers
-
-- **mem0** — persistent coding memory (above).
 ---
 
 ## Skills & tooling conventions
@@ -181,8 +161,8 @@ Graph at `graphify-out/` (built AST-only, no API cost).
 
 ## Workflow defaults
 
-1. Recall memory (file `MEMORY.md` + mem0 search) at start.
+1. Recall memory (file `MEMORY.md`) at start.
 2. Consult graphify before architecture questions.
 3. Use `./venv/Scripts/python.exe` for any run.
-4. Persist new decisions/insights to **both** memory layers.
+4. Persist new decisions/insights to file memory.
 5. Run `graphify update .` after code edits.
