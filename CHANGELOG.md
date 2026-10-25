@@ -630,6 +630,9 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **`Error` cells name the file only (2026-10-25, W3-T7, O38).** The `Error` cell of a row
+  that could not be measured names the file, not its absolute path, so a shared CSV no
+  longer carries user or folder names. Values and every other cell are unchanged.
 - **Row order of tied rows (2026-10-25, WX-T9, O21).** Rows of `root_lengths.csv` /
   `root_areas.csv` that tie on tube, date, time and position are now ordered by image name;
   before, they kept the folder-scan order, which differs per OS. Library entries that tie are

@@ -79,7 +79,7 @@ def preprocess_image(image_path: str, *, data: bytes | None = None) -> np.ndarra
 
     img = _read_grey(image_path, data)
     if img is None:
-        raise FileNotFoundError(f"Could not read image: {image_path}")
+        raise FileNotFoundError(f"Could not read image: {os.path.basename(image_path)}")
     _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if _mostly_white(binary):
         binary = 255 - binary
@@ -91,7 +91,7 @@ def load_mask(image_path: str, *, data: bytes | None = None) -> np.ndarray:
     """Read a mask image and return a binary (0/255) array (``data``: its bytes, read)."""
     img = _read_grey(image_path, data)
     if img is None:
-        raise FileNotFoundError(f"Could not read mask: {image_path}")
+        raise FileNotFoundError(f"Could not read mask: {os.path.basename(image_path)}")
     _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
     return binary
 
@@ -159,6 +159,19 @@ def parse_image_name(name: str) -> dict:
 # ----------------------------- rows ----------------------------------------
 
 
+def _error_text(exc: BaseException, path: str) -> str:
+    """``str(exc)`` with ``path`` (as given, absolute, normalised, and as ``repr`` prints it,
+    doubled backslashes) replaced by the file name: a shared CSV carries no folder (O38)."""
+    text = str(exc)
+    base = os.path.basename(path)
+    forms = {path, os.path.abspath(path), os.path.normpath(path)}
+    forms |= {repr(f)[1:-1] for f in forms}
+    for form in sorted(forms, key=len, reverse=True):
+        if form:
+            text = text.replace(form, base)
+    return text
+
+
 def _metric_row(
     name: str,
     path: str,
@@ -187,7 +200,7 @@ def _metric_row(
             "Date": None,
             "Time": None,
             value_column: 0,
-            "Error": str(e),
+            "Error": _error_text(e, path),
         }
 
 

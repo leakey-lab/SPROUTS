@@ -101,7 +101,7 @@ changes a CSV value.
 | `Time` | text `HH:MM:SS` | | Capture time from the file name, local camera time without time zone; empty if absent or failed |
 | `Length (mm)` | decimal, 2 places | mm | Total root length in the image (`root_lengths.csv` only) |
 | `Area (mm²)` | decimal, 2 places | mm² | Total root area in the image (`root_areas.csv` only) |
-| `Error` | text | | Empty on success; otherwise the reason the image could not be measured |
+| `Error` | text | | Empty on success; otherwise the reason the image could not be measured, naming the file (never its folder; since 2026-10-25) |
 
 ### Zero versus failure
 

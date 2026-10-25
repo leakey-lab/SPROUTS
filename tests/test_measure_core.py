@@ -51,7 +51,8 @@ def _legacy_row(name, path, kind):
         img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
         if img is None:
             what = "image" if kind == "length" else "mask"
-            raise FileNotFoundError(f"Could not read {what}: {path}")
+            # O38 (W3-T7): the file name only
+            raise FileNotFoundError(f"Could not read {what}: {os.path.basename(path)}")
         h, w = img.shape[:2]
         if kind == "length":
             _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
