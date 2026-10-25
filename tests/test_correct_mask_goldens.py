@@ -5,7 +5,8 @@ fully synthetic projects: the plane after every op of the ``mask`` and ``mask_cl
 scripts and the saved file (pixel sha256, shape, PNG colour type 6, the "on" pixels and
 the area Measure would write). The same scripts, driven through the layer's
 ``EditLayer`` input with the C18 op semantics, must leave the same planes and write the
-same files. The replay is repeated with every stroke ended early by Esc or a forced
+same files, now as the GT mask ``gt/mask/<stem>.png`` (WG-T2; the emptied model mask is
+an empty GT file, O9). The replay is repeated with every stroke ended early by Esc or a forced
 finish before its release (the mid-gesture rule: a forced finish commits exactly what
 the release would), and with hover moves, reference / active switches and no-op
 finishes between the ops, none of which may change a pixel.
@@ -122,7 +123,7 @@ def replay(tmp_path, scene, case: str, script: str, *, ending="release", noise=F
         if op[0] == "save":
             outcome = result
         per_op.append(sha(layer.document.history.plane))
-    saved = describe_mask_file(os.path.join(folder, "mask", f"{SYNTH_STEM}.png"))
+    saved = describe_mask_file(os.path.join(folder, "gt", "mask", f"{SYNTH_STEM}.png"))
     return per_op, outcome, saved
 
 
@@ -153,8 +154,9 @@ def test_clear_then_save_matches_its_golden(qapp, scene, tmp_path, case):
     per_op, outcome, saved = replay(tmp_path, scene, case, "mask_clear")
 
     assert_matches(GOLDENS["cases"][case]["mask_clear"], "mask_clear", per_op, outcome, saved)
-    had_a_file = SYNTH_CASES[case][0]  # the model-mask case starts with a saved mask
-    assert (outcome.path, outcome.cleared) == (None, had_a_file)
+    model = case == "synth_model_mask_and_skeleton"  # O9: its emptied mask is an empty GT file
+    assert (outcome.path is not None, outcome.cleared) == (model, False)
+    assert saved.get("on_count") == (0 if model else None)
 
 
 @pytest.mark.parametrize("ending", ["esc", "finish"])

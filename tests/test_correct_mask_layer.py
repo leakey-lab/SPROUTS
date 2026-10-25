@@ -47,14 +47,14 @@ from app.gui.paint_canvas import PaintCanvas, pixmap_to_argb_array  # noqa: E402
 from app.gui.patch_history import PatchHistory  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 from app.io_utils import imread_unicode, imwrite_unicode  # noqa: E402
-from app.masks import MaskStore, write_mask_file  # noqa: E402
+from app.masks import write_mask_file  # noqa: E402
 from tests.correct_fakes import FakeHost, FakeLayer  # noqa: E402
 
 STEM = "plot_T001_L001_2024.07.18_111530_001_SMM"
 W, H = 160, 120
 NO_MODS = Qt.KeyboardModifier.NoModifier
 MASK_COLOUR = QColor(tokens.MASK)
-CLEARED = "Mask cleared. Ctrl+Z to undo, Save to remove the file."
+CLEARED = "Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask."
 FILL_MISS = "Fill works inside a closed outline. Close the loop first."
 NOT_SHOWN_SIZE_TEXT = (
     "Saved mask size does not match the image: it is not shown and is kept unless you save over it"
@@ -131,7 +131,21 @@ def image_path(tmp_path, stem: str = STEM) -> str:
 
 
 def mask_file(tmp_path, stem: str = STEM, ext: str = ".png") -> str:
+    """The model's mask (the prediction): never written by the layer."""
     return os.path.join(str(tmp_path), "mask", f"{stem}{ext}")
+
+
+def gt_file(tmp_path, stem: str = STEM) -> str:
+    """The GT mask: the one file a save writes (WG-T2)."""
+    return os.path.join(str(tmp_path), "gt", "mask", f"{stem}.png")
+
+
+#: The status of a layer showing the prediction it opened.
+PREDICTION = LayerStatus(
+    "none",
+    "Prediction",
+    f"mask/{STEM}.png — the model's output. Save after an edit writes gt/mask/{STEM}.png",
+)
 
 
 def write_model_mask(tmp_path, plane: np.ndarray, stem: str = STEM) -> None:
@@ -542,7 +556,7 @@ def test_redo_mid_stroke_commits_the_stroke_which_ends_the_redo_branch(scene, tm
 def test_undo_back_to_the_saved_mask_reads_clean(scene, tmp_path):
     layer, _ = open_layer(scene, tmp_path, boxes_plane())
     assert layer.is_dirty() is False
-    assert layer.status() == LayerStatus("clean")
+    assert layer.status() == PREDICTION
 
     stroke(layer, [(10, 100), (60, 110)])
     assert layer.is_dirty() is True
@@ -550,7 +564,7 @@ def test_undo_back_to_the_saved_mask_reads_clean(scene, tmp_path):
 
     layer.undo()
     assert layer.is_dirty() is False
-    assert layer.status() == LayerStatus("clean")
+    assert layer.status() == PREDICTION
 
 
 def test_a_blank_image_says_no_mask(scene, tmp_path):
@@ -634,7 +648,7 @@ def test_a_transition_mid_stroke_commits_it_and_the_rest_of_the_drag_changes_not
     assert outcome.ok
     replay_file = os.path.join(str(tmp_path), "replay.png")
     write_mask_file(replay_file, oracle.plane > 0)
-    assert np.array_equal(read_rgba(mask_file(tmp_path)), read_rgba(replay_file))
+    assert np.array_equal(read_rgba(gt_file(tmp_path)), read_rgba(replay_file))
 
     ring_follows = transition in ("esc", "eraser", "same_tool", "pgdn")
     assert layer.ring.is_visible() is ring_follows
@@ -692,7 +706,7 @@ def test_document_actions_commit_a_stroke_in_progress_first(scene, tmp_path, act
 
     if action == "save":
         outcome = layer.save()
-        saved = read_rgba(mask_file(tmp_path))[:, :, 3] == 255
+        saved = read_rgba(gt_file(tmp_path))[:, :, 3] == 255
         assert np.array_equal(saved, oracle.plane > 0)
         assert outcome == SaveOutcome("mask", ok=True, path=outcome.path)
         assert layer.is_dirty() is False
@@ -1032,7 +1046,7 @@ def test_the_canvas_view_and_router_drive_the_layer_end_to_end(qapp, tmp_path):
 
 # --------------------------------------------------------------------------- documents
 def test_open_hands_back_the_documents_notices(scene, tmp_path):
-    write_model_mask(tmp_path, np.ones((H + 1, W), np.uint8))
+    write_mask_file(gt_file(tmp_path), np.ones((H + 1, W), bool))  # a GT mask of another size
     layer = MaskLayer(FakeHost(), scene)
 
     notices = layer.open(image_path(tmp_path), (W, H), None)
@@ -1041,22 +1055,33 @@ def test_open_hands_back_the_documents_notices(scene, tmp_path):
     assert layer.is_open() and not plane_of(layer).any()
 
 
-def test_unloaded_label_names_the_file_only_while_something_is_painted(scene, tmp_path):
-    path = mask_file(tmp_path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    write_mask_file(path, np.ones((H // 2, W // 2), bool))  # an editor-saved mask, other size
+def test_unloaded_label_names_the_gt_file_that_was_not_shown(scene, tmp_path):
+    path = gt_file(tmp_path)
+    write_mask_file(path, np.ones((H // 2, W // 2), bool))  # a GT mask of another size
     layer = MaskLayer(FakeHost(), scene)
     layer.open(image_path(tmp_path), (W, H), None)
-    assert layer.unloaded_label() == ""  # a save of the empty plane keeps the file
+    assert layer.unloaded_label() == f"gt/mask/{STEM}.png"  # a save would replace it
 
     stroke(layer, [(20, 20), (40, 40)])
 
-    assert layer.unloaded_label() == f"mask/{STEM}.png"
+    assert layer.unloaded_label() == f"gt/mask/{STEM}.png"
     assert layer.status() == LayerStatus("dirty")
+    os.remove(path)
+    assert layer.unloaded_label() == ""  # gone since the open: nothing left to replace
+
+
+def test_an_unshown_prediction_is_never_named_for_replacing(scene, tmp_path):
+    write_model_mask(tmp_path, np.ones((H + 1, W), np.uint8))  # a prediction of another size
+    layer = MaskLayer(FakeHost(), scene)
+    layer.open(image_path(tmp_path), (W, H), None)
+
+    stroke(layer, [(20, 20), (40, 40)])
+
+    assert layer.unloaded_label() == ""  # a save writes gt/mask, never the prediction
 
 
 def test_a_save_with_nothing_painted_keeps_the_unshown_file(scene, tmp_path):
-    path = mask_file(tmp_path)
+    path = gt_file(tmp_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     write_mask_file(path, np.ones((H // 2, W // 2), bool))
     with open(path, "rb") as fh:
@@ -1119,13 +1144,14 @@ def test_save_writes_the_mask_and_reports_its_path(scene, tmp_path):
 
     assert outcome == SaveOutcome("mask", ok=True, path=outcome.path)
     assert os.path.normcase(os.path.normpath(outcome.path)) == os.path.normcase(
-        os.path.normpath(mask_file(tmp_path))
+        os.path.normpath(gt_file(tmp_path))
     )
-    assert np.array_equal(read_rgba(mask_file(tmp_path))[:, :, 3] == 255, plane_of(layer) > 0)
+    assert np.array_equal(read_rgba(gt_file(tmp_path))[:, :, 3] == 255, plane_of(layer) > 0)
     assert layer.is_dirty() is False
+    assert not os.path.exists(mask_file(tmp_path))  # no prediction is ever written
 
 
-def test_saving_an_emptied_mask_removes_the_file_and_says_so(scene, tmp_path):
+def test_saving_an_emptied_mask_writes_an_empty_gt_mask_and_says_so(scene, tmp_path):  # O9
     layer, _ = open_layer(scene, tmp_path, boxes_plane())
     layer.clear()
 
@@ -1135,18 +1161,32 @@ def test_saving_an_emptied_mask_removes_the_file_and_says_so(scene, tmp_path):
     assert outcome == SaveOutcome(
         "mask",
         ok=True,
-        path=None,
-        cleared=True,
-        message=f"Empty mask: removed saved mask for {name}",
+        path=gt_file(tmp_path),
+        message=f"Empty mask saved as GT for {name}: root area 0",
         kind="info",
     )
-    assert not os.path.exists(mask_file(tmp_path))
+    assert not read_rgba(gt_file(tmp_path)).any() and os.path.exists(mask_file(tmp_path))
+
+
+def test_saving_the_prediction_again_removes_the_gt_file_and_says_so(scene, tmp_path):
+    write_mask_file(gt_file(tmp_path), np.zeros((H, W), bool))
+    layer, host = open_layer(scene, tmp_path, boxes_plane())
+    assert layer.load_prediction() is True
+    assert np.array_equal(plane_of(layer), boxes_plane()) and layer.can_undo()
+    assert host.calls.count(("layer_edited", "mask")) == 1
+
+    outcome = layer.save()
+
+    message = f"Mask equals the prediction: removed gt/mask/{STEM}.png"
+    assert outcome == SaveOutcome("mask", ok=True, cleared=True, message=message, kind="info")
+    assert not os.path.exists(gt_file(tmp_path)) and layer.status() == PREDICTION
 
 
 def test_saving_an_empty_mask_without_a_file_writes_and_says_nothing(scene, tmp_path):
     layer, _ = open_layer(scene, tmp_path)
 
     assert layer.save() == SaveOutcome("mask", ok=True)
+    assert not os.path.exists(gt_file(tmp_path))  # O2: no edits, no GT file
     assert not os.path.exists(mask_file(tmp_path))
 
 
@@ -1164,7 +1204,7 @@ def test_a_failed_write_is_a_danger_outcome_with_todays_text(scene, tmp_path, mo
 
     outcome = layer.save()
 
-    target = MaskStore.for_image(image_path(tmp_path)).path_for(image_path(tmp_path))
+    target = os.path.normpath(gt_file(tmp_path))
     assert outcome == SaveOutcome(
         "mask",
         ok=False,
@@ -1177,15 +1217,15 @@ def test_a_failed_write_is_a_danger_outcome_with_todays_text(scene, tmp_path, mo
 
 
 def test_a_failed_removal_is_a_danger_outcome_with_todays_text(scene, tmp_path, monkeypatch):
+    write_mask_file(gt_file(tmp_path), np.zeros((H, W), bool))
     layer, _ = open_layer(scene, tmp_path, boxes_plane())
-    layer.clear()
+    layer.load_prediction()
     monkeypatch.setattr(os, "remove", _raise("in use"))
 
     outcome = layer.save()
 
-    assert outcome == SaveOutcome(
-        "mask", ok=False, path=None, message="Could not remove mask: in use", kind="danger"
-    )
+    message = f"Could not remove gt/mask/{STEM}.png: in use"
+    assert outcome == SaveOutcome("mask", ok=False, path=None, message=message, kind="danger")
     assert layer.is_dirty() is True
 
 

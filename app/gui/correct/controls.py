@@ -14,8 +14,9 @@ layer. What it puts on the chrome (spec sections 3.2 and 4):
   first time a layer shows it, in a slot at the dock's start, so the mask's brush and eraser
   share one and the skeleton's eraser has its own; a disabled placeholder for a tool without
   a size), the opacity of the shown layer, Load skeleton file (enabled for the skeleton
-  only), Undo, Redo, Clear and Save. Nothing is hidden, so the dock keeps its width and
-  place across tools and layers;
+  only), Load prediction (enabled while the shown layer has a prediction to load), Undo,
+  Redo, Clear and Save. Nothing is hidden, so the dock keeps its width and place across
+  tools and layers;
 * the polyline prompt (top centre): Finish line, Cancel and Smooth, shown while the
   skeleton is the shown layer and its Polyline draft has points;
 * the topbar's ghost button "Clear mask" / "Clear skeleton" (the shell places it).
@@ -49,12 +50,16 @@ __all__ = ["CorrectControls"]
 _OPACITY_FMT = "{}%"
 _LOAD_TIP = "Load skeleton file…"
 _LOAD_OFF_TIP = f"{_LOAD_TIP} (edit the skeleton to load one)"
+_PREDICTION_TIP = "Load the prediction into the {noun} (undoable)"
+_PREDICTION_NONE_TIP = "No prediction to load for this image (Generate makes one)"
+_PREDICTION_UNSHOWN_TIP = "The prediction for this image could not be shown"
+_PREDICTION_OFF_TIP = "Load prediction (not for the {noun})"
 _NO_SIZE_TIP = "No size for this tool"
 _WIDEST_SIZE = "000 px"  # every size readout is this wide, so a new value moves nothing
 _SMOOTH_TIP = "needs 3+ points"
 # The topbar clear button for the shown layer: (text, tooltip).
 _CLEAR_TEXTS = {
-    MASK: ("Clear mask", "Clear the mask. Undo with Ctrl+Z; Save removes the file."),
+    MASK: ("Clear mask", "Clear the mask. Undo with Ctrl+Z; Save writes an empty GT mask."),
     SKELETON: ("Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
 }
 # The Smooth toggle shows its word and key beside the icon, as Finish and Cancel show theirs
@@ -73,6 +78,20 @@ def _tool_tooltip(spec: ToolSpec, noun: str = "") -> str:
     label = f"{noun[:1].upper()}{noun[1:]} {spec.label.lower()}" if noun else spec.label
     head = f"{label} ({spec.key})"
     return f"{head} · {spec.tip}" if spec.tip and " " not in spec.label else head
+
+
+def _prediction_state(layer: EditLayer) -> tuple[bool, str]:
+    """``(enabled, tooltip)`` of Load prediction for the shown ``layer``: enabled while the
+    layer can load a prediction (``load_prediction``) and its document holds one. A
+    prediction file that could not be shown (unreadable, another size) says so."""
+    if not callable(getattr(layer, "load_prediction", None)):
+        return False, _PREDICTION_OFF_TIP.format(noun=layer.noun)
+    document = getattr(layer, "document", None)
+    prediction = getattr(document, "prediction", None)
+    if not callable(prediction) or prediction() is None:
+        unshown = getattr(document, "prediction_path", None) is not None
+        return False, _PREDICTION_UNSHOWN_TIP if unshown else _PREDICTION_NONE_TIP
+    return True, _PREDICTION_TIP.format(noun=layer.noun)
 
 
 def _retip(widget: QWidget, tip: str) -> None:
@@ -131,6 +150,7 @@ class CorrectControls(QObject):
     size_changed = pyqtSignal(int)  # the visible size slider moved (px)
     opacity_changed = pyqtSignal(float)  # the opacity slider moved (0..1, the active layer)
     load_requested = pyqtSignal()  # "Load skeleton file…"
+    prediction_requested = pyqtSignal()  # "Load prediction" (the shown layer's)
     undo_requested = pyqtSignal()
     redo_requested = pyqtSignal()
     clear_requested = pyqtSignal()  # the dock Clear or the topbar clear button
@@ -194,7 +214,7 @@ class CorrectControls(QObject):
         self._tool_group.idClicked.connect(self._tool_clicked)
 
     def _build_dock(self, dock: FloatingDock) -> None:
-        """Size slot, opacity | Load, Undo, Redo, Clear | Save."""
+        """Size slot, opacity | Load, Load prediction, Undo, Redo, Clear | Save."""
         self._dock = dock
         self._slot = QWidget()  # the size sliders, made on first sight
         self._slot_row = QHBoxLayout(self._slot)
@@ -212,6 +232,7 @@ class CorrectControls(QObject):
         scope = shortcuts.CORRECT
         redo_keys = " / ".join(shortcuts.keys_for("redo", scope))
         self.load_button = IconButton("load", _LOAD_TIP)
+        self.prediction_button = IconButton("cpu", _PREDICTION_TIP.format(noun="mask"))
         self.undo_button = IconButton("undo", shortcuts.tooltip("Undo", "undo", scope))
         self.redo_button = IconButton("redo", f"Redo ({redo_keys})" if redo_keys else "Redo")
         self.clear_icon_button = IconButton("trash")  # show_layer names the layer it clears
@@ -223,6 +244,7 @@ class CorrectControls(QObject):
         )
         actions = (
             (self.load_button, self.load_requested),
+            (self.prediction_button, self.prediction_requested),
             (self.undo_button, self.undo_requested),
             (self.redo_button, self.redo_requested),
             (self.clear_icon_button, self.clear_requested),
@@ -279,8 +301,9 @@ class CorrectControls(QObject):
     def sync(self, layer: EditLayer) -> None:
         """Show ``layer``'s state (the shown layer's): its current tool checked (the rail's
         Tab stop), the size slider of its tool's ``SizeSpec`` at ``layer.size()`` (made on
-        first sight; the disabled placeholder for a tool without a size) and its opacity in
-        percent. The sliders' signals are blocked meanwhile: it emits nothing."""
+        first sight; the disabled placeholder for a tool without a size), its opacity in
+        percent and whether it has a prediction to load (:func:`_prediction_state`). The
+        sliders' signals are blocked meanwhile: it emits nothing."""
         button = self.tool_buttons.get((layer.layer_id, layer.current_tool))
         if button is not None:
             if not button.isChecked():
@@ -294,6 +317,13 @@ class CorrectControls(QObject):
             slider.setVisible(slider is shown)
         self.no_size_slider.setVisible(shown is None)
         _set_quietly(self.opacity_slider, round(layer.opacity() * 100), _OPACITY_FMT)
+        self.set_prediction_available(*_prediction_state(layer))
+
+    def set_prediction_available(self, available: bool, tip: str) -> None:
+        """Enable Load prediction (or not), with ``tip`` saying why."""
+        if self.prediction_button.isEnabled() != bool(available):
+            self.prediction_button.setEnabled(bool(available))
+        _retip(self.prediction_button, tip)
 
     def set_history(self, can_undo: bool, can_redo: bool) -> None:
         """Enable Undo and Redo as the undo timeline allows."""

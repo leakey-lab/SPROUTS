@@ -88,10 +88,10 @@ class Reads:
             self.jobs.append(os.path.basename(path))
             return real_job(path, *args, **kwargs)
 
-        def mask(image_path, size):
+        def mask(image_path, size, **kwargs):
             if threading.current_thread() is gui:
                 self.gui_masks.append(os.path.basename(image_path))
-            return real_mask(image_path, size)
+            return real_mask(image_path, size, **kwargs)
 
         def skeleton(path, *args):
             if threading.current_thread() is gui:

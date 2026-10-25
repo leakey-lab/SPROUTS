@@ -102,8 +102,8 @@ def test_a_file_changed_by_someone_else_after_our_save_is_read_again(make_editor
     assert editor.save()
     other = np.zeros_like(plane(editor))
     other[5:25, 5:45] = 1
-    write_mask(project.mask(), other)  # another program, after our save
-    bump(project.mask())
+    write_mask(project.gt_mask(), other)  # another program, after our save (of the GT mask)
+    bump(project.gt_mask())
 
     editor.load_image(project.a, project.folder)
 

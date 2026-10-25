@@ -140,8 +140,8 @@ def test_saved_mask_counts_and_survives_stage_switches_without_stats(mw, tmp_pat
     _select(mw, STEMS[2])
     image_path = str(folder / f"{STEMS[2]}.jpg")
     mw.toggle_correct()
-    mw.on_mask_saved(image_path)
-    assert mw._image_has_mask(STEMS[2]) and mw.mask_exists(STEMS[2])
+    mw.on_mask_saved(image_path)  # an editor save is GT (WG-T2), never a prediction
+    assert mw.image_manager.has_gt_mask(STEMS[2]) and not mw.mask_exists(STEMS[2])
 
     calls = []
     real_exists = os.path.exists
@@ -153,12 +153,10 @@ def test_saved_mask_counts_and_survives_stage_switches_without_stats(mw, tmp_pat
     # Only the editor looks up the open image's own mask: no per-leaf status stats.
     mask_stats = [p for p in calls if os.path.basename(os.path.dirname(str(p))) == "mask"]
     assert all(STEMS[2] in str(p) for p in mask_stats)
-    assert mw._image_has_mask(STEMS[2])
-    mw._refresh_metrics_bar(STEMS[2])
-    assert mw.metrics_bar._status_value.text() == "Mask ready"
+    assert mw.image_manager.has_gt_mask(STEMS[2])
 
     mw.on_mask_cleared(image_path)
-    assert not mw._image_has_mask(STEMS[2])
+    assert not mw.image_manager.has_gt_mask(STEMS[2])
 
 
 # ------------------------------------------------------------------ PG-03

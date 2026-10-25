@@ -3,7 +3,7 @@ File tree management for the main window.
 
 Thin, name-stable wrappers over the window's :class:`~app.gui.library_index.LibraryIndex`
 (tree building, O(1) item lookup, per-image status). Status is drawn from
-``image_manager`` state by the index's delegate, so saving or clearing a mask only
+``image_manager`` state by the index's delegate, so saving or removing a GT mask only
 updates that state and repaints one row.
 """
 
@@ -62,13 +62,13 @@ def _stem(image_path):
 
 
 def highlight_saved_mask(main_window, image_path):
-    """Record the saved mask of ``image_path`` and repaint its row."""
-    manager = main_window.image_manager
-    manager.set_mask(image_path, manager.mask_path_for(image_path))
+    """Record the saved GT mask of ``image_path`` and repaint its row (its prediction in
+    ``mask/`` is not touched by a save)."""
+    main_window.image_manager.set_gt(image_path, "mask", True)
     library_index_for(main_window).refresh_status(_stem(image_path))
 
 
 def unhighlight_cleared_mask(main_window, image_path):
-    """Record that ``image_path`` has no mask any more and repaint its row."""
-    main_window.image_manager.set_mask(image_path, None)
+    """Record that ``image_path`` has no GT mask any more and repaint its row."""
+    main_window.image_manager.set_gt(image_path, "mask", False)
     library_index_for(main_window).refresh_status(_stem(image_path))

@@ -86,7 +86,12 @@ def dock(editor, size_slider=None) -> list[QWidget]:
     controls = editor.controls
     parts = [] if size_slider is None else [size_slider.slider]
     parts.append(controls.opacity_slider.slider)
-    buttons = (controls.load_button, controls.undo_button, controls.redo_button)
+    buttons = (
+        controls.load_button,
+        controls.prediction_button,
+        controls.undo_button,
+        controls.redo_button,
+    )
     parts += [button for button in buttons if button.isEnabled()]
     return parts + [controls.clear_icon_button, controls.save_button]
 

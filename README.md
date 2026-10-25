@@ -252,14 +252,18 @@ If your imaging system has a different FOV, change it in one place:
 The **Correct** stage fixes both model outputs of an image on one canvas. The mask (root
 area) and the skeleton (root length) are drawn together over the photo and you edit one
 of them at a time, the *active layer*; the other stays visible at half its opacity as a
-reference. The **Layers** panel on the right shows each layer's state (Saved, Unsaved,
-Generated, Not saved …): click a row to edit that layer, click its eye to hide it (or reach
+reference. The **Layers** panel on the right shows each layer's state (GT, Prediction,
+Unsaved, Generated, Not saved …): click a row to edit that layer, click its eye to hide it (or reach
 them with Tab: Space or Enter picks a layer, Space toggles an eye). Opacity and visibility
 are kept across restarts.
 
-- **Mask** (green): Brush, Eraser and Fill (fills a closed outline). It opens
-  `mask/<stem>.png` and saves it as a white-on-transparent PNG; saving an empty mask
-  deletes the file.
+- **Mask** (green): Brush, Eraser and Fill (fills a closed outline). It opens the saved
+  GT mask `gt/mask/<stem>.png` if there is one, else the model's prediction
+  `mask/<stem>.png`, and saves only to `gt/mask/<stem>.png` (white on transparent); the
+  prediction is never changed. Saving an edited prediction makes it GT; saving an empty
+  (cleared) mask writes an empty GT mask; a mask edited back to equal its prediction
+  removes the GT file. **Load prediction** (dock, chip icon) puts the prediction back as
+  one undoable step.
 - **Skeleton** (orange): Select (pick a branch; Delete removes it), Eraser, Polyline
   (click points, drag them to adjust, Ctrl+click adds a bend, Shift+drag moves the line,
   Enter or a double-click finishes it, S smooths it) and Connect (drag from an endpoint
@@ -302,22 +306,22 @@ its last point.
 **Saving**
 
 - `Ctrl+S` (or **Save**) saves every layer with unsaved changes, the mask first. With
-  nothing unsaved it saves the active mask (the way to mark a model mask as checked). A
+  nothing unsaved it writes nothing and says *Nothing unsaved*. A
   skeleton is saved only when it differs from the generated one: saving is not acceptance,
   and a skeleton edited back to the generated one (or **Load generated** over an old
-  correction that equals it) removes its correction. A layer without changes that is not
-  active is never rewritten.
+  correction that equals it) removes its correction.
 - `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
   image. If a save fails, you stay on the image and a message says why. An unfinished
   polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you
   finish it (Enter) or cancel it (Esc), and bring the skeleton forward if it was hidden.
-- A saved mask that *Correct* cannot show (another size than the photo, or a file it
-  cannot read) shows *Mask not shown* and is kept: `Ctrl+S` with nothing painted leaves
-  it, painting over it asks before replacing it, and `PgDn` stays on the image.
+- A saved GT mask that *Correct* cannot show (another size than the photo, or a file it
+  cannot read) shows *Mask not shown* and is kept: `Ctrl+S` with nothing painted writes
+  nothing, painting over it asks before replacing it, and `PgDn` stays on the image. A
+  prediction that cannot be shown is never replaced: a save writes `gt/mask/`.
 - If the file a layer saves to changed on disk after you opened it (another program, or a
   *Generate* run), **Save** asks first: **Overwrite**, **Reload (lose my edits)** or
   **Cancel**. A file rewritten with the same pixels asks nothing, and a layer without edits
-  just reloads. `PgDn` / `PgUp` never ask: they stay on the image and say why. An image
+  reloads when the image is opened again. `PgDn` / `PgUp` never ask: they stay on the image and say why. An image
   open in *Correct* without unsaved edits shows the new results when a *Generate* run
   finishes.
 - A polyline you are placing (two or more points) counts as unsaved: **Save** and

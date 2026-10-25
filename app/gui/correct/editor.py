@@ -64,8 +64,8 @@ class CorrectEditor(PagingApi, QWidget):
 
     notice = pyqtSignal(str, str)
     dirty_changed = pyqtSignal(bool)
-    mask_saved = pyqtSignal(str)  # image path: a mask file was written
-    mask_cleared = pyqtSignal(str)  # image path: an empty mask removed the saved file
+    mask_saved = pyqtSignal(str)  # image path: the GT mask was written (an empty one too)
+    mask_cleared = pyqtSignal(str)  # image path: a mask equal to the prediction removed its GT
     skeleton_saved = pyqtSignal(str)  # correction path (FR-03: MainWindow does not connect it)
     b_key_status_changed = pyqtSignal(bool)
     navigate_requested = pyqtSignal(int)  # PgDn / PgUp after the dirty layers were saved
@@ -154,6 +154,7 @@ class CorrectEditor(PagingApi, QWidget):
         controls.size_changed.connect(lambda px: self._active().set_size(px))
         controls.opacity_changed.connect(lambda value: self._active().set_opacity(value))
         controls.load_requested.connect(self.load_skeleton_file)
+        controls.prediction_requested.connect(self.load_prediction)
         controls.undo_requested.connect(self.undo)
         controls.redo_requested.connect(self.redo)
         controls.clear_requested.connect(self.clear_active_layer)
@@ -283,9 +284,8 @@ class CorrectEditor(PagingApi, QWidget):
         self._refresh()
 
     def save(self) -> bool:
-        """Ctrl+S: save the unsaved layers (none unsaved: the edited one); True when all did."""
-        self.session.finish_gestures()
-        report = self.session.save(self.active_layer_id)  # nothing open: nothing saved
+        """Ctrl+S: save the unsaved layers (none: "Nothing unsaved"); True when all did."""
+        report = self.session.save(self.active_layer_id)  # ends a gesture; nothing open: no save
         return bool(report.outcomes) and report.ok
 
     def undo(self) -> None:
@@ -354,6 +354,11 @@ class CorrectEditor(PagingApi, QWidget):
         """Shift+H: show or hide the layer that is not edited."""
         other = SKELETON if self.active_layer_id == MASK else MASK
         self.set_layer_visible(other, not self.layers[other].is_visible())
+
+    def load_prediction(self) -> None:
+        """Load prediction: the edited layer's prediction as one undoable action (if any)."""
+        self.session.finish_gestures()
+        getattr(self._active(), "load_prediction", lambda: None)()
 
     def load_skeleton_file(self) -> None:
         """Open another skeleton file; an unsaved skeleton is asked about first."""

@@ -18,7 +18,9 @@ once however it was committed; open, revert and close replace the plane through 
 document and redraw the whole canvas.
 
 On screen the mask is ``tokens.MASK`` without antialiasing; on disk it stays white on
-transparent RGBA (``mask/<stem>.png``), so saved files are today's for the same edits.
+transparent RGBA, saved as GT (``gt/mask/<stem>.png``; the prediction in ``mask/`` is never
+written), so saved files are today's for the same edits. "Load prediction" puts the
+prediction back as one undoable action.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ from app.gui.correct.layer import (
     ToolSpec,
     project_label,
 )
-from app.gui.correct.mask_document import MaskDocument, MaskRead, MaskSaveResult
+from app.gui.correct.mask_document import SOURCE_GT, MaskDocument, MaskRead
 from app.gui.correct.mask_tools import (
     FILL_MISS_NOTICE,
     TOOL_CLASSES,
@@ -76,7 +78,7 @@ class MaskLayer:
     SIZE_RANGE = (1, 100)
     DEFAULT_OPACITY = 0.60
     Z = 1.0
-    CLEARED_NOTICE = "Mask cleared. Ctrl+Z to undo, Save to remove the file."
+    CLEARED_NOTICE = "Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask."
     FILL_MISS_NOTICE = FILL_MISS_NOTICE
     #: The one dock slider of the brush and the eraser (they share the size).
     SIZE_SPEC = SizeSpec("brush", "Brush size ([ and ])", *SIZE_RANGE)
@@ -138,7 +140,7 @@ class MaskLayer:
         self.finish_gesture()
         self._root = images_base_folder or os.path.dirname(image_path)
         read = ahead if isinstance(ahead, MaskRead) else None
-        notices = self.document.open(image_path, size, read)
+        notices = self.document.open(image_path, size, read, root=self._root)
         self._replaced()
         return notices
 
@@ -153,9 +155,12 @@ class MaskLayer:
         return self.document.is_open()
 
     def file_stamps(self) -> tuple:
-        """The document's pinned mask files, stamped or absent (``()`` when closed); also
-        the files a save writes or removes (``DiskGuardedLayer.write_stamps``)."""
+        """The GT mask and the prediction's names, stamped or absent (``()`` when closed)."""
         return self.document.file_stamps()
+
+    def write_stamps(self) -> tuple:
+        """``DiskGuardedLayer``: the GT mask, the one file a save writes or removes."""
+        return self.document.write_stamps()
 
     def matches_disk(self) -> bool:
         """``DiskGuardedLayer``: reading the mask files now would open the saved mask."""
@@ -166,24 +171,37 @@ class MaskLayer:
         return self.document.is_dirty()
 
     def save(self) -> SaveOutcome:
-        """Write the mask (an empty one removes the file); a stroke is committed first."""
+        """Write the GT mask (``MaskDocument.save``); a stroke is committed first."""
         self.finish_gesture()
         if not self.document.is_open():
             return SaveOutcome(self.layer_id, ok=False, message="No mask is open", kind="danger")
         result = self.document.save()
         self._changed()
-        return self._outcome(result)
+        return self.document.outcome(result)
 
     def unloaded_label(self) -> str:
-        """``DiskGuardedLayer``: ``"mask/<stem>.png"`` while a mask file found at open was not
-        shown and something is painted (a save would replace it); ``""`` otherwise."""
-        document, plane = self.document, self.document.history.plane
-        if not document.unloaded_file() or plane is None or not plane.any():
+        """``DiskGuardedLayer``: ``"gt/mask/<stem>.png"`` while that GT file exists and was not
+        shown (a save would replace it); ``""`` otherwise (a prediction is never replaced)."""
+        document = self.document
+        if not document.unloaded_file() or document.source != SOURCE_GT:
             return ""
-        found = [stamp[0] for stamp in document.file_stamps() if stamp[1:] != (None,)]
-        if not found:  # gone since the open: nothing left to replace
+        stamp = document.write_stamps()[0]
+        if stamp[1:] == (None,):  # gone since the open: nothing left to replace
             return ""
-        return project_label(found[0], self._root)
+        return project_label(stamp[0], self._root)
+
+    def load_prediction(self) -> bool:
+        """Replace the plane with the prediction as one undoable action; False (nothing
+        changes) without a prediction or when the plane is the prediction already."""
+        self.finish_gesture()
+        prediction, plane = self.document.prediction(), self.document.history.plane
+        if prediction is None or plane is None or (plane == prediction).all():
+            return False
+        height, width = plane.shape
+        patch = self.document.history.commit((0, 0, width, height), prediction)
+        self.canvas.rebuild()
+        self._on_patch(patch, True)
+        return True
 
     def revert(self) -> list[Notice]:
         """Discard: back to the saved mask in memory, history cleared (no notices)."""
@@ -194,12 +212,12 @@ class MaskLayer:
         return []
 
     def status(self) -> LayerStatus:
-        """Save state: a failed save until the next edit, unsaved, "Mask not shown", saved or
-        "No mask"."""
+        """Save state: a failed save until the next edit, unsaved, "Mask not shown", "GT",
+        "Prediction" or "No mask"."""
         return self.document.status()
 
     def clear(self) -> bool:
-        """Empty the mask as one undoable action (Save then removes the file)."""
+        """Empty the mask as one undoable action (Save then writes an empty GT mask)."""
         if not self.document.is_open():
             return False
         self.finish_gesture()  # a stroke in progress becomes its own action first
@@ -422,20 +440,3 @@ class MaskLayer:
         """The ring may show while active, visible, open and with a sized tool."""
         allowed = self._active and self._visible and self.document.is_open()
         self._footprint.allow(allowed and self._tool.spec.sized, forget=forget)
-
-    def _outcome(self, result: MaskSaveResult) -> SaveOutcome:
-        """A document save as the workspace reports it (the texts of C15)."""
-        if result.ok and result.kept:
-            message = "Nothing to save: the saved mask was kept"
-            return SaveOutcome(self.layer_id, ok=True, message=message, kind="info")
-        if result.ok and result.removed:
-            name = os.path.basename(self.document.image_path)
-            message = f"Empty mask: removed saved mask for {name}"
-            return SaveOutcome(self.layer_id, ok=True, cleared=True, message=message, kind="info")
-        if result.ok:
-            return SaveOutcome(self.layer_id, ok=True, path=result.path)
-        if result.path is not None:
-            message = f"Could not save mask to {result.path}: {result.error}"
-        else:
-            message = f"Could not remove mask: {result.error}"
-        return SaveOutcome(self.layer_id, ok=False, message=message, kind="danger")

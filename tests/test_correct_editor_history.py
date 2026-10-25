@@ -466,13 +466,13 @@ def test_a_key_mid_stroke_commits_it_and_the_rest_of_the_drag_paints_nothing(
     for point in REST:
         mouse(view, QEvent.Type.MouseMove, point, NO_BUTTON, LEFT)
     mouse(view, QEvent.Type.MouseButtonRelease, REST[-1], LEFT, NO_BUTTON)
-    assert editor.save() is True
+    assert editor.save() is (name not in ("Ctrl+S", "PgDn"))  # those saved it already (O2)
 
     replay = stroke_plane(np.zeros_like(plane(editor)), STROKE)
     assert np.array_equal(plane(editor), replay)  # the rest of the drag painted nothing
     lut = mask_lut()
     assert np.array_equal(pixmap_to_argb_array(mask.canvas.image), lut[plane(editor)])
-    saved = imread_unicode(project.mask("b"), cv2.IMREAD_UNCHANGED)
+    saved = imread_unicode(project.gt_mask("b"), cv2.IMREAD_UNCHANGED)
     assert np.array_equal(saved, replay_file(tmp_path, replay))
     assert editor.session.journal.undo_entries == (MASK,)
     assert moved == ([1] if name == "PgDn" else [])
@@ -521,6 +521,6 @@ def test_leaving_mid_drag_commits_the_stroke_before_the_prompt(make_editor, proj
 
     assert [title for title, _text in answers.seen] == ["Unsaved mask"]
     assert view.drawing is False
-    saved = imread_unicode(project.mask("b"), cv2.IMREAD_UNCHANGED)
+    saved = imread_unicode(project.gt_mask("b"), cv2.IMREAD_UNCHANGED)
     stroked = stroke_plane(np.zeros_like(plane(editor)), STROKE)
     assert np.array_equal(saved[:, :, 3] == 255, stroked > 0)

@@ -110,8 +110,12 @@ class Project:
         return os.path.join(self.folder, f"{STEMS[i]}.jpg")
 
     def mask(self, i: int) -> str:
-        """The saved mask of image ``i``."""
+        """The model's mask (the prediction) of image ``i``."""
         return os.path.join(self.folder, "mask", f"{STEMS[i]}.png")
+
+    def gt_mask(self, i: int) -> str:
+        """The saved (GT) mask of image ``i``: what a mask save writes."""
+        return os.path.join(self.folder, "gt", "mask", f"{STEMS[i]}.png")
 
     def correction(self, i: int) -> str:
         """The skeleton correction of image ``i``."""
@@ -383,7 +387,7 @@ def test_trace_gt_and_correct_hand_over_with_one_prompt_each_way(
     assert [title for title, _ in answers.seen] == ["Unsaved mask"]
     assert window.right_panel.currentWidget() is gt
     assert same_path(gt.current_image_path, project.image(0))
-    saved = cv2.imread(project.mask(0), cv2.IMREAD_UNCHANGED)
+    saved = cv2.imread(project.gt_mask(0), cv2.IMREAD_UNCHANGED)
     assert saved.shape == (H, W, 4) and saved[100, 40, 3] == 255  # the stroke was saved
 
     gt.begin_stroke(QPoint(10, 10))
@@ -500,7 +504,7 @@ def test_pgdn_and_pgup_on_the_canvas_save_then_open_the_next_and_previous_image(
     settle()
 
     assert len(saved) == 1 and same_path(saved[0], project.image(1))
-    assert os.path.isfile(project.mask(1))
+    assert os.path.isfile(project.gt_mask(1))
     assert same_path(editor.current_image_path, project.image(2))
     assert window.file_list.currentItem() is leaf(window, 2)
 
@@ -522,7 +526,7 @@ def test_pgdn_in_the_library_while_correcting_saves_then_opens_the_next_image(
     QTest.keyClick(window.file_list, Qt.Key.Key_PageDown)
     settle()
 
-    assert os.path.isfile(project.mask(1)) and not editor.has_unsaved_changes()
+    assert os.path.isfile(project.gt_mask(1)) and not editor.has_unsaved_changes()
     assert same_path(editor.current_image_path, project.image(2))
     assert window.file_list.currentItem() is leaf(window, 2)
 
@@ -607,9 +611,11 @@ def test_a_mask_save_badges_the_image_and_refreshes_the_metrics_without_stat_per
 
     other_images = [p for p in stats if any(stem in p for stem in STEMS if stem != STEMS[1])]
     assert stats and other_images == []  # the spy saw the save; no other image was looked up
-    assert window.image_manager.has_mask(STEMS[1])
-    assert window.library_index.status_of(STEMS[1]) == (True, False)
-    assert window.metrics_bar._status_value.text() == "Mask ready"
+    # The save is GT (WG-T2): recorded as a GT mask, never as a prediction. The badge and
+    # the metrics bar words for GT come with WG-T6 / WG-T8.
+    assert window.image_manager.has_gt_mask(STEMS[1])
+    assert not window.image_manager.has_mask(STEMS[1])
+    assert window.image_manager.mask_state(STEMS[1]) == "gt"
     assert toasts == [("success", f"Saved mask · {STEMS[1]}.jpg")]  # the editor's toast only
     assert not window.isWindowModified()
 
@@ -627,28 +633,54 @@ def test_a_tree_click_answered_save_reports_the_mask_once_and_badges_it(
 
     assert len(answers.seen) == 1
     assert len(saved) == 1 and same_path(saved[0], project.image(1))
-    assert os.path.isfile(project.mask(1))
-    assert window.library_index.status_of(STEMS[1])[0] is True
+    assert os.path.isfile(project.gt_mask(1)) and not os.path.exists(project.mask(1))
+    assert window.image_manager.has_gt_mask(STEMS[1])
     assert same_path(editor.current_image_path, project.image(2))
 
 
-def test_an_emptied_mask_saved_on_a_tree_click_clears_the_badge_once(
+def test_an_emptied_mask_saved_on_a_tree_click_records_an_empty_gt_mask_once(
     make_window, tmp_path, monkeypatch
-):
+):  # O9
     window, project = in_correct(make_window, tmp_path, 0)  # image 0 has the model mask
     editor = window.correct_editor
-    assert window.library_index.status_of(STEMS[0])[0] is True
+    assert window.image_manager.mask_state(STEMS[0]) == "prediction"
     editor.clear_active_layer()
-    cleared = record(window.mask_cleared)
+    saved, cleared = record(window.mask_saved), record(window.mask_cleared)
     answers = answer_prompts(monkeypatch).will(SAVE)
 
     select(window, 1)
 
     assert len(answers.seen) == 1
-    assert len(cleared) == 1 and same_path(cleared[0], project.image(0))
-    assert not os.path.exists(project.mask(0))
-    assert window.library_index.status_of(STEMS[0])[0] is False
-    assert not window.image_manager.has_mask(STEMS[0])
+    assert len(saved) == 1 and same_path(saved[0], project.image(0)) and cleared == []
+    assert os.path.exists(project.mask(0)) and os.path.isfile(project.gt_mask(0))
+    assert window.image_manager.has_mask(STEMS[0])  # the prediction stays
+    assert window.image_manager.mask_state(STEMS[0]) == "gt"
+
+
+def test_a_mask_back_to_the_prediction_forgets_the_gt_mask(make_window, tmp_path, monkeypatch):
+    project = new_project(tmp_path)
+    write_mask(project.gt_mask(0), np.zeros((H, W), np.uint8))
+    window, _project = in_correct(make_window, tmp_path, 0, project)
+    editor = window.correct_editor
+    window.image_manager.set_gt(project.image(0), "mask", True)  # as the scan (WG-T1) finds it
+    editor.load_prediction()
+    cleared = record(window.mask_cleared)
+
+    assert editor.save()
+
+    assert len(cleared) == 1 and not os.path.exists(project.gt_mask(0))
+    assert window.image_manager.mask_state(STEMS[0]) == "prediction"
+
+
+def test_the_library_marks_a_gt_mask_after_a_save(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 1)  # image 1 has no mask
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+
+    assert editor.save()
+
+    assert window.image_manager.has_gt_mask(STEMS[1])
+    assert STEMS[1] not in window.image_manager.masks  # a save never adds a prediction
 
 
 def test_re_entering_correct_after_a_skeleton_save_shows_the_saved_correction(

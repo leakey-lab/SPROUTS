@@ -220,7 +220,8 @@ def test_saving_again_in_correct_updates_the_save_toast_in_place(window):
     [first] = saved_toasts(window)
     assert first.message() == f"Saved mask · {name}"
 
-    assert editor.save()  # nothing unsaved: Ctrl+S rewrites the active layer (spec D7)
+    paint(editor, (20, 120), (60, 120))  # another edit: Ctrl+S saves only unsaved layers
+    assert editor.save()
     settle()
 
     assert saved_toasts(window) == [first]

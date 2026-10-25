@@ -367,6 +367,7 @@ def test_the_dock_holds_the_size_and_opacity_then_the_actions_then_save(make_pag
     ]
     actions = [
         controls.load_button,
+        controls.prediction_button,
         controls.undo_button,
         controls.redo_button,
         controls.clear_icon_button,
@@ -375,9 +376,9 @@ def test_the_dock_holds_the_size_and_opacity_then_the_actions_then_save(make_pag
     assert len(controls.size_sliders) == 2
     assert all(widgets[0].isAncestorOf(slider) for slider in controls.size_sliders.values())
     assert widgets[1] is controls.opacity_slider
-    assert separators == [2, 7]
-    assert widgets[3:7] == actions
-    assert widgets[8:] == [controls.save_button]
+    assert separators == [2, 8]
+    assert widgets[3:8] == actions
+    assert widgets[9:] == [controls.save_button]
 
 
 def test_load_is_offered_only_while_the_skeleton_is_shown(make_page):
@@ -394,7 +395,7 @@ def test_load_is_offered_only_while_the_skeleton_is_shown(make_page):
 @pytest.mark.parametrize(
     "layer_id, text, tip",
     [
-        (MASK, "Clear mask", "Clear the mask. Undo with Ctrl+Z; Save removes the file."),
+        (MASK, "Clear mask", "Clear the mask. Undo with Ctrl+Z; Save writes an empty GT mask."),
         (SKELETON, "Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
     ],
 )

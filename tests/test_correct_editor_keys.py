@@ -410,6 +410,7 @@ def test_ctrl_s_saves_from_the_canvas(page, project):
 
     assert not page.has_unsaved_changes() and os.path.isfile(project.correction())
     assert png_colour_type(project.mask()) == 0  # only the edited skeleton was written
+    assert not os.path.exists(project.gt_mask())
 
 
 def test_pgdn_and_pgup_save_first_then_ask_for_the_next_and_previous_image(page, project):
@@ -418,7 +419,8 @@ def test_pgdn_and_pgup_save_first_then_ask_for_the_next_and_previous_image(page,
 
     press(page, Key.Key_PageDown)
     assert moved == [1] and not page.has_unsaved_changes()
-    assert png_colour_type(project.mask()) == 6  # the edited mask was written
+    assert png_colour_type(project.gt_mask()) == 6  # the edited mask was written (GT)
+    assert png_colour_type(project.mask()) == 0  # the prediction was not
     press(page, Key.Key_PageUp)
     assert moved == [1, -1]
 

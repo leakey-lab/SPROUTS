@@ -436,6 +436,17 @@ Five passes, not yet released:
     budget) (WX-T6, O21).
   - Citation record: authors Parth, Varela and Leakey; cited as "SPROUTS"; `CITATION.cff`
     ships in the Windows bundle so About can show how to cite (W5-T3, O34).
+  - Correct, mask layer (WG-T2, O2, O9, O26): the mask opens `gt/mask/<stem>.png` when it
+    exists, else the model's prediction `mask/<stem>.png`, and Save writes only
+    `gt/mask/<stem>.png`; `mask/` is never written or removed. Save writes only the layers
+    with unsaved edits; with none it writes nothing ("Nothing unsaved"). Clear + Save writes
+    an empty GT mask ("Empty mask saved as GT for <image>: root area 0") instead of deleting
+    the file; a mask edited back to equal its prediction removes the GT file ("Mask equals
+    the prediction: removed gt/mask/<stem>.png"). A **Load prediction** dock button puts the
+    prediction back as one undoable step. Mask states read "GT" / "Prediction". No CSV
+    value changes yet: Measure reads `gt/` from WG-T8 on. Golden `mask_clear.saved` of
+    `synth_model_mask_and_skeleton`: file removed → empty GT file (O9); every other golden
+    pixel unchanged.
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

@@ -1,10 +1,11 @@
 """MaskDocument: the Qt-free mask of one image in the Correct workspace (C13).
 
-Today's load and save (``MaskTracingInterface._open_document`` / ``save_mask``) moved
-verbatim, plus what the workspace adds: dirty as a pixel comparison with the saved
-state, an in-memory revert, a failed-save status and the pinned file stamps. Plane
-edits are driven through ``document.history`` followed by ``touch()``, as the mask
-layer does after every commit, undo and redo.
+Today's load and save (``MaskTracingInterface._open_document`` / ``save_mask``) moved,
+plus what the workspace adds: dirty as a pixel comparison with the saved state, an
+in-memory revert, a failed-save status and the pinned file stamps. It opens the GT mask
+``gt/mask/<stem>.png`` first, else the prediction ``mask/<stem>.png``, and saves GT only
+(WG-T2). Plane edits are driven through ``document.history`` followed by ``touch()``, as
+the mask layer does after every commit, undo and redo.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ NOT_SHOWN_SIZE = (
 NOT_SHOWN_UNREADABLE = (
     "Saved mask could not be read: it is not shown and is kept unless you save over it"
 )
+PREDICTION_NOT_SHOWN_SIZE = "The prediction's size does not match the image: it is not shown"
+GT_LABEL = f"gt/mask/{STEM}.png"  # the "GT" status tooltip: relative to the project folder
 MASK_EXTENSIONS = (".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG")  # lookup order
 SYNTH_CASES = ("synth_model_mask_and_skeleton", "synth_blank_png")
 
@@ -50,7 +53,18 @@ def _image(tmp_path) -> str:
 
 
 def _mask_path(tmp_path, ext: str = ".png") -> str:
+    """The prediction (``mask/``) of the image."""
     return os.path.normpath(os.path.join(str(tmp_path), "mask", f"{STEM}{ext}"))
+
+
+def _gt_path(tmp_path) -> str:
+    """The GT mask (``gt/mask/``) of the image: the one file a save writes."""
+    return os.path.normpath(os.path.join(str(tmp_path), "gt", "mask", f"{STEM}.png"))
+
+
+def _prediction_status() -> LayerStatus:
+    tip = f"mask/{STEM}.png — the model's output. Save after an edit writes gt/mask/{STEM}.png"
+    return LayerStatus("none", "Prediction", tip)
 
 
 def _write(path: str, pixels: np.ndarray) -> None:
@@ -111,6 +125,8 @@ def test_opens_empty_without_a_saved_mask(tmp_path):
     assert not doc.has_saved_file and not doc.is_dirty()
     assert not doc.history.can_undo
     assert doc.status() == LayerStatus("none", "No mask")
+    assert doc.source is None and doc.prediction() is None
+    assert doc.gt_path == _gt_path(tmp_path) and doc.prediction_path is None
 
 
 def test_opens_a_model_mask_thresholded_above_200(tmp_path):
@@ -121,7 +137,27 @@ def test_opens_a_model_mask_thresholded_above_200(tmp_path):
 
     assert np.array_equal(doc.history.plane, expected)
     assert doc.has_saved_file and not doc.is_dirty()
-    assert doc.status() == LayerStatus("clean", None)
+    assert doc.source == "prediction" and doc.prediction_path == _mask_path(tmp_path)
+    assert np.array_equal(doc.prediction(), expected)
+    assert doc.prediction() is not doc.history.plane  # the plane is edited in place
+    assert doc.status() == _prediction_status()
+
+
+def test_opens_the_gt_mask_first_thresholded_above_200(tmp_path):
+    prediction = _model_mask(tmp_path)
+    grey = np.zeros((60, 80), np.uint8)
+    grey[1, :3] = (200, 201, 255)
+    _write(_gt_path(tmp_path), grey)
+    doc = MaskDocument()
+
+    assert doc.open(_image(tmp_path), SIZE) == []
+
+    expected = np.zeros((60, 80), np.uint8)
+    expected[1, 1:3] = 1
+    assert np.array_equal(doc.history.plane, expected)
+    assert np.array_equal(doc.prediction(), prediction)
+    assert doc.source == "gt" and doc.has_saved_file and not doc.is_dirty()
+    assert doc.status() == LayerStatus("clean", "GT", GT_LABEL)
 
 
 @pytest.mark.parametrize("case", SYNTH_CASES)
@@ -141,7 +177,7 @@ def _bytes(path: str) -> bytes:
         return fh.read()
 
 
-def _assert_not_shown_and_kept(doc: MaskDocument, tmp_path, text: str, before: bytes) -> None:
+def _assert_not_shown_and_kept(doc: MaskDocument, path: str, text: str, before: bytes) -> None:
     """Empty, clean, flagged; status says so; a save writes and removes nothing."""
     assert not doc.history.plane.any() and doc.unloaded_file() and not doc.is_dirty()
     assert not doc.has_saved_file
@@ -149,35 +185,48 @@ def _assert_not_shown_and_kept(doc: MaskDocument, tmp_path, text: str, before: b
 
     assert doc.save() == MaskSaveResult(ok=True, kept=True)
 
-    assert _bytes(_mask_path(tmp_path)) == before  # nothing written or removed
+    assert _bytes(path) == before  # nothing written or removed
     assert doc.unloaded_file() and doc.status() == LayerStatus("error", "Mask not shown", text)
 
 
 def test_a_mask_of_another_size_is_not_shown_and_is_kept(tmp_path):
-    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
-    before = _bytes(_mask_path(tmp_path))
+    _write(_gt_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    before = _bytes(_gt_path(tmp_path))
     doc = MaskDocument()
 
     assert doc.open(_image(tmp_path), (100, 50)) == [Notice(NOT_SHOWN_SIZE, "warn")]
 
-    assert doc.history.plane.shape == (50, 100)
-    _assert_not_shown_and_kept(doc, tmp_path, NOT_SHOWN_SIZE, before)
+    assert doc.history.plane.shape == (50, 100) and doc.source == "gt"
+    _assert_not_shown_and_kept(doc, _gt_path(tmp_path), NOT_SHOWN_SIZE, before)
 
 
 def test_an_undecodable_mask_is_not_shown_says_so_and_is_kept(tmp_path):
-    os.makedirs(tmp_path / "mask")
-    with open(_mask_path(tmp_path), "wb") as fh:
+    os.makedirs(tmp_path / "gt" / "mask")
+    with open(_gt_path(tmp_path), "wb") as fh:
         fh.write(b"not a png")
     doc = MaskDocument()
 
     assert doc.open(_image(tmp_path), SIZE) == [Notice(NOT_SHOWN_UNREADABLE, "warn")]
 
     assert doc.history.plane.shape == (60, 80)
-    _assert_not_shown_and_kept(doc, tmp_path, NOT_SHOWN_UNREADABLE, b"not a png")
+    _assert_not_shown_and_kept(doc, _gt_path(tmp_path), NOT_SHOWN_UNREADABLE, b"not a png")
+
+
+def test_a_prediction_of_another_size_is_not_shown_and_never_written(tmp_path):
+    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    before = _bytes(_mask_path(tmp_path))
+    doc = MaskDocument()
+
+    assert doc.open(_image(tmp_path), (100, 50)) == [Notice(PREDICTION_NOT_SHOWN_SIZE, "warn")]
+
+    assert doc.source == "prediction" and doc.prediction() is None
+    _assert_not_shown_and_kept(doc, _mask_path(tmp_path), PREDICTION_NOT_SHOWN_SIZE, before)
+    _paint(doc, (10, 10, 5, 5))
+    assert doc.save().path == _gt_path(tmp_path) and _bytes(_mask_path(tmp_path)) == before
 
 
 def test_painting_over_an_unshown_mask_then_saving_replaces_it(tmp_path):
-    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    _write(_gt_path(tmp_path), np.full((60, 80), 255, np.uint8))
     doc = MaskDocument()
     doc.open(_image(tmp_path), (100, 50))
     _paint(doc, (10, 10, 5, 5))
@@ -185,14 +234,14 @@ def test_painting_over_an_unshown_mask_then_saving_replaces_it(tmp_path):
 
     result = doc.save()
 
-    assert result.ok and not result.kept and result.path == _mask_path(tmp_path)
+    assert result.ok and not result.kept and result.path == _gt_path(tmp_path)
     assert read_rgba_shape(result.path) == (50, 100)
     assert not doc.unloaded_file() and doc.has_saved_file
-    assert doc.status() == LayerStatus("clean")
+    assert doc.status() == LayerStatus("clean", "GT", GT_LABEL)
 
 
 def test_a_failed_save_over_an_unshown_mask_says_so_and_keeps_it_flagged(tmp_path, monkeypatch):
-    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    _write(_gt_path(tmp_path), np.full((60, 80), 255, np.uint8))
     doc = MaskDocument()
     doc.open(_image(tmp_path), (100, 50))
     _paint(doc, (10, 10, 5, 5))
@@ -204,7 +253,7 @@ def test_a_failed_save_over_an_unshown_mask_says_so_and_keeps_it_flagged(tmp_pat
 
 
 def test_closing_forgets_the_unshown_file(tmp_path):
-    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    _write(_gt_path(tmp_path), np.full((60, 80), 255, np.uint8))
     doc = MaskDocument()
     doc.open(_image(tmp_path), (100, 50))
 
@@ -214,14 +263,17 @@ def test_closing_forgets_the_unshown_file(tmp_path):
     assert doc.open(_image(tmp_path / "other"), SIZE) == [] and not doc.unloaded_file()
 
 
-def test_a_read_says_why_a_file_was_not_loaded(tmp_path):
+@pytest.mark.parametrize("which", ["prediction", "gt"])
+def test_a_read_says_why_a_file_was_not_loaded(tmp_path, which):
+    path = _mask_path(tmp_path) if which == "prediction" else _gt_path(tmp_path)
     assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == ""
-    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    _write(path, np.full((60, 80), 255, np.uint8))
     assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == ""
     assert MaskDocument.read(_image(tmp_path), (100, 50)).not_loaded == "size"
-    with open(_mask_path(tmp_path), "wb") as fh:
+    with open(path, "wb") as fh:
         fh.write(b"not a png")
-    assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == "unreadable"
+    read = MaskDocument.read(_image(tmp_path), SIZE)
+    assert (read.not_loaded, read.source) == ("unreadable", which)
 
 
 def read_rgba_shape(path: str) -> tuple[int, int]:
@@ -257,7 +309,7 @@ def test_save_writes_white_on_transparent_rgba(tmp_path):
 
     result = doc.save()
 
-    path = _mask_path(tmp_path)
+    path = _gt_path(tmp_path)
     assert result == MaskSaveResult(ok=True, path=path)
     assert png_colour_type(path) == 6
     rgba = imread_unicode(path, cv2.IMREAD_UNCHANGED)
@@ -266,13 +318,15 @@ def test_save_writes_white_on_transparent_rgba(tmp_path):
     on[30:55, 40:43] = True
     assert rgba.shape == (60, 80, 4)
     assert (rgba[on] == 255).all() and not rgba[~on].any()
-    assert doc.has_saved_file and not doc.is_dirty()
-    assert doc.status() == LayerStatus("clean", None)
+    assert doc.has_saved_file and not doc.is_dirty() and doc.source == "gt"
+    assert doc.status() == LayerStatus("clean", "GT", GT_LABEL)
+    assert not (tmp_path / "mask").exists()  # no prediction is ever written
 
 
-def test_saving_an_empty_plane_removes_every_saved_variant(tmp_path):
+def test_saving_an_emptied_prediction_writes_an_empty_gt_mask(tmp_path):  # O9
     _model_mask(tmp_path)
     _write(_mask_path(tmp_path, ".jpg"), np.zeros((60, 80), np.uint8))  # a legacy JPEG mask
+    predictions = sorted(os.listdir(tmp_path / "mask"))
     doc = MaskDocument()
     doc.open(_image(tmp_path), SIZE)
     _paint(doc, (0, 0, 80, 60), value=0)  # Clear
@@ -280,24 +334,45 @@ def test_saving_an_empty_plane_removes_every_saved_variant(tmp_path):
 
     result = doc.save()
 
-    assert result == MaskSaveResult(ok=True, path=None, removed=True)
-    assert os.listdir(tmp_path / "mask") == []
-    assert not doc.has_saved_file and not doc.is_dirty()
-    assert doc.status() == LayerStatus("none", "No mask")
+    message = f"Empty mask saved as GT for {STEM}.jpg: root area 0"
+    assert result == MaskSaveResult(ok=True, path=_gt_path(tmp_path), message=message)
+    assert describe_mask_file(_gt_path(tmp_path))["on_count"] == 0
+    assert sorted(os.listdir(tmp_path / "mask")) == predictions  # the predictions stay
+    assert doc.has_saved_file and not doc.is_dirty()
+    assert doc.status() == LayerStatus("clean", "GT", GT_LABEL)
 
 
-def test_saving_an_empty_plane_without_a_file_removes_nothing(tmp_path):
+def test_saving_without_edits_writes_nothing(tmp_path):  # O2
+    _model_mask(tmp_path)
     doc = MaskDocument()
     doc.open(_image(tmp_path), SIZE)
 
-    assert doc.save() == MaskSaveResult(ok=True, path=None, removed=False)
+    assert doc.save() == MaskSaveResult(ok=True)
 
-    assert not (tmp_path / "mask").exists()
+    assert not (tmp_path / "gt").exists()
+
+
+def test_a_plane_equal_to_the_prediction_removes_the_gt_file(tmp_path):
+    prediction = _model_mask(tmp_path)
+    _write(_gt_path(tmp_path), np.zeros((60, 80), np.uint8))  # an empty GT mask
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), SIZE)
+    assert doc.source == "gt" and not doc.history.plane.any()
+    doc.history.commit((0, 0, 80, 60), doc.prediction())  # Load prediction
+    doc.touch()
+
+    result = doc.save()
+
+    message = f"Mask equals the prediction: removed gt/mask/{STEM}.png"
+    assert result == MaskSaveResult(ok=True, removed=True, message=message)
+    assert not os.path.exists(_gt_path(tmp_path)) and os.path.isfile(_mask_path(tmp_path))
+    assert np.array_equal(doc.history.plane, prediction) and not doc.is_dirty()
+    assert doc.source == "prediction" and doc.status() == _prediction_status()
 
 
 @pytest.mark.parametrize("case", SYNTH_CASES)
 def test_clear_then_save_matches_the_mask_clear_golden(tmp_path, case):
-    """``ops.mask_clear`` at the document level: Clear commits zeros, Save removes the file."""
+    """``ops.mask_clear`` at the document level: Clear commits zeros, Save writes empty GT."""
     golden = load_goldens()["cases"][case]["mask_clear"]
     folder, image = make_synth_project(str(tmp_path), case)
     doc = MaskDocument()
@@ -309,9 +384,11 @@ def test_clear_then_save_matches_the_mask_clear_golden(tmp_path, case):
     shas.append(sha(doc.history.plane))
 
     assert shas == golden["per_op_plane_sha256"]
-    assert result.ok and result.path is None
-    assert result.removed == (case == "synth_model_mask_and_skeleton")
-    assert describe_mask_file(os.path.join(folder, "mask", f"{SYNTH_STEM}.png")) == golden["saved"]
+    model = case == "synth_model_mask_and_skeleton"
+    assert result.ok and (result.path is not None, result.removed) == (model, False)
+    saved = describe_mask_file(os.path.join(folder, "gt", "mask", f"{SYNTH_STEM}.png"))
+    assert saved == golden["saved"]
+    assert saved.get("on_count") == (0 if model else None)  # O9: an empty GT file
 
 
 def test_failed_write_keeps_the_old_file_and_stays_dirty(tmp_path, monkeypatch):
@@ -319,7 +396,7 @@ def test_failed_write_keeps_the_old_file_and_stays_dirty(tmp_path, monkeypatch):
     doc.open(_image(tmp_path), SIZE)
     _paint(doc, (5, 5, 10, 10))
     assert doc.save().ok
-    path = _mask_path(tmp_path)
+    path = _gt_path(tmp_path)
     with open(path, "rb") as fh:
         before = fh.read()
     _paint(doc, (30, 30, 10, 10))
@@ -330,30 +407,48 @@ def test_failed_write_keeps_the_old_file_and_stays_dirty(tmp_path, monkeypatch):
     assert result == MaskSaveResult(ok=False, path=path, error="disk full")
     with open(path, "rb") as fh:
         assert fh.read() == before
-    assert os.listdir(tmp_path / "mask") == [os.path.basename(path)]  # no temp file left
+    assert os.listdir(tmp_path / "gt" / "mask") == [os.path.basename(path)]  # no temp file
     assert doc.has_saved_file and doc.is_dirty()
     assert doc.status() == LayerStatus("error", "Not saved", "disk full")
     doc.touch()  # the next edit
     assert doc.status() == LayerStatus("dirty", None)
 
 
-def test_failed_removal_is_a_result_and_stays_dirty(tmp_path, monkeypatch):
+def test_a_gt_file_already_gone_is_not_said_to_be_removed(tmp_path):
     _model_mask(tmp_path)
+    _write(_gt_path(tmp_path), np.zeros((60, 80), np.uint8))
     doc = MaskDocument()
     doc.open(_image(tmp_path), SIZE)
-    _paint(doc, (0, 0, 80, 60), value=0)
+    doc.history.commit((0, 0, 80, 60), doc.prediction())  # back to the prediction
+    doc.touch()
+    os.remove(_gt_path(tmp_path))  # gone meanwhile
+
+    result = doc.save()
+
+    message = f"Mask equals the prediction: gt/mask/{STEM}.png was already gone"
+    assert result == MaskSaveResult(ok=True, removed=True, message=message)
+    assert doc.source == "prediction" and not doc.is_dirty()
+
+
+def test_failed_removal_is_a_result_and_stays_dirty(tmp_path, monkeypatch):
+    _model_mask(tmp_path)
+    _write(_gt_path(tmp_path), np.zeros((60, 80), np.uint8))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), SIZE)
+    doc.history.commit((0, 0, 80, 60), doc.prediction())  # back to the prediction
+    doc.touch()
     monkeypatch.setattr(os, "remove", _boom("in use"))
 
     result = doc.save()
 
     assert result == MaskSaveResult(ok=False, error="in use")
-    assert os.path.isfile(_mask_path(tmp_path))
-    assert doc.has_saved_file and doc.is_dirty()
+    assert os.path.isfile(_gt_path(tmp_path)) and os.path.isfile(_mask_path(tmp_path))
+    assert doc.has_saved_file and doc.is_dirty() and doc.source == "gt"
     assert doc.status() == LayerStatus("error", "Not saved", "in use")
 
 
 def test_unwritable_folder_returns_a_result_instead_of_raising(tmp_path):
-    with open(tmp_path / "mask", "wb") as fh:  # a file where the mask folder belongs
+    with open(tmp_path / "gt", "wb") as fh:  # a file where the GT folder belongs
         fh.write(b"")
     doc = MaskDocument()
     doc.open(_image(tmp_path), SIZE)
@@ -362,7 +457,7 @@ def test_unwritable_folder_returns_a_result_instead_of_raising(tmp_path):
     result = doc.save()
 
     assert not result.ok and result.error
-    assert result.path == _mask_path(tmp_path) and not result.removed
+    assert result.path == _gt_path(tmp_path) and not result.removed
     assert doc.is_dirty() and doc.status().state == "error"
 
 
@@ -376,7 +471,7 @@ def test_a_successful_save_clears_the_error(tmp_path, monkeypatch):
 
     assert doc.save().ok
 
-    assert doc.status() == LayerStatus("clean", None)
+    assert doc.status() == LayerStatus("clean", "GT", GT_LABEL)
 
 
 # ------------------------------------------------------------------ dirty and revert
@@ -459,7 +554,7 @@ def test_revert_restores_the_saved_plane_and_clears_the_history(tmp_path):
     assert not doc.history.can_undo and not doc.history.can_redo
     assert changes  # the owner hears that the history emptied
     assert doc.revision > revision and not doc.is_dirty()
-    assert doc.status() == LayerStatus("clean", None)
+    assert doc.status() == _prediction_status()
 
 
 def test_revert_goes_back_to_the_last_save(tmp_path):
@@ -479,12 +574,13 @@ def test_revert_goes_back_to_the_last_save(tmp_path):
 # ------------------------------------------------------------------ stamps and lifecycle
 
 
-def test_file_stamps_pin_every_mask_candidate_in_lookup_order(tmp_path):
+def test_file_stamps_pin_the_gt_mask_then_every_mask_candidate_in_lookup_order(tmp_path):
     doc = MaskDocument()
-    assert doc.file_stamps() == ()
+    assert doc.file_stamps() == () and doc.write_stamps() == ()
     doc.open(_image(tmp_path), SIZE)
-    paths = [_mask_path(tmp_path, ext) for ext in MASK_EXTENSIONS]
+    paths = [_gt_path(tmp_path)] + [_mask_path(tmp_path, ext) for ext in MASK_EXTENSIONS]
     assert doc.file_stamps() == tuple((path, None) for path in paths)
+    assert doc.write_stamps() == ((paths[0], None),)
 
     _paint(doc, (5, 5, 10, 10))
     assert doc.save().ok
@@ -493,6 +589,7 @@ def test_file_stamps_pin_every_mask_candidate_in_lookup_order(tmp_path):
     assert [entry[0] for entry in written] == paths
     assert written[0] == (paths[0], stat.st_mtime_ns, stat.st_size)
     assert doc.file_stamps() == written  # read afresh: equal while nothing changed
+    assert doc.write_stamps() == (written[0],)
 
     _paint(doc, (30, 30, 20, 20))
     assert doc.save().ok
@@ -503,14 +600,26 @@ def test_file_stamps_pin_every_mask_candidate_in_lookup_order(tmp_path):
     touched = doc.file_stamps()  # same bytes, a new time: another program rewrote it
     assert touched != rewritten
 
-    _write(paths[2], np.zeros((60, 80), np.uint8))  # a legacy .jpg appears
+    _write(paths[3], np.zeros((60, 80), np.uint8))  # a legacy .jpg prediction appears
     with_jpg = doc.file_stamps()
-    assert with_jpg != touched
-    stat = os.stat(paths[2])
-    assert with_jpg[2] == (paths[2], stat.st_mtime_ns, stat.st_size)
+    assert with_jpg != touched and doc.write_stamps() == (touched[0],)
+    stat = os.stat(paths[3])
+    assert with_jpg[3] == (paths[3], stat.st_mtime_ns, stat.st_size)
 
     doc.close()
     assert doc.file_stamps() == ()
+
+
+def test_matches_disk_needs_the_same_source(tmp_path):
+    _model_mask(tmp_path)
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), SIZE)
+    _paint(doc, (0, 0, 80, 60), value=0)
+    assert doc.save().path == _gt_path(tmp_path)  # an empty GT mask
+    assert doc.matches_disk()
+
+    os.remove(_gt_path(tmp_path))  # gone: the prediction would open now
+    assert not doc.matches_disk()
 
 
 def test_close_forgets_the_document(tmp_path):

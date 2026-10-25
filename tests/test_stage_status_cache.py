@@ -169,9 +169,13 @@ def test_the_generate_text_follows_a_mask_saved_in_an_editor(window, tmp_path, c
         window.statusline.refresh_idle()
     assert len(counted) == 1
 
-    window.highlight_saved_mask(str(project / f"{NAMES[1]}.jpg"))  # an editor saved a mask
+    window.highlight_saved_mask(str(project / f"{NAMES[1]}.jpg"))  # an editor saved GT
+    window.statusline.refresh_idle()
+    assert line.text() == "Ready · 4 images · 3 without a mask · 4 without a skeleton"
+    manager = window.image_manager  # the count is of predictions (what Generate would add)
+    manager.set_mask(NAMES[1], str(project / "mask" / f"{NAMES[1]}.png"))  # one was generated
     window.statusline.refresh_idle()
     assert line.text() == "Ready · 4 images · 2 without a mask · 4 without a skeleton"
-    window.unhighlight_cleared_mask(str(project / f"{NAMES[0]}.jpg"))  # and cleared one
+    manager.set_mask(NAMES[0], None)  # and one is gone
     window.statusline.refresh_idle()
     assert line.text() == "Ready · 4 images · 3 without a mask · 4 without a skeleton"

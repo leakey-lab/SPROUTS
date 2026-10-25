@@ -265,10 +265,11 @@ class CorrectSession:
 
     # ----------------------------------------------------------------------- save
     def save(self, active_id: str) -> SaveReport:
-        """Ctrl+S: save the dirty layers, mask first; with none dirty, the active layer.
+        """Ctrl+S: save the dirty layers, mask first (O2: a clean layer is never written).
 
-        A clean inactive layer is never rewritten. A gesture in progress is committed
-        first, so its stroke is saved too.
+        With none dirty nothing is written: an empty report and the notice "Nothing
+        unsaved". ``active_id`` (the edited layer) selects nothing. A gesture in progress
+        is committed first, so its stroke is saved too.
         """
         if active_id not in self.layers:
             raise KeyError(active_id)
@@ -276,7 +277,11 @@ class CorrectSession:
             return SaveReport()
         with self._batch:
             self.finish_gestures()
-            return self._save(self.dirty_layers() or [active_id], ask=True)
+            dirty = self.dirty_layers()
+            if not dirty:
+                self._on_notice("Nothing unsaved", "info")
+                return SaveReport()
+            return self._save(dirty, ask=True)
 
     def save_dirty(self) -> SaveReport:
         """PgDn / PgUp: save the dirty layers only; an empty report (and no refresh of the

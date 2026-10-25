@@ -51,6 +51,7 @@ from app.gui.widgets import (  # noqa: E402
     ZoomCluster,
     tokens,
 )
+from app.project_layout import ProjectLayout  # noqa: E402
 from tests.correct_goldens_support import png_colour_type  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
 from tests.render_metrics import equal_neighbour_fraction, sine_image, sine_step_ratio  # noqa: E402
@@ -138,8 +139,12 @@ class Project:
     b: str
 
     def mask(self, name: str = "a") -> str:
-        """The saved mask of image ``name``."""
+        """The model's mask (the prediction) of image ``name``."""
         return os.path.join(self.folder, "mask", f"{name}.png")
+
+    def gt_mask(self, name: str = "a") -> str:
+        """The saved (GT) mask of image ``name``: what a mask save writes."""
+        return os.path.join(self.folder, "gt", "mask", f"{name}.png")
 
     def correction(self, name: str = "a") -> str:
         """The skeleton correction of image ``name``."""
@@ -1105,21 +1110,24 @@ def test_the_chip_shows_the_state_of_both_layers(make_editor, project, monkeypat
     chip = editor.status_chip
     assert chip.state() == "none"  # no mask, no skeleton
     editor.load_image(project.a, project.folder)
-    assert chip.state() == "clean"  # a saved mask and a generated skeleton
+    assert chip.state() == "none"  # the model's mask and a generated skeleton: nothing saved
     paint(editor, (20, 100), (60, 100))
     assert chip.state() == "dirty"
     editor.undo()
-    assert chip.state() == "clean"
+    assert chip.state() == "none"
 
     def fail(*_args, **_kwargs):
         raise OSError("disk full")
 
     monkeypatch.setattr(skeleton_document, "imwrite_unicode", fail)
+    paint(editor, (20, 100), (60, 100))
+    assert editor.save()
+    assert chip.state() == "clean"  # a saved (GT) mask and a generated skeleton
     draw_line(editor)
     assert chip.state() == "dirty"  # an unsaved skeleton beside a saved mask
     editor.save()
     assert chip.state() == "error" and "disk full" in chip.state_label.toolTip()
-    assert editor.layer_panel.rows[MASK].state_label.text() == "Saved"
+    assert editor.layer_panel.rows[MASK].state_label.text() == "GT"
 
 
 def test_the_chip_hint_names_the_edited_layer_and_its_tool_in_its_colour(make_editor, project):
@@ -1143,13 +1151,13 @@ def test_the_layers_rows_show_the_save_state_of_each_layer(make_editor, project)
     def states():
         return rows[MASK].state_label.text(), rows[SKELETON].state_label.text()
 
-    assert states() == ("Saved", "Generated")
+    assert states() == ("Prediction", "Generated")
     paint(editor, (20, 100), (60, 100))
     assert states() == ("Unsaved", "Generated")
     draw_line(editor)
     assert states() == ("Unsaved", "Unsaved")
     editor.save()
-    assert states() == ("Saved", "Saved")
+    assert states() == ("GT", "Saved")
 
 
 # ================================================================================= saving
@@ -1164,7 +1172,8 @@ def test_a_mask_edit_saves_only_the_mask(make_editor, project):
     assert masks == [project.a] and skeletons == []
     assert notices == [("Saved mask · a.png", "success")]
     assert not os.path.exists(os.path.join(project.folder, "skeleton_corrections"))
-    assert png_colour_type(project.mask()) == 6 and not editor.has_unsaved_changes()
+    assert png_colour_type(project.gt_mask()) == 6 and not editor.has_unsaved_changes()
+    assert png_colour_type(project.mask()) == 0  # the model mask is never rewritten
 
 
 def test_a_skeleton_edit_saves_only_the_correction(make_editor, project):
@@ -1186,17 +1195,17 @@ def test_a_skeleton_edit_saves_only_the_correction(make_editor, project):
 
 # The skeleton half: tests/test_skeleton_save_only_when_changed.py (O2: an untouched skeleton
 # is not written).
-@pytest.mark.parametrize("layer_id", [MASK])
-def test_saving_with_nothing_unsaved_saves_the_edited_layer_only(make_editor, project, layer_id):
+@pytest.mark.parametrize("layer_id", [MASK, SKELETON])
+def test_saving_with_nothing_unsaved_writes_nothing(make_editor, project, layer_id):  # O2
     editor = make_editor(project.a, project.folder)
     editor.set_active_layer(layer_id)
+    notices = record(editor.notice)
     before = listing(project.folder)
 
-    assert editor.save() is True
+    assert editor.save() is False
 
-    changed = {path for path, stamp in listing(project.folder).items() if before.get(path) != stamp}
-    written = project.mask() if layer_id == MASK else project.correction()
-    assert changed == {os.path.relpath(written, project.folder)}
+    assert listing(project.folder) == before
+    assert notices == [("Nothing unsaved", "info")]
 
 
 def test_saving_both_layers_says_so_in_one_toast(make_editor, project):
@@ -1294,7 +1303,7 @@ def test_the_skeleton_saves_at_image_resolution_whatever_size_was_read(make_edit
     assert (saved.shape[1], saved.shape[0]) == (W, H)
 
 
-def test_an_emptied_mask_removes_its_file_on_save_and_reports_it_once(make_editor, project):
+def test_an_emptied_mask_saves_an_empty_gt_mask_and_reports_it_once(make_editor, project):
     editor = make_editor(project.a, project.folder)
     cleared, masks, notices = (
         record(editor.mask_cleared),
@@ -1303,16 +1312,21 @@ def test_an_emptied_mask_removes_its_file_on_save_and_reports_it_once(make_edito
     )
 
     editor.clear_active_layer()
-    assert os.path.exists(project.mask())  # Clear alone never deletes the file
+    assert not os.path.exists(project.gt_mask())  # Clear alone writes nothing
     editor.undo()
     assert plane(editor).any()
     editor.clear_active_layer()
     assert editor.save() is True
 
-    assert not os.path.exists(project.mask())
-    assert cleared == [project.a] and masks == []
-    assert ("Mask cleared. Ctrl+Z to undo, Save to remove the file.", "info") in notices
-    assert notices[-1] == ("Empty mask: removed saved mask for a.png", "info")
+    assert os.path.exists(project.mask())  # the prediction stays
+    assert png_colour_type(project.gt_mask()) == 6  # O9: an empty GT mask
+    assert not cv2.imread(project.gt_mask(), cv2.IMREAD_UNCHANGED).any()
+    assert masks == [project.a] and cleared == []
+    assert ("Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask.", "info") in notices
+    assert notices[-2:] == [
+        ("Saved mask · a.png", "success"),
+        ("Empty mask saved as GT for a.png: root area 0", "info"),
+    ]
 
 
 def test_the_saved_mask_is_white_on_transparent_and_pixel_identical(make_editor, tmp_path):
@@ -1323,26 +1337,29 @@ def test_the_saved_mask_is_white_on_transparent_and_pixel_identical(make_editor,
     expected = alpha(editor) > 0
     assert editor.save()
 
-    path = str(tmp_path / "big" / "mask" / "plot_001.png")
+    path = str(tmp_path / "big" / "gt" / "mask" / "plot_001.png")
     assert os.path.getsize(path) < 64 * 1024
     rgba = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     assert np.array_equal(rgba[:, :, 3] == 255, expected)
     assert set(np.unique(rgba)) <= {0, 255}
     assert np.array_equal(rgba[:, :, :3].max(axis=2) == 255, expected)
-    assert os.listdir(tmp_path / "big" / "mask") == ["plot_001.png"]
+    assert os.listdir(tmp_path / "big" / "gt" / "mask") == ["plot_001.png"]
 
 
-def test_saving_writes_binary_masks_and_never_the_gt_folder(make_editor, project):
+def test_saving_writes_the_gt_mask_and_never_the_class_labels(make_editor, project):
     editor = make_editor(project.b, project.folder)
     editor.controls.size_sliders[MaskLayer.SIZE_SPEC].slider.setValue(6)
     paint(editor, (10, 10), (40, 10))
     draw_line(editor)
     assert editor.save()
 
-    saved = cv2.imread(project.mask("b"), cv2.IMREAD_GRAYSCALE)
+    layout = ProjectLayout(project.folder)
+    gt_mask = layout.gt_mask_path(project.b)
+    assert os.path.isfile(gt_mask) and not os.path.exists(layout.gt_path(project.b))
+    assert not os.path.exists(project.mask("b"))  # no prediction is ever written
+    saved = cv2.imread(gt_mask, cv2.IMREAD_GRAYSCALE)
     assert saved.shape == (H, W) and set(np.unique(saved)) <= {0, 255}
     assert saved[10, 25] == 255 and saved[140, 190] == 0
-    assert not os.path.exists(os.path.join(project.folder, "gt"))
 
     editor.load_image(project.b, project.folder)  # the saved files read back
     assert np.array_equal(alpha(editor) > 0, saved > 200)
@@ -1391,7 +1408,7 @@ def test_the_prompts_save_reports_each_written_file_once(make_editor, project, a
     assert masks == [project.a] and len(skeletons) == 1
 
 
-def test_an_emptied_mask_saved_from_the_prompt_reports_mask_cleared_once(
+def test_an_emptied_mask_saved_from_the_prompt_reports_mask_saved_once(
     make_editor, project, answers
 ):
     editor = make_editor(project.a, project.folder)
@@ -1401,7 +1418,22 @@ def test_an_emptied_mask_saved_from_the_prompt_reports_mask_cleared_once(
 
     assert editor.maybe_save_changes() is True
 
-    assert cleared == [project.a] and masks == [] and not os.path.exists(project.mask())
+    assert masks == [project.a] and cleared == [] and os.path.exists(project.mask())
+    assert os.path.isfile(project.gt_mask())  # O9: an empty GT mask
+
+
+def test_a_mask_back_to_the_prediction_removed_from_the_prompt_reports_mask_cleared_once(
+    make_editor, project, answers
+):
+    write_mask(project.gt_mask(), np.zeros((H, W), np.uint8))
+    editor = make_editor(project.a, project.folder)
+    editor.load_prediction()
+    cleared, masks = record(editor.mask_cleared), record(editor.mask_saved)
+    answers.will(SAVE)
+
+    assert editor.maybe_save_changes() is True
+
+    assert cleared == [project.a] and masks == [] and not os.path.exists(project.gt_mask())
 
 
 def test_a_tree_click_answered_save_reports_the_saved_mask_once(make_editor, project, answers):
@@ -1559,7 +1591,7 @@ def test_a_failed_save_on_a_tree_click_keeps_the_open_image(make_editor, project
     editor = make_editor(project.b, project.folder)
     paint(editor, (10, 10), (40, 10))
     edited = plane(editor).copy()
-    os.makedirs(project.mask("b"))  # a folder where the file must go
+    os.makedirs(project.gt_mask("b"))  # a folder where the file must go
     answers.will(SAVE, CANCEL)  # Save, then "Keep editing"
 
     editor.load_image(project.a, project.folder)

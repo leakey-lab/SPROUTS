@@ -159,13 +159,20 @@ def test_goldens_hold_both_cases_and_all_four_op_scripts():
 
 
 def test_goldens_saved_masks_are_hand_traced_rgba():
-    """The contract every mask replay checks: RGBA colour type 6, and Clear + Save deletes."""
+    """The contract every mask replay checks: RGBA colour type 6; Clear + Save of the model
+    mask writes an empty GT mask (O9), and of the blank image (nothing to save) no file."""
     for case in CASES:
         record = load_goldens()["cases"][case]
         saved = record["mask"]["saved"]
         assert saved["exists"] and saved["colour_type"] == 6
         assert saved["shape"] == [480, 640, 4]
-        assert record["mask_clear"]["saved"] == {"exists": False}
+        cleared = record["mask_clear"]["saved"]
+        if case == "synth_model_mask_and_skeleton":
+            assert cleared["exists"] and cleared["colour_type"] == 6
+            assert (cleared["on_count"], cleared["area_mm2_as_measured"]) == (0, 0.0)
+            assert cleared["shape"] == [480, 640, 4]
+        else:
+            assert cleared == {"exists": False}
 
 
 def test_support_module_imports_no_qt():

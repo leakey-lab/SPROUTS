@@ -197,14 +197,15 @@ def test_save_leaves_a_clean_inactive_layer_alone():
     assert "save" not in rig.skeleton.names()
 
 
-def test_save_with_nothing_dirty_saves_the_active_layer():
+def test_save_with_nothing_dirty_writes_nothing_and_notifies():  # O2
     rig = _Rig().opened()
 
     report = rig.session.save(SKELETON)
 
-    assert [outcome.layer_id for outcome in report.outcomes] == [SKELETON]
-    assert "save" not in rig.mask.names()
-    assert [outcome.layer_id for outcome in rig.saved()] == [SKELETON]
+    assert report.outcomes == () and report == SaveReport()
+    assert "save" not in rig.mask.names() and "save" not in rig.skeleton.names()
+    assert rig.saved() == []
+    assert rig.notices()[-1] == ("Nothing unsaved", "info")
 
 
 def test_save_with_nothing_open_saves_nothing():

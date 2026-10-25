@@ -232,7 +232,8 @@ def test_a_legacy_no_op_correction_leaves_the_library_when_the_generated_one_is_
 
     editor.layers[SKELETON].load_file(project.generated(0))
     editor.set_active_layer(SKELETON)
-    assert editor.save()
+    assert not editor.save()  # nothing unsaved: the page writes nothing (O2)
+    assert editor.layers[SKELETON].save().cleared  # the layer's save removes the no-op file
     settle()
     assert not os.path.isfile(project.correction(0))
     # Nothing was unsaved, so no dirty change re-reads the disk while Correct is shown;

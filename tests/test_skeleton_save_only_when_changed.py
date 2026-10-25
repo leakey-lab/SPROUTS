@@ -1,9 +1,10 @@
 """A skeleton Save writes a correction only when it differs from the generated one (O2, W1-T3).
 
 Saving is not acceptance: Ctrl+S on an untouched skeleton writes nothing (it once turned a
-generated 341 x 256 skeleton into a 640 x 480 "correction" of another length), a correction
-edited back to the generated skeleton is removed, and an emptied skeleton over a non-empty
-generated one is a real correction. Image ``a`` of the project has a generated skeleton on
+generated 341 x 256 skeleton into a 640 x 480 "correction" of another length; since WG-T2 the
+page saves only unsaved layers and says "Nothing unsaved"), a correction edited back to the
+generated skeleton is removed, and an emptied skeleton over a non-empty generated one is a
+real correction. Image ``a`` of the project has a generated skeleton on
 row 110 (fixtures of ``tests/test_correct_editor.py``).
 """
 
@@ -31,6 +32,7 @@ from tests.test_correct_editor import (  # noqa: E402
 )
 
 UNCHANGED = ("Skeleton unchanged: nothing to save", "info")
+NOTHING_UNSAVED = ("Nothing unsaved", "info")  # the page saves unsaved layers only (O2)
 REMOVED = ("Skeleton is the generated one again: correction removed", "info")
 
 
@@ -60,12 +62,13 @@ def test_a_no_op_save_writes_nothing_and_says_so(make_editor, project):
     saved = record(editor.skeleton_saved)
     notices = record(editor.notice)
 
-    assert editor.save() is True
+    assert editor.save() is False
 
     assert not os.path.exists(project.correction())
-    assert notices == [UNCHANGED]
+    assert notices == [NOTHING_UNSAVED]
     assert saved == []
     assert editor.layers[SKELETON].document.source == "generated"
+    assert editor.layers[SKELETON].save().message == UNCHANGED[0]  # the layer's own rule
 
 
 def test_edit_undo_save_writes_nothing(make_editor, project):
@@ -74,10 +77,10 @@ def test_edit_undo_save_writes_nothing(make_editor, project):
     editor.undo()
     notices = record(editor.notice)
 
-    assert editor.save() is True
+    assert editor.save() is False
 
     assert not os.path.exists(project.correction())
-    assert UNCHANGED in notices
+    assert NOTHING_UNSAVED in notices
     assert not editor.has_unsaved_changes()
 
 
@@ -151,11 +154,12 @@ def test_a_legacy_no_op_correction_is_removed_when_the_generated_one_is_loaded(
     assert not skeleton.is_dirty()  # the same pixels: nothing unsaved
     editor.set_active_layer(SKELETON)
     notices = record(editor.notice)
+    assert editor.save() is False and notices == [NOTHING_UNSAVED]  # O2: the page writes nothing
 
-    assert editor.save() is True
+    outcome = skeleton.save()  # the layer's own save still removes the no-op correction
 
     assert not os.path.exists(project.correction())
-    assert notices == [REMOVED]
+    assert outcome.ok and outcome.cleared and outcome.message == REMOVED[0]
     assert skeleton.document.source == "generated" and not editor.has_unsaved_changes()
 
 
@@ -165,9 +169,10 @@ def test_an_untouched_correction_is_never_removed(make_editor, project):
     editor.set_active_layer(SKELETON)
     notices = record(editor.notice)
 
-    assert editor.save() is True
+    assert editor.save() is False
+    assert editor.layers[SKELETON].save().message == UNCHANGED[0]  # nor does the layer's save
 
-    assert os.path.isfile(project.correction()) and notices == [UNCHANGED]
+    assert os.path.isfile(project.correction()) and notices == [NOTHING_UNSAVED]
 
 
 def test_an_unreadable_correction_is_not_removed_by_a_save(make_editor, project):
@@ -179,7 +184,8 @@ def test_an_unreadable_correction_is_not_removed_by_a_save(make_editor, project)
     assert skeleton.document.source is None  # it could not be read: an empty skeleton
     editor.set_active_layer(SKELETON)
 
-    assert editor.save() is True
+    assert editor.save() is False
+    assert skeleton.save().ok  # the layer's own save keeps it too
 
     assert os.path.isfile(project.correction("b"))
 

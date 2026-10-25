@@ -193,7 +193,7 @@ def test_correct_undo_redo_save_and_zoom_keys_work_after_a_tree_click(window):
     window.correct_editor.mask_saved.connect(saved.append)
     key(tree, Qt.Key.Key_S, CTRL)
     assert saved and same_path(saved[0], window.project.image(1))
-    assert os.path.isfile(window.project.mask(1)) and not editor.has_unsaved_changes()
+    assert os.path.isfile(window.project.gt_mask(1)) and not editor.has_unsaved_changes()
 
 
 def test_the_search_field_keeps_its_typing_in_correct(window):

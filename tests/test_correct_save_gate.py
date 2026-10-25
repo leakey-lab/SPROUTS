@@ -286,17 +286,32 @@ def test_pgdn_over_a_rewritten_file_never_asks_and_stays():
     assert ("notice", CHANGED_PGDN, "warn") in events
 
 
-def test_a_clean_layer_over_a_rewritten_file_is_reloaded_not_saved():
+def test_a_clean_layer_over_a_rewritten_file_is_neither_saved_nor_read_by_ctrl_s():
     mask = FakeLayer(MASK)
     mask.stamps = AT_OPEN
     session, prompts, events = _rig(mask)
     mask.stamps = REWRITTEN
 
-    report = session.save(MASK)  # Ctrl+S with nothing unsaved
+    report = session.save(MASK)  # Ctrl+S with nothing unsaved: O2, nothing is written
 
-    assert prompts.asked == [] and "save" not in mask.names() and "open" in mask.names()
-    assert report.outcomes == (SaveOutcome(MASK, ok=True, message=RELOADED, kind="info"),)
-    assert ("notice", RELOADED, "info") in events
+    assert prompts.asked == [] and "save" not in mask.names() and "open" not in mask.names()
+    assert report.outcomes == ()
+    assert ("notice", "Nothing unsaved", "info") in events
+    assert session.files_changed()  # opening the image again reads the file
+
+
+def test_the_gate_reloads_a_clean_layer_over_a_rewritten_file():
+    prompts, reopened = FakePrompts(), []
+    gate = _gate(prompts, reopened)
+    mask = FakeLayer(MASK)
+    mask.stamps = AT_OPEN
+    gate.take(MASK, mask)
+    mask.stamps = REWRITTEN
+
+    outcome = gate.before_save(MASK, mask, ask=True)
+
+    assert outcome == SaveOutcome(MASK, ok=True, message=RELOADED, kind="info")
+    assert prompts.asked == [] and reopened == [MASK]
 
 
 def test_matching_files_only_refresh_the_stamps():
@@ -318,7 +333,9 @@ def test_matching_files_save_without_a_question():
     mask, session, prompts, _ = _rewritten()
     mask.disk_same = True
 
-    assert session.save_dirty().ok and session.save(MASK).ok
+    assert session.save_dirty().ok
+    mask.dirty = True  # edited again
+    assert session.save(MASK).ok
 
     assert prompts.asked == [] and mask.names().count("save") == 2
 

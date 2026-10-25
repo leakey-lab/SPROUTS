@@ -213,7 +213,19 @@
     ],
     "save_returned": true,
     "saved": {
-     "exists": false
+     "area_mm2_as_measured": 0.0,
+     "colour_type": 6,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "43f709630180239a8bd5bc63905b7c8bc0a0cfbdf267b636679fa4478d09d365",
+     "on_count": 0,
+     "on_sha256": "ffbf2ea92e7dd3330aa68e1abd8f0860673c674a829166ef4138249ed53632b2",
+     "pixels_sha256": "3a30998c7a384bbd8591e77c465600c853613c49758faad6b7ac4ae731efc0a8",
+     "shape": [
+      480,
+      640,
+      4
+     ]
     },
     "undo_depth_after": null
    },

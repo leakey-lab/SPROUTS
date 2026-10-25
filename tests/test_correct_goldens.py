@@ -7,7 +7,9 @@ file. Here the scripts drive one ``CorrectEditor`` the way a user does: the rail
 buttons, the dock's size sliders, the polyline prompt, Clear, Save, Undo / Redo and the
 canvas input (the router, or real mouse events through the view). Saved pixels must stay
 identical to the goldens (the skeleton entries were re-recorded once for Q1: bilinear
-open, corrections saved at image resolution; see CHANGELOG):
+open, corrections saved at image resolution; see CHANGELOG). The mask is saved as GT
+(``gt/mask/<stem>.png``, WG-T2); Clear and Save on the model mask writes an empty GT file
+(O9), and a save with nothing unsaved writes nothing (O2):
 
 - ``ops.mask`` then ``ops.skeleton`` in one page, each op and each save matching its golden
   (the skeleton's save never rewrites the clean mask);
@@ -35,6 +37,7 @@ from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
 from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
 from app.gui.correct.skeleton_layer import SkeletonLayer  # noqa: E402
 from app.io_utils import imread_unicode  # noqa: E402
+from app.project_layout import ProjectLayout  # noqa: E402
 from tests.correct_goldens_support import (  # noqa: E402
     SYNTH_CASES,
     SYNTH_STEM,
@@ -123,8 +126,9 @@ def apply(editor, op: list, stroke=router_stroke):
         editor.undo()
     elif kind == "redo":
         editor.redo()
-    elif kind == "save":
-        return editor.save()
+    elif kind == "save":  # O2: nothing unsaved writes nothing, and fails nothing
+        nothing_unsaved = not editor.has_unsaved_changes()
+        return editor.save() or nothing_unsaved
     else:
         raise ValueError(f"unknown golden op {op!r}")
     return None
@@ -151,9 +155,9 @@ def replay(editor, layer_id: str, script: str, expected: list[str], stroke=route
 
 
 def files(folder: str) -> tuple[str, str]:
-    """The saved mask and the skeleton correction of the synthetic image."""
+    """The saved (GT) mask and the skeleton correction of the synthetic image."""
     return (
-        os.path.join(folder, "mask", f"{SYNTH_STEM}.png"),
+        ProjectLayout(folder).gt_mask_path(SYNTH_STEM),
         os.path.join(folder, "skeleton_corrections", f"{SYNTH_STEM}_skeleton.png"),
     )
 
@@ -246,10 +250,10 @@ def run_alone(
 
 
 def save_each_layer(editor) -> None:
-    """Ctrl+S on the mask, then on the skeleton (a clean layer is saved when it is edited)."""
-    for layer_id in (MASK, SKELETON):
-        editor.set_active_layer(layer_id)
-        assert editor.save() is True
+    """Ctrl+S once: it saves every unsaved layer, mask first (O2: a clean layer, such as a
+    blank skeleton cleared again, is not written, and with none unsaved nothing is)."""
+    unsaved = editor.has_unsaved_changes()
+    assert editor.save() is unsaved
 
 
 @pytest.mark.parametrize("case", sorted(SYNTH_CASES))
