@@ -20,9 +20,45 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _not_macos(monkeypatch):
+    """Default platform for these tests; the macOS tests patch it again."""
+    monkeypatch.setattr(canvas_gl.sys, "platform", "linux")
+
+
 def test_env_flag_unset_requests_opengl(monkeypatch):
     monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
     assert canvas_gl.opengl_viewport_requested() is True
+
+
+def test_macos_defaults_to_the_raster_viewport(monkeypatch):
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    monkeypatch.setattr(canvas_gl.sys, "platform", "darwin")
+    assert canvas_gl.opengl_viewport_requested() is False
+
+
+def test_macos_can_opt_in_to_opengl(monkeypatch):
+    monkeypatch.setenv(canvas_gl.ENV_VAR, "1")
+    monkeypatch.setattr(canvas_gl.sys, "platform", "darwin")
+    assert canvas_gl.opengl_viewport_requested() is True
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_other_platforms_still_default_on(monkeypatch, platform):
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    monkeypatch.setattr(canvas_gl.sys, "platform", platform)
+    assert canvas_gl.opengl_viewport_requested() is True
+
+
+def test_macos_default_is_a_chosen_path_not_a_slow_one(monkeypatch):
+    def probe():
+        raise AssertionError("the macOS default must not probe")
+
+    monkeypatch.setattr(canvas_gl, "opengl_support", probe)
+    monkeypatch.delenv(canvas_gl.ENV_VAR, raising=False)
+    monkeypatch.setattr(canvas_gl.sys, "platform", "darwin")
+    assert canvas_gl.canvas_line() == (f"Software drawing · {canvas_gl.DARWIN_REASON}", False)
+    assert canvas_gl.slow_path_notice("cocoa") is None
 
 
 @pytest.mark.parametrize(

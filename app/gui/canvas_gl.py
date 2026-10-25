@@ -4,8 +4,11 @@ Every image ``QGraphicsView`` in the app (see :mod:`app.gui.canvas_view`) render
 through a ``QOpenGLWidget`` viewport only when that is both requested and useful:
 
 * **requested**: the ``ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT`` environment variable,
-  read at call time. Unset means on; only ``1``/``true``/``yes``/``on`` keep it on
-  when set. It is the documented escape hatch for machines where GL misbehaves.
+  read at call time. Unset means on, except on macOS (``sys.platform == "darwin"``),
+  where unset means off: Apple's deprecated GL 4.1 over Metal is untested here, so
+  the raster viewport (tested on every OS) is the default and ``1`` opts in. When
+  set, only ``1``/``true``/``yes``/``on`` keep it on. It is the documented escape
+  hatch for machines where GL misbehaves.
 * **supported**: a one-time probe creates a real OpenGL context. Platforms
   without GL (``offscreen``, some remote sessions) fail it. A software
   rasterizer (Mesa llvmpipe from Qt's ``opengl32sw.dll`` fallback, Windows'
@@ -27,12 +30,16 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import sys
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+DARWIN_REASON = (
+    "macOS: raster canvases by default (set ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=1 to try OpenGL)"
+)
 
 SAMPLES_ENV_VAR = "ROOT_VIEWER_GL_SAMPLES"
 DEFAULT_GL_SAMPLES = 4
@@ -64,10 +71,13 @@ class GLSupport:
 
 
 def opengl_viewport_requested() -> bool:
-    """True unless ``ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT`` opts out (read now, not at import)."""
+    """Whether GL viewports are wanted (env and platform read now, not at import).
+
+    Unset: on, except on macOS where the raster viewport is the default.
+    """
     value = os.environ.get(ENV_VAR)
     if value is None:
-        return True
+        return sys.platform != "darwin"
     return value.strip().lower() in _TRUE_VALUES
 
 
@@ -167,6 +177,8 @@ def canvas_line() -> tuple[str, bool]:
     The env opt-out answers first, so an opted-out session never probes.
     """
     if not opengl_viewport_requested():
+        if ENV_VAR not in os.environ:
+            return f"Software drawing · {DARWIN_REASON}", False
         return f"Software drawing · turned off by {ENV_VAR}", False
     support = opengl_support()
     if support.supported:

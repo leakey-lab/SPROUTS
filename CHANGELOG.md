@@ -354,6 +354,9 @@ Five passes, not yet released:
     colour for a date in every view and every tube (W4-T6, O27).
   - A generation run that writes and fails nothing leaves `_sprouts_run.json` alone; every
     other run is also appended to `_sprouts_runs.jsonl` in the same folder (W2-T1, R6, O16).
+  - macOS: the canvases draw without OpenGL by default (OpenGL is opt-in with
+    `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=1`); About and the device chip say so, and no
+    slow-path warning appears for this default (WX-T8, O21).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so
