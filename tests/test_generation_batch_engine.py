@@ -109,6 +109,40 @@ def test_out_of_memory_halves_the_batch_and_writes_everything(tmp_path):
     assert sizes.count(4) == 1
 
 
+def test_the_report_records_the_batch_shapes(tmp_path):
+    paths = _make_images(str(tmp_path / "in"), NAMES)
+    report = run_batches(paths, _spec(str(tmp_path / "out")), batch_size=3)
+    assert report.batch_shapes == {3: 6, 1: 1}
+    assert report.oom_events == []
+    assert report.summary()["batch_shapes"] == {"3": 6, "1": 1}
+
+
+def test_the_report_records_out_of_memory_events(tmp_path):
+    paths = _make_images(str(tmp_path / "in"), NAMES)
+
+    def oom_step(x):
+        if x.shape[0] > 2:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (stub)")
+        return _step(x)
+
+    report = run_batches(paths, _spec(str(tmp_path / "out"), step=oom_step), batch_size=4)
+    assert report.batch_shapes == {2: 6, 1: 1}
+    assert report.oom_events == [{"at": "img00.png", "from": 4, "to": 2}]
+    assert report.summary()["oom_events"] == report.oom_events
+
+
+def test_zero_filled_slots_count_in_the_forward_shape(tmp_path):
+    dirty = _make_images(str(tmp_path / "dirty"), NAMES + ["bad.jpg"], corrupt={"bad.jpg"})
+    report = run_batches(dirty, _spec(str(tmp_path / "out")), batch_size=3)
+    assert report.batch_shapes == {3: 6, 2: 2}
+
+
+def test_an_empty_report_has_empty_shapes():
+    summary = BatchReport().summary()
+    assert summary["batch_shapes"] == {}
+    assert summary["oom_events"] == []
+
+
 def test_out_of_memory_at_size_one_fails_only_that_item():
     backoff = OomBackoff(4)
 

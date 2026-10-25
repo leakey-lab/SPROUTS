@@ -60,6 +60,11 @@ class BatchReport:
     effective_batch_size: int = 0  # after any out-of-memory backoff
     elapsed_s: float = 0.0
     error: str | None = None  # (R7) "<ExceptionType>: <message>" when the run raised
+    # (R1) forward size (rows of the stacked tensor, zero-filled slots included) -> number of
+    # input slots that ran at that size; only forwards that returned a result count.
+    batch_shapes: dict[int, int] = field(default_factory=dict)
+    # (R1) one {"at": first input of the slice, "from": length, "to": retry length} per backoff
+    oom_events: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def failed_names(self) -> list[str]:
@@ -96,6 +101,11 @@ class BatchReport:
             "cancelled": self.cancelled,
             "batch_size": self.batch_size,
             "effective_batch_size": self.effective_batch_size,
+            "batch_shapes": {
+                str(size): self.batch_shapes[size]
+                for size in sorted(self.batch_shapes, reverse=True)
+            },
+            "oom_events": [dict(event) for event in self.oom_events],
             "elapsed_s": round(self.elapsed_s, 3),
             "failed": [{"input": name, "reason": reason} for name, reason in self.failed],
             "skipped": sorted(self.skipped),
@@ -173,6 +183,7 @@ class OomBackoff:
     ) -> None:
         self.size = max(1, int(batch_size))
         self._oom_len: float = float("inf")  # (R5) shortest slice split after out-of-memory
+        self.events: list[tuple[int, int, int]] = []  # (R1) (start index, from, to) per backoff
         self._is_oom = is_oom
         self._on_oom = on_oom
 
@@ -213,6 +224,7 @@ class OomBackoff:
             logger.error("Out of memory on a single image (index %d): %s", start, reason)
             return [(slice(start, stop), ItemOutOfMemory(reason))]
         self._oom_len = min(self._oom_len, stop - start)  # (R5)
+        self.events.append((start, stop - start, (stop - start + 1) // 2))
         logger.warning(
             "Out of memory at batch %d; retrying at %d", stop - start, (stop - start + 1) // 2
         )
@@ -296,6 +308,8 @@ def run_batches(
     ticks = _Progress(len(paths), progress)
     batches = [list(paths[i : i + batch_size]) for i in range(0, len(paths), batch_size)]
     backoff = OomBackoff(batch_size)
+    shapes: dict[int, int] = {}
+    oom_events: list[dict[str, Any]] = []
     written: list[str] = []
     written_lock = threading.Lock()
     writer: AsyncWriter | None = None
@@ -317,6 +331,14 @@ def run_batches(
         if disk_full:
             logger.error("The disk is full; stopping the run: %s", disk_full[0])
             raise disk_full[0]
+
+    current_paths: list[str] = []  # the batch whose forwards are running
+
+    def flush_oom_events() -> None:
+        """Turn the backoff's new events into report entries named by input file."""
+        for start, n_from, n_to in backoff.events[len(oom_events) :]:
+            at = os.path.basename(current_paths[start])
+            oom_events.append({"at": at, "from": n_from, "to": n_to})
 
     def record_failure(path: str, reason: str) -> None:
         report.failed.append((os.path.basename(path), reason))
@@ -356,7 +378,13 @@ def run_batches(
                         record_failure(batch_paths[i], reason)
                     if x is None:
                         continue
-                    for chunk, result in backoff.run(spec.step, x):
+                    current_paths = batch_paths
+                    results = backoff.run(spec.step, x)
+                    flush_oom_events()
+                    for chunk, result in results:
+                        if not isinstance(result, BaseException):
+                            n = chunk.stop - chunk.start
+                            shapes[n] = shapes.get(n, 0) + n
                         for offset, i in enumerate(range(chunk.start, chunk.stop)):
                             if i in bad:
                                 continue  # zero-filled slot: never written
@@ -373,6 +401,9 @@ def run_batches(
                     report.failed.append((os.path.basename(str(key)), _describe(exc)))
             report.written = sorted(written)
             report.effective_batch_size = backoff.size
+            flush_oom_events()  # also those of a batch whose step then raised
+            report.batch_shapes = dict(shapes)
+            report.oom_events = oom_events
             report.elapsed_s = time.perf_counter() - started
             report.cancelled = bool(should_stop and should_stop()) and report.done < report.total
     return report
