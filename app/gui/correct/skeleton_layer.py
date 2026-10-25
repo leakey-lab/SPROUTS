@@ -10,7 +10,6 @@ began it (transitions finish it first). The reference layer is dimmed, markers h
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -213,17 +212,14 @@ class SkeletonLayer:
         return self.document.status(pending_edit=self.draft.pending())
 
     def save(self) -> SaveOutcome:
-        """Write the correction; a drag is finished and a pending draft committed first."""
+        """Write the correction if it differs from the generated skeleton (O2); a drag is
+        finished and a pending draft committed first."""
         self.finish_gesture()
         if self.draft.pending():  # Save keeps what the user drew (S5)
             self._tools[POLYLINE].commit()
         result = self.document.save()
         self._changed()
-        if result.ok:
-            return SaveOutcome(SKELETON, True, path=result.path)
-        name = os.path.basename(self.document.files().correction_path) if self.is_open() else "it"
-        message = f"Could not save {name}: {result.error}"
-        return SaveOutcome(SKELETON, False, message=message, kind="danger")
+        return self.document.outcome(result)
 
     def clear(self) -> bool:
         """Erase every skeleton line as one undoable action; False when nothing is open."""

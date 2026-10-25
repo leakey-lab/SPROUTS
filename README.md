@@ -64,11 +64,13 @@ checkpoints/mask_weights/best_mask_model_V5.pth   (mask model)
 checkpoints/skeletonizer/latest_net_G.pth         (skeleton model)
 ```
 
-The repository tracks `checkpoints.zip`, which contains the **skeleton** model only:
-extract it here to get `checkpoints/skeletonizer/latest_net_G.pth`. The **mask** model
-is not published yet; ask the maintainers. Check that you have the right files with the
-SHA-256 digests in [`docs/MODELS.md`](docs/MODELS.md); the app warns in its log when a
-checkpoint does not match.
+The weights are not stored in this repository. They are published as a Zenodo record
+(licence CC-BY-4.0); the link and DOI are in [`docs/MODELS.md`](docs/MODELS.md) once the
+record exists, and until then you can get them from the maintainers. With the record's
+address registered, `./venv/Scripts/python.exe scripts/fetch_models.py` downloads both files
+into `checkpoints/` and checks their SHA-256 (the app also warns in its log when a
+checkpoint does not match). The skeleton model of earlier versions is still in the git
+history: `git show 2075568:checkpoints.zip > checkpoints.zip`.
 
 To keep the weights somewhere else (required for a `pip install .` copy, whose
 application folder is `site-packages`), point `SPROUTS_CHECKPOINTS_DIR` at the folder
@@ -236,9 +238,11 @@ its last point.
 **Saving**
 
 - `Ctrl+S` (or **Save**) saves every layer with unsaved changes, the mask first. With
-  nothing unsaved it saves the active layer: the explicit way to accept a generated
-  skeleton or to mark a model mask as checked. A layer without changes that is not active
-  is never rewritten.
+  nothing unsaved it saves the active mask (the way to mark a model mask as checked). A
+  skeleton is saved only when it differs from the generated one: saving is not acceptance,
+  and a skeleton edited back to the generated one (or **Load generated** over an old
+  correction that equals it) removes its correction. A layer without changes that is not
+  active is never rewritten.
 - `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
   image. If a save fails, you stay on the image and a message says why. An unfinished
   polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you
@@ -329,9 +333,10 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1     # or: scripts\bui
 
 This runs PyInstaller on `scripts/build_executable.spec` and produces
 `dist\SPROUTS\SPROUTS.exe` (zip the whole `dist\SPROUTS` folder to distribute; with CUDA
-PyTorch it is about 6 GB). The scripts work from any folder, stop if the model weights
-are missing (pass `-AllowMissingModels` / `/allow-missing-models` to build anyway) and
-exit with an error when the build fails. The app records its version and git commit in
+PyTorch it is about 6 GB). Run `scripts/fetch_models.py` first. The scripts work from any
+folder, stop if the model weights are missing (pass `-AllowMissingModels` /
+`/allow-missing-models` to build anyway) and exit with an error when the build fails.
+The app records its version and git commit in
 `_internal\build_info.json`.
 
 The bundle is distributed under the GPL: ship `LICENSE` and `THIRD_PARTY_NOTICES.md` (the

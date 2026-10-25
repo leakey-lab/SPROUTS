@@ -384,6 +384,14 @@ Five passes, not yet released:
   - macOS: the canvases draw without OpenGL by default (OpenGL is opt-in with
     `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=1`); About and the device chip say so, and no
     slow-path warning appears for this default (WX-T8, O21).
+  - Correct: Save writes a skeleton correction only when the skeleton differs from the
+    generated one as Correct opens it. Saving is not acceptance: `Ctrl+S` on an untouched
+    skeleton writes nothing ("Skeleton unchanged: nothing to save"). A correction edited back
+    to the generated skeleton is removed ("Skeleton is the generated one again: correction
+    removed"), and so is an old no-op correction once **Load generated** is saved over it.
+    An emptied skeleton over a non-empty generated one is still saved. The thinning helpers
+    moved to the Qt-free `app/editing/thinning.py`. No CSV value or existing output pixel
+    changes (W1-T3, L2, O2).
   - Measure records each input's size, time and SHA-256 in `<csv>.inputs.json`; "changed
     since measured" compares content when the times differ and reports new and removed
     inputs; without a record it keeps the file-time rule (W2-T2, R5).

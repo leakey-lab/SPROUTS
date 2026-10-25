@@ -16,9 +16,10 @@ The editor keeps an internal binary skeleton mask (uint8 0/255) and provides:
   ``drop_redo`` (one undo timeline across layers) and ``take_changed_box`` (the
   region a display must refresh)
 
-scikit-image (about 0.2 s to import, most of it scipy) is imported on the first
-skeletonize, or ahead of time by :func:`prewarm_skeletonize`, which ``MainWindow``
-runs in the thread pool once the window shows; importing this module stays cheap.
+The thinning (:func:`thin_raster`, the lazy scikit-image import with its
+:func:`prewarm_skeletonize` hook, the 0/255 helpers) lives in the Qt-free
+``app.editing.thinning`` and is imported back here under the same names; importing this
+module stays cheap.
 """
 
 from __future__ import annotations
@@ -32,6 +33,12 @@ import cv2
 import numpy as np
 
 from app.editing.history import SnapshotHistory
+from app.editing.thinning import (
+    _ensure_uint8_binary,
+    _skeletonize_uint8,
+    prewarm_skeletonize,  # noqa: F401  (re-exported: MainWindow's warm-up calls it here)
+    thin_raster,
+)
 from app.gui.patch_history import Patch
 
 logger = logging.getLogger(__name__)
@@ -52,28 +59,6 @@ _COMPRESS_MIN = 1024  # patch sides from this size on are stored zlib-compressed
 _ROI_PAD = 16
 _ROI_CORE = 8
 _ROI_BAND = 2
-
-# scikit-image's skeletonize, imported on first use (see prewarm_skeletonize).
-_skimage_skeletonize: Callable[[np.ndarray], np.ndarray] | None = None
-
-
-def _skeletonize_fn() -> Callable[[np.ndarray], np.ndarray]:
-    """scikit-image's ``skeletonize``, imported (once) on first use."""
-    global _skimage_skeletonize
-    if _skimage_skeletonize is None:
-        from skimage.morphology import skeletonize
-
-        _skimage_skeletonize = skeletonize
-    return _skimage_skeletonize
-
-
-def prewarm_skeletonize() -> None:
-    """Import scikit-image's skeletonize now, so the first skeleton edit does not wait.
-
-    Idempotent: later calls return at once. Safe from a worker thread (Python's import
-    lock makes a skeletonize on another thread wait for the import to finish).
-    """
-    _skeletonize_fn()
 
 
 @dataclass(frozen=True)
@@ -96,22 +81,6 @@ def _neighbors8() -> list[tuple[int, int]]:
         (1, 0),
         (1, 1),
     ]
-
-
-def _ensure_uint8_binary(mask: np.ndarray) -> np.ndarray:
-    if mask.dtype != np.uint8:
-        mask = mask.astype(np.uint8)
-    if mask.ndim != 2:
-        raise ValueError("Expected a 2D binary mask.")
-    # Normalize to 0/255. uint8 scalars keep np.where from building an int64 temporary.
-    return np.where(mask > 0, np.uint8(255), np.uint8(0))
-
-
-def _skeletonize_uint8(mask: np.ndarray) -> np.ndarray:
-    """Skeletonize a uint8 0/255 foreground mask to 1px (uint8 0/255)."""
-    mask = _ensure_uint8_binary(mask)
-    skel_bool = _skeletonize_fn()(mask > 0)
-    return skel_bool.astype(np.uint8) * 255
 
 
 def _union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tuple[int, ...]:
@@ -258,35 +227,6 @@ def skeleton_tips(mask: np.ndarray) -> np.ndarray:
     if mask.ndim != 2:
         raise ValueError("Expected a 2D binary mask.")
     return _tip_indices(mask)
-
-
-def thin_raster(
-    raster_gray: np.ndarray, target_size: tuple[int, int], threshold: str = "otsu"
-) -> np.ndarray:
-    """A grayscale skeleton raster at ``target_size``, 1 px thin (uint8 0/255); any thread.
-
-    A raster of another size (the generated skeleton is ``SKELETON_OUTPUT_SIZE``) is
-    upscaled bilinearly *before* thresholding, so thin lines come out as smooth,
-    connected 1 px lines of the right length instead of a nearest-neighbour
-    staircase. A raster already at ``target_size`` (a correction saved at image
-    resolution) is only thresholded and thinned, so it reopens unchanged.
-    """
-    if raster_gray.ndim != 2:
-        raise ValueError("Expected a grayscale image.")
-
-    img = raster_gray
-    w_t, h_t = target_size
-    if (img.shape[1], img.shape[0]) != (w_t, h_t):
-        img = cv2.resize(img, (w_t, h_t), interpolation=cv2.INTER_LINEAR)
-    if threshold == "otsu":
-        _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:
-        _, binary = cv2.threshold(img, 50, 255, cv2.THRESH_BINARY)
-
-    # Ensure skeleton is foreground (white) by inverting if background dominates.
-    if float(np.mean(binary)) > 127.0:
-        binary = 255 - binary
-    return _skeletonize_uint8(binary)
 
 
 def _patch_tips(tips: np.ndarray, mask: np.ndarray, dirty: tuple[int, ...]) -> np.ndarray:

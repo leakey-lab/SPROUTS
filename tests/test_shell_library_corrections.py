@@ -199,3 +199,45 @@ def test_a_correction_saved_in_correct_reaches_the_library(window, tmp_path):
         os.path.normpath(project.correction(1))
     )
     assert window.metrics_bar._status_value.text() == "Skeleton corrected"
+
+
+def test_a_correction_edited_back_to_the_generated_one_leaves_the_library(window, tmp_path):
+    project = _corrected_project(tmp_path)
+    open_project(window, project)
+    select(window, 0)
+    enter(window, "Correct")
+    editor = window.correct_editor
+    assert window.library_index.corrected_of(STEMS[0]) is True
+
+    editor.layers[SKELETON].load_file(project.generated(0))
+    editor.session.forget(SKELETON)  # Load clears the layer's own history
+    assert editor.save()
+    settle()
+
+    assert not os.path.isfile(project.correction(0))
+    assert not window.image_manager.has_correction(STEMS[0])
+    assert window.library_index.corrected_of(STEMS[0]) is False
+
+
+def test_a_legacy_no_op_correction_leaves_the_library_when_the_generated_one_is_saved(
+    window, tmp_path
+):
+    project = new_project(tmp_path)
+    write_skeleton(project.correction(0))  # an old Ctrl+S: equal to the generated skeleton
+    open_project(window, project)
+    select(window, 0)
+    enter(window, "Correct")
+    editor = window.correct_editor
+    assert window.library_index.corrected_of(STEMS[0]) is True
+
+    editor.layers[SKELETON].load_file(project.generated(0))
+    editor.set_active_layer(SKELETON)
+    assert editor.save()
+    settle()
+    assert not os.path.isfile(project.correction(0))
+    # Nothing was unsaved, so no dirty change re-reads the disk while Correct is shown;
+    # the Library reads it again when it is back on screen.
+    enter(window, "Library")
+
+    assert not window.image_manager.has_correction(STEMS[0])
+    assert window.library_index.corrected_of(STEMS[0]) is False

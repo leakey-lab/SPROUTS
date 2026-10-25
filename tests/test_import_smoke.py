@@ -134,6 +134,7 @@ APP_MODULES = [
     "app.visualization.viz_window",
     # The unified Correct editor and the smooth-zoom render parts (2026-09-29).
     "app.editing.journal",
+    "app.editing.thinning",
     "app.imaging",
     "app.imaging.pyramid",
     "app.gui.canvas_layers",

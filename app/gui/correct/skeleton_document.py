@@ -25,9 +25,10 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from app.gui.correct.layer import LayerStatus, Notice
+from app.editing.thinning import is_generated_as_opened, thin_raster
+from app.gui.correct.layer import SKELETON, LayerStatus, Notice, SaveOutcome
 from app.gui.skeleton_document import CORRECTED, GENERATED, GeneratedResolver, SkeletonFiles
-from app.gui.skeleton_graph_model import SkeletonCorrectionModel, skeleton_tips, thin_raster
+from app.gui.skeleton_graph_model import SkeletonCorrectionModel, skeleton_tips
 from app.io_utils import imread_unicode, imwrite_unicode
 
 __all__ = [
@@ -50,12 +51,16 @@ class SkeletonSaveResult:
     """What :meth:`SkeletonDocument.save` did.
 
     ``path`` is the correction file written (None when nothing was written) and
-    ``error`` the reason of a failure.
+    ``error`` the reason of a failure. ``unchanged``: nothing to write (the skeleton is
+    as saved, or is the generated one with no correction on disk); ``removed``: the
+    skeleton is the generated one again, so its correction file was removed.
     """
 
     ok: bool
     path: str | None = None
     error: str = ""
+    unchanged: bool = False
+    removed: bool = False
 
 
 @dataclass(frozen=True)
@@ -278,8 +283,15 @@ class SkeletonDocument:
 
     # ------------------------------------------------------------------ save
     def save(self) -> SkeletonSaveResult:
-        """Write ``skeleton_corrections/<stem>_skeleton.png`` atomically.
+        """Write ``skeleton_corrections/<stem>_skeleton.png`` atomically, only when the
+        skeleton differs from the generated one as Correct opens it (O2: saving is not
+        acceptance).
 
+        A skeleton as saved writes nothing (``unchanged``), unless it shows a file other
+        than the correction and is the generated one while a correction is on disk (an old
+        no-op save). One equal to the generated skeleton writes nothing and removes the
+        correction (``removed``; ``unchanged`` when there was none); an emptied skeleton
+        over a non-empty generated one is written.
         The raster is written at image resolution, exactly as edited (1 px, 0/255), so
         reopening it gives back the same skeleton. Shrinking it to the generated file's
         size (``SKELETON_OUTPUT_SIZE``) broke thin lines into fragments (known issue Q1).
@@ -288,22 +300,68 @@ class SkeletonDocument:
         """
         if not self.image_path or self.model.mask is None:
             return SkeletonSaveResult(False, error="No skeleton is open")
-        out_path = self.files().correction_path
+        files = self.files()
+        out_path = files.correction_path
+        if not self.is_dirty():  # a correction is never removed unread (source None)
+            legacy = self.source not in (CORRECTED, None) and os.path.isfile(out_path)
+            if not (legacy and self._is_generated(files)):
+                return SkeletonSaveResult(True, unchanged=True)
+            return self._remove_correction(out_path)
+        if self._is_generated(files):
+            return self._remove_correction(out_path)
         h, w = self.model.mask.shape
         rendered = self.model.render_to_size((w, h))
         try:
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             imwrite_unicode(out_path, rendered)
         except (OSError, ValueError) as exc:
-            logger.warning("Could not save skeleton to %s: %s", out_path, exc)
-            self.save_error = str(exc)
-            self.error_revision = self.model.revision
-            return SkeletonSaveResult(False, error=self.save_error)
+            return self._failed(out_path, exc)
         self.model.mark_saved()
         self.source = CORRECTED
         self.save_size = (w, h)  # the start file is now the correction just written
         self.save_error = ""
         return SkeletonSaveResult(True, out_path)
+
+    def _remove_correction(self, path: str) -> SkeletonSaveResult:
+        """The skeleton is the generated one: no correction stays on disk."""
+        existed = os.path.isfile(path)
+        if existed:
+            try:
+                os.remove(path)
+            except OSError as exc:
+                return self._failed(path, exc)
+        self.model.mark_saved()
+        generated = self.files().generated_path()  # GENERATED only if it reads, as reopen()
+        readable = generated and imread_unicode(generated, cv2.IMREAD_GRAYSCALE) is not None
+        self.source = GENERATED if readable else None
+        self.save_size = None
+        self.save_error = ""
+        return SkeletonSaveResult(True, removed=existed, unchanged=not existed)
+
+    def _is_generated(self, files: SkeletonFiles) -> bool:
+        """The skeleton is the generated one as Correct opens it."""
+        return is_generated_as_opened(self.model.mask, files.generated_path(), self._size)
+
+    def _failed(self, path: str, exc: Exception) -> SkeletonSaveResult:
+        """A write or a removal of ``path`` failed: recorded for :meth:`status`."""
+        logger.warning("Could not save skeleton to %s: %s", path, exc)
+        self.save_error = str(exc)
+        self.error_revision = self.model.revision
+        return SkeletonSaveResult(False, error=self.save_error)
+
+    def outcome(self, result: SkeletonSaveResult) -> SaveOutcome:
+        """A :meth:`save` result as the workspace reports it."""
+        if result.ok and result.removed:
+            message = "Skeleton is the generated one again: correction removed"
+            return SaveOutcome(SKELETON, ok=True, cleared=True, message=message, kind="info")
+        if result.ok and result.unchanged:
+            message = "Skeleton unchanged: nothing to save"
+            return SaveOutcome(SKELETON, ok=True, message=message, kind="info")
+        if result.ok:
+            return SaveOutcome(SKELETON, True, path=result.path)
+        name = os.path.basename(self.files().correction_path) if self.is_open() else "it"
+        message = f"Could not save {name}: {result.error}"
+        return SaveOutcome(SKELETON, False, message=message, kind="danger")
 
     # ------------------------------------------------------------------ state
     def status(self, *, pending_edit: bool = False) -> LayerStatus:

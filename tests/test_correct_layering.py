@@ -24,6 +24,7 @@ MAX_LINES = 450
 # Qt-free modules; the documents are skipped until their packages create them.
 QT_FREE = [
     "app.editing.journal",
+    "app.editing.thinning",
     "app.gui.correct.layer",
     "app.gui.correct.session",
     "app.gui.correct.save_gate",

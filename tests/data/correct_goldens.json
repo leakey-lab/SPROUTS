@@ -136,20 +136,7 @@
     ],
     "save_returned": true,
     "saved": {
-     "colour_type": 0,
-     "dtype": "uint8",
-     "exists": true,
-     "file_sha256_informational": "45e945d98ded38001430be13601895981708846604f9db9184b3b6af1dd62402",
-     "length_mm_if_measured_informational": 0.0,
-     "on_count": 0,
-     "pixels_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
-     "shape": [
-      480,
-      640
-     ],
-     "values": [
-      0
-     ]
+     "exists": false
     },
     "start": {
      "raster_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",

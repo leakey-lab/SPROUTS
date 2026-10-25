@@ -67,7 +67,7 @@ class SaveOutcome:
     layer_id: str
     ok: bool
     path: str | None = None  # the file written; None when nothing was written
-    cleared: bool = False  # mask only: an empty mask removed an existing saved file
+    cleared: bool = False  # an empty mask removed the file, or a skeleton correction was removed
     message: str = ""  # detail for a toast ("" = nothing beyond the summary)
     kind: str = "success"
     declined: bool = False  # the user declined the write (ok is False); nothing was written

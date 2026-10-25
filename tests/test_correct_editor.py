@@ -1184,7 +1184,9 @@ def test_a_skeleton_edit_saves_only_the_correction(make_editor, project):
     assert png_colour_type(project.mask()) == 0  # the model mask is never rewritten
 
 
-@pytest.mark.parametrize("layer_id", [MASK, SKELETON])
+# The skeleton half: tests/test_skeleton_save_only_when_changed.py (O2: an untouched skeleton
+# is not written).
+@pytest.mark.parametrize("layer_id", [MASK])
 def test_saving_with_nothing_unsaved_saves_the_edited_layer_only(make_editor, project, layer_id):
     editor = make_editor(project.a, project.folder)
     editor.set_active_layer(layer_id)

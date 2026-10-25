@@ -6,9 +6,14 @@ Qt-free editing core shared by the editors.
   image (the Correct workspace's one undo timeline).
 - ``geometry``: point/segment/polyline picking and Catmull-Rom smoothing on
   ``(x, y)`` tuples.
+- ``thinning``: ``thin_raster`` (a skeleton file thinned as Correct opens it),
+  ``is_generated_as_opened`` and the lazy scikit-image import (numpy and cv2; imported
+  on its own, not by this package).
 
-The package stays standard library only (no Qt, numpy or torch), so it is cheap to
-import and unit-testable without a QApplication.
+The package imports neither PyQt6 nor torch, so it is unit-testable without a
+QApplication and ``app.inference`` may import it. ``history``, ``journal`` and
+``geometry`` (all this ``__init__`` imports) are standard library only, so importing
+the package stays cheap.
 """
 
 from __future__ import annotations
