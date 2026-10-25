@@ -145,7 +145,7 @@ shown at the end of the run.
 | File | Format | Meaning |
 |---|---|---|
 | `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
-| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Skeleton corrected in *Correct*, saved at the source image's resolution exactly as edited (corrections saved before 2026-09-29 are 341 x 256); not read by Measure. The Library's Overlay and Side by side views draw it when it exists |
+| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Skeleton corrected in *Correct*, saved at the source image's resolution exactly as edited (builds before commit `d1645d2` of 2026-09-29, the published `main` among them, save 341 x 256); not read by Measure. The Library's Overlay and Side by side views draw it when it exists |
 
 An image that cannot be decoded gets no skeleton file; it is listed in
 `skeletons/_sprouts_run.json` (`"failed"`) and in the warning shown at the end of the
