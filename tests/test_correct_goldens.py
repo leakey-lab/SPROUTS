@@ -155,11 +155,9 @@ def replay(editor, layer_id: str, script: str, expected: list[str], stroke=route
 
 
 def files(folder: str) -> tuple[str, str]:
-    """The saved (GT) mask and the skeleton correction of the synthetic image."""
-    return (
-        ProjectLayout(folder).gt_mask_path(SYNTH_STEM),
-        os.path.join(folder, "skeleton_corrections", f"{SYNTH_STEM}_skeleton.png"),
-    )
+    """The saved (GT) mask and the saved (GT) skeleton of the synthetic image."""
+    layout = ProjectLayout(folder)
+    return layout.gt_mask_path(SYNTH_STEM), layout.gt_skeleton_path(SYNTH_STEM)
 
 
 def assert_mask_file(path: str, golden: dict) -> None:

@@ -1,9 +1,9 @@
 """Skeleton thinning as Correct opens a skeleton file (Qt-free: numpy and cv2).
 
 - :func:`thin_raster`: a grayscale skeleton raster resized to the image and thinned to 1 px,
-  the skeleton Correct shows for a generated file or a saved correction.
-- :func:`is_generated_as_opened`: whether a skeleton is the generated one as Correct opens
-  it. Saving is not acceptance (O2): a skeleton Save writes a correction only when this is
+  the skeleton Correct shows for a prediction or a GT skeleton.
+- :func:`is_generated_as_opened`: whether a skeleton is the prediction as Correct opens
+  it. Saving is not acceptance (O2): a skeleton Save writes a GT skeleton only when this is
   False.
 - The lazy scikit-image import (:func:`prewarm_skeletonize`) and the 0/255 helpers the
   skeleton model shares (``app.gui.skeleton_graph_model`` imports them back).
@@ -72,7 +72,7 @@ def thin_raster(
     A raster of another size (the generated skeleton is ``SKELETON_OUTPUT_SIZE``) is
     upscaled bilinearly *before* thresholding, so thin lines come out as smooth,
     connected 1 px lines of the right length instead of a nearest-neighbour
-    staircase. A raster already at ``target_size`` (a correction saved at image
+    staircase. A raster already at ``target_size`` (a GT skeleton saved at image
     resolution) is only thresholded and thinned, so it reopens unchanged.
     """
     if raster_gray.ndim != 2:
@@ -102,7 +102,7 @@ def is_generated_as_opened(
 
     No path, a missing file or an unreadable one opens as an empty skeleton, so an empty
     ``mask`` is then the generated one; an emptied skeleton over a non-empty generated one
-    is not (a real correction). Only where ``mask`` is set counts, not its values.
+    is not (real GT). Only where ``mask`` is set counts, not its values.
     """
     gray = imread_unicode(generated_path, cv2.IMREAD_GRAYSCALE) if generated_path else None
     if gray is None:

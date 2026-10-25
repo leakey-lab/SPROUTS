@@ -81,7 +81,6 @@ def test_folders(layout, tmp_path):
     root = str(tmp_path)
     assert layout.mask_dir == os.path.join(root, "mask")
     assert layout.skeletons_dir == os.path.join(root, "skeletons")
-    assert layout.corrections_dir == os.path.join(root, "skeleton_corrections")
     assert layout.gt_dir == os.path.join(root, "gt")
 
 
@@ -148,7 +147,7 @@ def test_scans_of_missing_folders_are_empty(layout):
     assert layout.scan_masks() == {}
     assert layout.scan_mask_stems() == set()
     assert layout.scan_skeleton_stems() == set()
-    assert layout.scan_corrected_stems() == set()
+    assert layout.scan_gt_skeletons() == {}
 
 
 # ------------------------------------------------------------------ skeletons
@@ -171,19 +170,6 @@ def test_find_and_scan_skeletons(layout):
     # skeleton_handler.calculate_root_length: filename.endswith("_fake.png")
     assert layout.scan_skeleton_stems() == {STEM}
     assert layout.scan_skeletons() == {STEM: path}
-
-
-def test_corrected_skeleton_path_matches_skeleton_editor(tmp_path, layout):
-    # skeleton_correction_interface._default_correction_path:
-    # join(images_base_folder, "skeleton_corrections", f"{current_image_name}_skeleton.png")
-    expected = os.path.join(str(tmp_path), "skeleton_corrections", f"{STEM}_skeleton.png")
-    assert layout.corrected_skeleton_path(STEM) == expected
-    assert layout.find_corrected_skeleton(STEM) is None
-    _touch(expected)
-    _touch(os.path.join(layout.corrections_dir, "notes.txt"))
-    assert layout.find_corrected_skeleton(STEM) == expected
-    assert layout.scan_corrected_stems() == {STEM}
-    assert layout.scan_corrected_skeletons() == {STEM: expected}
 
 
 def test_gt_path_matches_gt_store(tmp_path, layout):

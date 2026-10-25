@@ -16,7 +16,6 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
   mask/root_areas.csv                     root area per mask
   skeletons/<stem>_fake.png               model-predicted skeletons
   skeletons/root_lengths.csv              root length per skeleton
-  skeleton_corrections/<stem>_skeleton.png   hand-corrected skeletons
   gt/<stem>.png, gt/classes.json          multi-class ground truth (Trace GT)
   gt/mask/<stem>.png                      GT root mask: a mask saved after a human edit
   gt/skeletons/<stem>.png                 GT skeleton: a skeleton saved after a human edit
@@ -133,8 +132,7 @@ mapped onto the actual resolution of the file being measured: `mm_per_px_x = 18 
 - Values are rounded to 2 decimal places.
 
 Skeletons are predicted from the original images, not from the masks: correcting a mask
-changes `Area (mm²)` only. Corrected skeletons (`skeleton_corrections/`) are not read by
-Measure.
+changes `Area (mm²)` only. GT skeletons (`gt/skeletons/`) are not read by Measure.
 
 ### Encoding
 
@@ -171,7 +169,7 @@ cannot be decoded gets no mask file; it is listed in `mask/_sprouts_run.json`
 | File | Format | Meaning |
 |---|---|---|
 | `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
-| `skeleton_corrections/<stem>_skeleton.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | Skeleton corrected in *Correct*, saved at the source image's resolution exactly as edited (builds before commit `d1645d2` of 2026-09-29, the published `main` among them, save 341 x 256); not read by Measure. The Library's Overlay and Side by side views draw it when it exists |
+| `gt/skeletons/<stem>.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | GT skeleton: a skeleton saved in *Correct* after an edit, at the source image's resolution exactly as edited; removed again when an edit makes it equal to the prediction. Not read by Measure. The Library's Overlay and Side by side views draw it when it exists. `skeleton_corrections/` is no longer read or written (no migration) |
 
 An image that cannot be decoded gets no skeleton file; it is listed in
 `skeletons/_sprouts_run.json` (`"failed"`) and in the warning shown at the end of the

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E
 
 from app.gui.correct.skeleton_layer import SkeletonLayer  # noqa: E402
 from app.io_utils import imread_unicode  # noqa: E402
+from app.project_layout import ProjectLayout  # noqa: E402
 from tests.correct_fakes import FakeHost  # noqa: E402
 from tests.correct_goldens_support import (  # noqa: E402
     SYNTH_CASES,
@@ -125,7 +126,7 @@ def test_skeleton_ops_through_the_layer_match_the_goldens(app, tmp_path, case, s
         assert sha(doc.model.mask) == expected, f"op {index} {op} diverges from the golden"
 
     assert saved == want["save_returned"]
-    path = os.path.join(folder, "skeleton_corrections", f"{SYNTH_STEM}_skeleton.png")
+    path = ProjectLayout(folder).gt_skeleton_path(SYNTH_STEM)
     got = describe_skeleton_file(path)
     assert {key: got.get(key) for key in SAVED_KEYS} == {
         key: want["saved"].get(key) for key in SAVED_KEYS

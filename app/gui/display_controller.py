@@ -9,9 +9,9 @@ drag. ``DisplayController`` decides what the canvas shows for the selection:
 * Side by side: the image and its skeleton, the skeleton scaled to the image's
   height.
 
-The skeleton drawn is the image's correction (``skeleton_corrections/<stem>_skeleton.png``)
-when one exists, else its ML skeleton (``skeletons/<stem>_fake.png``). Display only: Measure
-reads the ML skeleton either way (FR-03), and the metrics bar says "Skeleton corrected".
+The skeleton drawn is the image's GT skeleton (``gt/skeletons/<stem>.png``) when one exists,
+else its ML skeleton (``skeletons/<stem>_fake.png``). Display only: Measure reads the ML
+skeleton either way (FR-03), and the metrics bar says "Skeleton corrected".
 
 The photo (and the side-by-side skeleton) is a
 :class:`~app.gui.canvas_layers.photo.PhotoLayerItem`, decoded like every canvas
@@ -307,7 +307,7 @@ class DisplayController:
 
     def _current_skeleton_path(self) -> str | None:
         """Path of the skeleton drawn for the current image, looked up for this image only:
-        its correction (``skeleton_corrections/``) when one exists, else its ML skeleton.
+        its GT skeleton (``gt/skeletons/``) when one exists, else its ML skeleton.
 
         Display only: Measure reads the ML skeleton either way (FR-03); the metrics bar
         says which one an image has.
@@ -315,8 +315,8 @@ class DisplayController:
         if self.current_fake_image is None:
             name = self.current_name or os.path.splitext(os.path.basename(self.current_image))[0]
             manager = self.main_window.image_manager
-            corrected = getattr(manager, "corrected_skeleton_path", None)
-            path = corrected(name) if callable(corrected) else None
+            gt_skeleton = getattr(manager, "gt_skeleton_path_for", None)
+            path = gt_skeleton(name) if callable(gt_skeleton) else None
             if path and not os.path.isfile(path):
                 path = None  # removed since the scan: the ML skeleton, as before
             self.current_fake_image = path or manager.get_fake_image_path(name)

@@ -117,14 +117,14 @@ def test_opening_an_image_clears_the_undo_timeline():
 def test_files_changed_compares_every_layers_stamps_with_those_at_open():
     rig = _Rig()
     rig.mask.stamps = (("mask/a.png", None),)
-    rig.skeleton.stamps = (("corrections/a_skeleton.png", None), ("skeletons/a_fake.png", 5, 9))
+    rig.skeleton.stamps = (("gt/skeletons/a.png", None), ("skeletons/a_fake.png", 5, 9))
     assert not rig.session.files_changed()  # nothing open
 
     rig.session.open(IMAGE, SIZE, BASE)
     assert not rig.session.files_changed()
 
-    # our own first save creates the correction
-    rig.skeleton.stamps = (("corrections/a_skeleton.png", 7, 3), ("skeletons/a_fake.png", 5, 9))
+    # our own first save creates the GT skeleton
+    rig.skeleton.stamps = (("gt/skeletons/a.png", 7, 3), ("skeletons/a_fake.png", 5, 9))
     assert rig.session.files_changed()
 
     rig.session.reload_documents()
@@ -320,7 +320,7 @@ def test_every_save_attempt_is_reported_once_mask_first_failures_included():
     rig = _Rig().opened()
     rig.mask.dirty = rig.skeleton.dirty = True
     failed = _failure(MASK, "Could not remove mask: busy")
-    written = SaveOutcome(SKELETON, ok=True, path="skeleton_corrections/a_skeleton.png")
+    written = SaveOutcome(SKELETON, ok=True, path="gt/skeletons/a.png")
     rig.mask.save_outcomes = [failed]
     rig.skeleton.save_outcomes = [written]
 
@@ -489,7 +489,7 @@ def test_release_save_saves_and_moves_on():
 def test_a_failed_save_asks_again_about_the_failed_layers_only():
     rig = _Rig(unsaved=[SAVE], after_failed=[KEEP]).opened()
     rig.mask.dirty = rig.skeleton.dirty = True
-    rig.skeleton.save_outcomes = [_failure(SKELETON, "Could not save a_skeleton.png: denied")]
+    rig.skeleton.save_outcomes = [_failure(SKELETON, "Could not save gt/skeletons/a.png: denied")]
 
     assert not rig.session.release()  # Keep editing: the caller stays
 

@@ -395,7 +395,7 @@ def test_the_label_is_the_first_changed_file_relative_to_the_root():
     skeleton = FakeLayer(SKELETON)
     skeleton.dirty = True
     skeleton.stamps = (
-        ("/data/images/skeleton_corrections/a_skeleton.png", 1, 5),
+        ("/data/images/gt/skeletons/a.png", 1, 5),
         ("/data/images/skeletons/a_fake.png", 1, 5),
     )
     gate.take(SKELETON, skeleton)

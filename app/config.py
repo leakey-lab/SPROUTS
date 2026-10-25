@@ -177,7 +177,7 @@ SKELETON_OUTPUT_SIZE = (341, 256)
 # that turns these into paths).
 MASK_DIRNAME = "mask"  # masks: generated and traced, <stem>.png
 SKELETONS_DIRNAME = "skeletons"  # generated skeletons, <stem>_fake.png
-SKELETON_CORRECTIONS_DIRNAME = "skeleton_corrections"  # edited, <stem>_skeleton.png
+SKELETON_CORRECTIONS_DIRNAME = "skeleton_corrections"  # retired (WG-T3): edits go to gt/skeletons/
 
 # Image files the library lists and the mask generator reads (lower case;
 # compare with ``name.lower()``).

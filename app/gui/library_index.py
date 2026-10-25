@@ -343,13 +343,13 @@ class LibraryIndex:
         path_of: Callable[[str], str | None] | None = None,
         has_mask: Callable[[str], bool] | None = None,
         has_skeleton: Callable[[str], bool] | None = None,
-        has_correction: Callable[[str], bool] | None = None,
+        has_gt_skeleton: Callable[[str], bool] | None = None,
     ) -> None:
         self._tree = tree
         self._path_of = path_of or (lambda _name: None)
         self._has_mask = has_mask or (lambda _name: False)
         self._has_skeleton = has_skeleton or (lambda _name: False)
-        self._has_correction = has_correction or (lambda _name: False)
+        self._has_gt_skeleton = has_gt_skeleton or (lambda _name: False)
         self._delegate = LibraryItemDelegate(
             self.status_of, self.tooltip_for, tree, corrected_of=self.corrected_of
         )
@@ -588,8 +588,8 @@ class LibraryIndex:
         return bool(self._has_mask(name)), bool(self._has_skeleton(name))
 
     def corrected_of(self, name: str) -> bool:
-        """True when image ``name`` has a skeleton correction (display only, FR-03)."""
-        return bool(self._has_correction(name))
+        """True when image ``name`` has a GT skeleton (display only, FR-03)."""
+        return bool(self._has_gt_skeleton(name))
 
     def tooltip_for(self, name: str) -> str:
         """Full stem, status in words, and the image path."""

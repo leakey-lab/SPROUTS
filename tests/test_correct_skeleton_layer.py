@@ -259,7 +259,7 @@ def test_the_item_sits_on_the_scene_below_every_decoration(layer, scene):
 
 
 # ---------------------------------------------------------------------- document glue
-def test_open_shows_the_generated_skeleton_clean(host, scene, project):
+def test_open_shows_the_prediction_clean(host, scene, project):
     root, image = project
     _write_raster(root, "skeletons/a_fake.png", LINE)
     layer = SkeletonLayer(host, scene)
@@ -267,10 +267,10 @@ def test_open_shows_the_generated_skeleton_clean(host, scene, project):
     assert layer.open(image, (W, H), root) == []
 
     assert layer.is_open() and not layer.is_dirty()
-    assert layer.document.source == "generated"
+    assert layer.document.source == "prediction"
     assert layer.document.model.mask[240, 100:540].all()
     assert layer.item.boundingRect() == QRectF(0, 0, W, H)
-    assert layer.status() == LayerStatus("none", "Generated", "Not corrected yet")
+    assert layer.status() == LayerStatus("none", "Prediction", "Not corrected yet")
     assert host.calls == [("layer_changed", "skeleton")]  # once, even for a new layer
 
 
@@ -353,14 +353,14 @@ def test_revert_rereads_the_start_file_and_clears_the_history(layer):
     assert not layer.is_dirty() and not layer.can_undo()
 
 
-def test_save_writes_the_correction_and_reports_its_path(layer, host, project):
+def test_save_writes_the_gt_skeleton_and_reports_its_path(layer, host, project):
     root, _image = project
     _commit(layer, (50, 50), (200, 100))
     host.calls.clear()
 
     outcome = layer.save()
 
-    expected = os.path.join(root, "skeleton_corrections", "a_skeleton.png")
+    expected = os.path.join(root, "gt", "skeletons", "a.png")
     assert outcome.ok and os.path.isfile(expected)
     assert os.path.normcase(os.path.abspath(outcome.path)) == os.path.normcase(expected)
     assert outcome == SaveOutcome("skeleton", True, path=outcome.path)
@@ -373,7 +373,7 @@ def test_a_failed_save_names_the_file_keeps_the_old_one_and_stays_dirty(
     layer, project, monkeypatch
 ):
     root, _image = project
-    old = _write_raster(root, "skeleton_corrections/a_skeleton.png", [(10, 20, 5)])
+    old = _write_raster(root, "gt/skeletons/a.png", [(10, 20, 5)])
     before = Path(old).read_bytes()
     _commit(layer, (50, 50), (200, 100))
 
@@ -385,7 +385,7 @@ def test_a_failed_save_names_the_file_keeps_the_old_one_and_stays_dirty(
     monkeypatch.undo()
 
     assert outcome == SaveOutcome(
-        "skeleton", False, message="Could not save a_skeleton.png: disk full", kind="danger"
+        "skeleton", False, message="Could not save gt/skeletons/a.png: disk full", kind="danger"
     )
     assert Path(old).read_bytes() == before
     assert not [f for f in os.listdir(os.path.dirname(old)) if f.endswith(".tmp")]
@@ -1269,7 +1269,7 @@ def test_the_layers_own_transitions_finish_a_drag_first(gap_layer, host, project
     assert not gap_layer.gesture_active()
     assert _count(host, "layer_edited") == 1  # the drag was joined, not dropped
     if transition == "save":
-        saved = cv2.imread(os.path.join(root, "skeleton_corrections", "a_skeleton.png"), 0)
+        saved = cv2.imread(os.path.join(root, "gt", "skeletons", "a.png"), 0)
         assert saved[100, 200:260].all()
 
 

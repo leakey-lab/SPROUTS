@@ -9,8 +9,8 @@ image → ResNet mask      → Correct (mask layer)     → root area (mm²)   �
 image → Pix2Pix skeleton → Correct (skeleton layer) → root length (mm) ┴→ CSV (+ provenance) → Dash/Plotly viz
 ```
 (Correct is ONE stage that edits both layers of an image on one canvas. Measure
-currently reads the generated skeletons only; corrected skeletons are not
-measured — owner decision FR-03, see `docs/KNOWN_ISSUES.md` #5.)
+currently reads the generated skeletons only; GT skeletons (`gt/skeletons/`) are not
+measured yet — owner decision O1 / FR-03, built by WG-T8, see `docs/KNOWN_ISSUES.md`.)
 
 See `README.md` for the user-facing overview and calibration math. This file is
 the agent contract: how to run things, where things live, and the conventions to

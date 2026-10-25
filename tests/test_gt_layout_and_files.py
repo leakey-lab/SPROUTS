@@ -64,7 +64,7 @@ def test_gt_paths_mirror_the_prediction_folders(tmp_path):
     )
     assert layout.gt_path("T001_L044") == os.path.join(root, "gt", "T001_L044.png")
     assert layout.output_dirs[-2:] == (layout.gt_mask_dir, layout.gt_skeletons_dir)
-    assert len(layout.output_dirs) == 9
+    assert len(layout.output_dirs) == 8  # skeleton_corrections/ is retired (WG-T3)
     assert os.listdir(tmp_path) == []  # describing the folders creates none
 
 

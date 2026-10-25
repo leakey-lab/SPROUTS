@@ -180,7 +180,6 @@ def test_output_dirs_are_the_folders_the_app_writes_into(tmp_path):
         join(root, "skeletons"),
         join(root, "output", "skeletonizer", "test_latest", "images"),
         join(root, "skeletonizer", "test_latest", "images"),
-        join(root, "skeleton_corrections"),
         join(root, "gt"),
         join(root, "gt", "mask"),
         join(root, "gt", "skeletons"),
@@ -239,7 +238,7 @@ def _stale_project(root):
     stale.add(_file(layout.gt_dir, f"{STEM}.png.tmp", age_s=2 * HOUR))
     kept.add(_file(layout.gt_dir, "a.png.tmp", age_s=60))  # legacy but fresh
     kept.add(_file(layout.mask_dir, f"{STEM}.png.tmp", age_s=2 * HOUR))  # legacy: gt/ only
-    kept.add(_file(layout.corrections_dir, "classes.json.tmp", age_s=2 * HOUR))
+    kept.add(_file(layout.gt_skeletons_dir, "classes.json.tmp", age_s=2 * HOUR))
     return layout, stale, kept
 
 

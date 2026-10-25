@@ -11,7 +11,8 @@ The editor keeps an internal binary skeleton mask (uint8 0/255) and provides:
   connect/snap UX
 - Undo/redo as changed-box patches, unsaved-change tracking and cached topology for
   the editor; the endpoints are recomputed only around the pixels that changed
-- Saving corrected skeletons as `<base>_skeleton.png`
+- Rendering the skeleton for a save (the Correct page writes it as the GT skeleton
+  `gt/skeletons/<stem>.png`)
 - Hooks for the Correct workspace: ``on_action`` (a new undoable action),
   ``drop_redo`` (one undo timeline across layers) and ``take_changed_box`` (the
   region a display must refresh)

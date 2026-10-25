@@ -3,7 +3,7 @@
 One row per edit layer, the mask on top (spec section 3.2): the layer's key (1 / 2), a
 swatch in its colour, its name, an eye for its visibility and, below the name, its save
 state as a dot and a label in the status chip's colours ("Saved", "Unsaved", "Not saved",
-or the layer's own label such as "No mask", "Generated" or "Loaded file"). The active row
+or the layer's own label such as "No mask", "Prediction" or "Loaded file"). The active row
 has a raised fill and a 2 px bar in its layer's colour; a row can flash briefly (the editor
 flashes the other layer's row when Ctrl+Z undoes one of that layer's actions).
 

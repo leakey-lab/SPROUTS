@@ -118,8 +118,8 @@ class Project:
         return os.path.join(self.folder, "gt", "mask", f"{STEMS[i]}.png")
 
     def correction(self, i: int) -> str:
-        """The skeleton correction of image ``i``."""
-        return os.path.join(self.folder, "skeleton_corrections", f"{STEMS[i]}_skeleton.png")
+        """The saved (GT) skeleton of image ``i``: what a skeleton save writes."""
+        return os.path.join(self.folder, "gt", "skeletons", f"{STEMS[i]}.png")
 
     def generated(self, i: int) -> str:
         """The generated skeleton of image ``i``."""
@@ -329,7 +329,7 @@ def test_entering_correct_opens_the_selected_image_with_both_layers(make_window,
     assert same_path(editor.current_image_path, project.image(0))
     assert np.array_equal(plane(editor), box_plane())  # the model mask
     assert raster(editor)[110, 20 : W - 20].all()  # the generated skeleton
-    assert editor.layers[SKELETON].document.source == "generated"
+    assert editor.layers[SKELETON].document.source == "prediction"
     page = window.action_bar_stack.currentWidget()
     assert editor.clear_button.parentWidget() is page and editor.clear_button.isVisible()
     assert editor.clear_button.text() == "Clear mask"
@@ -704,7 +704,7 @@ def test_re_entering_correct_after_a_skeleton_save_shows_the_saved_correction(
     fresh.load_from_raster(saved, target_size=(W, H))
     assert np.array_equal(raster(editor), fresh.mask)
     assert np.array_equal(raster(editor), in_memory)
-    assert editor.layers[SKELETON].document.source == "corrected"
+    assert editor.layers[SKELETON].document.source == "gt"
 
 
 def test_a_skeleton_save_changes_neither_has_skeleton_nor_the_metrics_bar(
@@ -744,7 +744,7 @@ def test_the_generated_skeleton_resolver_reaches_the_skeleton_layer(make_window,
 
     editor = window.correct_editor
     assert raster(editor)[40, 20 : W - 20].all()
-    assert editor.layers[SKELETON].document.source == "generated"
+    assert editor.layers[SKELETON].document.source == "prediction"
 
 
 def test_the_opengl_switch_reaches_the_display_correct_and_trace_gt_canvases(

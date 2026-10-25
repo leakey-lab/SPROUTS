@@ -73,22 +73,20 @@ class SkeletonLayer:
         self.model = doc.model  # ToolHost; one object for the document's whole life
         self.model.on_action = lambda: host.layer_edited(SKELETON)
         # Calls the document, the model or the host answer as they are (EditLayer, ToolHost).
-        self.is_open = doc.is_open
+        self.is_open, self.notify = doc.is_open, host.notify
         self.can_undo, self.can_redo = (lambda: doc.model.can_undo), (lambda: doc.model.can_redo)
         self.file_stamps, self.set_resolver = doc.file_stamps, doc.set_resolver
         self.write_stamps, self.matches_disk = doc.write_stamps, doc.matches_disk
         # ReadAheadLayer: a worker reader of a document; the document handed back (paging).
         self.read_ahead, self.read_back = doc.plan_read, doc.read_back
-        self.notify = host.notify
         self.item = SkeletonLayerItem()
         self.item.setZValue(self.Z)
         scene.addItem(self.item)
         self.decorations = SkeletonDecorations(scene)  # markers device-cached (a blit a frame)
         self.eraser_ring = BrushPreview(scene)
         self.eraser_ring.set_style(tokens.SKEL, dashed=True)
-        self.draft = PolylineDraft()
+        self.draft, self.current_tool = PolylineDraft(), SELECT
         self._tools: dict[str, SkeletonTool] = build_tools(self)
-        self.current_tool = SELECT
         self._eraser, self._opacity = self.DEFAULT_ERASER, self.DEFAULT_OPACITY
         self._active = self._visible = self._shown = True
         self._drag: SkeletonTool | None = None  # the tool that owns the drag in progress
@@ -121,8 +119,7 @@ class SkeletonLayer:
 
     def image_size(self) -> tuple[int, int]:
         """``(w, h)`` of the open skeleton, the image size; ``(0, 0)`` when closed (ToolHost)."""
-        mask = self.model.mask
-        return (0, 0) if mask is None else (mask.shape[1], mask.shape[0])
+        return (0, 0) if (mask := self.model.mask) is None else (mask.shape[1], mask.shape[0])
 
     def eraser_footprint_radius(self) -> int:
         """Erase radius, image px: half the eraser diameter, as the ring shows (ToolHost)."""
@@ -165,7 +162,7 @@ class SkeletonLayer:
     hover = show_eraser_ring  # EditLayer: the ring is the layer's only hover feedback
 
     def open(self, image_path, size, images_base_folder, ahead=None) -> list[Notice]:
-        """Open the skeleton of ``image_path``: the correction, else the generated file."""
+        """Open the skeleton of ``image_path``: the GT skeleton, else the prediction."""
         read = ahead if isinstance(ahead, SkeletonRead) else None  # a read_ahead payload
         return self._reload(self.document.open, image_path, size, images_base_folder, read)
 
@@ -191,6 +188,15 @@ class SkeletonLayer:
             self.render_skeleton()
         return notices
 
+    def load_prediction(self) -> list[Notice]:
+        """Load prediction as one undoable action; unreadable or shown already: said, no change."""
+        plane, notices = self.document.read_prediction()
+        if plane is not None:
+            self._reload(self.document.load_prediction, plane)
+        for notice in notices:
+            self.notify(notice.message, notice.kind)
+        return notices
+
     def _reload(self, load: Callable, *args):
         self.finish_gesture()
         self._drop_transient()
@@ -213,8 +219,7 @@ class SkeletonLayer:
         return self.document.status(pending_edit=self.draft.pending())
 
     def save(self) -> SaveOutcome:
-        """Write the correction if it differs from the generated skeleton (O2); a drag is
-        finished and a pending draft committed first."""
+        """Save the GT unless it is the prediction (O2); a drag ends and a draft commits first."""
         self.finish_gesture()
         if self.draft.pending():  # Save keeps what the user drew (S5)
             self._tools[POLYLINE].commit()
@@ -402,7 +407,7 @@ class SkeletonLayer:
         self.item.setOpacity(self._opacity * (1.0 if self._active else REFERENCE_DIM))
 
     def dialog_start(self) -> str:
-        """Where the Load dialog starts: the generated file, else skeletons/ ("" if closed)."""
+        """Where the Load dialog starts: the prediction, else skeletons/ ("" if closed)."""
         return self.document.files().dialog_start() if self.is_open() else ""
 
     def draft_state(self) -> DraftState:

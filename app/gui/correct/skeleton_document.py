@@ -7,12 +7,12 @@ Load file and Save are today's skeleton editor code
 (``skeleton_correction_interface.py``) moved without Qt: messages come back as
 :class:`~app.gui.correct.layer.Notice` lists and save results, never as dialogs.
 
-The file rules are :class:`app.gui.skeleton_document.SkeletonFiles`: the saved
-correction ``skeleton_corrections/<stem>_skeleton.png`` wins over the generated
-``skeletons/<stem>_fake.png`` (an injected resolver is asked first). Saving writes only
-the correction, atomically, at image resolution: the generated file is smaller
-(``SKELETON_OUTPUT_SIZE``) and is upscaled when opened, so a save never shrinks
-the edited skeleton back and never breaks its lines (known issue Q1).
+The file rules are :class:`app.gui.skeleton_document.SkeletonFiles`: the GT skeleton
+``gt/skeletons/<stem>.png`` wins over the prediction ``skeletons/<stem>_fake.png`` (an
+injected resolver is asked first). Saving writes only the GT file, atomically, at image
+resolution: the prediction is smaller (``SKELETON_OUTPUT_SIZE``) and is upscaled when
+opened, so a save never shrinks the edited skeleton back and never breaks its lines (known
+issue Q1); a GT file of another size opens the same way and saves at the photo's size.
 """
 
 from __future__ import annotations
@@ -26,15 +26,16 @@ import cv2
 import numpy as np
 
 from app.editing.thinning import is_generated_as_opened, thin_raster
-from app.gui.correct.layer import SKELETON, LayerStatus, Notice, SaveOutcome
-from app.gui.skeleton_document import CORRECTED, GENERATED, GeneratedResolver, SkeletonFiles
+from app.gui.correct.layer import SKELETON, LayerStatus, Notice, SaveOutcome, project_label
+from app.gui.correct.read_ahead import file_stamp as _stamp
+from app.gui.skeleton_document import GT, PREDICTION, GeneratedResolver, SkeletonFiles
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel, skeleton_tips
-from app.io_utils import imread_unicode, imwrite_unicode
+from app.io_utils import imread_unicode, imwrite_unicode, same_file
 
 __all__ = [
-    "CORRECTED",
-    "GENERATED",
+    "GT",
     "LOADED",
+    "PREDICTION",
     "GeneratedResolver",
     "SkeletonDocument",
     "SkeletonRead",
@@ -44,16 +45,17 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 LOADED = "loaded"  # source of a file opened with Load that is neither of the two above
+SHOWN_ALREADY = "Nothing to load: the skeleton is the prediction already"
 
 
 @dataclass(frozen=True)
 class SkeletonSaveResult:
     """What :meth:`SkeletonDocument.save` did.
 
-    ``path`` is the correction file written (None when nothing was written) and
-    ``error`` the reason of a failure. ``unchanged``: nothing to write (the skeleton is
-    as saved, or is the generated one with no correction on disk); ``removed``: the
-    skeleton is the generated one again, so its correction file was removed.
+    ``path`` is the GT file written (None when nothing was written) and ``error`` the
+    reason of a failure. ``unchanged``: nothing to write (the skeleton is as saved, or is
+    the prediction with no GT file on disk); ``removed``: the skeleton is the prediction
+    again, so its GT file was removed.
     """
 
     ok: bool
@@ -94,8 +96,8 @@ class SkeletonDocument:
 
     ``model`` is one object for the document's whole life: opening, Discard, Load
     and close reset it in place, so hooks set on it (``on_action``) stay connected.
-    ``source`` is ``CORRECTED``, ``GENERATED``, ``LOADED`` or None (nothing was read).
-    ``save_size`` is the ``(w, h)`` of the raster read, or of the correction last written
+    ``source`` is ``GT``, ``PREDICTION``, ``LOADED`` or None (nothing was read).
+    ``save_size`` is the ``(w, h)`` of the raster read, or of the GT file last written
     (informational; saves are at image resolution). ``save_error`` and ``error_revision``
     describe the last failed save, which :meth:`status` reports until the next edit.
     """
@@ -111,6 +113,7 @@ class SkeletonDocument:
         self.last_load_ok = False  # the last load_file read its file
         self._resolver = resolver
         self._size = (0, 0)  # (w, h) of the image: the model's size
+        self._prediction: str | None = None  # the prediction file found at open (or None)
 
     def set_resolver(self, resolver: GeneratedResolver | None) -> None:
         """Inject ``image_path -> generated skeleton path | None`` (asked before
@@ -159,7 +162,7 @@ class SkeletonDocument:
         """Open the skeleton of ``image_path`` (an image of ``size`` ``(w, h)``).
 
         The project root is ``images_base_folder``, else the image's folder. Reads the
-        start file (the correction, else the generated skeleton); nothing to read opens
+        start file (the GT skeleton, else the prediction); nothing to read opens
         an empty skeleton. Returns the notices to show. ``read`` (a :meth:`plan_read`
         reader's result) is adopted while the files are still the ones it read.
         """
@@ -169,6 +172,7 @@ class SkeletonDocument:
         self._size = (max(1, int(w)), max(1, int(h)))
         if read is None or not self._current(read):
             return self.reopen()
+        self._prediction = self.files().generated_path()
         self.save_error = ""
         if read.mask is None:  # nothing to read: an empty skeleton
             self.model.set_empty(self._size)
@@ -219,7 +223,9 @@ class SkeletonDocument:
         self.save_error = ""
         self.source = None
         notices: list[Notice] = []
-        path, kind = self.files().start_file()
+        files = self.files()
+        self._prediction = files.generated_path()
+        path, kind = files.start_file()
         if path and self._read(path, notices):
             self.source = kind
         return notices
@@ -228,8 +234,8 @@ class SkeletonDocument:
         """Open another skeleton file for this image (the Load button); history cleared.
 
         The loaded skeleton is an unsaved edit while it differs from the skeleton opened or
-        last saved: Save writes it as the correction, Discard (:meth:`reopen`) reads the
-        start file again. ``source`` becomes ``CORRECTED`` or ``GENERATED`` when ``path`` is
+        last saved: Save writes it as the GT file, Discard (:meth:`reopen`) reads the
+        start file again. ``source`` becomes ``GT`` or ``PREDICTION`` when ``path`` is
         one of those files, else ``LOADED``. An unreadable file changes nothing;
         ``last_load_ok`` says which of the two happened.
         """
@@ -241,13 +247,37 @@ class SkeletonDocument:
         if self.last_load_ok:
             files = self.files()
             generated = files.generated_path()
-            if _same_file(path, files.correction_path):
-                self.source = CORRECTED
-            elif generated and _same_file(path, generated):
-                self.source = GENERATED
+            if same_file(path, files.gt_path):
+                self.source = GT
+            elif generated and same_file(path, generated):
+                self.source = PREDICTION
             else:
                 self.source = LOADED
         return notices
+
+    def prediction_file(self) -> str | None:
+        """The prediction file found when the image was opened (Load prediction), or None."""
+        return self._prediction if self.image_path else None
+
+    def read_prediction(self) -> tuple[np.ndarray | None, list[Notice]]:
+        """The prediction as opened (thinned to the image size) for Load prediction, read now;
+        None with the notice to show when it is missing, unreadable or shown already."""
+        path = self.prediction_file()
+        if not path:
+            return None, []
+        gray = imread_unicode(path, cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            return None, [Notice(f"Could not read skeleton {os.path.basename(path)}", "danger")]
+        plane = thin_raster(gray, self._size)
+        if np.array_equal(plane, self.model.mask):
+            return None, [Notice(SHOWN_ALREADY, "info")]
+        return plane, []
+
+    def load_prediction(self, plane: np.ndarray) -> None:
+        """Adopt ``plane`` (:meth:`read_prediction`) as one undoable action; a Save of it then
+        removes the GT file (W1-T3)."""
+        self.model.push_undo()  # the model's on_action: the page's timeline records it
+        self.model.mask = plane
 
     def _read(self, path: str, notices: list[Notice], *, saved: bool = True) -> bool:
         """Load ``path`` into the model at image size (resized, then thinned); ``saved``
@@ -269,6 +299,7 @@ class SkeletonDocument:
         self.save_error = ""
         self.error_revision = -1
         self._size = (0, 0)
+        self._prediction = None
         self.model.mask = None
         self.model.clear_history()
         self.model.mark_saved()
@@ -283,15 +314,13 @@ class SkeletonDocument:
 
     # ------------------------------------------------------------------ save
     def save(self) -> SkeletonSaveResult:
-        """Write ``skeleton_corrections/<stem>_skeleton.png`` atomically, only when the
-        skeleton differs from the generated one as Correct opens it (O2: saving is not
-        acceptance).
+        """Write ``gt/skeletons/<stem>.png`` atomically, only when the skeleton differs from
+        the prediction as Correct opens it (O2: saving is not acceptance).
 
-        A skeleton as saved writes nothing (``unchanged``), unless it shows a file other
-        than the correction and is the generated one while a correction is on disk (an old
-        no-op save). One equal to the generated skeleton writes nothing and removes the
-        correction (``removed``; ``unchanged`` when there was none); an emptied skeleton
-        over a non-empty generated one is written.
+        A skeleton as saved writes nothing (``unchanged``). One equal to the prediction (the
+        file on disk now, read at save time) writes nothing and removes the GT file
+        (``removed``; ``unchanged`` when there was none); an emptied skeleton over a
+        non-empty prediction is written. ``skeletons/`` is never written.
         The raster is written at image resolution, exactly as edited (1 px, 0/255), so
         reopening it gives back the same skeleton. Shrinking it to the generated file's
         size (``SKELETON_OUTPUT_SIZE``) broke thin lines into fragments (known issue Q1).
@@ -301,14 +330,11 @@ class SkeletonDocument:
         if not self.image_path or self.model.mask is None:
             return SkeletonSaveResult(False, error="No skeleton is open")
         files = self.files()
-        out_path = files.correction_path
-        if not self.is_dirty():  # a correction is never removed unread (source None)
-            legacy = self.source not in (CORRECTED, None) and os.path.isfile(out_path)
-            if not (legacy and self._is_generated(files)):
-                return SkeletonSaveResult(True, unchanged=True)
-            return self._remove_correction(out_path)
+        out_path = files.gt_path
+        if not self.is_dirty():  # a GT file is never removed unread (source None)
+            return SkeletonSaveResult(True, unchanged=True)
         if self._is_generated(files):
-            return self._remove_correction(out_path)
+            return self._remove_gt(out_path)
         h, w = self.model.mask.shape
         rendered = self.model.render_to_size((w, h))
         try:
@@ -317,13 +343,13 @@ class SkeletonDocument:
         except (OSError, ValueError) as exc:
             return self._failed(out_path, exc)
         self.model.mark_saved()
-        self.source = CORRECTED
-        self.save_size = (w, h)  # the start file is now the correction just written
+        self.source = GT
+        self.save_size = (w, h)  # the start file is now the GT file just written
         self.save_error = ""
         return SkeletonSaveResult(True, out_path)
 
-    def _remove_correction(self, path: str) -> SkeletonSaveResult:
-        """The skeleton is the generated one: no correction stays on disk."""
+    def _remove_gt(self, path: str) -> SkeletonSaveResult:
+        """The skeleton is the prediction: no GT file stays on disk."""
         existed = os.path.isfile(path)
         if existed:
             try:
@@ -331,15 +357,16 @@ class SkeletonDocument:
             except OSError as exc:
                 return self._failed(path, exc)
         self.model.mark_saved()
-        generated = self.files().generated_path()  # GENERATED only if it reads, as reopen()
+        generated = self.files().generated_path()  # PREDICTION only if it reads, as reopen()
         readable = generated and imread_unicode(generated, cv2.IMREAD_GRAYSCALE) is not None
-        self.source = GENERATED if readable else None
+        self.source = PREDICTION if readable else None
         self.save_size = None
         self.save_error = ""
         return SkeletonSaveResult(True, removed=existed, unchanged=not existed)
 
     def _is_generated(self, files: SkeletonFiles) -> bool:
-        """The skeleton is the generated one as Correct opens it."""
+        """The skeleton is the prediction as Correct opens it, read from disk now (a Generate
+        run that rewrote it meanwhile is compared, never a copy read at open)."""
         return is_generated_as_opened(self.model.mask, files.generated_path(), self._size)
 
     def _failed(self, path: str, exc: Exception) -> SkeletonSaveResult:
@@ -351,16 +378,16 @@ class SkeletonDocument:
 
     def outcome(self, result: SkeletonSaveResult) -> SaveOutcome:
         """A :meth:`save` result as the workspace reports it."""
+        label = project_label(self.files().gt_path, self.images_base_folder or "")
         if result.ok and result.removed:
-            message = "Skeleton is the generated one again: correction removed"
+            message = f"Skeleton equals the prediction: removed {label}"
             return SaveOutcome(SKELETON, ok=True, cleared=True, message=message, kind="info")
         if result.ok and result.unchanged:
             message = "Skeleton unchanged: nothing to save"
             return SaveOutcome(SKELETON, ok=True, message=message, kind="info")
         if result.ok:
             return SaveOutcome(SKELETON, True, path=result.path)
-        name = os.path.basename(self.files().correction_path) if self.is_open() else "it"
-        message = f"Could not save {name}: {result.error}"
+        message = f"Could not save {label if self.is_open() else 'it'}: {result.error}"
         return SaveOutcome(SKELETON, False, message=message, kind="danger")
 
     # ------------------------------------------------------------------ state
@@ -376,33 +403,33 @@ class SkeletonDocument:
             return LayerStatus("error", "Not saved", self.save_error)
         if pending_edit or self.is_dirty():
             return LayerStatus("dirty")
-        if self.source == CORRECTED:
-            return LayerStatus("clean", "Saved", self.files().correction_path)
-        if self.source == GENERATED:
+        if self.source == GT:
+            return LayerStatus("clean", "GT", self.files().gt_path)
+        if self.source == PREDICTION:
             mask = self.model.mask
             empty = mask is None or not mask.any()
-            label = "Generated · empty" if empty else "Generated"
+            label = "Prediction · empty" if empty else "Prediction"
             return LayerStatus("none", label, "Not corrected yet")
         if self.source == LOADED:
             return LayerStatus("none", "Loaded file")
         return LayerStatus("none", "No skeleton")
 
     def file_stamps(self) -> tuple:
-        """The pinned file set: ``(correction, generated)``, read afresh on each call.
+        """The pinned file set: ``(GT, prediction)``, read afresh on each call.
 
         Each entry is ``(path, mtime_ns, size)``, or ``(path, None)`` for a missing
-        file. The generated path is the resolver's file when it finds one, else
+        file. The prediction path is the resolver's file when it finds one, else
         ``skeletons/<stem>_fake.png``. ``()`` when nothing is open. Our own save
-        (the correction appears or changes) and a Generate run both change it.
+        (the GT file appears, changes or goes) and a Generate run both change it.
         """
         if not self.image_path:
             return ()
         return _stamps_of(self.files())
 
     def write_stamps(self) -> tuple:
-        """The file :meth:`save` writes or removes, the correction, stamped afresh (``()``
-        when closed): a Generate run, which rewrites only the generated file, is no change."""
-        return (_stamp(self.files().correction_path),) if self.image_path else ()
+        """The file :meth:`save` writes or removes, the GT file, stamped afresh (``()`` when
+        closed): a Generate run, which rewrites only the prediction, is no change."""
+        return (_stamp(self.files().gt_path),) if self.image_path else ()
 
     def matches_disk(self) -> bool:
         """True when :meth:`reopen` would now open exactly the saved skeleton: the start file
@@ -415,20 +442,7 @@ class SkeletonDocument:
 
 
 def _stamps_of(files: SkeletonFiles) -> tuple:
-    """``(correction, generated)`` stamps; the generated path is the resolver's file when it
-    finds one, else ``skeletons/<stem>_fake.png``."""
+    """``(GT, prediction)`` stamps; the prediction path is the resolver's file when it finds
+    one, else ``skeletons/<stem>_fake.png``."""
     generated = files.generated_path() or files.layout.skeleton_path(files.stem)
-    return (_stamp(files.correction_path), _stamp(generated))
-
-
-def _stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a file, ``(path, None)`` when it cannot be read."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return (path, None)
-    return (path, st.st_mtime_ns, st.st_size)
-
-
-def _same_file(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    return (_stamp(files.gt_path), _stamp(generated))

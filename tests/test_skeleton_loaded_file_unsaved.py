@@ -24,9 +24,9 @@ from PyQt6.QtWidgets import QFileDialog  # noqa: E402
 
 from app.gui.correct.layer import SKELETON, LayerStatus  # noqa: E402
 from app.gui.correct.skeleton_document import (  # noqa: E402
-    CORRECTED,
-    GENERATED,
+    GT,
     LOADED,
+    PREDICTION,
     SkeletonDocument,
 )
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel  # noqa: E402
@@ -101,7 +101,7 @@ def test_a_loaded_file_that_differs_is_unsaved_until_saved(folder):
     assert doc.source == LOADED and doc.is_dirty()
     assert doc.status() == LayerStatus("dirty")
     result = doc.save()
-    assert result.ok and not doc.is_dirty() and doc.source == CORRECTED
+    assert result.ok and not doc.is_dirty() and doc.source == GT
     written = cv2.imread(result.path, cv2.IMREAD_GRAYSCALE)
     assert np.array_equal(written, doc.model.mask) and written[90].any()
 
@@ -115,7 +115,7 @@ def test_discard_after_a_load_reads_the_start_file_again(folder):
 
     doc.reopen()  # the prompt's Discard
 
-    assert not doc.is_dirty() and doc.source == GENERATED
+    assert not doc.is_dirty() and doc.source == PREDICTION
     assert np.array_equal(doc.model.mask, opened)
 
 
@@ -127,7 +127,7 @@ def test_a_loaded_copy_of_the_open_skeleton_stays_clean(folder):
     doc.load_file(_file(root / "elsewhere" / "copy.png", row=30))
     assert not doc.is_dirty() and doc.status() == LayerStatus("none", "Loaded file")
     doc.load_file(generated)
-    assert not doc.is_dirty() and doc.source == GENERATED
+    assert not doc.is_dirty() and doc.source == PREDICTION
 
 
 def test_a_file_loaded_over_no_skeleton_is_unsaved(folder):
@@ -149,7 +149,7 @@ def test_an_unreadable_file_leaves_a_clean_skeleton_clean(folder):
 
     doc.load_file(str(bad))
 
-    assert not doc.last_load_ok and not doc.is_dirty() and doc.source == GENERATED
+    assert not doc.last_load_ok and not doc.is_dirty() and doc.source == PREDICTION
 
 
 # ----------------------------------------------------------------------------- the editor

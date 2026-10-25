@@ -566,9 +566,9 @@ class MainWindow(QMainWindow):
         """Return True if a processed skeleton is known for the image (``metrics``)."""
         return self.metrics.image_has_skeleton(stored_name)
 
-    def _image_has_correction(self, stored_name) -> bool:
-        """True when a skeleton correction of the image is known (``metrics``)."""
-        return self.metrics.image_has_correction(stored_name)
+    def _image_has_gt_skeleton(self, stored_name) -> bool:
+        """True when a GT skeleton of the image is known (``metrics``)."""
+        return self.metrics.image_has_gt_skeleton(stored_name)
 
     def _current_image_name(self) -> str | None:
         """Stem of the image selected in the library (``metrics.current_image_name``)."""

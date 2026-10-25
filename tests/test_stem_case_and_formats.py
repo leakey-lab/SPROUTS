@@ -323,17 +323,17 @@ def test_single_stem_lookups_find_a_file_whose_name_differs_in_case(tmp_path):
     layout = ProjectLayout(_images(tmp_path / "p", {"A.png": 90}))
     mask = _touch(os.path.join(layout.mask_dir, "a.PNG"))
     skeleton = _touch(os.path.join(layout.skeletons_dir, "a_fake.png"))
-    corrected = _touch(os.path.join(layout.corrections_dir, "a_skeleton.png"))
+    gt_skeleton = _touch(os.path.join(layout.gt_skeletons_dir, "a.png"))
 
     assert layout.find_mask("A") == mask
     assert layout.find_skeleton("A") == skeleton
-    assert layout.find_corrected_skeleton("A") == corrected
+    assert layout.find_gt_skeleton("A") == gt_skeleton
     assert layout.find_mask("b") is None and layout.find_skeleton("b") is None
 
     manager = ImageManager()
     manager.original_folder = layout.root
     manager.on_loading_finished(layout.scan_images(), {}, {}, False)
-    assert manager.has_correction("A") and manager.corrected_skeleton_path("A") == corrected
+    assert manager.has_gt_skeleton("A") and manager.gt_skeleton_path_for("A") == gt_skeleton
     manager.processed_base_path = layout.skeletons_dir
     manager.current_view_mode = "Overlay"
     assert manager.get_fake_image_path("A") == skeleton

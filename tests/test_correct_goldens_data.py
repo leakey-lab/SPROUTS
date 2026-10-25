@@ -93,8 +93,8 @@ def test_make_synth_project_regenerates_the_inputs_byte_for_byte(tmp_path, case)
 def test_make_synth_project_starts_from_a_fresh_folder(tmp_path):
     folder, _ = make_synth_project(str(tmp_path), "synth_model_mask_and_skeleton")
     expected = _tree(folder)
-    os.makedirs(os.path.join(folder, "skeleton_corrections"))
-    with open(os.path.join(folder, "skeleton_corrections", "stale.png"), "wb") as fh:
+    os.makedirs(os.path.join(folder, "gt", "skeletons"))
+    with open(os.path.join(folder, "gt", "skeletons", "stale.png"), "wb") as fh:
         fh.write(b"left over by an earlier replay")
     with open(os.path.join(folder, MODEL_MASK), "wb") as fh:
         fh.write(b"overwritten by an earlier save")
@@ -103,7 +103,7 @@ def test_make_synth_project_starts_from_a_fresh_folder(tmp_path):
 
     assert again == folder
     assert _tree(folder) == expected
-    assert not os.path.exists(os.path.join(folder, "skeleton_corrections"))
+    assert not os.path.exists(os.path.join(folder, "gt"))
 
 
 def test_unknown_case_is_refused(tmp_path):

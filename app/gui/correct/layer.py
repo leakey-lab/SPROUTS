@@ -70,7 +70,7 @@ class SaveOutcome:
     layer_id: str
     ok: bool
     path: str | None = None  # the file written; None when nothing was written
-    cleared: bool = False  # the mask's GT file or the skeleton correction was removed
+    cleared: bool = False  # the layer's GT file was removed (it equals the prediction)
     message: str = ""  # detail for a toast ("" = nothing beyond the summary)
     kind: str = "success"
     declined: bool = False  # the user declined the write (ok is False); nothing was written

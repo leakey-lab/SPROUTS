@@ -147,8 +147,8 @@ class Project:
         return os.path.join(self.folder, "gt", "mask", f"{name}.png")
 
     def correction(self, name: str = "a") -> str:
-        """The skeleton correction of image ``name``."""
-        return os.path.join(self.folder, "skeleton_corrections", f"{name}_skeleton.png")
+        """The saved (GT) skeleton of image ``name``: what a skeleton save writes."""
+        return os.path.join(self.folder, "gt", "skeletons", f"{name}.png")
 
     def generated(self, name: str = "a") -> str:
         """The generated skeleton of image ``name``."""
@@ -432,7 +432,8 @@ SIGNALS = {
     "dirty_changed": (True,),
     "mask_saved": ("a.png",),
     "mask_cleared": ("a.png",),
-    "skeleton_saved": ("a_skeleton.png",),
+    "skeleton_saved": ("a.png",),
+    "skeleton_cleared": ("a.png",),
     "b_key_status_changed": (True,),
     "navigate_requested": (1,),
     "active_layer_changed": ("skeleton",),
@@ -520,7 +521,7 @@ def test_load_image_opens_both_layers_and_fits_the_photo(make_editor, project):
 
     assert same_path(editor.current_image_path, project.a)
     assert np.array_equal(plane(editor), box_plane())
-    assert editor.layers[SKELETON].document.source == "generated"
+    assert editor.layers[SKELETON].document.source == "prediction"
     assert raster(editor)[110, 20:180].all()
     assert editor.photo_item.image_size() == (W, H)
     assert editor.status_chip.text() == "a.png" and not editor.has_unsaved_changes()
@@ -578,15 +579,15 @@ def test_an_undecodable_first_image_leaves_the_page_empty(make_editor, tmp_path)
 def test_the_generated_skeleton_opens_without_a_dialog(make_editor, project):
     editor = make_editor(project.a, project.folder)  # the guard fails on any file dialog
 
-    assert editor.layers[SKELETON].document.source == "generated" and raster(editor).any()
+    assert editor.layers[SKELETON].document.source == "prediction" and raster(editor).any()
     assert not editor.has_unsaved_changes()
 
 
-def test_the_saved_correction_wins_over_the_generated_skeleton(make_editor, project):
+def test_the_gt_skeleton_wins_over_the_prediction(make_editor, project):
     write_skeleton(project.correction(), row=40)
     editor = make_editor(project.a, project.folder)
 
-    assert editor.layers[SKELETON].document.source == "corrected"
+    assert editor.layers[SKELETON].document.source == "gt"
     assert raster(editor)[40].any() and not raster(editor)[110].any()
 
 
@@ -597,7 +598,7 @@ def test_the_injected_resolver_finds_the_generated_skeleton(make_editor, project
 
     editor.load_image(project.b, project.folder)
 
-    assert editor.layers[SKELETON].document.source == "generated" and raster(editor)[60].any()
+    assert editor.layers[SKELETON].document.source == "prediction" and raster(editor)[60].any()
 
 
 def test_an_image_without_mask_or_skeleton_says_so(make_editor, project):
@@ -738,7 +739,7 @@ def test_re_entry_after_our_own_skeleton_save_reloads_the_saved_correction(make_
     fresh.load_from_raster(saved, target_size=(W, H))
     assert np.array_equal(raster(editor), fresh.mask)
     assert np.array_equal(raster(editor), in_memory)
-    assert editor.layers[SKELETON].document.source == "corrected"
+    assert editor.layers[SKELETON].document.source == "gt"
 
 
 # ============================================================================ the two layers
@@ -1151,13 +1152,13 @@ def test_the_layers_rows_show_the_save_state_of_each_layer(make_editor, project)
     def states():
         return rows[MASK].state_label.text(), rows[SKELETON].state_label.text()
 
-    assert states() == ("Prediction", "Generated")
+    assert states() == ("Prediction", "Prediction")
     paint(editor, (20, 100), (60, 100))
-    assert states() == ("Unsaved", "Generated")
+    assert states() == ("Unsaved", "Prediction")
     draw_line(editor)
     assert states() == ("Unsaved", "Unsaved")
     editor.save()
-    assert states() == ("GT", "Saved")
+    assert states() == ("GT", "GT")
 
 
 # ================================================================================= saving
@@ -1171,12 +1172,12 @@ def test_a_mask_edit_saves_only_the_mask(make_editor, project):
 
     assert masks == [project.a] and skeletons == []
     assert notices == [("Saved mask · a.png", "success")]
-    assert not os.path.exists(os.path.join(project.folder, "skeleton_corrections"))
+    assert not os.path.exists(project.correction())
     assert png_colour_type(project.gt_mask()) == 6 and not editor.has_unsaved_changes()
     assert png_colour_type(project.mask()) == 0  # the model mask is never rewritten
 
 
-def test_a_skeleton_edit_saves_only_the_correction(make_editor, project):
+def test_a_skeleton_edit_saves_only_the_gt_skeleton(make_editor, project):
     with open(project.mask(), "rb") as fh:
         mask_bytes = fh.read()
     editor = make_editor(project.a, project.folder)
@@ -1240,7 +1241,7 @@ def test_a_failed_skeleton_save_is_named_stays_unsaved_and_the_mask_is_saved(
 
     assert notices == [
         ("Saved mask · a.png", "success"),
-        ("Could not save a_skeleton.png: disk full", "danger"),
+        ("Could not save gt/skeletons/a.png: disk full", "danger"),
     ]
     assert masks == [project.a] and skeletons == []
     assert editor.layers[SKELETON].is_dirty() and not editor.layers[MASK].is_dirty()

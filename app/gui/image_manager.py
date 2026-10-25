@@ -88,10 +88,9 @@ class ImageLoaderThread(QThread):
 
     An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
     ``scan`` (the folder listing, with the files it does not list), ``hierarchy``,
-    ``labels`` (library row texts), ``skeleton_stems``, ``corrected_stems`` (images
-    with a skeleton correction) and ``gt`` (the images with GT mask, skeleton and class
-    labels) hold the extra results. Masks, skeletons, corrections and GT are keyed by the
-    Library's stems (O7: ``mask/a.png`` is ``A.png``'s).
+    ``labels`` (library row texts), ``skeleton_stems`` and ``gt`` (the images with GT mask,
+    skeleton and class labels) hold the extra results. Masks, skeletons and GT are keyed by
+    the Library's stems (O7: ``mask/a.png`` is ``A.png``'s).
     """
 
     progress = pyqtSignal(int)
@@ -105,7 +104,6 @@ class ImageLoaderThread(QThread):
         self.hierarchy = None
         self.labels: dict[str, str] = {}
         self.skeleton_stems: set[str] = set()
-        self.corrected_stems: set[str] = set()
         self.gt = GtStems(frozenset(), frozenset(), frozenset())
 
     def run(self):
@@ -122,7 +120,6 @@ class ImageLoaderThread(QThread):
             if self._stop(70):
                 return
             self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), images)
-            self.corrected_stems = _stems_of(layout.scan_corrected_stems(), images)
             self.gt = _gt_of(layout.scan_gt_stems(), images)
             if self._stop(85):
                 return
@@ -174,9 +171,6 @@ class ImageManager:
         self._fake_misses: set[tuple[str, str]] = set()
         self.masks = {}
         self.skeleton_stems: set[str] = set()
-        # Images with a skeleton correction (display only: Measure reads the generated
-        # skeleton, FR-03).
-        self.corrected_stems: set[str] = set()
         # Images with GT under gt/ (a saved edit; a prediction is never GT).
         self.gt_mask_stems: set[str] = set()
         self.gt_skeleton_stems: set[str] = set()
@@ -286,7 +280,6 @@ class ImageManager:
                 "hierarchy": thread.hierarchy,
                 "labels": thread.labels,
                 "skeleton_stems": thread.skeleton_stems,
-                "corrected_stems": thread.corrected_stems,
                 "gt": thread.gt,
             }
         try:
@@ -324,14 +317,12 @@ class ImageManager:
         hierarchy=None,
         labels=None,
         skeleton_stems=None,
-        corrected_stems=None,
         gt=None,
     ):
         """Adopt a scan result as the library (``original_folder`` is already set).
 
-        ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``corrected_stems`` / ``gt`` come
-        precomputed from the loader thread; without them they are computed here (the
-        first two lazily).
+        ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``gt`` come precomputed from the
+        loader thread; without them they are computed here (the first two lazily).
         """
         self._clear_images()
         self.images = images
@@ -344,10 +335,6 @@ class ImageManager:
             self.skeleton_stems = set(skeleton_stems)
         elif self.original_folder:
             self.skeleton_stems = _stems_of(self._layout().scan_skeleton_stems(), images)
-        if corrected_stems is not None:
-            self.corrected_stems = set(corrected_stems)
-        elif self.original_folder:
-            self.corrected_stems = _stems_of(self._layout().scan_corrected_stems(), images)
         if gt is None and self.original_folder:
             gt = _gt_of(self._layout().scan_gt_stems(), images)
         if gt is not None:
@@ -369,7 +356,6 @@ class ImageManager:
         self.has_fake_real_pairs = False
         self.masks = {}
         self.skeleton_stems = set()
-        self.corrected_stems = set()
         self._adopt_gt(GtStems(frozenset(), frozenset(), frozenset()))
         self.processed_base_path = None
         # Invalidate cache
@@ -471,26 +457,14 @@ class ImageManager:
             return SOURCE_GT
         return SOURCE_PREDICTION if self.has_skeleton(name) else SOURCE_NONE
 
-    def has_correction(self, name) -> bool:
-        """True when a skeleton correction of ``name`` was found (display only, FR-03)."""
-        return name in self.corrected_stems
-
-    def set_correction(self, name, present: bool) -> None:
-        """Record whether ``name`` (stem or image path) has a skeleton correction."""
+    def gt_skeleton_path_for(self, name) -> str | None:
+        """``gt/skeletons/<stem>.png`` of ``name`` when the image has a GT skeleton (its stem
+        compared without case, O7; the save path while the file is not there yet)."""
         stem = image_stem(name)
-        if present:
-            self.corrected_stems.add(stem)
-        else:
-            self.corrected_stems.discard(stem)
-
-    def corrected_skeleton_path(self, name) -> str | None:
-        """``skeleton_corrections/<stem>_skeleton.png`` of ``name`` when one was found (its
-        stem compared without case, O7; the save path while the file is not there yet)."""
-        stem = image_stem(name)
-        if stem not in self.corrected_stems or not self.original_folder:
+        if stem not in self.gt_skeleton_stems or not self.original_folder:
             return None
         layout = self._layout()
-        return layout.find_corrected_skeleton(stem) or layout.corrected_skeleton_path(stem)
+        return layout.find_gt_skeleton(stem) or layout.gt_skeleton_path(stem)
 
     # ------------------------------------------------------------ view / lookup
     def get_fake_image_path(self, name):

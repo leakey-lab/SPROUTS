@@ -1,13 +1,13 @@
-"""The Library shows a skeleton correction where one exists (W17, display only).
+"""The Library shows a GT skeleton where one exists (W17, display only).
 
-``skeleton_corrections/<stem>_skeleton.png`` is what the Correct stage saves. Measure does not
-read it (FR-03: root length is measured from the generated ``skeletons/<stem>_fake.png``), but
-the Library's Overlay and Side by side drew the generated skeleton even when a correction
-existed, and nothing said an image had one. Now they draw the correction, the metrics bar
-says "Skeleton corrected" (the tooltip: which file is drawn, and that Measure reads the
-generated one), and the library row's skeleton mark is a diamond instead of a dot. The
-correction state is found by the folder scan and follows the Correct stage's saves without
-connecting its ``skeleton_saved`` signal (FR-03 pins that nothing listens to it).
+``gt/skeletons/<stem>.png`` is what the Correct stage saves (WG-T3; ``skeleton_corrections/``
+is retired). Measure does not read it (FR-03: root length is measured from the generated
+``skeletons/<stem>_fake.png``), but the Library's Overlay and Side by side drew the generated
+skeleton even when a saved edit existed, and nothing said an image had one. Now they draw the
+GT skeleton, the metrics bar says "Skeleton corrected" (the tooltip: which file is drawn, and
+that Measure reads the generated one), and the library row's skeleton mark is a diamond
+instead of a dot. The GT state is found by the folder scan and follows the Correct stage's
+saves without connecting its ``skeleton_saved`` signal (FR-03 pins that nothing listens to it).
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def window(app, tmp_path):
 
 
 def _corrected_project(root):
-    """Image 0: a generated skeleton on row 110 and a correction on row 40."""
+    """Image 0: a generated skeleton on row 110 and a GT skeleton on row 40."""
     project = new_project(root)
     write_skeleton(project.correction(0), row=40)
     return project
@@ -103,7 +103,7 @@ def _overlay_mode(window) -> None:
 
 
 # ============================================================================== display
-def test_the_overlay_draws_the_correction_when_one_exists(window, tmp_path):
+def test_the_overlay_draws_the_gt_skeleton_when_one_exists(window, tmp_path):
     project = _corrected_project(tmp_path)
     open_project(window, project)
     _overlay_mode(window)
@@ -117,7 +117,7 @@ def test_the_overlay_draws_the_correction_when_one_exists(window, tmp_path):
     assert _overlay_rows(window) == {40}
 
 
-def test_without_a_correction_the_overlay_draws_the_generated_skeleton(window, tmp_path):
+def test_without_a_gt_skeleton_the_overlay_draws_the_generated_skeleton(window, tmp_path):
     project = new_project(tmp_path)
     open_project(window, project)
     _overlay_mode(window)
@@ -127,7 +127,7 @@ def test_without_a_correction_the_overlay_draws_the_generated_skeleton(window, t
     assert _overlay_rows(window) == {110}
 
 
-def test_side_by_side_shows_the_correction_too(window, tmp_path):
+def test_side_by_side_shows_the_gt_skeleton_too(window, tmp_path):
     project = _corrected_project(tmp_path)
     open_project(window, project)
     window.view_mode_combo.setCurrentIndex(2)  # Side by side
@@ -149,18 +149,18 @@ def test_the_metrics_bar_says_skeleton_corrected_and_what_is_measured(window, tm
     bar = window.metrics_bar
     assert bar._status_value.text() == "Skeleton corrected"
     tip = bar._status_cell.toolTip()
-    assert "skeleton_corrections" in tip and "generated" in tip
+    assert "gt/skeletons/" in tip and "generated" in tip
     select(window, 1)
     assert bar._status_value.text() == "No mask"
     assert bar._status_cell.toolTip() == ""
 
 
-def test_the_library_row_marks_a_corrected_skeleton(window, tmp_path):
+def test_the_library_row_marks_a_gt_skeleton(window, tmp_path):
     open_project(window, _corrected_project(tmp_path))
     index = window.library_index
 
-    assert window.image_manager.has_correction(STEMS[0])
-    assert not window.image_manager.has_correction(STEMS[1])
+    assert window.image_manager.has_gt_skeleton(STEMS[0])
+    assert not window.image_manager.has_gt_skeleton(STEMS[1])
     assert index.status_of(STEMS[0]) == (True, True)  # (mask, generated skeleton) unchanged
     assert index.corrected_of(STEMS[0]) is True
     assert "corrected" in index.tooltip_for(STEMS[0]).lower()
@@ -174,20 +174,20 @@ def test_the_library_row_marks_a_corrected_skeleton(window, tmp_path):
 
 
 # ================================================================ follows the Correct saves
-def test_a_correction_saved_in_correct_reaches_the_library(window, tmp_path):
+def test_a_skeleton_saved_in_correct_reaches_the_library(window, tmp_path):
     project = new_project(tmp_path)
     open_project(window, project)
     select(window, 1)
     enter(window, "Correct")
     editor = window.correct_editor
-    assert not window.image_manager.has_correction(STEMS[1])
+    assert not window.image_manager.has_gt_skeleton(STEMS[1])
 
     draw_line(editor)
     assert editor.save()
     settle()
 
     assert os.path.isfile(project.correction(1))
-    assert window.image_manager.has_correction(STEMS[1])
+    assert window.image_manager.has_gt_skeleton(STEMS[1])
     assert window.library_index.corrected_of(STEMS[1]) is True
     # FR-03 unchanged: nothing listens to skeleton_saved, and it is not a generated skeleton.
     assert editor.receivers(editor.skeleton_saved) == 0
@@ -201,7 +201,7 @@ def test_a_correction_saved_in_correct_reaches_the_library(window, tmp_path):
     assert window.metrics_bar._status_value.text() == "Skeleton corrected"
 
 
-def test_a_correction_edited_back_to_the_generated_one_leaves_the_library(window, tmp_path):
+def test_a_gt_skeleton_edited_back_to_the_prediction_leaves_the_library(window, tmp_path):
     project = _corrected_project(tmp_path)
     open_project(window, project)
     select(window, 0)
@@ -215,30 +215,5 @@ def test_a_correction_edited_back_to_the_generated_one_leaves_the_library(window
     settle()
 
     assert not os.path.isfile(project.correction(0))
-    assert not window.image_manager.has_correction(STEMS[0])
-    assert window.library_index.corrected_of(STEMS[0]) is False
-
-
-def test_a_legacy_no_op_correction_leaves_the_library_when_the_generated_one_is_saved(
-    window, tmp_path
-):
-    project = new_project(tmp_path)
-    write_skeleton(project.correction(0))  # an old Ctrl+S: equal to the generated skeleton
-    open_project(window, project)
-    select(window, 0)
-    enter(window, "Correct")
-    editor = window.correct_editor
-    assert window.library_index.corrected_of(STEMS[0]) is True
-
-    editor.layers[SKELETON].load_file(project.generated(0))
-    editor.set_active_layer(SKELETON)
-    assert not editor.save()  # nothing unsaved: the page writes nothing (O2)
-    assert editor.layers[SKELETON].save().cleared  # the layer's save removes the no-op file
-    settle()
-    assert not os.path.isfile(project.correction(0))
-    # Nothing was unsaved, so no dirty change re-reads the disk while Correct is shown;
-    # the Library reads it again when it is back on screen.
-    enter(window, "Library")
-
-    assert not window.image_manager.has_correction(STEMS[0])
+    assert not window.image_manager.has_gt_skeleton(STEMS[0])
     assert window.library_index.corrected_of(STEMS[0]) is False

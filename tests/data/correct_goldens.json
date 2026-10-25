@@ -290,7 +290,7 @@
       341,
       256
      ],
-     "skeleton_source": "generated"
+     "skeleton_source": "prediction"
     }
    },
    "skeleton_clear": {
@@ -325,7 +325,7 @@
       341,
       256
      ],
-     "skeleton_source": "generated"
+     "skeleton_source": "prediction"
     }
    }
   }

@@ -173,7 +173,7 @@ def test_an_image_saved_on_the_way_out_is_handed_back_as_saved(
 
     assert reads.jobs == [] and reads.on_gui() == []
     got = state(editor)
-    assert got["source"] == "corrected" and not got["dirty"]
+    assert got["source"] == "gt" and not got["dirty"]
     assert_same_state(got, fresh_state(make_editor, project.a, project.folder))
 
 
@@ -298,7 +298,7 @@ def test_a_skeleton_loaded_from_another_file_is_read_again(
     editor.load_image(project.a, project.folder)
 
     assert "a.png" in reads.jobs
-    assert skeleton.document.source == "generated"  # as a fresh open shows it
+    assert skeleton.document.source == "prediction"  # as a fresh open shows it
 
 
 def test_without_a_neighbour_provider_nothing_is_kept(make_editor, project):

@@ -230,9 +230,9 @@ def test_a_correction_is_named_in_the_length_tooltip(window, tmp_path):
     folder.mkdir()
     _measured_project(folder)
     _write_jpg(folder / f"{STEM}.jpg")
-    corrections = folder / "skeleton_corrections"
-    corrections.mkdir()
-    (corrections / f"{STEM}_skeleton.png").write_bytes(b"c")
+    gt_skeletons = folder / "gt" / "skeletons"
+    gt_skeletons.mkdir(parents=True)
+    (gt_skeletons / f"{STEM}.png").write_bytes(b"c")
 
     _open(window, folder)
     tip = window.metrics_bar._length_cell.toolTip()

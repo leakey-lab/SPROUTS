@@ -227,14 +227,20 @@ def test_load_prediction_is_one_undo_step_and_is_off_without_a_prediction(make_e
     assert not plane(editor).any() and not editor.session.can_undo()
 
 
-def test_load_prediction_is_off_on_the_skeleton_layer(make_editor, project):
-    editor = make_editor(project.a, project.folder)
+def test_load_prediction_on_the_skeleton_layer_follows_its_generated_file(make_editor, project):
+    editor = make_editor(project.a, project.folder)  # a has skeletons/a_fake.png
+    button = editor.controls.prediction_button
 
     editor.set_active_layer(SKELETON)
 
-    assert not editor.controls.prediction_button.isEnabled()
+    assert button.isEnabled()
+    assert button.toolTip() == "Load the prediction into the skeleton (undoable)"
     editor.set_active_layer(MASK)
-    assert editor.controls.prediction_button.isEnabled()
+    assert button.isEnabled()
+
+    editor.load_image(project.b, project.folder)  # b has no generated skeleton
+    editor.set_active_layer(SKELETON)
+    assert not button.isEnabled()
 
 
 def test_the_dock_button_loads_the_prediction(make_editor, project):

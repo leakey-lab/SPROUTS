@@ -1,10 +1,10 @@
-"""A skeleton Save writes a correction only when it differs from the generated one (O2, W1-T3).
+"""A skeleton Save writes GT only when it differs from the prediction (O2, W1-T3, WG-T3).
 
 Saving is not acceptance: Ctrl+S on an untouched skeleton writes nothing (it once turned a
 generated 341 x 256 skeleton into a 640 x 480 "correction" of another length; since WG-T2 the
-page saves only unsaved layers and says "Nothing unsaved"), a correction edited back to the
-generated skeleton is removed, and an emptied skeleton over a non-empty generated one is a
-real correction. Image ``a`` of the project has a generated skeleton on
+page saves only unsaved layers and says "Nothing unsaved"), a GT skeleton edited back to the
+prediction is removed (``gt/skeletons/<stem>.png``), and an emptied skeleton over a non-empty
+prediction is real GT. Image ``a`` of the project has a generated skeleton on
 row 110 (fixtures of ``tests/test_correct_editor.py``).
 """
 
@@ -33,7 +33,8 @@ from tests.test_correct_editor import (  # noqa: E402
 
 UNCHANGED = ("Skeleton unchanged: nothing to save", "info")
 NOTHING_UNSAVED = ("Nothing unsaved", "info")  # the page saves unsaved layers only (O2)
-REMOVED = ("Skeleton is the generated one again: correction removed", "info")
+REMOVED = ("Skeleton equals the prediction: removed gt/skeletons/a.png", "info")
+REMOVED_B = ("Skeleton equals the prediction: removed gt/skeletons/b.png", "info")
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +68,7 @@ def test_a_no_op_save_writes_nothing_and_says_so(make_editor, project):
     assert not os.path.exists(project.correction())
     assert notices == [NOTHING_UNSAVED]
     assert saved == []
-    assert editor.layers[SKELETON].document.source == "generated"
+    assert editor.layers[SKELETON].document.source == "prediction"
     assert editor.layers[SKELETON].save().message == UNCHANGED[0]  # the layer's own rule
 
 
@@ -84,11 +85,11 @@ def test_edit_undo_save_writes_nothing(make_editor, project):
     assert not editor.has_unsaved_changes()
 
 
-def test_a_correction_edited_back_to_the_generated_one_is_removed(make_editor, project):
+def test_a_gt_skeleton_edited_back_to_the_prediction_is_removed(make_editor, project):
     write_skeleton(project.correction(), row=40)
     editor = make_editor(project.a, project.folder)
     skeleton = editor.layers[SKELETON]
-    assert skeleton.document.source == "corrected"
+    assert skeleton.document.source == "gt"
     skeleton.load_file(project.generated())
     editor.set_active_layer(SKELETON)
     notices = record(editor.notice)
@@ -97,8 +98,8 @@ def test_a_correction_edited_back_to_the_generated_one_is_removed(make_editor, p
 
     assert not os.path.exists(project.correction())
     assert REMOVED in notices
-    assert skeleton.document.source == "generated" and not editor.has_unsaved_changes()
-    assert skeleton.status().label == "Generated"
+    assert skeleton.document.source == "prediction" and not editor.has_unsaved_changes()
+    assert skeleton.status().label == "Prediction"
 
 
 def test_an_emptied_skeleton_over_a_generated_one_is_written(make_editor, project):
@@ -120,10 +121,10 @@ def test_a_real_edit_is_written(make_editor, project):
     assert editor.save() is True
 
     assert os.path.isfile(project.correction()) and len(saved) == 1
-    assert editor.layers[SKELETON].document.source == "corrected"
+    assert editor.layers[SKELETON].document.source == "gt"
 
 
-def test_a_correction_that_cannot_be_removed_is_a_failed_save(make_editor, project, monkeypatch):
+def test_a_gt_skeleton_that_cannot_be_removed_is_a_failed_save(make_editor, project, monkeypatch):
     write_skeleton(project.correction(), row=40)
     editor = make_editor(project.a, project.folder)
     skeleton = editor.layers[SKELETON]
@@ -140,31 +141,11 @@ def test_a_correction_that_cannot_be_removed_is_a_failed_save(make_editor, proje
 
     assert os.path.isfile(project.correction())
     assert skeleton.is_dirty() and skeleton.status().state == "error"
-    assert notices == [("Could not save a_skeleton.png: locked", "danger")]
+    assert notices == [("Could not save gt/skeletons/a.png: locked", "danger")]
 
 
-def test_a_legacy_no_op_correction_is_removed_when_the_generated_one_is_loaded(
-    make_editor, project
-):
-    write_skeleton(project.correction())  # an old Ctrl+S: the generated skeleton, as opened
-    editor = make_editor(project.a, project.folder)
-    skeleton = editor.layers[SKELETON]
-    assert skeleton.document.source == "corrected"
-    skeleton.load_file(project.generated())
-    assert not skeleton.is_dirty()  # the same pixels: nothing unsaved
-    editor.set_active_layer(SKELETON)
-    notices = record(editor.notice)
-    assert editor.save() is False and notices == [NOTHING_UNSAVED]  # O2: the page writes nothing
-
-    outcome = skeleton.save()  # the layer's own save still removes the no-op correction
-
-    assert not os.path.exists(project.correction())
-    assert outcome.ok and outcome.cleared and outcome.message == REMOVED[0]
-    assert skeleton.document.source == "generated" and not editor.has_unsaved_changes()
-
-
-def test_an_untouched_correction_is_never_removed(make_editor, project):
-    write_skeleton(project.correction())  # equal to the generated one, but it is what is shown
+def test_an_untouched_gt_skeleton_is_never_removed(make_editor, project):
+    write_skeleton(project.correction())  # equal to the prediction, but it is what is shown
     editor = make_editor(project.a, project.folder)
     editor.set_active_layer(SKELETON)
     notices = record(editor.notice)
@@ -175,7 +156,7 @@ def test_an_untouched_correction_is_never_removed(make_editor, project):
     assert os.path.isfile(project.correction()) and notices == [NOTHING_UNSAVED]
 
 
-def test_an_unreadable_correction_is_not_removed_by_a_save(make_editor, project):
+def test_an_unreadable_gt_skeleton_is_not_removed_by_a_save(make_editor, project):
     os.makedirs(os.path.dirname(project.correction("b")), exist_ok=True)
     with open(project.correction("b"), "wb") as fh:
         fh.write(b"not a png")
@@ -190,11 +171,11 @@ def test_an_unreadable_correction_is_not_removed_by_a_save(make_editor, project)
     assert os.path.isfile(project.correction("b"))
 
 
-def test_an_emptied_correction_without_a_generated_skeleton_is_removed(make_editor, project):
+def test_an_emptied_gt_skeleton_without_a_prediction_is_removed(make_editor, project):
     write_skeleton(project.correction("b"), row=40)  # image b has no generated skeleton
     editor = make_editor(project.b, project.folder)
     skeleton = editor.layers[SKELETON]
-    assert skeleton.document.source == "corrected"
+    assert skeleton.document.source == "gt"
     editor.set_active_layer(SKELETON)
     editor.clear_active_layer()
     notices = record(editor.notice)
@@ -202,7 +183,7 @@ def test_an_emptied_correction_without_a_generated_skeleton_is_removed(make_edit
     assert editor.save() is True
 
     assert not os.path.exists(project.correction("b"))
-    assert REMOVED in notices
+    assert REMOVED_B in notices
     assert skeleton.document.source is None
     assert skeleton.status().label == "No skeleton"
 

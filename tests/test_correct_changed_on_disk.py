@@ -1,7 +1,7 @@
 """Files changed on disk while open in Correct (E2, O19): Discard reloads, Save asks.
 
-A GT mask (``gt/mask/<stem>.png``, the file a mask save writes) or a skeleton correction
-rewritten by another program after the page opened it: Discard shows the file, not a stale
+A GT mask (``gt/mask/<stem>.png``, the file a mask save writes) or a GT skeleton
+(``gt/skeletons/<stem>.png``) rewritten by another program after the page opened it: Discard shows the file, not a stale
 copy; Save asks before overwriting it (Overwrite / Reload (lose my edits) / Cancel, Cancel by
 default); a file rewritten with the same pixels asks nothing; a clean Ctrl+S writes nothing
 (O2) and the image reloads when opened again; PgDn never asks. A Generate run, which
@@ -52,7 +52,7 @@ PROMPT = ("Mask changed on disk", "gt/mask/a.png changed on disk after you opene
 INFO = "Overwrite it with your edits, reload it from disk (your edits are lost), or cancel."
 CORRECTION_PROMPT = (
     "Skeleton changed on disk",
-    "skeleton_corrections/a_skeleton.png changed on disk after you opened it.",
+    "gt/skeletons/a.png changed on disk after you opened it.",
 )
 PGDN = ("gt/mask/a.png changed on disk after you opened it: press Ctrl+S to choose", "warn")
 CANCELLED = ("Mask not saved: gt/mask/a.png changed on disk", "info")
@@ -231,7 +231,7 @@ def test_equal_pixels_with_a_new_mtime_ask_nothing(make_editor, project):
     assert np.array_equal(saved_plane(project.gt_mask()), plane(editor))
 
 
-def test_a_correction_rewritten_as_it_was_asks_nothing(make_editor, project):
+def test_a_gt_skeleton_rewritten_as_it_was_asks_nothing(make_editor, project):
     write_skeleton(project.correction(), row=40)
     editor = make_editor(project.a, project.folder)
     draw_line(editor)
@@ -299,14 +299,14 @@ def test_a_clean_ctrl_s_after_a_rewrite_writes_nothing_and_reopening_reloads(
     assert np.array_equal(plane(editor), other)
 
 
-def test_a_rewritten_correction_asks_but_a_rewritten_generated_skeleton_does_not(
+def test_a_rewritten_gt_skeleton_asks_but_a_rewritten_prediction_does_not(
     make_editor, project, answers
 ):
     editor = make_editor(project.a, project.folder)
     draw_line(editor)
     rewrite_skeleton(project.generated(), row=60)  # a Generate run
 
-    assert editor.save() is True  # no prompt: the correction is written
+    assert editor.save() is True  # no prompt: the GT skeleton is written
     assert os.path.isfile(project.correction()) and answers.seen == []
 
     draw_line(editor, (40, 20), (160, 25))

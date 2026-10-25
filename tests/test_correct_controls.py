@@ -800,7 +800,7 @@ def test_the_mask_row_stays_on_top_and_keeps_its_key_whatever_the_order_given(st
         (LayerStatus("dirty"), "Unsaved", tokens.WARN),
         (LayerStatus("error"), "Not saved", tokens.DANGER),
         (LayerStatus("none", "No mask"), "No mask", tokens.TEXT_FAINT),
-        (LayerStatus("none", "Generated", "Not corrected yet"), "Generated", tokens.TEXT_FAINT),
+        (LayerStatus("none", "Prediction", "Not corrected yet"), "Prediction", tokens.TEXT_FAINT),
         (LayerStatus("error", "Not saved", "Disk full"), "Not saved", tokens.DANGER),
         (LayerStatus("clean", "Saved · 2/3 checked"), "Saved · 2/3 checked", tokens.OK),
     ],
@@ -840,11 +840,11 @@ def test_a_long_status_label_is_shown_in_full(app, make_page):
     panel = page.panel
     label = panel.rows[SKELETON].state_label
 
-    panel.set_status(SKELETON, LayerStatus("none", "Generated · empty", "Not corrected yet"))
+    panel.set_status(SKELETON, LayerStatus("none", "Prediction · empty", "Not corrected yet"))
     for _ in range(3):  # no relayout from the test: the panel asks for its new width itself
         app.processEvents()
 
-    assert label.width() >= label.fontMetrics().horizontalAdvance("Generated · empty")
+    assert label.width() >= label.fontMetrics().horizontalAdvance("Prediction · empty")
     left = label.mapTo(panel, QPoint(0, 0)).x()
     assert left + label.width() <= panel.width()
 
@@ -1018,7 +1018,7 @@ def test_the_overlays_never_overlap(app, make_page, size, shown):
     controls.sync(layer)
     controls.set_draft(DraftState(True, 3, False) if shown == SKELETON else None)
     panel.set_active(shown)
-    panel.set_status(SKELETON, LayerStatus("none", "Generated · empty", "Not corrected yet"))
+    panel.set_status(SKELETON, LayerStatus("none", "Prediction · empty", "Not corrected yet"))
     chrome.chip.set_text(LONG_NAME)
     chrome.chip.set_state("dirty")
     chrome.chip.set_hint(f"{shown.title()} · Eraser · drag to erase", dot=layer.color)

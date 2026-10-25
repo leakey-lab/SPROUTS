@@ -17,8 +17,8 @@ root_areas.csv + root_lengths.csv → Dash/Plotly dashboards
 
 The skeleton model reads the original image, not the mask, so correcting a mask changes
 **root area only**. Root length is measured from `skeletons/*_fake.png`; skeletons edited
-in *Correct* are saved to `skeleton_corrections/` and are not measured (the Library's
-Overlay and Side by side views draw the correction and mark the image *Skeleton
+in *Correct* are saved as GT to `gt/skeletons/<stem>.png` and are not measured (the
+Library's Overlay and Side by side views draw the GT skeleton and mark the image *Skeleton
 corrected*).
 The models are described in [`docs/MODELS.md`](docs/MODELS.md), every output file and
 column in [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
@@ -185,7 +185,7 @@ chose last (root length at first); with nothing to chart yet it says what to run
 | `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error` |
 | `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
 | `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error` |
-| `skeleton_corrections/<stem>_skeleton.png` | skeleton corrected in *Correct* (1-pixel lines at the photo's resolution, so a saved correction reopens unchanged); not measured |
+| `gt/skeletons/<stem>.png` | skeleton saved in *Correct* after an edit: the GT skeleton (8-bit grey, 1-pixel lines at the photo's resolution, so a saved skeleton reopens unchanged); not measured |
 | `gt/mask/<stem>.png` | root mask saved in *Correct* after an edit: the GT mask (white on transparent, at the photo's size) |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
@@ -255,7 +255,7 @@ The **Correct** stage fixes both model outputs of an image on one canvas. The ma
 area) and the skeleton (root length) are drawn together over the photo and you edit one
 of them at a time, the *active layer*; the other stays visible at half its opacity as a
 reference. The **Layers** panel on the right shows each layer's state (GT, Prediction,
-Unsaved, Generated, Not saved …): click a row to edit that layer, click its eye to hide it (or reach
+Unsaved, Not saved …): click a row to edit that layer, click its eye to hide it (or reach
 them with Tab: Space or Enter picks a layer, Space toggles an eye). Opacity and visibility
 are kept across restarts.
 
@@ -269,11 +269,13 @@ are kept across restarts.
 - **Skeleton** (orange): Select (pick a branch; Delete removes it), Eraser, Polyline
   (click points, drag them to adjust, Ctrl+click adds a bend, Shift+drag moves the line,
   Enter or a double-click finishes it, S smooths it) and Connect (drag from an endpoint
-  to another point). It opens the corrected skeleton
-  `skeleton_corrections/<stem>_skeleton.png` if there is one, else the generated
-  `skeletons/<stem>_fake.png`, and saves to `skeleton_corrections/`. **Load skeleton
-  file…** in the dock opens another file; if it differs from the skeleton shown, it counts
-  as unsaved. Corrected skeletons are not measured.
+  to another point). It opens the GT skeleton `gt/skeletons/<stem>.png` if there is one,
+  else the model's prediction `skeletons/<stem>_fake.png`, and saves only to
+  `gt/skeletons/<stem>.png`; the prediction is never changed. A GT skeleton of another size
+  opens resampled to the photo and is saved at the photo's size. **Load prediction** (dock,
+  chip icon) puts the prediction back as one undoable step. **Load skeleton file…** in the
+  dock opens another file; if it differs from the skeleton shown, it counts as unsaved. GT
+  skeletons are not measured.
 - **Enhance** (the contrast button on the tool rail) changes how the photo is shown, for
   every image while it is on; it never changes a mask, a skeleton or a measurement. For
   `.jpg` / `.jpeg` photos, **Smooth JPEG blocks** (off by default) softens the 8 x 8
@@ -309,9 +311,9 @@ its last point.
 
 - `Ctrl+S` (or **Save**) saves every layer with unsaved changes, the mask first. With
   nothing unsaved it writes nothing and says *Nothing unsaved*. A
-  skeleton is saved only when it differs from the generated one: saving is not acceptance,
-  and a skeleton edited back to the generated one (or **Load generated** over an old
-  correction that equals it) removes its correction.
+  skeleton is saved only when it differs from the prediction: saving is not acceptance, and
+  a skeleton edited back to the prediction (or **Load prediction** and Save) removes its GT
+  file `gt/skeletons/<stem>.png`.
 - `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
   image. If a save fails, you stay on the image and a message says why. An unfinished
   polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you

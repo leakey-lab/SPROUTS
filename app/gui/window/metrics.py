@@ -23,14 +23,14 @@ from ._common import USER_ROLE
 
 logger = logging.getLogger(__name__)
 
-#: The LENGTH tooltip's line for an image with a skeleton correction (FR-03).
+#: The LENGTH tooltip's line for an image with a GT skeleton (FR-03).
 CORRECTION_NOT_MEASURED = (
-    "A corrected skeleton exists (skeleton_corrections/); it is not measured: "
+    "A corrected skeleton exists (gt/skeletons/); it is not measured: "
     "Measure reads the generated skeleton."
 )
-#: The STATUS tooltip of an image with a skeleton correction (W17, display only).
+#: The STATUS tooltip of an image with a GT skeleton (W17, display only).
 CORRECTED_STATUS_TIP = (
-    "Overlay and Side by side draw the corrected skeleton (skeleton_corrections/); "
+    "Overlay and Side by side draw the corrected skeleton (gt/skeletons/); "
     "Measure reads the generated skeleton (skeletons/), so root length is the generated one's."
 )
 
@@ -86,10 +86,10 @@ class MetricsController:
         """Return True if a processed ``<name>_fake.png`` skeleton is known for the image."""
         return self._window.image_manager.has_skeleton(stored_name)
 
-    def image_has_correction(self, stored_name) -> bool:
-        """True when a skeleton correction of the image is known (display only, FR-03)."""
-        has_correction = getattr(self._window.image_manager, "has_correction", None)
-        return bool(stored_name and callable(has_correction) and has_correction(stored_name))
+    def image_has_gt_skeleton(self, stored_name) -> bool:
+        """True when a GT skeleton of the image is known (display only, FR-03)."""
+        has_gt = getattr(self._window.image_manager, "has_gt_skeleton", None)
+        return bool(stored_name and callable(has_gt) and has_gt(stored_name))
 
     def current_image_name(self) -> str | None:
         """Stem of the image selected in the library (else the one on the display)."""
@@ -111,7 +111,7 @@ class MetricsController:
             return
 
         status = None
-        corrected = self.image_has_correction(stored_name)
+        corrected = self.image_has_gt_skeleton(stored_name)
         if stored_name:
             if corrected:
                 status = "Skeleton corrected"

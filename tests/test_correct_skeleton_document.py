@@ -1,6 +1,6 @@
 """SkeletonDocument: the skeleton of one image for the Correct workspace (Qt-free).
 
-Which file opens (the saved correction, else the generated skeleton, injected resolver
+Which file opens (the GT skeleton, else the prediction, injected resolver
 first), the save (at image resolution, so a save never fragments the skeleton; atomic; a failure
 is reported, never raised), Discard (re-read the start file), Load file, the status
 labels of today's skeleton editor and the pinned file stamps (plan contract C14).
@@ -22,9 +22,10 @@ from skimage.morphology import skeletonize
 from app.config import SKELETON_OUTPUT_SIZE
 from app.gui.correct.layer import LayerStatus, Notice
 from app.gui.correct.skeleton_document import (
-    CORRECTED,
-    GENERATED,
+    GT,
     LOADED,
+    PREDICTION,
+    SHOWN_ALREADY,
     SkeletonDocument,
     SkeletonSaveResult,
 )
@@ -34,7 +35,7 @@ W, H = 200, 150
 
 
 def _write_skeleton(path, row: int = 75, size: tuple[int, int] = (W, H), value: int = 255):
-    """A grey file with one horizontal line (what Generate or a correction looks like)."""
+    """A grey file with one horizontal line (what Generate or a GT skeleton looks like)."""
     w, h = size
     raster = np.zeros((h, w), np.uint8)
     raster[row, 20 : w - 20] = value
@@ -52,7 +53,7 @@ def project(tmp_path):
 
 def _paths(root):
     return (
-        str(root / "skeleton_corrections" / "a_skeleton.png"),
+        str(root / "gt" / "skeletons" / "a.png"),
         str(root / "skeletons" / "a_fake.png"),
     )
 
@@ -71,22 +72,22 @@ def _draw(doc: SkeletonDocument) -> None:
 
 
 # ------------------------------------------------------------------ opening
-def test_the_correction_wins_over_the_generated_skeleton(project):
+def test_the_gt_skeleton_wins_over_the_prediction(project):
     root, image = project
-    correction, generated = _paths(root)
+    gt_file, generated = _paths(root)
     _write_skeleton(generated, row=30)
-    _write_skeleton(correction, row=100)
+    _write_skeleton(gt_file, row=100)
     doc = _opened(root, image)
-    assert doc.source == CORRECTED
+    assert doc.source == GT
     assert doc.model.mask[100].any() and not doc.model.mask[30].any()
     assert not doc.is_dirty() and not doc.model.can_undo
 
 
-def test_the_generated_skeleton_opens_when_there_is_no_correction(project):
+def test_the_prediction_opens_when_there_is_no_gt_skeleton(project):
     root, image = project
     _write_skeleton(_paths(root)[1], row=40)
     doc = _opened(root, image)
-    assert doc.source == GENERATED
+    assert doc.source == PREDICTION
     assert doc.model.mask[40].any()
     assert doc.is_open() and doc.image_path == image
 
@@ -103,7 +104,7 @@ def test_the_injected_resolver_is_asked_first(project):
 
     doc = _opened(root, image, resolver)
     assert asked and asked[0] == image
-    assert doc.source == GENERATED
+    assert doc.source == PREDICTION
     assert doc.model.mask[110].any() and not doc.model.mask[30].any()
 
 
@@ -133,12 +134,12 @@ def test_a_generated_raster_is_upscaled_bilinearly_and_thinned_to_image_size(pro
 
 def test_an_unreadable_start_file_is_reported_and_opens_empty(project):
     root, image = project
-    correction = _paths(root)[0]
-    os.makedirs(os.path.dirname(correction))
-    Path(correction).write_bytes(b"not a png")
+    gt_file = _paths(root)[0]
+    os.makedirs(os.path.dirname(gt_file))
+    Path(gt_file).write_bytes(b"not a png")
     doc = SkeletonDocument()
     notices = doc.open(image, (W, H), str(root))
-    assert notices == [Notice("Could not read skeleton a_skeleton.png", "danger")]
+    assert notices == [Notice("Could not read skeleton a.png", "danger")]
     assert doc.source is None and not doc.model.mask.any()
 
 
@@ -189,10 +190,10 @@ def test_reopen_rereads_the_start_file_and_clears_the_history(project):
     assert doc.reopen() == []
     assert np.array_equal(doc.model.mask, opened)
     assert not doc.is_dirty() and not doc.model.can_undo and not doc.model.can_redo
-    assert doc.source == GENERATED
+    assert doc.source == PREDICTION
 
 
-def test_reopen_after_a_save_rereads_the_saved_correction(project):
+def test_reopen_after_a_save_rereads_the_saved_gt_skeleton(project):
     root, image = project
     _write_skeleton(_paths(root)[1], row=60)
     doc = _opened(root, image)
@@ -203,26 +204,26 @@ def test_reopen_after_a_save_rereads_the_saved_correction(project):
     doc.reopen()
     reference = SkeletonDocument()
     reference.open(image, (W, H), str(root))
-    assert doc.source == CORRECTED
+    assert doc.source == GT
     assert np.array_equal(doc.model.mask, reference.model.mask)
 
 
 # ------------------------------------------------------------------ Load file
 def test_load_file_sets_the_source_by_path_identity(project):
     root, image = project
-    correction, generated = _paths(root)
-    _write_skeleton(correction, row=100)
+    gt_file, generated = _paths(root)
+    _write_skeleton(gt_file, row=100)
     _write_skeleton(generated, row=30)
     other = _write_skeleton(root / "elsewhere" / "b.png", row=50, size=(100, 75))
     doc = _opened(root, image)
     same_generated = os.path.join(str(root), ".", "skeletons", "a_fake.png")
     assert doc.load_file(same_generated) == []
-    assert doc.source == GENERATED and doc.model.mask[30].any()
+    assert doc.source == PREDICTION and doc.model.mask[30].any()
     assert doc.load_file(other) == []
     assert doc.source == LOADED and doc.save_size == (100, 75)
     assert doc.model.mask.shape == (H, W) and not doc.model.can_undo
-    doc.load_file(correction.upper() if os.name == "nt" else correction)
-    assert doc.source == CORRECTED
+    doc.load_file(gt_file.upper() if os.name == "nt" else gt_file)
+    assert doc.source == GT
 
 
 def test_load_file_of_an_unreadable_file_changes_nothing(project):
@@ -233,22 +234,69 @@ def test_load_file_of_an_unreadable_file_changes_nothing(project):
     bad = root / "bad.png"
     bad.write_bytes(b"not an image")
     assert doc.load_file(str(bad)) == [Notice("Could not read skeleton bad.png", "danger")]
-    assert doc.source == GENERATED and np.array_equal(doc.model.mask, before)
+    assert doc.source == PREDICTION and np.array_equal(doc.model.mask, before)
+
+
+# ------------------------------------------------------------------ Load prediction
+def test_load_prediction_is_one_undoable_action_and_its_save_removes_the_gt(project):
+    root, image = project
+    gt_file, generated = _paths(root)
+    _write_skeleton(generated, row=30)
+    _write_skeleton(gt_file, row=100)
+    doc = _opened(root, image)
+    assert doc.source == GT and doc.prediction_file() == generated
+    assert not hasattr(doc, "prediction")  # a plane on the mask's document: another name here
+    plane, notices = doc.read_prediction()
+    assert notices == [] and plane[30].any()
+
+    doc.load_prediction(plane)
+
+    assert doc.model.mask[30].any() and not doc.model.mask[100].any()
+    assert doc.is_dirty() and doc.model.can_undo and doc.source == GT
+    assert doc.save() == SkeletonSaveResult(True, removed=True)
+    assert not os.path.exists(gt_file) and os.path.isfile(generated)
+    assert doc.source == PREDICTION and doc.write_stamps() == ((gt_file, None),)
+    assert doc.outcome(SkeletonSaveResult(True, removed=True)).message == (
+        "Skeleton equals the prediction: removed gt/skeletons/a.png"
+    )
+
+
+def test_load_prediction_without_one_or_of_the_shown_skeleton_changes_nothing(project):
+    root, image = project
+    doc = _opened(root, image)
+    assert doc.prediction_file() is None and doc.read_prediction() == (None, [])
+    _write_skeleton(_paths(root)[1], row=30)
+    doc.reopen()  # the prediction is found again (Discard, or a reload after Generate)
+    revision = doc.model.revision
+    assert doc.read_prediction() == (None, [Notice(SHOWN_ALREADY, "info")])
+    assert SHOWN_ALREADY == "Nothing to load: the skeleton is the prediction already"
+    assert not doc.model.can_undo and doc.model.revision == revision
+
+
+def test_an_unreadable_prediction_is_reported_by_load_prediction(project):
+    root, image = project
+    generated = _paths(root)[1]
+    os.makedirs(os.path.dirname(generated))
+    Path(generated).write_bytes(b"not a png")
+    doc = _opened(root, image)
+    unread = [Notice("Could not read skeleton a_fake.png", "danger")]
+    assert doc.read_prediction() == (None, unread)
+    assert not doc.model.can_undo and not doc.is_dirty()
 
 
 # ------------------------------------------------------------------ saving
-def test_save_writes_the_correction_at_image_resolution_not_the_loaded_size(project):
+def test_save_writes_the_gt_skeleton_at_image_resolution_not_the_loaded_size(project):
     root, image = project
-    correction, generated = _paths(root)
+    gt_file, generated = _paths(root)
     _write_skeleton(generated, row=30, size=(341, 256))
     doc = _opened(root, image)
     _draw(doc)
     result = doc.save()
-    assert result == SkeletonSaveResult(True, correction)
-    written = cv2.imread(correction, cv2.IMREAD_GRAYSCALE)
+    assert result == SkeletonSaveResult(True, gt_file)
+    written = cv2.imread(gt_file, cv2.IMREAD_GRAYSCALE)
     assert written.shape == (H, W)  # the generated file was 341x256
     assert set(np.unique(written).tolist()) == {0, 255}
-    assert doc.source == CORRECTED and not doc.is_dirty() and doc.save_error == ""
+    assert doc.source == GT and not doc.is_dirty() and doc.save_error == ""
 
 
 def test_save_without_a_loaded_raster_writes_at_image_resolution(project):
@@ -276,7 +324,7 @@ def _components(mask) -> int:
 
 
 def test_save_then_reopen_gives_back_the_edited_skeleton_exactly(tmp_path):
-    """Q1: a correction is saved at image resolution, so saving never fragments it.
+    """Q1: a GT skeleton is saved at image resolution, so saving never fragments it.
 
     The generated file is small (SKELETON_OUTPUT_SIZE); saving used to shrink the edited
     image-size raster back to it with nearest neighbour, which broke 1 px lines apart.
@@ -293,34 +341,32 @@ def test_save_then_reopen_gives_back_the_edited_skeleton_exactly(tmp_path):
     edited = doc.model.mask.copy()
     assert doc.save().ok
 
-    written = cv2.imread(str(tmp_path / "skeleton_corrections" / "a_skeleton.png"), 0)
+    written = cv2.imread(str(tmp_path / "gt" / "skeletons" / "a.png"), 0)
     assert (written.shape[1], written.shape[0]) == (w, h)
     reopened = SkeletonDocument()
     reopened.open(str(image), (w, h), str(tmp_path))
-    assert reopened.source == CORRECTED
+    assert reopened.source == GT
     assert np.array_equal(reopened.model.mask, edited)
     assert _components(reopened.model.mask) == _components(edited)
     assert not reopened.is_dirty()
 
 
-def test_an_old_small_correction_still_opens_at_image_size(tmp_path):
-    """Corrections saved before the fix are 341x256; they open upscaled, as before."""
+def test_a_small_gt_skeleton_opens_at_image_size(tmp_path):
+    """A GT skeleton of another size (341x256) opens upscaled to the image (no flag)."""
     w, h = 640, 480
     image = tmp_path / "a.png"
     assert cv2.imwrite(str(image), np.full((h, w, 3), 90, np.uint8))
-    _write_skeleton(
-        tmp_path / "skeleton_corrections" / "a_skeleton.png", row=100, size=SKELETON_OUTPUT_SIZE
-    )
+    _write_skeleton(tmp_path / "gt" / "skeletons" / "a.png", row=100, size=SKELETON_OUTPUT_SIZE)
     doc = SkeletonDocument()
     doc.open(str(image), (w, h), str(tmp_path))
-    assert doc.source == CORRECTED and doc.model.mask.shape == (h, w)
+    assert doc.source == GT and doc.model.mask.shape == (h, w)
     assert doc.model.mask.any()
 
 
 def test_a_failed_save_keeps_the_old_file_and_reports_until_the_next_edit(project, monkeypatch):
     root, image = project
-    correction = _write_skeleton(_paths(root)[0], row=100)
-    old = Path(correction).read_bytes()
+    gt_file = _write_skeleton(_paths(root)[0], row=100)
+    old = Path(gt_file).read_bytes()
     doc = _opened(root, image)
     _draw(doc)
 
@@ -331,8 +377,8 @@ def test_a_failed_save_keeps_the_old_file_and_reports_until_the_next_edit(projec
     result = doc.save()
     monkeypatch.undo()
     assert result.ok is False and result.path is None and "disk full" in result.error
-    assert Path(correction).read_bytes() == old
-    assert not [name for name in os.listdir(root / "skeleton_corrections") if ".tmp" in name]
+    assert Path(gt_file).read_bytes() == old
+    assert not [name for name in os.listdir(root / "gt" / "skeletons") if ".tmp" in name]
     assert doc.save_error == result.error and doc.error_revision == doc.model.revision
     assert doc.is_dirty()
     assert doc.status() == LayerStatus("error", "Not saved", result.error)
@@ -340,7 +386,7 @@ def test_a_failed_save_keeps_the_old_file_and_reports_until_the_next_edit(projec
     assert doc.status() == LayerStatus("dirty")
 
 
-def test_an_unwritable_corrections_folder_does_not_raise(project, monkeypatch):
+def test_an_unwritable_gt_skeletons_folder_does_not_raise(project, monkeypatch):
     root, image = project
     doc = _opened(root, image)
     _draw(doc)
@@ -357,24 +403,24 @@ def test_an_unwritable_corrections_folder_does_not_raise(project, monkeypatch):
 # ------------------------------------------------------------------ status
 def test_status_labels_follow_the_source(project):
     root, image = project
-    correction, generated = _paths(root)
+    gt_file, generated = _paths(root)
     doc = _opened(root, image)
     assert doc.status() == LayerStatus("none", "No skeleton")
     _write_skeleton(generated, value=0)  # an empty generated skeleton (all black)
     doc.reopen()
-    assert doc.status() == LayerStatus("none", "Generated · empty", "Not corrected yet")
+    assert doc.status() == LayerStatus("none", "Prediction · empty", "Not corrected yet")
     _write_skeleton(generated, row=40)
     doc.reopen()
-    assert doc.status() == LayerStatus("none", "Generated", "Not corrected yet")
+    assert doc.status() == LayerStatus("none", "Prediction", "Not corrected yet")
     _draw(doc)
     assert doc.status() == LayerStatus("dirty")
     doc.save()
-    assert doc.status() == LayerStatus("clean", "Saved", correction)
+    assert doc.status() == LayerStatus("clean", "GT", gt_file)
     doc.load_file(_write_skeleton(root / "other.png", row=20))
     assert doc.status() == LayerStatus("dirty")  # a loaded file is unsaved until saved (E1)
     doc.reopen()
     copy = root / "copy.png"
-    copy.write_bytes(Path(correction).read_bytes())
+    copy.write_bytes(Path(gt_file).read_bytes())
     doc.load_file(str(copy))  # the saved skeleton, from another file: nothing to save
     assert doc.status() == LayerStatus("none", "Loaded file")
 
@@ -385,15 +431,15 @@ def _stamp(path):
     return (path, st.st_mtime_ns, st.st_size)
 
 
-def test_file_stamps_name_the_correction_and_the_default_generated_path(project):
+def test_file_stamps_name_the_gt_skeleton_and_the_default_generated_path(project):
     root, image = project
-    correction, generated = _paths(root)
+    gt_file, generated = _paths(root)
     doc = SkeletonDocument()
     assert doc.file_stamps() == ()
     doc.open(image, (W, H), str(root))
-    assert doc.file_stamps() == ((correction, None), (generated, None))
+    assert doc.file_stamps() == ((gt_file, None), (generated, None))
     _write_skeleton(generated)
-    assert doc.file_stamps() == ((correction, None), _stamp(generated))
+    assert doc.file_stamps() == ((gt_file, None), _stamp(generated))
 
 
 def test_our_first_save_changes_the_stamps(project):

@@ -216,7 +216,7 @@ def metrics_window(*, bar=None, stage=None, checks=None) -> SimpleNamespace:
         image_manager=SimpleNamespace(
             has_mask=lambda name: name == "a",
             has_skeleton=lambda _name: False,
-            has_correction=lambda _name: False,
+            has_gt_skeleton=lambda _name: False,
             original_folder=None,
             images={},
         ),

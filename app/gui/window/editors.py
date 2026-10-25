@@ -68,31 +68,31 @@ def sync_window_modified(window: "MainWindow", *_args) -> None:
 
 def on_editor_dirty_changed(window: "MainWindow", *_args) -> None:
     """An editor's unsaved state changed: the title marker follows, and a save in
-    Correct may have written the open image's skeleton correction."""
+    Correct may have written or removed the open image's GT skeleton."""
     window._sync_window_modified()
     window._sync_open_correction()
 
 
 def sync_open_correction(window: "MainWindow") -> None:
-    """Keep the Library's "corrected" state of the image open in Correct in step with
+    """Keep the Library's GT-skeleton state of the image open in Correct in step with
     the disk (W17, display only: Measure reads the generated skeleton, FR-03).
 
     Correct's ``skeleton_saved`` stays unconnected (FR-03), so this runs when the
     editor's unsaved state changes (a save) and whenever another image is selected:
-    one ``os.path.isfile`` of that image's correction.
+    one ``os.path.isfile`` of that image's ``gt/skeletons/<stem>.png``.
     """
     manager = window.image_manager
     path = getattr(window.correct_editor, "current_image_path", "")
-    set_correction = getattr(manager, "set_correction", None)
-    if not path or not callable(set_correction):
+    set_gt = getattr(manager, "set_gt", None)
+    if not path or not callable(set_gt):
         return
     stem = image_stem(path)
     layout = project_layout_of(manager)
     if layout is None or manager.get_image_path(stem) is None:
         return
-    present = os.path.isfile(layout.corrected_skeleton_path(stem))
-    if present != manager.has_correction(stem):
-        set_correction(stem, present)
+    present = os.path.isfile(layout.gt_skeleton_path(stem))
+    if present != manager.has_gt_skeleton(stem):
+        set_gt(stem, "skeleton", present)
         window.library_index.refresh_status(stem)
 
 

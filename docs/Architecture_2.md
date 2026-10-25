@@ -624,12 +624,12 @@ Root-Mask-and-Skeletons/
 │   └── data_processing/data_processor.py  # Data processing pipeline
 │
 └── 📤 <project>/                        # Outputs, next to the images
-    ├── mask/<stem>.png                  # Masks (generated, or corrected in Correct)
+    ├── mask/<stem>.png                  # Predicted masks (Generate)
     ├── mask/root_areas.csv              # Root area per mask
     ├── skeletons/<stem>_fake.png        # Generated skeletons
     ├── skeletons/root_lengths.csv       # Root length per skeleton
-    ├── skeleton_corrections/<stem>_skeleton.png  # Skeletons corrected in Correct
-    └── gt/                              # Ground truth (Trace GT)
+    └── gt/                              # Ground truth: mask/<stem>.png and skeletons/<stem>.png
+                                         # saved in Correct; <stem>.png class labels (Trace GT)
 ```
 
 ### Runtime Artifacts
@@ -637,9 +637,10 @@ Root-Mask-and-Skeletons/
 | Artifact Type | Location | Format | Description |
 |--------------|----------|--------|-------------|
 | **Input Images** | User specified | PNG/JPG | Original root images |
-| **Binary Masks** | `mask/*.png` | 8-bit PNG (generated), RGBA PNG (corrected) | Segmentation masks |
+| **Binary Masks** | `mask/*.png` | 8-bit PNG | Predicted segmentation masks |
+| **GT Masks** | `gt/mask/*.png` | RGBA PNG | Masks saved in *Correct* after an edit |
 | **Skeleton Images** | `*_fake.png` | RGB PNG | Skeletonized roots |
-| **Corrected Skeletons** | `skeleton_corrections/*_skeleton.png` | 8-bit PNG | Skeletons corrected in *Correct* (not measured) |
+| **GT Skeletons** | `gt/skeletons/*.png` | 8-bit PNG | Skeletons saved in *Correct* after an edit (not measured yet) |
 | **Metrics CSV** | `root_lengths.csv` | CSV | Morphometric data |
 | **HTML Reports** | `index.html` | HTML | Visual results browser |
 | **Dash Server** | `localhost:8050` | Web | Interactive dashboard |

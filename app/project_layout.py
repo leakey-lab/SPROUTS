@@ -8,7 +8,6 @@ A SPROUTS project is a folder of images. Every stage writes next to them::
     <root>/mask/root_areas.csv                      Measure (area)
     <root>/skeletons/<stem>_fake.png                generated skeleton
     <root>/skeletons/root_lengths.csv               Measure (length)
-    <root>/skeleton_corrections/<stem>_skeleton.png corrected skeleton
     <root>/gt/<stem>.png                            GT class labels
     <root>/gt/mask/<stem>.png                       GT mask (a saved edit)
     <root>/gt/skeletons/<stem>.png                  GT skeleton (a saved edit)
@@ -36,7 +35,6 @@ from app.config import (
     MASK_DIRNAME,
     ROOT_AREAS_CSV,
     ROOT_LENGTHS_CSV,
-    SKELETON_CORRECTIONS_DIRNAME,
     SKELETONS_DIRNAME,
 )
 from app.naming import LEGACY_IMAGE_EXTENSIONS, image_stem, stem_key
@@ -44,7 +42,6 @@ from app.naming import LEGACY_IMAGE_EXTENSIONS, image_stem, stem_key
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "CORRECTED_SKELETON_SUFFIX",
     "MASK_EXTENSIONS",
     "SKELETON_SUFFIX",
     "GtStems",
@@ -57,8 +54,6 @@ __all__ = [
 
 #: File-name suffix of a generated skeleton (skeleton_inference output).
 SKELETON_SUFFIX = "_fake.png"
-#: File-name suffix of a skeleton saved by the skeleton-correction editor.
-CORRECTED_SKELETON_SUFFIX = "_skeleton.png"
 #: Mask file types the app reads, in lookup priority: the image formats, as masks use
 #: the same scan (one mask per stem without case). Masks are written as .png.
 MASK_EXTENSIONS = IMAGE_EXTENSIONS
@@ -304,10 +299,6 @@ class ProjectLayout:
         return self._path(SKELETONS_DIRNAME)
 
     @property
-    def corrections_dir(self) -> str:
-        return self._path(SKELETON_CORRECTIONS_DIRNAME)
-
-    @property
     def gt_dir(self) -> str:
         return self._path(GT_DIRNAME)
 
@@ -336,14 +327,13 @@ class ProjectLayout:
         """Every folder the app writes into: where killed writes leave temp files (R8).
 
         The mask and skeleton candidates (generation writes there, and Measure writes
-        its CSV and ``.provenance.json`` into the folder it measured),
-        ``skeleton_corrections/``, ``gt/``, ``gt/mask/`` and ``gt/skeletons/``. Not the image
-        folder (nothing writes there) and no legacy ``test_latest`` walk: nothing is read from disk.
+        its CSV and ``.provenance.json`` into the folder it measured), ``gt/``, ``gt/mask/``
+        and ``gt/skeletons/``. Not the image folder (nothing writes there) and no legacy
+        ``test_latest`` walk: nothing is read from disk.
         """
         return (
             *self.mask_dir_candidates,
             *self.skeleton_dir_candidates,
-            self.corrections_dir,
             self.gt_dir,
             self.gt_mask_dir,
             self.gt_skeletons_dir,
@@ -450,22 +440,6 @@ class ProjectLayout:
             if found and os.path.isdir(os.path.join(found, "images")):
                 return os.path.join(found, "images")
         return None
-
-    # ------------------------------------------------------------------ corrections
-    def corrected_skeleton_path(self, stem: str) -> str:
-        """Skeleton-editor save path ``skeleton_corrections/<stem>_skeleton.png``."""
-        return self._path(SKELETON_CORRECTIONS_DIRNAME, self.stem(stem) + CORRECTED_SKELETON_SUFFIX)
-
-    def find_corrected_skeleton(self, stem: str) -> str | None:
-        """Existing ``skeleton_corrections/<stem>_skeleton.png``, its stem compared without
-        case (O7)."""
-        return find_by_stem(self.corrections_dir, self.stem(stem), CORRECTED_SKELETON_SUFFIX)
-
-    def scan_corrected_skeletons(self) -> dict[str, str]:
-        return dict(_scan(self.corrections_dir, _suffix_stem(CORRECTED_SKELETON_SUFFIX)))
-
-    def scan_corrected_stems(self) -> set[str]:
-        return set(self.scan_corrected_skeletons())
 
     # ------------------------------------------------------------------ GT
     def gt_path(self, stem: str) -> str:

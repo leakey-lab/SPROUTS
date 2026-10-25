@@ -452,6 +452,13 @@ Five passes, not yet released:
     **Cancel**. It no longer counts hand-corrected masks: they live in `gt/`, which Generate
     never reads or writes. Run records and the `keep_existing` / `overwrite_all` policy
     values are unchanged (WG-T7, O9).
+  - Correct, skeleton layer (WG-T3, O2, O26): the skeleton opens `gt/skeletons/<stem>.png`
+    when it exists, else the prediction `skeletons/<stem>_fake.png`, and Save writes only
+    `gt/skeletons/<stem>.png`; `skeletons/` is never written or removed, and
+    `skeleton_corrections/` is retired (never read or written; no migration). **Load
+    prediction** works on the skeleton too (one undoable step; a Save of it removes the GT
+    file). Skeleton states read "GT" / "Prediction". No CSV value or output pixel changes;
+    the goldens' `start.skeleton_source` reads `prediction` instead of `generated`.
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

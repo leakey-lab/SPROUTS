@@ -1,11 +1,11 @@
 """Which skeleton file the Correct stage opens and saves (Qt-free).
 
-:class:`SkeletonFiles`: for an image it names the saved correction
-(``skeleton_corrections/<stem>_skeleton.png``, the only skeleton file the editor
-writes) and the generated skeleton (``skeletons/<stem>_fake.png`` by default,
-read-only), via :class:`app.project_layout.ProjectLayout`.
-:meth:`SkeletonFiles.start_file` picks the file to open: the correction when one
-exists, else the generated skeleton. ``app.gui.correct.skeleton_document`` builds the
+:class:`SkeletonFiles`: for an image it names the GT skeleton
+(``gt/skeletons/<stem>.png``, the only skeleton file the editor writes) and the model's
+prediction (``skeletons/<stem>_fake.png`` by default, read-only), via
+:class:`app.project_layout.ProjectLayout`.
+:meth:`SkeletonFiles.start_file` picks the file to open: the GT skeleton when one
+exists, else the prediction. ``app.gui.correct.skeleton_document`` builds the
 skeleton layer's document on it; the unsaved-changes prompt is
 :mod:`app.gui.editor_prompts`.
 """
@@ -18,8 +18,8 @@ from dataclasses import dataclass
 
 from app.project_layout import ProjectLayout
 
-CORRECTED = "corrected"
-GENERATED = "generated"
+GT = "gt"
+PREDICTION = "prediction"
 
 GeneratedResolver = Callable[[str], "str | None"]
 
@@ -41,8 +41,9 @@ class SkeletonFiles:
         return ProjectLayout.stem(self.image_path)
 
     @property
-    def correction_path(self) -> str:
-        return self.layout.corrected_skeleton_path(self.stem)
+    def gt_path(self) -> str:
+        """``gt/skeletons/<stem>.png``: where a saved skeleton edit goes."""
+        return self.layout.gt_skeleton_path(self.stem)
 
     def generated_path(self) -> str | None:
         """The generated skeleton if it exists (injected resolver first, then skeletons/)."""
@@ -53,12 +54,12 @@ class SkeletonFiles:
         return self.layout.find_skeleton(self.stem)
 
     def start_file(self) -> tuple[str | None, str | None]:
-        """``(path, CORRECTED | GENERATED)`` to open, or ``(None, None)`` if neither exists."""
-        if os.path.isfile(self.correction_path):
-            return self.correction_path, CORRECTED
+        """``(path, GT | PREDICTION)`` to open, or ``(None, None)`` if neither exists."""
+        if os.path.isfile(self.gt_path):
+            return self.gt_path, GT
         generated = self.generated_path()
         if generated:
-            return generated, GENERATED
+            return generated, PREDICTION
         return None, None
 
     def dialog_start(self) -> str:

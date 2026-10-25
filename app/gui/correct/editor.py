@@ -5,7 +5,7 @@ A composition root (spec section 12.2) with no document, tool or history logic: 
 (``EditorCanvasView``, input to the ``ToolRouter``) shows the photo (``PhotoLayerItem``, z 0)
 under the ``MaskLayer`` and the ``SkeletonLayer``; the ``CorrectSession`` opens, saves,
 prompts (``app.gui.editor_prompts``) and keeps the one undo timeline, and its report of each
-layer save becomes ``mask_saved`` / ``mask_cleared`` / ``skeleton_saved`` on every path; the
+layer save becomes a ``mask_*`` or ``skeleton_*`` signal (saved / cleared) on every path; the
 overlays are the ``EditorChrome``, the ``CorrectControls`` and the ``LayerPanel``; the keys
 are the registry's Correct rows (``keys``). ``Neighbours`` (``paging``) knows the image's place
 in the library and reads the next images ahead; ``LayerPrefs`` keeps the layers' opacity and
@@ -40,6 +40,7 @@ from app.gui.correct.tool_router import ToolRouter
 from app.gui.editor_canvas import EditorCanvasView
 from app.gui.editor_chrome import EditorChrome
 from app.gui.image_normalization_interface import NormalizationControls
+from app.io_utils import same_file
 
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
@@ -53,10 +54,6 @@ __all__ = ["CorrectEditor"]
 _SKELETON_FILES = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
 
 
-def _same_file(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
-
-
 class CorrectEditor(PagingApi, QWidget):
     """The Correct stage's page: the mask (root area) and the skeleton (root length) of one
     image on one canvas, one of them edited at a time. The parts are attributes by name
@@ -66,7 +63,8 @@ class CorrectEditor(PagingApi, QWidget):
     dirty_changed = pyqtSignal(bool)
     mask_saved = pyqtSignal(str)  # image path: the GT mask was written (an empty one too)
     mask_cleared = pyqtSignal(str)  # image path: a mask equal to the prediction removed its GT
-    skeleton_saved = pyqtSignal(str)  # correction path (FR-03: MainWindow does not connect it)
+    skeleton_saved = pyqtSignal(str)  # GT skeleton path (FR-03: MainWindow does not connect it)
+    skeleton_cleared = pyqtSignal(str)  # image path: the skeleton equals the prediction, GT removed
     b_key_status_changed = pyqtSignal(bool)
     navigate_requested = pyqtSignal(int)  # PgDn / PgUp after the dirty layers were saved
     active_layer_changed = pyqtSignal(str)
@@ -106,11 +104,8 @@ class CorrectEditor(PagingApi, QWidget):
         self.photo_item = PhotoLayerItem()
         self.photo_item.setZValue(0)
         self.scene.addItem(self.photo_item)
-        self._skeleton = SkeletonLayer(self, self.scene)
-        self.layers: dict[str, EditLayer] = {
-            MASK: MaskLayer(self, self.scene),
-            SKELETON: self._skeleton,
-        }
+        self._skeleton = skeleton = SkeletonLayer(self, self.scene)
+        self.layers: dict[str, EditLayer] = {MASK: MaskLayer(self, self.scene), SKELETON: skeleton}
         self.session = CorrectSession(
             list(self.layers.values()),
             prompts=editor_prompts,
@@ -208,7 +203,7 @@ class CorrectEditor(PagingApi, QWidget):
         """
         session = self.session
         self._end_drag()
-        if session.image_path and _same_file(image_path, session.image_path):
+        if session.image_path and same_file(image_path, session.image_path):
             if session.is_dirty():
                 return
             if not session.image_changed():
@@ -424,6 +419,8 @@ class CorrectEditor(PagingApi, QWidget):
             return
         if outcome.layer_id == MASK and (outcome.path or outcome.cleared):
             (self.mask_saved if outcome.path else self.mask_cleared).emit(self.session.image_path)
+        elif outcome.layer_id == SKELETON and outcome.cleared:
+            self.skeleton_cleared.emit(self.session.image_path)
         elif outcome.layer_id == SKELETON and outcome.path:
             self.skeleton_saved.emit(outcome.path)
 

@@ -82,13 +82,14 @@ def _tool_tooltip(spec: ToolSpec, noun: str = "") -> str:
 
 def _prediction_state(layer: EditLayer) -> tuple[bool, str]:
     """``(enabled, tooltip)`` of Load prediction for the shown ``layer``: enabled while the
-    layer can load a prediction (``load_prediction``) and its document holds one. A
+    layer can load a prediction (``load_prediction``) and its document holds one: a plane
+    (``prediction()``, the mask) or a file (``prediction_file()``, the skeleton). A
     prediction file that could not be shown (unreadable, another size) says so."""
     if not callable(getattr(layer, "load_prediction", None)):
         return False, _PREDICTION_OFF_TIP.format(noun=layer.noun)
     document = getattr(layer, "document", None)
-    prediction = getattr(document, "prediction", None)
-    if not callable(prediction) or prediction() is None:
+    getters = [getattr(document, name, None) for name in ("prediction", "prediction_file")]
+    if not any(callable(get) and get() is not None for get in getters):
         unshown = getattr(document, "prediction_path", None) is not None
         return False, _PREDICTION_UNSHOWN_TIP if unshown else _PREDICTION_NONE_TIP
     return True, _PREDICTION_TIP.format(noun=layer.noun)
