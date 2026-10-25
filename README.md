@@ -162,6 +162,11 @@ image/mask resolution, so they are resolution-independent:
 - **Length** uses a true arc-length estimator: orthogonal pixel steps cost one
   pixel pitch, diagonal steps cost the Euclidean diagonal (per-axis pitch).
 
+Every image is taken to cover the whole field of view, whatever its size, aspect or crop:
+a quarter-covered mask of a 640 × 480 frame, of a 320 × 240 crop and of a 1920 × 1080
+frame all measure the same area. The pixel is not square (0.028125 × 0.027083 mm for
+640 × 480).
+
 If your imaging system has a different FOV, change it in one place:
 `app/config.py`.
 
