@@ -1,11 +1,10 @@
-"""Who made a mask on disk: the model or a person (RB-01 / PI-04 / FR-04 / UXS-01).
+"""The PNG type of a mask in ``mask/`` and the pre-Generate scan (RB-01 / PI-04 / FR-04).
 
-Generated masks and hand-corrected masks share one file name (``mask/<stem>.png``),
-so a blind re-run of Generate would overwrite manual work. The two kinds differ in
-their PNG header: the Correct Mask editor saves ARGB32 (white on transparent ->
-PNG colour type 6) while the mask model writes 8-bit greyscale (colour type 0).
-Reading the 26-byte header is enough to tell them apart; no pixel is decoded (a
-buffered ``open`` read 8 KB per file, R6).
+Before WG-T2 the Correct editor saved hand-corrected masks to ``mask/<stem>.png`` too, so a
+blind re-run of Generate could overwrite manual work. The two kinds differed in their PNG
+header: the editor saved ARGB32 (white on transparent -> PNG colour type 6) while the mask
+model writes 8-bit greyscale (colour type 0). Reading the 26-byte header is enough to tell
+them apart; no pixel is decoded (a buffered ``open`` read 8 KB per file, R6).
 
 Opening a file costs far more than reading its header: of about 1.4 s for 46k masks
 (warm cache, NTFS), the opens took 0.85 s, the reads 0.3 s and the folder listing
@@ -14,6 +13,10 @@ headers on a few threads (about 0.6 s for 46k). The scan still returns only once
 every header is read.
 
 Qt-free and torch-free, so the pre-flight scan is cheap and unit-testable.
+
+Since WG-T7 nothing reads the manual / model split: ``mask/`` holds predictions only (every
+human correction is saved in ``gt/``), and Generate's prompt needs only
+``ExistingMasks.count``. The classifier stays for now; W5-T5 may delete it.
 """
 
 from __future__ import annotations
@@ -153,10 +156,10 @@ def scan_existing_masks(layout: ProjectLayout, stems: Iterable[str] | None = Non
 
 
 class OverwritePolicy(enum.Enum):
-    """What a generation run does with masks that already exist."""
+    """What a generation run does with predictions that already exist."""
 
-    KEEP_EXISTING = "keep_existing"  # generate missing masks only (the safe default)
-    OVERWRITE_ALL = "overwrite_all"  # regenerate every mask, including hand-corrected ones
+    KEEP_EXISTING = "keep_existing"  # predict the missing masks only (the safe default)
+    OVERWRITE_ALL = "overwrite_all"  # replace every prediction (gt/ is never touched)
 
     def skip_stems(self, existing: ExistingMasks) -> frozenset[str]:
         """Stems the generator must not write under this policy."""

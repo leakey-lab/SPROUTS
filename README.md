@@ -181,19 +181,21 @@ chose last (root length at first); with nothing to chart yet it says what to run
 
 | File | Content |
 |---|---|
-| `mask/<stem>.png` | root mask: model-generated (grayscale 0/255, 640 x 480) or hand-traced (white on transparent) |
+| `mask/<stem>.png` | predicted root mask (grayscale 0/255, 640 x 480); *Correct* never changes it |
 | `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error` |
 | `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
 | `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error` |
 | `skeleton_corrections/<stem>_skeleton.png` | skeleton corrected in *Correct* (1-pixel lines at the photo's resolution, so a saved correction reopens unchanged); not measured |
+| `gt/mask/<stem>.png` | root mask saved in *Correct* after an edit: the GT mask (white on transparent, at the photo's size) |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
 | `<csv>.inputs.json` | the files a CSV was measured from: each one's size, time and SHA-256, and the CSV's SHA-256 (what "changed since measured" compares) |
 | `mask/_sprouts_run.json`, `skeletons/_sprouts_run.json` | the latest generation run into that folder: model SHA-256, device and precision, parameters, failed inputs |
 | `mask/_sprouts_runs.jsonl`, `skeletons/_sprouts_runs.jsonl` | one line per generation run that wrote or failed an input (the run file holds the latest) |
 
-Generating masks into a folder that already has masks asks first: keep them and
-generate only the missing ones (the default), or replace every mask. On a GPU, outputs
+Generating masks into a folder that already has predicted masks asks first: keep the
+predictions and predict only the missing ones (the default), or replace every prediction.
+Hand-corrected masks live in `gt/` and are never read or touched by Generate. On a GPU, outputs
 are reproducible run to run (cuDNN autotuning is off, deterministic algorithms on, batches
 at one fixed size, see below). They are numerically
 equivalent to earlier versions, not bit-identical: root length is unchanged and area moves

@@ -144,7 +144,7 @@ def test_the_mask_generation_toast_names_the_folder_and_the_status_line_the_path
 
     (message, kind), *_ = _calls(feedback, "notify")
     assert kind == "success"
-    assert message == "Generated 3 masks, kept 2 existing. Saved to the mask folder"
+    assert message == "Generated 3 masks, kept 2 existing predictions. Saved to the mask folder"
     assert str(root) not in message
     assert f"Saved to {out}" in [m for m, *_ in _calls(feedback, "status")]
 

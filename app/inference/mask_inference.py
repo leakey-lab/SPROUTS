@@ -2,7 +2,7 @@
 
 ``generate_masks(input_dir, output_dir, ...)`` lists the images (sorted, so batch
 composition no longer depends on the file system), leaves ``skip_stems`` alone
-(RB-01: existing / hand-corrected masks), loads the cached mask model on first
+(RB-01: the predictions to keep), loads the cached mask model on first
 use (PG-04 / PI-11: never at app start-up), runs the shared batch engine
 (failures recorded, OOM backoff, overlap, cancel), writes the run manifest and
 releases the CUDA cache once (PI-13).

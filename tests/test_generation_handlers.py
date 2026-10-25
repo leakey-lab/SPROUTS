@@ -1,7 +1,8 @@
 """Mask / skeleton generation handlers (offscreen Qt, CPU stub models, no checkpoints).
 
-RB-01 / PI-04 / FR-04 / UXS-01: existing masks -> one prompt; Keep is the default;
-    Cancel starts nothing (so generate_all chains nothing).
+RB-01 / PI-04 / FR-04 / UXS-01: existing predictions -> one prompt (WG-T7: Keep / Replace
+    predictions, gt/ is never touched); Keep is the default; Cancel starts nothing (so
+    generate_all chains nothing).
 PG-04 / PI-11: importing the handlers or building them loads neither torch nor a model.
 PI-12 / UXS-02 / AR-07: progress through main_window.feedback, no modal success box.
 PI-08 / UI-20: Cancel stops the thread; RB-07: refuses politely while another job runs.
@@ -27,7 +28,7 @@ from app.gui.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
 from app.handlers import mask_generation_handler as mgh
 from app.inference import runtime
-from app.inference.mask_origin import ExistingMasks, OverwritePolicy
+from app.inference.mask_origin import OverwritePolicy
 from tests.qt_teardown import flush_deleted
 
 
@@ -167,19 +168,17 @@ def test_existing_masks_keep_is_the_default_choice(project, qapp, monkeypatch):
     assert handler.generate_masks() is True
     _wait(handler.generation_thread, qapp)
 
-    existing, total = seen[0]
-    assert existing.manual == frozenset({"a"}) and existing.model == frozenset({"b"})
-    assert total == 3
+    assert seen == [(2, 3)]  # two of the three images already have a prediction
     assert {n: (mask_dir / n).read_bytes() for n in ("a.png", "b.png")} == before
     assert (mask_dir / "c.png").exists()
     assert project.stub.items == 1
     assert project.window.outputs_changed == [True]
 
 
-def test_overwrite_all_replaces_hand_traced_masks(project, qapp):
+def test_replace_all_replaces_every_prediction(project, qapp):
     mask_dir = project.folder / "mask"
     mask_dir.mkdir()
-    _save_traced(mask_dir / "a.png")
+    _save_traced(mask_dir / "a.png")  # a prediction like any other
     handler = mgh.MaskGenerationHandler(
         project.window, confirm_overwrite=lambda e, t: OverwritePolicy.OVERWRITE_ALL
     )
@@ -350,7 +349,6 @@ def test_skeleton_failures_get_one_report(project, qapp):
 
 
 def test_overwrite_prompt_defaults_to_keep(qapp):
-    existing = ExistingMasks(manual=frozenset({"a"}), model=frozenset({"b"}))
     clicked = []
 
     def press_default():
@@ -359,17 +357,15 @@ def test_overwrite_prompt_defaults_to_keep(qapp):
         box.defaultButton().click()
 
     QTimer.singleShot(50, press_default)
-    policy = mgh.ask_overwrite_policy(None, existing, total=5)
+    policy = mgh.ask_overwrite_policy(None, 2, 5)
     assert policy is OverwritePolicy.KEEP_EXISTING
-    assert "Keep" in clicked[0]
+    assert "Keep predictions" in clicked[0]
 
 
 def test_overwrite_prompt_escape_is_cancel(qapp):
-    existing = ExistingMasks(model=frozenset({"b"}))
-
     def press_escape():
         box = QApplication.activeModalWidget()
         box.escapeButton().click()
 
     QTimer.singleShot(50, press_escape)
-    assert mgh.ask_overwrite_policy(None, existing, total=5) is None
+    assert mgh.ask_overwrite_policy(None, 1, 5) is None

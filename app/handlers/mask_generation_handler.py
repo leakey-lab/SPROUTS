@@ -1,11 +1,12 @@
 """Generate masks for the loaded image folder (thin Qt layer over mask_inference).
 
-* RB-01 / PI-04 / FR-04 / UXS-01: before starting, ``mask/`` is scanned once and
-  existing masks are classified (hand-corrected = RGBA PNG, model = greyscale).
-  If any exist the user chooses "Keep existing masks (generate missing only)"
-  (default), "Overwrite all (N hand-corrected)" ("Overwrite all" when none are)
-  or Cancel. Cancel starts no thread, so ``main_window.generate_all`` chains no
-  skeleton pass.
+* RB-01 / PI-04 / FR-04 / UXS-01 / WG-T7: ``mask/`` holds the model's predictions only
+  (every human correction is saved in ``gt/``), and Generate never reads or writes
+  ``gt/``. Before starting, ``mask/`` is scanned once; if any prediction exists the
+  user chooses "Keep predictions (predict missing only)" (default), "Replace all
+  predictions" or Cancel. The prompt needs only how many exist (a file in ``mask/``
+  is a prediction whatever its PNG type). Cancel starts no thread, so
+  ``main_window.generate_all`` chains no skeleton pass.
 * PG-04 / PI-11: importing or constructing the handler loads neither torch nor
   the model; the worker loads the cached model on first use ("Loading mask model").
 * PI-12 / UXS-02 / AR-07: progress, completion and failures go through
@@ -38,12 +39,12 @@ from app.handlers.job_registry import JobRegistry
 from app.handlers.worker_base import GuardedThread, JobCancelled
 from app.inference import runtime
 from app.inference.batch_pipeline import progress_percent
-from app.inference.mask_origin import ExistingMasks, OverwritePolicy, scan_existing_masks
+from app.inference.mask_origin import OverwritePolicy, scan_existing_masks
 from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
 
-ConfirmOverwrite = Callable[[ExistingMasks, int], "OverwritePolicy | None"]
+ConfirmOverwrite = Callable[[int, int], "OverwritePolicy | None"]
 
 
 class MaskGenerationThread(GuardedThread):
@@ -134,29 +135,21 @@ def _wait_cursor() -> Iterator[None]:
 
 
 def ask_overwrite_policy(
-    parent: QWidget | None, existing: ExistingMasks, total: int
+    parent: QWidget | None, existing_count: int, total: int
 ) -> OverwritePolicy | None:
-    """Ask what to do with existing masks; None means Cancel (the default is Keep)."""
-    manual = len(existing.manual)
+    """Ask what to do with existing predictions; None means Cancel (the default is Keep)."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Warning)
-    box.setWindowTitle("Masks already exist")
-    box.setText(f"{existing.count:,} of {total:,} images already have a mask.")
-    detail = (
-        f"{manual:,} of them were corrected by hand. "
-        if manual
-        else "None of them look hand-corrected. "
-    )
+    box.setWindowTitle("Predictions already exist")
+    box.setText(f"{existing_count:,} of {total:,} images already have a predicted mask.")
     box.setInformativeText(
-        detail + "Keep them and generate only the missing masks, or replace every mask "
-        "with a new model prediction. Replaced masks cannot be restored."
+        "Keep them and predict only the missing ones, or replace every prediction with a new "
+        "one. Hand-corrected masks live in gt/ and are never touched."
     )
     keep = box.addButton(
-        "Keep existing masks (generate missing only)", QMessageBox.ButtonRole.AcceptRole
+        "Keep predictions (predict missing only)", QMessageBox.ButtonRole.AcceptRole
     )
-    # The count only when some are hand-corrected: "(0 hand-corrected)" read oddly.
-    overwrite = f"Overwrite all ({manual:,} hand-corrected)" if manual else "Overwrite all"
-    box.addButton(overwrite, QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton("Replace all predictions", QMessageBox.ButtonRole.DestructiveRole)
     cancel = box.addButton(QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(keep)
     box.setEscapeButton(cancel)
@@ -179,7 +172,7 @@ class MaskGenerationHandler(GenerationHandlerBase):
         main_window: provides ``image_manager`` and, optionally, ``feedback``
             (``UiFeedback``), ``jobs`` (``JobRegistry``) and ``on_outputs_changed()``.
         feedback / jobs: explicit dependencies (tests, tools).
-        confirm_overwrite: ``(existing, total) -> OverwritePolicy | None``; default
+        confirm_overwrite: ``(existing_count, total) -> OverwritePolicy | None``; default
             is the :func:`ask_overwrite_policy` dialog.
     """
 
@@ -249,7 +242,7 @@ class MaskGenerationHandler(GenerationHandlerBase):
             return False
         policy = OverwritePolicy.KEEP_EXISTING
         if existing:
-            chosen = self._confirm(existing, len(stems))
+            chosen = self._confirm(existing.count, len(stems))
             if chosen is None:
                 return False
             policy = chosen
@@ -294,7 +287,7 @@ class MaskGenerationHandler(GenerationHandlerBase):
         written, kept = len(report.written), len(report.skipped)
         message = f"Generated {written:,} masks"
         if kept:
-            message += f", kept {kept:,} existing"
+            message += f", kept {kept:,} existing predictions"
         self.feedback.task_finished(message)
         if report.failed:
             self.feedback.notify(f"{len(report.failed):,} images could not be processed", "warn")

@@ -447,6 +447,11 @@ Five passes, not yet released:
     value changes yet: Measure reads `gt/` from WG-T8 on. Golden `mask_clear.saved` of
     `synth_model_mask_and_skeleton`: file removed → empty GT file (O9); every other golden
     pixel unchanged.
+  - Generate's overwrite prompt speaks of predictions: "Predictions already exist", with
+    **Keep predictions (predict missing only)** (default), **Replace all predictions** and
+    **Cancel**. It no longer counts hand-corrected masks: they live in `gt/`, which Generate
+    never reads or writes. Run records and the `keep_existing` / `overwrite_all` policy
+    values are unchanged (WG-T7, O9).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

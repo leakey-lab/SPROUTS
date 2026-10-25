@@ -12,7 +12,7 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
 ```
 <project>/
   <stem>.jpg | .jpeg | .png               original images (never modified)
-  mask/<stem>.png                         root masks: model-generated or hand-traced
+  mask/<stem>.png                         predicted root masks (Generate; Correct never writes them)
   mask/root_areas.csv                     root area per mask
   skeletons/<stem>_fake.png               model-predicted skeletons
   skeletons/root_lengths.csv              root length per skeleton
@@ -66,7 +66,7 @@ dashboards.
 | File | One row per | Written by |
 |---|---|---|
 | `skeletons/root_lengths.csv` | `skeletons/*_fake.png` file | Measure > Root length |
-| `mask/root_areas.csv` | `mask/*.png` file (model or hand-traced) | Measure > Root area |
+| `mask/root_areas.csv` | `mask/*.png` file (prediction) | Measure > Root area |
 
 Each run rewrites the whole file. Rows are sorted by `Tube`, then `Date`, `Time` and
 `Position`; rows without a tube come last.
@@ -144,25 +144,27 @@ quoting (a field is quoted only if it contains a comma, quote or line break). Th
 shows `Area (mmÂ²)`. Import it instead: *Data > From Text/CSV*, *File origin: 65001:
 Unicode (UTF-8)*. In R: `read.csv(path, fileEncoding = "UTF-8", check.names = FALSE)`.
 
-## Masks (`mask/<stem>.png`)
+## Masks (`mask/<stem>.png`, `gt/mask/<stem>.png`)
 
-Both kinds share the folder and the name; Measure treats them alike.
+The prediction and the GT mask of an image share the stem and live in two folders.
 
-| Origin | PNG mode | Size | Root | Background |
-|---|---|---|---|---|
-| *Generate* (mask model) | 8-bit grayscale (`L`) | always 640 x 480 | 255 | 0 |
-| *Correct* (hand-traced) | RGBA | the source image's size | opaque white (255, 255, 255, 255) | fully transparent (0, 0, 0, 0) |
+| File | Written by | PNG mode | Size | Root | Background |
+|---|---|---|---|---|---|
+| `mask/<stem>.png` (prediction) | *Generate* (mask model) | 8-bit grayscale (`L`) | always 640 x 480 | 255 | 0 |
+| `gt/mask/<stem>.png` (GT) | *Correct* | RGBA | the source image's size | opaque white (255, 255, 255, 255) | fully transparent (0, 0, 0, 0) |
 
-Saving an empty mask in *Correct* deletes the file (the image then has no mask). *Correct*
-also opens `mask/<stem>.jpg`/`.jpeg` masks, but Measure reads only `.png`. The file does not
-record its origin; mode `L` versus `RGBA` is the only practical tell.
+*Correct* opens the GT mask when there is one, else the prediction, and saves only to
+`gt/mask/`; it never writes or removes a file in `mask/`. Saving an edited prediction makes
+it GT; saving an empty (cleared) mask writes an empty GT mask; a mask edited back to equal
+its prediction removes the GT file. *Correct* also opens `mask/<stem>.jpg`/`.jpeg`
+predictions. Measure > Root area reads the `.png` files in `mask/`.
 
-When masks already exist, *Generate* asks first: **Keep existing masks** (the default;
-only missing masks are generated), **Overwrite all** (the dialog counts the
-hand-corrected ones), or **Cancel**. Hand-corrected masks are recognised by their RGBA
-PNG header (`app/inference/mask_origin.py`). An image that cannot be decoded gets no
-mask file; it is listed in `mask/_sprouts_run.json` (`"failed"`) and in the warning
-shown at the end of the run.
+When predicted masks already exist, *Generate* asks first: **Keep predictions (predict
+missing only)** (the default), **Replace all predictions**, or **Cancel**. Hand-corrected
+masks live in `gt/mask/` and are never read or touched by Generate; `mask/` holds the
+model's output only, so a file there is a prediction whatever its PNG type. An image that
+cannot be decoded gets no mask file; it is listed in `mask/_sprouts_run.json`
+(`"failed"`) and in the warning shown at the end of the run.
 
 ## Skeletons
 
@@ -262,7 +264,7 @@ written atomically: each is complete or absent.
 `_sprouts_run.json` per output folder (`app/inference/run_record.py`) with the same
 keys, describing the latest run into that folder that wrote or failed an input (completed,
 cancelled, or stopped with an error after writing outputs: `outputs.status` is then
-`failed`). A run that did neither (a *Keep existing masks* run with nothing missing, a
+`failed`). A run that did neither (a *Keep predictions* run with nothing missing, a
 cancel before the first batch) leaves the record alone (since 2026-10-25, O16; before, it
 replaced it), and so does a run that stops with an error before writing anything.
 `<output folder>/_sprouts_runs.jsonl` holds one compact JSON line per run that wrote or

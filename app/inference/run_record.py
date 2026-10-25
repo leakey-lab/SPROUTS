@@ -9,7 +9,7 @@ failed inputs with reasons, skipped stems, cancel flag).
 Every image scanner filters by image extension, so the JSON is never read as data.
 The file describes the latest run into that folder that wrote or failed an input
 (including one that raised after writing outputs, R7); a run that did neither
-leaves it alone, so a *Keep existing masks* run with nothing missing, a cancel
+leaves it alone, so a *Keep predictions* run with nothing missing, a cancel
 before the first batch and a run that raised before writing anything keep the
 record of the run that made the outputs. Every such run is also one line of
 ``_sprouts_runs.jsonl`` (``provenance.RUN_HISTORY_FILENAME``; O16). When the full record cannot be
@@ -52,8 +52,8 @@ def write_run_manifest(
 ) -> str | None:
     """Write the run manifest and append the run to the history; returns the manifest path.
 
-    A run that wrote nothing, failed nothing and did not raise (a *Keep existing
-    masks* run with nothing missing, a cancel before the first batch) changed nothing:
+    A run that wrote nothing, failed nothing and did not raise (a *Keep
+    predictions* run with nothing missing, a cancel before the first batch) changed nothing:
     it writes nothing and returns None, so the record of the run that made the outputs
     stays. A provenance failure is logged and never fails the run (the outputs exist);
     the minimal record, or else the removal of the outdated one, keeps the folder from

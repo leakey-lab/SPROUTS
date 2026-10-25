@@ -260,7 +260,7 @@ def test_a_run_that_kept_masks_is_not_a_run_where_every_input_failed(project, qa
     assert thread.report.written == [] and thread.report.failed_names == ["c.jpg"]
     fb = project.window.feedback
     assert "task_failed" not in fb.names()
-    assert _messages(fb, "task_finished") == ["Generated 0 masks, kept 2 existing"]
+    assert _messages(fb, "task_finished") == ["Generated 0 masks, kept 2 existing predictions"]
     assert ("1 images could not be processed", "warn") in [
         c.args for c in fb.calls if c.name == "notify"
     ]
@@ -285,7 +285,7 @@ def test_a_run_with_nothing_to_do_still_completes_and_chains(project, qapp):
 
     fb = project.window.feedback
     assert "task_failed" not in fb.names()
-    assert _messages(fb, "task_finished") == ["Generated 0 masks, kept 3 existing"]
+    assert _messages(fb, "task_finished") == ["Generated 0 masks, kept 3 existing predictions"]
     assert "success" in _toast_kinds(fb)
     assert project.dialogs == []
     assert thread.completed is True

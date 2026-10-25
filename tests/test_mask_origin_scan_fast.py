@@ -11,9 +11,8 @@ the whole result, as before.
 The reference is the scan before this change, with the pre-R6 header reader, both
 verbatim, on every kind of file a mask folder can hold.
 
-The overwrite prompt names the hand-corrected count on its "Overwrite all" button
-only when there are some ("Overwrite all (0 hand-corrected)" read oddly next to
-"None of them look hand-corrected").
+The overwrite prompt (WG-T7) shows only how many masks exist, never a hand-corrected
+count: "Replace all predictions" is the same button whatever the scan classified.
 """
 
 from __future__ import annotations
@@ -287,7 +286,7 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _overwrite_button_text(existing):
+def _replace_button_text(existing_count):
     """The text of the prompt's destructive button (the prompt is cancelled)."""
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -306,17 +305,18 @@ def _overwrite_button_text(existing):
         box.escapeButton().click()
 
     QTimer.singleShot(0, read_and_cancel)
-    assert mgh.ask_overwrite_policy(None, existing, total=5000) is None
+    assert mgh.ask_overwrite_policy(None, existing_count, 5000) is None
     [text] = texts
     return text
 
 
-def test_the_overwrite_button_counts_hand_corrected_masks_only_when_there_are_some(qapp):
+def test_the_replace_button_never_counts_hand_corrected_masks(qapp):
+    # mask/ holds predictions only (WG-T7): the scan's manual / model split is not shown.
     none_by_hand = ExistingMasks(model=frozenset({"a", "b"}), unknown=frozenset({"c"}))
-    assert _overwrite_button_text(none_by_hand) == "Overwrite all"
+    assert _replace_button_text(none_by_hand.count) == "Replace all predictions"
 
     two_by_hand = ExistingMasks(manual=frozenset({"a", "b"}), model=frozenset({"c"}))
-    assert _overwrite_button_text(two_by_hand) == "Overwrite all (2 hand-corrected)"
+    assert _replace_button_text(two_by_hand.count) == "Replace all predictions"
 
     many = ExistingMasks(manual=frozenset(f"m{i}" for i in range(1234)))
-    assert _overwrite_button_text(many) == "Overwrite all (1,234 hand-corrected)"
+    assert _replace_button_text(many.count) == "Replace all predictions"

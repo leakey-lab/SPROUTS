@@ -2,7 +2,7 @@
 
 The non-modal Retry prompt of Measure (``_offer_retry``) left one QMessageBox child on
 its long-lived parent (the main window) per prompt until the window closed. The modal
-"Masks already exist" prompt of Generate (``ask_overwrite_policy``) went only with its
+"Predictions already exist" prompt of Generate (``ask_overwrite_policy``) went only with its
 last Python reference (PyQt's ``exec()`` hands the box to Python); both are now deleted
 once answered. (The task progress hide timer: ``tests/test_shell_chrome_task_progress.py``;
 the F1 sheet and About dialog: ``tests/test_integration_main_window_wiring.py``.)
@@ -25,7 +25,7 @@ from app.gui.feedback import RecordingFeedback  # noqa: E402
 from app.handlers import mask_generation_handler as mgh  # noqa: E402
 from app.handlers.job_registry import JobRegistry  # noqa: E402
 from app.handlers.skeleton_handler import SkeletonHandler  # noqa: E402
-from app.inference.mask_origin import ExistingMasks, OverwritePolicy  # noqa: E402
+from app.inference.mask_origin import OverwritePolicy  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
 
 _Button = QMessageBox.StandardButton
@@ -78,16 +78,15 @@ def _answer_when_shown(role: QMessageBox.ButtonRole, answered: list) -> None:
 @pytest.mark.parametrize(
     ("role", "policy"),
     [
-        (_Role.AcceptRole, OverwritePolicy.KEEP_EXISTING),  # "Keep existing masks"
-        (_Role.DestructiveRole, OverwritePolicy.OVERWRITE_ALL),  # "Overwrite all"
+        (_Role.AcceptRole, OverwritePolicy.KEEP_EXISTING),  # "Keep predictions ..."
+        (_Role.DestructiveRole, OverwritePolicy.OVERWRITE_ALL),  # "Replace all predictions"
         (_Role.RejectRole, None),  # Cancel
     ],
 )
 def test_overwrite_prompt_is_freed_once_answered(window, role, policy):
-    existing = ExistingMasks(manual=frozenset({"a"}), model=frozenset({"b"}))
     answered = []
     _answer_when_shown(role, answered)
-    assert mgh.ask_overwrite_policy(window, existing, total=5) is policy
+    assert mgh.ask_overwrite_policy(window, 2, 5) is policy
     _flush_deferred_deletes()
     [box] = answered
     assert sip.isdeleted(box)  # freed although a reference to it is still held
