@@ -330,6 +330,11 @@ Five passes, not yet released:
     `jpeg_deblock` (W4-T5, O22).
   - About, the device chip's tooltip and, when OpenGL was not turned off by the user, one
     warning at start-up say whether the canvases draw with OpenGL (W2-T9, P6, O29).
+  - Trackpad pinch zoom on macOS and Linux (Wayland pointer gestures, X11 XInput 2.4): a
+    pinch zooms every canvas about the fingers, continuously, between the zoom-out limit
+    and 2000 %; a two-finger double tap (smart zoom) toggles fit and 100 %. Ignored while a
+    stroke is drawn. Windows precision touchpads keep zooming through Ctrl+wheel (WX-T3,
+    O21).
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
   data dictionary (`docs/DATA_DICTIONARY.md`: every output file, column, unit and

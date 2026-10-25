@@ -541,8 +541,10 @@ Follow-ups:
   `PgDn` costs 19.2 ms of GUI time instead of 78.9 ms at 2048 px in Correct (8.9 instead of
   17.9 ms at 640 px), and about 4.4 instead of 10.4 ms at 2048 px in the Library.
 - (Resolved 2026-09-30) Step zooms glide over 120 ms, anchored, and zooming out stops at
-  min(100 %, half the fit zoom). Still open: `QNativeGestureEvent` pinch (Windows touchpads
-  already pinch through Ctrl+wheel) and a bicubic refine when idle.
+  min(100 %, half the fit zoom). (Resolved 2026-10-25, WX-T3) Trackpad pinch on macOS and
+  Linux (`QNativeGestureEvent`) zooms about the fingers within the same limits; a smart
+  zoom (two-finger double tap) toggles fit and 100 %. Windows touchpads keep pinching
+  through Ctrl+wheel. A bicubic refine when idle is not planned (E6, table 3).
 - (Resolved 2026-09-30) Layer opacity and visibility are kept across restarts (QSettings,
   `app/gui/correct/layer_prefs.py`).
 - (Resolved 2026-09-30) The status chip shows "Image 12 / 40" (counting the rows the library

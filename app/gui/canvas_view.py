@@ -12,7 +12,9 @@ Zoom
     fractions from touchpads). Ctrl+0 fits, Ctrl+1 shows actual pixels, and
     Ctrl+= / Ctrl++ and Ctrl+- step along the ``ZOOM_STOPS`` ladder
     (:meth:`zoom_step`: round percentages, 80 % and 125 % around 100 %, integer
-    stops from 200 %, so exact-pixel layers show uniform blocks).
+    stops from 200 %, so exact-pixel layers show uniform blocks). A trackpad pinch
+    (macOS and Linux native gestures) zooms about the fingers, continuously, and a
+    smart zoom (two-finger double tap) toggles fit and 100 %.
 
     Step zooms (a wheel notch, Ctrl+= / Ctrl+-, the zoom buttons) glide over
     ``ZOOM_ANIMATION_MS`` when the platform animates its UI (see
@@ -63,6 +65,7 @@ from collections.abc import Callable
 from PyQt6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
+    QEvent,
     QMargins,
     QPoint,
     QPointF,
@@ -80,6 +83,7 @@ from PyQt6.QtGui import (
     QImage,
     QKeyEvent,
     QMouseEvent,
+    QNativeGestureEvent,
     QPainter,
     QTransform,
     QWheelEvent,
@@ -551,6 +555,46 @@ class CanvasViewMixin:
         if notches < 0:
             target = max(target, min(self.zoom_out_limit, zoom))
         self._step_zoom(target, anchor, glide=abs(notches) >= 1 or self.zoom_animating())
+
+    # ---------------------------------------------------------------- gestures
+    def viewportEvent(self, event: QEvent) -> bool:
+        """Native trackpad gestures (macOS, Linux), then the view's own handling."""
+        if event.type() == QEvent.Type.NativeGesture and self._native_gesture(event):
+            return True
+        return super().viewportEvent(event)
+
+    def _native_gesture(self, event: QNativeGestureEvent) -> bool:
+        """A pinch zooms about the fingers; a smart zoom toggles fit and 100 %.
+
+        Both are taken (and do nothing) while a tool drag is in progress; True when
+        ``event`` was taken. Windows precision touchpads send Ctrl+wheel instead.
+        """
+        kind = event.gestureType()
+        if kind == Qt.NativeGestureType.ZoomNativeGesture:
+            if not self.drawing and event.value():
+                self._pinch_zoom(event.value(), event.position())
+        elif kind == Qt.NativeGestureType.SmartZoomNativeGesture:  # two-finger double tap
+            if not self.drawing:
+                if abs(self.zoom_factor - 1.0) <= self.ZOOM_STOP_TOLERANCE:
+                    self.fit_to_view()
+                else:
+                    self.set_zoom(1.0, event.position())
+        else:
+            return False
+        event.accept()
+        return True
+
+    def _pinch_zoom(self, value: float, anchor: QPointF) -> None:
+        """A pinch step about ``anchor``: ``value`` is the zoom increment (0.25 = 25 % bigger).
+
+        From a glide's target, at once (the gesture is already smooth; ``set_zoom`` ends
+        the glide). Zooming out stops at :attr:`zoom_out_limit`, as :meth:`_wheel_zoom`.
+        """
+        zoom = self.target_zoom
+        target = zoom * max(1.0 + value, 0.05)
+        if value < 0:
+            target = max(target, min(self.zoom_out_limit, zoom))
+        self.set_zoom(target, anchor)
 
     # --------------------------------------------------------------- keyboard
     def keyPressEvent(self, event: QKeyEvent) -> None:
