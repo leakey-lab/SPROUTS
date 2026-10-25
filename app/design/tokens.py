@@ -82,8 +82,8 @@ PAD = 18
 UI = 14.5
 
 # --- fonts ---
-SANS = '"IBM Plex Sans", "Segoe UI", sans-serif'
-MONO = '"IBM Plex Mono", "Consolas", monospace'
+SANS = '"IBM Plex Sans", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans", "DejaVu Sans", sans-serif'
+MONO = '"IBM Plex Mono", "Consolas", "SF Mono", "Menlo", "DejaVu Sans Mono", "Liberation Mono", monospace'
 
 
 def rgba(hex_color: str, alpha: float) -> str:

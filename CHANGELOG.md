@@ -382,6 +382,9 @@ Five passes, not yet released:
   - Measure records each input's size, time and SHA-256 in `<csv>.inputs.json`; "changed
     since measured" compares content when the times differ and reports new and removed
     inputs; without a record it keeps the file-time rule (W2-T2, R5).
+  - Fonts: the sans and mono font chains fall back to the macOS and Linux system fonts
+    (SF Pro Text, Helvetica Neue, Noto Sans, DejaVu Sans; SF Mono, Menlo, DejaVu Sans Mono,
+    Liberation Mono) after IBM Plex and the Windows fonts (WX-T5, O21).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

@@ -97,3 +97,10 @@ def test_informational_chrome_text_passes_aa():
     }
     assert set(colours) == informational
     assert set(colours.values()) <= aa_tiers, colours
+
+
+def test_qss_font_families_are_the_token_chains():
+    qss = QSS_PATH.read_text(encoding="utf-8")
+    assert f"font: 10pt {tokens.SANS};" in qss
+    assert f"font: 9pt {tokens.MONO};" in qss
+    assert "DejaVu Sans Mono" in tokens.MONO and "Menlo" in tokens.MONO

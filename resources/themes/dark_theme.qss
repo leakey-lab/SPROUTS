@@ -22,7 +22,7 @@
 
 QWidget {
     color: #eceef5;
-    font: 10pt "IBM Plex Sans", "Segoe UI", sans-serif;
+    font: 10pt "IBM Plex Sans", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans", "DejaVu Sans", sans-serif;
     background-color: transparent;
 }
 
@@ -478,7 +478,7 @@ QStatusBar {
     background-color: #1b1c24;
     color: #8c90a6;                       /* --text-faint (AA): messages are information */
     border-top: 1px solid #2a2c39;
-    font: 9pt "IBM Plex Mono", "Consolas", monospace;
+    font: 9pt "IBM Plex Mono", "Consolas", "SF Mono", "Menlo", "DejaVu Sans Mono", "Liberation Mono", monospace;
 }
 
 QSplitter::handle {
