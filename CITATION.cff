@@ -3,13 +3,14 @@
 # pyproject.toml and codemeta.json (tests/test_fair_metadata.py checks them).
 #
 # TODO(owner) before the first release:
-#   - confirm the author list; add ORCIDs, affiliations and any co-authors;
+#   - add ORCIDs, affiliations, a contact e-mail and the funding statement (the author list
+#     follows RootQuantV2's CITATION.cff: names only);
 #   - add `date-released:` and the Zenodo DOI (`doi:` / `identifiers:`) when v3.0.0 is tagged.
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata from this file."
 type: software
 license: GPL-3.0-or-later
-title: "SPROUTS (Root-Mask-and-Skeletons)"
+title: "SPROUTS"
 abstract: >-
   SPROUTS is a desktop application (PyQt6 and PyTorch) for plant-root phenotyping
   from minirhizotron images. A ResNet-18-based segmentation network predicts root
@@ -21,7 +22,10 @@ abstract: >-
 authors:
   - given-names: Kinjalk
     family-names: Parth
-    alias: MasterKinjalk
+  - given-names: Sebastian
+    family-names: Varela
+  - given-names: Andrew D. B.
+    family-names: Leakey
 repository-code: "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
 url: "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
 keywords:

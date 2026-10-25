@@ -1,7 +1,7 @@
 {
   "@context": "https://w3id.org/codemeta/3.0",
   "@type": "SoftwareSourceCode",
-  "name": "SPROUTS (Root-Mask-and-Skeletons)",
+  "name": "SPROUTS",
   "alternateName": "root-mask-and-skeletons",
   "description": "Desktop application (PyQt6 and PyTorch) for plant-root phenotyping from minirhizotron images: model-predicted root masks and skeletons with hand-correction editors, calibrated root area (mm²) and root length (mm) exported as CSV, interactive dashboards, and a multi-class ground-truth tracing tool that exports segmentation training datasets.",
   "version": "3.0.0",
@@ -11,6 +11,16 @@
       "@type": "Person",
       "givenName": "Kinjalk",
       "familyName": "Parth"
+    },
+    {
+      "@type": "Person",
+      "givenName": "Sebastian",
+      "familyName": "Varela"
+    },
+    {
+      "@type": "Person",
+      "givenName": "Andrew D. B.",
+      "familyName": "Leakey"
     }
   ],
   "codeRepository": "https://github.com/leakey-lab/Root-Mask-and-Skeletons",

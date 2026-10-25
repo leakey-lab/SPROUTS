@@ -407,6 +407,8 @@ Five passes, not yet released:
     README documents installing on Linux x86_64 and Apple-silicon macOS. The status chip
     picks its name form by the width its label really gets (it could end 1 px over its
     budget) (WX-T6, O21).
+  - Citation record: authors Parth, Varela and Leakey; cited as "SPROUTS"; `CITATION.cff`
+    ships in the Windows bundle so About can show how to cite (W5-T3, O34).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

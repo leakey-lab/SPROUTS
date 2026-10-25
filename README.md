@@ -401,10 +401,10 @@ the Python wheel and validates `CITATION.cff`.
 ## How to cite
 
 Use GitHub's **Cite this repository** button (generated from
-[`CITATION.cff`](CITATION.cff)), or cite: Parth, K. *SPROUTS (Root-Mask-and-Skeletons)*,
-version 3.0.0, https://github.com/leakey-lab/Root-Mask-and-Skeletons. Please also state
-the model checkpoints you used (their SHA-256 is in [`docs/MODELS.md`](docs/MODELS.md)).
-A DOI will be added when the first release is archived.
+[`CITATION.cff`](CITATION.cff)), or cite: Parth, K., Varela, S., & Leakey, A. D. B.
+*SPROUTS*, version 3.0.0, https://github.com/leakey-lab/Root-Mask-and-Skeletons. Please
+also state the model checkpoints you used (their SHA-256 is in
+[`docs/MODELS.md`](docs/MODELS.md)). A DOI will be added when the first release is archived.
 
 ## License
 

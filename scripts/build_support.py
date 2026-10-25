@@ -60,6 +60,7 @@ REQUIRED_DATAS: tuple[tuple[str, str], ...] = (
     ("config/normalization_defaults.json", "config"),
     ("LICENSE", "."),
     ("THIRD_PARTY_NOTICES.md", "."),
+    ("CITATION.cff", "."),
 )
 
 

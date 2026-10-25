@@ -241,6 +241,12 @@ def test_build_script_exits_nonzero_when_pyinstaller_fails(bs, tmp_path, script)
     assert "failed" in (result.stdout + result.stderr).lower()
 
 
+def test_citation_is_bundled_at_the_bundle_root(bs):
+    assert dict(bs.REQUIRED_DATAS)["CITATION.cff"] == "."
+    resolved, _warnings = bs.resolve_datas(ROOT)
+    assert any(Path(s).name == "CITATION.cff" and d == "." for s, d in resolved)
+
+
 def test_licence_files_are_bundled_at_the_bundle_root(bs):
     datas = dict(bs.REQUIRED_DATAS)
     assert datas["LICENSE"] == "." and datas["THIRD_PARTY_NOTICES.md"] == "."

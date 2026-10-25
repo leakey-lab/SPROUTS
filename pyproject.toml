@@ -9,8 +9,8 @@ dynamic = ["version"]
 description = "SPROUTS: plant-root phenotyping from minirhizotron images (root masks, skeletons, correction editors, calibrated root length and area, dashboards)."
 readme = "README.md"
 requires-python = ">=3.10"
-# TODO(owner): add co-authors/maintainers and ORCIDs (kept in sync with CITATION.cff).
-authors = [{ name = "Kinjalk Parth" }]
+# TODO(owner): ORCIDs and maintainers (kept in sync with CITATION.cff).
+authors = [{ name = "Kinjalk Parth" }, { name = "Sebastian Varela" }, { name = "Andrew D. B. Leakey" }]
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "app/assets/licenses/*"]
 keywords = [

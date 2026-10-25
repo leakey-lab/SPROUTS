@@ -54,6 +54,12 @@ def test_citation_text_from_cff(tmp_path):
     )
 
 
+def test_citation_text_names_all_three_authors():
+    text = about_dialog.citation_text(str(about_dialog.PROJECT_ROOT + "/CITATION.cff"))
+    assert text.startswith("Parth, K., Varela, S., & Leakey, A. D. B.")
+    assert "SPROUTS (Version 3.0.0)" in text
+
+
 def test_citation_text_without_date_or_doi_uses_nd_and_url(tmp_path):
     path = tmp_path / "CITATION.cff"
     path.write_text(

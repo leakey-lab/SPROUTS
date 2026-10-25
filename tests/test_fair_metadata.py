@@ -52,6 +52,26 @@ def test_citation_cff_has_the_fields_github_needs_to_cite_it(cff):
         assert author.get("family-names") or author.get("name"), author
 
 
+def test_the_three_authors_are_in_the_agreed_order(cff):
+    assert [a["family-names"] for a in cff["authors"]] == ["Parth", "Varela", "Leakey"]
+    assert cff["title"] == "SPROUTS"
+
+
+def test_readme_cites_the_current_version_and_every_author(cff):
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = text.split("## How to cite", 1)[1].split("\n## ", 1)[0]
+    match = re.search(r"version (\d+\.\d+\.\d+)", section)
+    assert match and match.group(1) == app.__version__
+    for author in cff["authors"]:
+        assert author["family-names"] in section
+
+
+def test_orcids_have_the_registry_form_when_present(cff):
+    for author in cff["authors"]:
+        if "orcid" in author:
+            assert re.fullmatch(r"https://orcid\.org/\d{4}-\d{4}-\d{4}-\d{3}[\dX]", author["orcid"])
+
+
 def test_version_is_the_package_version_everywhere(cff, codemeta):
     assert cff["version"] == codemeta["version"] == app.__version__
 
