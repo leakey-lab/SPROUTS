@@ -12,10 +12,12 @@ look of a QGraphicsDropShadowEffect blitted from a cache).
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 
 from PyQt6.QtCore import QEvent, QPoint, Qt, pyqtSignal
+from PyQt6.QtGui import QFontMetrics, QFontMetricsF
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -308,6 +310,14 @@ _CAPTURE = re.compile(
 )
 
 
+def _label_advance(metrics: QFontMetrics, text: str) -> int:
+    """The width a label gives ``text``: its fractional advance rounded up. A font with
+    fractional advances (DejaVu on Linux) makes ``horizontalAdvance`` round to the nearest
+    pixel, so when the fraction is under .5 a name chosen by it ends one pixel wider than the
+    budget it was chosen for."""
+    return math.ceil(QFontMetricsF(metrics).horizontalAdvance(text))
+
+
 def name_forms(name: str) -> tuple[str, ...]:
     """``name`` and shorter forms of it that keep what identifies a capture, longest first.
 
@@ -517,7 +527,7 @@ class StatusChip(CornerPanel):
             state = self.state_label
             free = inner - (state.sizeHint().width() + spacing if state.text() else 0)
             # The name keeps its shortest telling form; the position takes what is left.
-            kept = min(metrics.horizontalAdvance(self._forms[-1]), self._max_name_width)
+            kept = min(_label_advance(metrics, self._forms[-1]), self._max_name_width)
             position = self._fit_position(free - max(kept, self.MIN_NAME_WIDTH) - spacing)
             used = self._position_width(position) + spacing if position else 0
             name_width = max(self.MIN_NAME_WIDTH, min(name_width, free - used))
@@ -543,7 +553,7 @@ class StatusChip(CornerPanel):
         """The longest form of the name that fits ``width`` px, else the shortest one
         elided (at its end for a camera name, in the middle for any other name)."""
         for form in self._forms:
-            if metrics.horizontalAdvance(form) <= width:
+            if _label_advance(metrics, form) <= width:
                 return form
         mode = Qt.TextElideMode.ElideRight if len(self._forms) > 1 else Qt.TextElideMode.ElideMiddle
         return metrics.elidedText(self._forms[-1], mode, width)

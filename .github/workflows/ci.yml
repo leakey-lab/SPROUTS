@@ -12,11 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The app ships for Windows; Linux keeps the suite portable.
-        os: [ubuntu-latest, windows-latest]
+        # The app runs on Windows, Linux and macOS (O21); macOS runs on Apple silicon, CPU only.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     defaults:
       run:
-        shell: bash  # every step stops at its first failing command, on both OSes
+        shell: bash  # every step stops at its first failing command, on all three OSes
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -47,7 +47,9 @@ jobs:
         run: ruff check .
 
       - name: Test suite
-        run: pytest -q
+        # Remove after the first green macOS run (WX-T6 step 8): the one OS not run locally.
+        continue-on-error: ${{ matrix.os == 'macos-latest' }}
+        run: pytest -q -rfE
 
   package:
     name: wheel builds and installs

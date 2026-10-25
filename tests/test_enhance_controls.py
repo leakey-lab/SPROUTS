@@ -14,7 +14,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QGuiApplication, QImage  # noqa: E402
+from PyQt6.QtGui import QFontInfo, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -138,21 +138,27 @@ def test_every_button_fits_inside_the_264px_popover_with_the_app_theme(app):
                 if button.isVisible():
                     assert button.width() >= button.sizeHint().width(), button.text()
                     assert button.toolTip(), button.text()
-        # The JPEG box: never clipped. The headless (offscreen) platform has no real fonts and
-        # draws text far wider than Windows does, so there the popover may grow past 264 px
-        # (UI-07: it is "wider when the content needs more"); with real fonts it stays 264.
+        # The JPEG box: never clipped. The Windows offscreen platform resolves no font and
+        # draws text far wider than a real one, so there the popover may grow past 264 px
+        # (UI-07: it is "wider when the content needs more"); with a resolved font it stays 264.
         controls.set_source_path("a.jpg")
         QApplication.processEvents()
         check = controls.deblock_check
         assert check.isVisible() and check.width() >= check.sizeHint().width()
-        if QGuiApplication.platformName() != "offscreen":
+        if QFontInfo(check.font()).family():  # a font was resolved: the widths are real ones
             assert popover.width() == 264
-        # Font-independent: the new label needs no more width than text already in the popover.
-        fm = check.fontMetrics()
-        existing = [controls.method_combo.itemText(i) for i in range(controls.method_combo.count())]
-        for widget_type in (QLabel, QPushButton, QCheckBox):
-            existing += [w.text() for w in controls.findChildren(widget_type) if w is not check]
-        assert fm.horizontalAdvance(check.text()) <= max(fm.horizontalAdvance(t) for t in existing)
+        else:
+            # No font at all (Windows offscreen): the widths are made up, so only compare the new
+            # label with the text already in the popover.
+            fm = check.fontMetrics()
+            existing = [
+                controls.method_combo.itemText(i) for i in range(controls.method_combo.count())
+            ]
+            for widget_type in (QLabel, QPushButton, QCheckBox):
+                existing += [w.text() for w in controls.findChildren(widget_type) if w is not check]
+            assert fm.horizontalAdvance(check.text()) <= max(
+                fm.horizontalAdvance(t) for t in existing
+            )
     finally:
         host.close()
         app.setStyleSheet(previous)

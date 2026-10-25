@@ -4,12 +4,14 @@ shares the chip's row, and middle elision dropped the L-number and the date."""
 
 from __future__ import annotations
 
+import math
 import os
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtGui import QFontMetricsF  # noqa: E402
 from PyQt6.QtWidgets import QWidget  # noqa: E402
 
 from app.gui.widgets.overlays import StatusChip, name_forms  # noqa: E402
@@ -90,8 +92,11 @@ def budget(chip: StatusChip, name_px: int, position: str = "") -> int:
 
 
 def advance(chip: StatusChip, text: str) -> int:
+    """The width the label gives ``text``: its fractional advance rounded up (a font with
+    fractional advances, DejaVu on Linux, makes ``horizontalAdvance`` round to the nearest
+    pixel, which is below the label's width when the fraction is under .5)."""
     chip.file_label.ensurePolished()
-    return chip.file_label.fontMetrics().horizontalAdvance(text)
+    return math.ceil(QFontMetricsF(chip.file_label.font()).horizontalAdvance(text))
 
 
 def test_a_chip_with_room_shows_the_whole_name(host):

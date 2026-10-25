@@ -293,7 +293,8 @@ its CUDA build, e.g. `2.8.0+cu128`).
 ## Logs
 
 `app.log` (UTF-8, rotating) in the per-user log folder (`app/user_paths.py`; on Windows
-`%LOCALAPPDATA%\SPROUTS\Logs`). The first line of each session gives the SPROUTS version,
+`%LOCALAPPDATA%\SPROUTS\Logs`, on Linux `~/.local/state/sprouts/log`, on macOS
+`~/Library/Logs/SPROUTS`). The first line of each session gives the SPROUTS version,
 Python and OS.
 
 ## Open questions for the owner

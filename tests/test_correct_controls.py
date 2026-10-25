@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import traceback
+from collections import Counter
 
 import pytest
 
@@ -208,6 +209,35 @@ def opaque_colours(image: QImage) -> set[str]:
         for x in range(image.width())
         if QColor.fromRgba(image.pixel(x, y)).alpha() == 255
     }
+
+
+def text_colours(image: QImage, min_alpha: int = 128, tolerance: int = 2) -> set[str]:
+    """The colours the text is drawn in. Antialiased glyphs of a small font (DejaVu on Linux)
+    have no fully opaque pixel, so every pixel at least ``min_alpha`` covered counts. The
+    grab is premultiplied; un-premultiplying a partly covered pixel is off by a level or two
+    (the 2 levels ``drawn_in`` allows), so colours within ``tolerance`` levels of a more
+    frequent one count as it."""
+    image = image.convertToFormat(QImage.Format.Format_ARGB32)
+    seen = Counter(
+        QColor(image.pixel(x, y)).name()
+        for y in range(image.height())
+        for x in range(image.width())
+        if QColor.fromRgba(image.pixel(x, y)).alpha() >= min_alpha
+    )
+    found: list[QColor] = []
+    for name, _count in seen.most_common():
+        colour = QColor(name)
+        if not any(
+            max(
+                abs(colour.red() - c.red()),
+                abs(colour.green() - c.green()),
+                abs(colour.blue() - c.blue()),
+            )
+            <= tolerance
+            for c in found
+        ):
+            found.append(colour)
+    return {colour.name() for colour in found}
 
 
 def icon_colours(button) -> set[str]:
@@ -787,7 +817,7 @@ def test_set_status_shows_the_label_else_the_state_name_in_the_chip_colour(
 
     assert row.state_label.text() == text
     assert row.state_label.toolTip() == row.state_dot.toolTip() == status.tooltip
-    assert opaque_colours(row.state_label.grab().toImage()) == {colour}
+    assert text_colours(row.state_label.grab().toImage()) == {colour}
     assert opaque_colours(row.state_dot.grab().toImage()) == {colour}
 
 

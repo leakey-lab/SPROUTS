@@ -11,6 +11,7 @@ tooltip. The item texts themselves (search, accessibility, tests) are unchanged.
 
 from __future__ import annotations
 
+import math
 import os
 
 import pytest
@@ -18,7 +19,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, Qt  # noqa: E402
-from PyQt6.QtGui import QHelpEvent  # noqa: E402
+from PyQt6.QtGui import QFontMetricsF, QHelpEvent  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QStyle,
@@ -196,7 +197,14 @@ def _name_label(app, name: str, width: int):
 def test_the_name_cell_falls_back_to_tube_depth_date_and_time(app):
     forms = stem_forms(STEM)
     probe = _name_label(app, STEM, 2000)
-    advance = probe.fontMetrics().horizontalAdvance
+    # The label's own font; the fractional advance rounded up, as a font with fractional
+    # advances (DejaVu on Linux) elides a text that exactly fills its rounded advance when the
+    # fraction is under .5.
+    metrics = QFontMetricsF(probe.font())
+
+    def advance(text: str) -> int:
+        return math.ceil(metrics.horizontalAdvance(text))
+
     assert probe._elided() == STEM and probe.toolTip() == ""  # room for the whole name
     probe.deleteLater()
     for i, form in enumerate(forms[1:], start=1):

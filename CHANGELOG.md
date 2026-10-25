@@ -402,6 +402,11 @@ Five passes, not yet released:
   - Fonts: the sans and mono font chains fall back to the macOS and Linux system fonts
     (SF Pro Text, Helvetica Neue, Noto Sans, DejaVu Sans; SF Mono, Menlo, DejaVu Sans Mono,
     Liberation Mono) after IBM Plex and the Windows fonts (WX-T5, O21).
+  - CI also runs on macOS (Apple silicon; the test step may fail until its first green run);
+    the suite passes on Linux (the font-dependent checks now use the real font's widths);
+    README documents installing on Linux x86_64 and Apple-silicon macOS. The status chip
+    picks its name form by the width its label really gets (it could end 1 px over its
+    budget) (WX-T6, O21).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

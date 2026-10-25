@@ -25,9 +25,11 @@ column in [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 
 ## Requirements
 
-- Windows 10/11 (the app is developed and shipped for Windows; the test suite also runs
-  on Linux), Python 3.10.
-- An NVIDIA GPU is recommended for inference; CPU works but is slow.
+- Windows 10/11, Linux x86_64 (glibc 2.34 or newer: Ubuntu 22.04+, Debian 12+) or macOS 13+
+  on Apple silicon only; Intel Macs are not supported (PyTorch publishes no Intel macOS
+  wheels). Python 3.10.
+- An NVIDIA GPU is used on Windows and Linux (CUDA 12.8 build); CPU works everywhere and is
+  the only mode on macOS, but is slow.
 
 ## Installation
 
@@ -54,6 +56,46 @@ Results published so far were produced with a PyTorch nightly
 (`torch 2.8.0.dev20250325+cu128`) that is no longer downloadable; torch 2.8.0 above is
 the matching stable release. GPU results can differ from another build or from CPU in
 the last decimal of the CSVs (see `docs/MODELS.md`).
+
+### Installation (Linux / macOS)
+
+Same order: PyTorch first, then the application dependencies.
+
+```bash
+# 0. Python 3.10 and a virtual environment, by system:
+#    Ubuntu 22.04:         sudo apt install python3.10 python3.10-venv
+#                          python3.10 -m venv venv
+#    Ubuntu 24.04 / Debian 12 (no python3.10 package): with uv (https://docs.astral.sh/uv/)
+#                          uv python install 3.10 && uv venv -p 3.10 venv
+#    macOS (Homebrew):     brew install python@3.10
+#                          python3.10 -m venv venv
+source venv/bin/activate
+
+# 1. PyTorch, one of:
+#    Linux + NVIDIA GPU (CUDA 12.8 build; driver 570 or newer):
+pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+#    Linux, CPU only (without --index-url pip pulls about 3 GB of CUDA wheels):
+pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+#    macOS (Apple silicon, CPU):
+pip install torch==2.8.0 torchvision==0.23.0
+
+# 2. Application dependencies, then optionally the development tooling
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+
+# 3. Linux only: system libraries (Debian / Ubuntu package names)
+sudo apt install libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+     libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
+     libdbus-1-3 libnss3 libfontconfig1
+#    Minimal / server images also need these for the embedded browser (QtWebEngine):
+#    sudo apt install libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libasound2
+
+python main.py
+```
+
+Troubleshooting: as root or in a container the app sets `QTWEBENGINE_DISABLE_SANDBOX=1`
+itself; on Ubuntu 24.04 with restricted user namespaces
+(`kernel.apparmor_restrict_unprivileged_userns=1`) set it yourself before starting the app.
 
 ### Model weights
 
@@ -94,9 +136,11 @@ pip install -e .
 sprouts
 ```
 
-Logs go to `%LOCALAPPDATA%\SPROUTS\Logs\app.log` (set `SPROUTS_LOG_DIR` to use another
-folder). A native crash writes the stacks of every thread to `fault.log` next to it; an
-unexpected Python error is logged and shown in a dialog instead of closing the app.
+Logs go to `app.log` in `%LOCALAPPDATA%\SPROUTS\Logs` (Windows),
+`~/.local/state/sprouts/log` (Linux) or `~/Library/Logs/SPROUTS` (macOS); set
+`SPROUTS_LOG_DIR` to use another folder. A native crash writes the stacks of every thread
+to `fault.log` next to it; an unexpected Python error is logged and shown in a dialog
+instead of closing the app.
 
 Set `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0` to draw the canvases without OpenGL; About (row
 `Canvas`) and the device chip's tooltip say which path is active, and a warning appears at
@@ -351,7 +395,7 @@ $env:QT_QPA_PLATFORM='offscreen'; pytest  # Windows PowerShell
 ```
 
 The suite pins the scientific calibration (length/area), skeleton vectorization,
-CSV schema, and imports of every app module. CI runs it on Windows and Linux, builds
+CSV schema, and imports of every app module. CI runs it on Windows, Linux and macOS, builds
 the Python wheel and validates `CITATION.cff`.
 
 ## How to cite

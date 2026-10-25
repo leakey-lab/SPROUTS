@@ -344,7 +344,11 @@ def test_the_torch_warmup_puts_the_runtime_on_the_chip(make_window, warmups, mon
     assert wait(lambda: refreshed)
 
 
-def test_a_failed_torch_warmup_says_why_on_the_chip(make_window, warmups):
+def test_a_failed_torch_warmup_says_why_on_the_chip(make_window, warmups, monkeypatch):
+    # The chip names a missing model before the device; checkpoints/ is not committed, so
+    # pin both model files present (any existing file) and the chip depends on nothing local.
+    monkeypatch.setattr("app.inference.runtime.mask_weights_path", lambda: __file__)
+    monkeypatch.setattr("app.inference.runtime.skeleton_weights_path", lambda: __file__)
     warmups.results[warmup.TORCH] = "DLL load failed while importing _C"
     window = make_window(warm_up=True)
     window.on_stage_changed("Generate")

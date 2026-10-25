@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from app.gui.metrics_bar import MetricsBar  # noqa: E402
+from app.gui.metrics_bar import MetricsBar, _ElidedLabel  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])  # keep a reference
 
@@ -30,8 +30,10 @@ def test_long_name_does_not_widen_the_bar_minimum():
     bar = _bar_with_everything()
     short = MetricsBar()
     short.set_metrics(length=123.45, area=67.89, status="Skeleton ready", name="img")
-    # The long name may cost a little (the elided stub) but never its full width.
-    assert bar.minimumSizeHint().width() <= short.minimumSizeHint().width() + 40
+    # The long name may cost its elided stub (the label's MIN_WIDTH in place of the short
+    # name's own width, whatever the font) but never its full width.
+    stub = max(0, _ElidedLabel.MIN_WIDTH - short._name_value.minimumSizeHint().width())
+    assert bar.minimumSizeHint().width() <= short.minimumSizeHint().width() + stub
 
 
 def test_name_keeps_full_text_and_tooltip_when_elided():
