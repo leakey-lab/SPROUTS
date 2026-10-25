@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import posixpath
 import re
 
 import pytest
 
-from app.naming import ImageName, parse_image_name
+from app.naming import ImageName, image_stem, parse_image_name
 
 REAL_DATA = r"D:/2024 EF image data"
 
@@ -103,6 +104,15 @@ def test_file_names_and_paths_are_parsed_by_stem():
     # The time token right before the extension is found (the legacy regex,
     # run on "..._111618.jpg", missed it).
     assert parse_image_name("EF_T1_L2_2024.01.01_111618.jpg").time == "11:16:18"
+
+
+def test_windows_paths_split_on_every_os(monkeypatch):
+    # Force POSIX path semantics so this fails on Windows too if the parser leans on os.path.
+    monkeypatch.setattr(os.path, "basename", posixpath.basename)
+    monkeypatch.setattr(os.path, "normpath", posixpath.normpath)
+    assert image_stem("C:\\data\\run 1\\24EFCAM1_T001_L044.png") == "24EFCAM1_T001_L044"
+    assert image_stem("/data/T001_L044.png") == "T001_L044"
+    assert image_stem("C:\\data\\run 1\\a.jpg\\") == "a"
 
 
 def test_image_name_is_frozen():

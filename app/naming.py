@@ -54,7 +54,9 @@ LEGACY_IMAGE_EXTENSIONS: tuple[str, ...] = (".bmp", ".ppm", ".tif", ".tiff")
 # legacy ones. Anything else after the last dot (e.g. ".18_111618_001_SMM" in a bare
 # stem ending in a dotted date) is part of the name.
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", *LEGACY_IMAGE_EXTENSIONS})
-_SEPARATORS = tuple({"/", os.sep, os.altsep or "/"})
+# Both separators on every OS: a Windows path in a CSV cell is split on Linux / macOS too.
+_SEPARATORS = ("/", "\\")
+_SPLIT = re.compile(r"[/\\]")
 
 
 @dataclass(frozen=True)
@@ -87,7 +89,7 @@ def image_stem(path_or_name: str | os.PathLike[str]) -> str:
     """
     name = os.fspath(path_or_name)
     if any(sep in name for sep in _SEPARATORS):
-        name = os.path.basename(os.path.normpath(name))
+        name = _SPLIT.split(name.rstrip("/\\"))[-1]
     dot = name.rfind(".")
     if dot > 0 and name[dot:].lower() in _IMAGE_EXTENSIONS and name[:dot].lstrip("."):
         return name[:dot]
