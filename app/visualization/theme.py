@@ -82,6 +82,24 @@ COLORWAY = [
     "#9aa5ff",  # periwinkle
 ]
 
+# One blue ramp for measurement dates: oldest darkest, newest lightest, one hue, every stop
+# at least 3:1 on BG_2 and clear of the mask green, skeleton orange and selection purple.
+DATE_RAMP = (
+    "#127abe",
+    "#2c84c4",
+    "#3e8dcb",
+    "#4f97d1",
+    "#5ea1d8",
+    "#6cabde",
+    "#7bb4e5",
+    "#89beeb",
+    "#97c8f2",
+    "#a6d2f8",
+    "#b4dcff",
+    "#c8e5ff",
+    "#dbeefe",
+)
+
 # Sequential scale for ordered data (depth profiles). Plasma is perceptually
 # uniform — keep it as the ordered default.
 SEQUENTIAL = "Plasma"
@@ -278,6 +296,31 @@ def hover(title: str, rows: list[tuple[str, str]], *, with_extra: bool = True) -
 def color(index: int) -> str:
     """Categorical colour by series index (wraps the colorway)."""
     return COLORWAY[index % len(COLORWAY)]
+
+
+def date_colors(n: int) -> list[str]:
+    """``n`` colours on :data:`DATE_RAMP`, oldest date darkest, newest lightest.
+
+    Up to 13 dates pick evenly spaced stops (``n == 13`` is the whole ramp); more are
+    interpolated linearly in sRGB between the 13 stops. A date's colour is its place among
+    ALL dates of the trial, so it is the same in every view and for every tube.
+    """
+    if n <= 0:
+        return []
+    last = len(DATE_RAMP) - 1
+    if n <= len(DATE_RAMP):
+        return [DATE_RAMP[round(i * last / (n - 1))] if n > 1 else DATE_RAMP[0] for i in range(n)]
+    stops = [tuple(int(stop[i : i + 2], 16) for i in (1, 3, 5)) for stop in DATE_RAMP]
+    colours = []
+    for i in range(n):
+        position = i * last / (n - 1)
+        low = min(int(position), last - 1)
+        fraction = position - low
+        rgb = (
+            round(a + (b - a) * fraction) for a, b in zip(stops[low], stops[low + 1], strict=True)
+        )
+        colours.append("#" + "".join(f"{channel:02x}" for channel in rgb))
+    return colours
 
 
 def margin_right(show_legend: bool) -> int:

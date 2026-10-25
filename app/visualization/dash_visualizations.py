@@ -21,7 +21,7 @@ from .figure_memo import FigureMemo
 
 logger = logging.getLogger(__name__)
 
-#: Depth positions per point in the Growth Lines view (L1-L10, L11-L20, ...).
+#: Depth positions per point in the Depth Profile view (L1-L10, L11-L20, ...).
 GROWTH_LINES_INTERVAL = 10
 #: Figures kept per dashboard instance.
 FIGURE_MEMO_SIZE = 16
@@ -117,7 +117,7 @@ class DashVisualizations:
         """
         return self.data_cache.get_tube_date_availability()
 
-    # -- Growth Lines -----------------------------------------------------
+    # -- Depth Profile ----------------------------------------------------
     def show_growth_lines(self, selected_tube: int) -> go.Figure:
         """Generate growth lines figure for selected tube."""
         try:
@@ -135,7 +135,9 @@ class DashVisualizations:
         all_positions: set[int] = set()
         max_length = 0
 
-        for i, date in enumerate(self.data_cache.dates):
+        dates = self.data_cache.dates
+        ramp = theme.date_colors(len(dates))  # the date's place among ALL dates of the trial
+        for date, colour in zip(dates, ramp, strict=True):
             table = self.data_cache.get_interval_data(tube, date, size)
             if not table:
                 continue
@@ -161,7 +163,7 @@ class DashVisualizations:
                     mode="lines+markers",
                     name=date.strftime("%Y-%m-%d"),
                     line={
-                        "color": theme.color(i),
+                        "color": colour,
                         "width": 2,
                         "shape": "spline",
                         "smoothing": 0.3,
@@ -175,10 +177,10 @@ class DashVisualizations:
 
         fig = go.Figure(data=traces)
         fig.update_layout(
-            title_text=f"Root Growth - Tube {int(tube)}",
+            title_text=f"Root {label} Depth Profile - Tube {int(tube)}",
             xaxis_title_text=f"Root {label} ({unit})",
             yaxis_title_text="Position (L)",
-            legend_title_text="Measurement Dates",
+            legend_title_text="Measurement date",
             hovermode="closest",
         )
         fig.update_xaxes(
@@ -207,7 +209,7 @@ class DashVisualizations:
 
     @staticmethod
     def _interval_hover(pos: int, date_str: str, stats: dict, unit: str, has_image: bool) -> str:
-        """Hover text of one Growth Lines point (a measured depth interval)."""
+        """Hover text of one Depth Profile point (a measured depth interval)."""
         std = stats["std"]
         std_text = "n/a (one image)" if math.isnan(std) else f"+/-{std:.2f}"
         start = pos - GROWTH_LINES_INTERVAL + 1
@@ -279,7 +281,7 @@ class DashVisualizations:
                     hovertemplate=theme.hover(
                         f"Tube {int(tube)}",
                         [
-                            ("Date", "%{x|%b %d, %Y}"),
+                            ("Date", "%{x|%Y-%m-%d}"),
                             (f"Total {label}", f"%{{y:.2f}} {unit}"),
                         ],
                     ),
@@ -287,7 +289,7 @@ class DashVisualizations:
             )
 
         layout = {
-            "title": {"text": "Root Growth Over Time"},
+            "title": {"text": f"Root {label} Growth Over Time"},
             "xaxis": {"title": {"text": "Date"}},
             "yaxis": {"title": {"text": f"Total {label} ({unit})"}},
             "showlegend": show_legend,
@@ -329,7 +331,7 @@ class DashVisualizations:
                     hovertemplate=theme.hover(
                         "Field Variance Range",
                         [
-                            ("Date", "%{x|%b %d, %Y}"),
+                            ("Date", "%{x|%Y-%m-%d}"),
                             ("Range", "+-1 Standard Deviation"),
                         ],
                     ),
@@ -347,7 +349,7 @@ class DashVisualizations:
                 hovertemplate=theme.hover(
                     "Field Average",
                     [
-                        ("Date", "%{x|%b %d, %Y}"),
+                        ("Date", "%{x|%Y-%m-%d}"),
                         (f"Avg {label}", f"%{{y:.2f}} {unit}"),
                         ("Std Dev", f"+/-%{{customdata[0]:.2f}} {unit}"),
                         ("Tubes", "%{customdata[1]:.0f}"),
@@ -358,7 +360,7 @@ class DashVisualizations:
         )
         return traces
 
-    # -- Stacked Bar ------------------------------------------------------
+    # -- Totals by Tube ---------------------------------------------------
     def create_stacked_bar_chart(self) -> go.Figure:
         """Create an optimized stacked bar chart."""
         try:
@@ -378,18 +380,19 @@ class DashVisualizations:
             grid = self.data_cache.tube_date_groups.unstack("Date").reindex(
                 index=tubes, columns=dates
             )
-            for date in dates:
+            for date, colour in zip(dates, theme.date_colors(len(dates)), strict=True):
                 values = grid[date].tolist()
                 traces.append(
                     go.Bar(
                         name=date.strftime("%Y-%m-%d"),
+                        marker_color=colour,
                         x=x,
                         y=values,
                         **theme.bar_labels(theme.value_labels(values), len(tubes)),
                         hovertemplate=theme.hover(
                             "%{x}",
                             [
-                                ("Date", date.strftime("%b %d, %Y")),
+                                ("Date", date.strftime("%Y-%m-%d")),
                                 (label, f"%{{y:.2f}} {unit}"),
                             ],
                         ),
@@ -399,15 +402,15 @@ class DashVisualizations:
         fig = go.Figure(data=traces)
         fig.update_layout(
             barmode="stack",
-            title_text=f"Root {label} Growth by Tube and Date",
+            title_text=f"Root {label} by Tube and Date",
             xaxis_title_text="Tube",
             yaxis_title_text=f"Total {label} ({unit})",
-            legend_title_text="Measurement Date",
+            legend_title_text="Measurement date",
             hovermode="x unified",
         )
         return fig
 
-    # -- Faceted Depth Profile --------------------------------------------
+    # -- Depth Profile Grid -----------------------------------------------
     def create_faceted_depth_profile(
         self, selected_tubes: list[int], selected_dates: list[pd.Timestamp] | None = None
     ) -> go.Figure:

@@ -1,5 +1,5 @@
 """
-Faceted depth profile: pure data preparation + one-pass figure assembly.
+Depth Profile Grid (faceted depth profile): pure data preparation + one-pass figure assembly.
 
 ``build_faceted_profile`` turns DataCache interval tables into plain data (no
 Plotly): one :class:`FacetCell` per (date row, tube column), each holding the
@@ -33,7 +33,7 @@ from . import theme
 INTERVAL_SIZE = 10
 #: Most tube columns the grid is designed for.
 MAX_TUBES = 6
-TITLE = "Faceted Depth Profile - Field Average (Left) vs Individual Tube (Right)"
+TITLE = "Depth Profile Grid - Field Average (Left) vs Tube (Right)"
 DEPTH_AXIS_TITLE = "Vertical Depth (cm)"
 
 

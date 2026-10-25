@@ -22,10 +22,10 @@ LENGTH_SHELL = ShellSpec(
     title="Root Length — trial overview",
     controls_label="Tube & date range",
     views=(
-        ViewOption("Stacked Bar View", "stacked"),
+        ViewOption("Totals by Tube", "stacked"),
         ViewOption("Growth Over Time", "time", has_controls=True),
-        ViewOption("Growth Lines", "lines", has_controls=True),
-        ViewOption("Faceted Depth Profile", "faceted", has_controls=True),
+        ViewOption("Depth Profile", "lines", has_controls=True),
+        ViewOption("Depth Profile Grid", "faceted", has_controls=True),
     ),
     plot_filename="root_length_plot",
     tube_view="lines",
@@ -238,11 +238,11 @@ def viz_options_card() -> dbc.Card:
 
 
 def faceted_options_card(tube_options: list, date_options: list) -> dbc.Card:
-    """Date rows and tube columns of the Faceted Depth Profile view."""
+    """Date rows and tube columns of the Depth Profile Grid view."""
     return dbc.Card(
         dbc.CardBody(
             [
-                html.H4("Faceted View Options", className="card-title viz-card-title"),
+                html.H4("Depth Profile Grid Options", className="card-title viz-card-title"),
                 dbc.Row(
                     className="gx-3",
                     children=[

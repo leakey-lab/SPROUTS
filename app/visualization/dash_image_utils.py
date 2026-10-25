@@ -157,7 +157,7 @@ class ImageIndex(Mapping[ImageKey, str]):
         """Parse the names on a daemon thread now instead of on first use.
 
         A dashboard calls this once it is built: the names are parsed while its
-        page loads (the Python side is idle then) and the first Growth Lines view
+        page loads (the Python side is idle then) and the first Depth Profile view
         no longer waits for them (~95 ms for 47k names). A lookup meanwhile waits
         for the same parse (one lock), never runs a second one.
         """

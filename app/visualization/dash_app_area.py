@@ -53,9 +53,9 @@ AREA_SHELL = ShellSpec(
     title="Root Area — trial overview",
     controls_label="Tube selection",
     views=(
-        ViewOption("Stacked Bar View", "stacked"),
+        ViewOption("Totals by Tube", "stacked"),
         ViewOption("Growth Over Time", "time"),
-        ViewOption("Area Profile by Position", "profile", has_controls=True),
+        ViewOption("Depth Profile", "profile", has_controls=True),
     ),
     plot_filename="root_area_plot",
     tube_view="profile",
@@ -280,13 +280,15 @@ class DashAppArea:
         # NaN (no bar, left out of the hover) where a tube was not measured.
         pivot = cache.tube_date_groups.unstack("Date").reindex(index=tubes, columns=cache.dates)
         labels = [f"Tube {int(tube)}" for tube in tubes]
+        ramp = theme.date_colors(len(cache.dates))
         traces = []
-        for date in cache.dates:
+        for date, colour in zip(cache.dates, ramp, strict=True):
             values = pivot[date].to_numpy()
             day = date.strftime("%Y-%m-%d")
             traces.append(
                 go.Bar(
                     name=day,
+                    marker_color=colour,
                     x=labels,
                     y=values,
                     **theme.bar_labels(theme.value_labels(values), len(tubes)),
@@ -296,10 +298,10 @@ class DashAppArea:
         fig = go.Figure(data=traces)
         fig.update_layout(
             barmode="stack",
-            title_text="Root Area Growth by Tube and Date",
+            title_text="Root Area by Tube and Date",
             xaxis_title_text="Tube",
             yaxis_title_text="Total Area (mm²)",
-            legend_title_text="Measurement Date",
+            legend_title_text="Measurement date",
             hovermode="x unified",
         )
         return fig
@@ -316,14 +318,17 @@ class DashAppArea:
         positions = sorted(means["Position"].unique())
         # grouped: every date's bar of a position stands side by side
         bars = len(positions) * means["Date"].nunique()
+        # a date's colour is its place among ALL dates of the trial, not among this tube's
+        days = [date.strftime("%Y-%m-%d") for date in self.data_cache.dates]
+        ramp = theme.date_colors(len(days))
         fig = go.Figure()
-        for index, (day, rows) in enumerate(means.groupby("Date", sort=True)):
+        for day, rows in means.groupby("Date", sort=True):
             fig.add_trace(
                 go.Bar(
                     x=[f"L{int(pos)}" for pos in rows["Position"]],
                     y=rows[value],
                     name=day,
-                    marker_color=theme.color(index),
+                    marker_color=ramp[days.index(day)],
                     **theme.bar_labels(rows[value].round(2), bars),
                     hovertemplate=theme.hover(
                         "Position: %{x}", [("Area", "%{y:.2f} mm²"), ("Date", day)]
@@ -331,10 +336,10 @@ class DashAppArea:
                 )
             )
         fig.update_layout(
-            title_text=f"Root Area Profile - Tube {int(tube)}",
-            xaxis_title_text="Position",
+            title_text=f"Root Area Depth Profile - Tube {int(tube)}",
+            xaxis_title_text="Position (L)",
             yaxis_title_text="Root Area (mm²)",
-            legend_title_text="Measurement Dates",
+            legend_title_text="Measurement date",
             barmode="group",
         )
         # Shallow to deep. Plotly's default category order is first appearance, so

@@ -77,7 +77,7 @@ class DashApp(DashVisualizations):
 
         self._setup_layout()
         self._setup_callbacks()
-        # Parsed while the page loads, not by the first Growth Lines view (~95 ms).
+        # Parsed while the page loads, not by the first Depth Profile view (~95 ms).
         self.available_images.parse_in_background()
 
     def get_encoded_image(self, tube: int, position: int, date: pd.Timestamp) -> str:
@@ -109,7 +109,7 @@ class DashApp(DashVisualizations):
     _viz_options_card = staticmethod(length_layout.viz_options_card)
 
     def _faceted_options_card(self) -> dbc.Card:
-        """Date rows and tube columns of the Faceted Depth Profile view."""
+        """Date rows and tube columns of the Depth Profile Grid view."""
         return length_layout.faceted_options_card(self._tube_options, self._date_options)
 
     _faceted_info = staticmethod(length_layout.faceted_info)
@@ -125,7 +125,7 @@ class DashApp(DashVisualizations):
     # ---- view model (dash_length_views) ------------------------------------------
 
     def _lines_tube(self, selected_tube: Any) -> int | None:
-        """The tube the Growth Lines view plots: the dropdown's, else the first."""
+        """The tube the Depth Profile view plots: the dropdown's, else the first."""
         return length_views.lines_tube(self.data_cache.tubes, selected_tube)
 
     def _controls_summary(self, view, tube, selected_tubes, faceted_tubes, faceted_dates) -> str:
@@ -143,7 +143,7 @@ class DashApp(DashVisualizations):
         )
 
     def _faceted_outputs(self, tubes, dates) -> tuple:
-        """(figure, message, tube-selector style) of the faceted view."""
+        """(figure, message, tube-selector style) of the Depth Profile Grid view."""
         return length_views.faceted_outputs(self, tubes, dates)
 
     _faceted_styles = staticmethod(length_views.faceted_styles)

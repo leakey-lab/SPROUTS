@@ -43,7 +43,7 @@ def test_stacked_chart_totals_per_tube_and_date(metric):
     charts, label, unit = metric
     fig = charts.create_stacked_bar_chart()
 
-    assert fig.layout.title.text == f"Root {label} Growth by Tube and Date"
+    assert fig.layout.title.text == f"Root {label} by Tube and Date"
     assert fig.layout.yaxis.title.text == f"Total {label} ({unit})"
     bars = {trace.name: list(trace.y) for trace in fig.data}
     assert bars == {"2024-07-18": [16.0, 14.0], "2024-08-07": [4.0, 5.0]}

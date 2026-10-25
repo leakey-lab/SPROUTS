@@ -102,7 +102,7 @@ def _reference_length(charts, tubes, show_field_average, show_field_variance, sh
                     legendgroup="field_avg",
                     hovertemplate=theme.hover(
                         "Field Variance Range",
-                        [("Date", "%{x|%b %d, %Y}"), ("Range", "+-1 Standard Deviation")],
+                        [("Date", "%{x|%Y-%m-%d}"), ("Range", "+-1 Standard Deviation")],
                     ),
                 )
             )
@@ -118,7 +118,7 @@ def _reference_length(charts, tubes, show_field_average, show_field_variance, sh
                 hovertemplate=theme.hover(
                     "Field Average",
                     [
-                        ("Date", "%{x|%b %d, %Y}"),
+                        ("Date", "%{x|%Y-%m-%d}"),
                         (f"Avg {label}", f"%{{y:.2f}} {unit}"),
                         ("Std Dev", f"+/-%{{customdata[0]:.2f}} {unit}"),
                         ("Tubes", "%{customdata[1]:.0f}"),
@@ -141,13 +141,13 @@ def _reference_length(charts, tubes, show_field_average, show_field_variance, sh
                 marker=dict(size=6),
                 hovertemplate=theme.hover(
                     f"Tube {int(tube)}",
-                    [("Date", "%{x|%b %d, %Y}"), (f"Total {label}", f"%{{y:.2f}} {unit}")],
+                    [("Date", "%{x|%Y-%m-%d}"), (f"Total {label}", f"%{{y:.2f}} {unit}")],
                 ),
             )
         )
     fig = go.Figure(data=traces)
     fig.update_layout(
-        title_text="Root Growth Over Time",
+        title_text=f"Root {label} Growth Over Time",
         xaxis_title_text="Date",
         yaxis_title_text=f"Total {label} ({unit})",
         showlegend=show_legend,

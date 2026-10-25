@@ -11,8 +11,12 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
-Four passes, not yet released:
+Five passes, not yet released:
 
+- **Owner-decisions build** (branch `feat/unified-correct-editor`, 2026-10-25; plan
+  `docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`): the owner's answers
+  to the 2026-10-12 decision sheet (O1-O38) and the follow-up answers, built task by task,
+  each reviewed and committed on its own. Entries carry the task ID (for example W4-T6).
 - **Fix pass** (branch `feat/unified-correct-editor`, 2026-10-02): the engineering items
   of `docs/KNOWN_ISSUES.md` #6 and #7 that need no owner decision, by parallel
   packages, each reviewed and committed on its own. The owner questions stay open.
@@ -329,6 +333,12 @@ Four passes, not yet released:
   app version, commit, model SHA-256, calibration and runtime precision.
 
 ### Changed
+- **Owner-decisions build (2026-10-25).** Display and wording; no CSV value or output pixel
+  changes.
+  - Dashboard views have one set of names (Totals by Tube, Growth Over Time, Depth Profile,
+    Depth Profile Grid; legend "Measurement date", ISO hover dates); dates are coloured on
+    one blue ramp that keeps clear of the mask, skeleton and selection colours, the same
+    colour for a date in every view and every tube (W4-T6, O27).
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

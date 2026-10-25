@@ -102,7 +102,7 @@ def growth_over_time(cache, tubes: Sequence[Any], *, field_average: bool) -> pd.
 def depth_intervals(
     cache, tube: Any, dates: Iterable[Any] | None = None, interval_size: int = 10
 ) -> pd.DataFrame:
-    """Per-interval statistics of one tube for every date (the Growth Lines view)."""
+    """Per-interval statistics of one tube for every date (the Depth Profile view)."""
     value, unit = cache.value_column, _unit(cache.value_column)
     rows = []
     for date in cache.dates if dates is None else dates:

@@ -265,7 +265,7 @@ def register_callbacks(dash_app) -> None:
         State("view-selector", "value"),
     )
     def display_hover_images(hover_data, selected_tube, view_type):
-        """Thumbnails of the hovered 10-position interval (Growth Lines only)."""
+        """Thumbnails of the hovered 10-position interval (Depth Profile only)."""
         if view_type != "lines":
             raise PreventUpdate  # PV-09: no round-trip DOM churn in other views
         try:

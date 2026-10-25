@@ -18,7 +18,7 @@ import pytest
 
 from tests.viz_dash_helpers import build_length_app
 
-GOLDEN_LAYOUT_SHA256 = "703c722ba967c02471837e56a3f344ef4149d24e07c16aeaf15bb8beb1ee9e0e"
+GOLDEN_LAYOUT_SHA256 = "c0fb067a8c23e60e0d6f825154585e99cdc8e5b2f39babb2db6187cfb022f51c"
 GOLDEN_CLIENTSIDE_JS_SHA256 = "9b5e33951972d377b9efc7595e5f78097044174135651414335f57422efc3338"
 # (output, inputs, states, prevent_initial_call, runs in the browser), in registration order.
 GOLDEN_CALLBACKS = (

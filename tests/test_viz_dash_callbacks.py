@@ -228,7 +228,7 @@ def test_area_profile_bars_use_the_theme_palette(area_app):
         ["view-selector.value"],
     )
     colors = [trace["marker"]["color"] for trace in figure["data"]]
-    assert colors == [theme.color(0), theme.color(1)]
+    assert colors == theme.date_colors(2)
 
 
 # ---- switching views keeps every selection ---------------------------------------

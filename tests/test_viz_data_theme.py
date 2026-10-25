@@ -144,3 +144,60 @@ def test_a_message_figure_is_text_only(color):
     assert fig.layout.plot_bgcolor == "rgba(0,0,0,0)"
     (note,) = fig.layout.annotations
     assert (note.text, note.x, note.y, note.font.color) == ("Select 1 to 6 tubes", 0.5, 0.5, color)
+
+
+# ---- O27: one blue ramp for dates -------------------------------------------------
+
+
+def _oklab(hex_colour):
+    """sRGB '#rrggbb' -> OKLab (Ottosson): linearise, LMS matrix, cube root, Lab matrix."""
+    r, g, b = (
+        (c / 255.0 / 12.92 if c / 255.0 <= 0.04045 else ((c / 255.0 + 0.055) / 1.055) ** 2.4)
+        for c in _parse_colour(hex_colour)[0]
+    )
+    l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return (
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+    )
+
+
+def _delta(a, b):
+    """OKLab distance x 100."""
+    return 100 * sum((x - y) ** 2 for x, y in zip(_oklab(a), _oklab(b), strict=True)) ** 0.5
+
+
+def test_date_ramp_is_the_decided_list_and_n13_returns_it_whole():
+    assert theme.DATE_RAMP == (
+        "#127abe",
+        "#2c84c4",
+        "#3e8dcb",
+        "#4f97d1",
+        "#5ea1d8",
+        "#6cabde",
+        "#7bb4e5",
+        "#89beeb",
+        "#97c8f2",
+        "#a6d2f8",
+        "#b4dcff",
+        "#c8e5ff",
+        "#dbeefe",
+    )
+    assert theme.date_colors(13) == list(theme.DATE_RAMP)
+    assert theme.date_colors(1) == ["#127abe"] and theme.date_colors(2) == ["#127abe", "#dbeefe"]
+    assert theme.date_colors(0) == []
+    assert theme.date_colors(-3) == []
+
+
+@pytest.mark.parametrize("n", range(1, 25))
+def test_date_colors_are_ordered_readable_and_clear_of_the_layer_accents(n):
+    colours = theme.date_colors(n)
+    assert len(colours) == n and all(len(c) == 7 and c.startswith("#") for c in colours)
+    lightness = [_oklab(c)[0] for c in colours]
+    assert lightness == sorted(lightness)  # oldest darkest, newest lightest
+    assert all(contrast_ratio(c, theme.BG_2) >= 3.0 for c in colours)
+    for accent in (theme.ACCENT, theme.SKEL, theme.SEL):  # mask green, skeleton, selection
+        assert min(_delta(c, accent) for c in colours) >= 10, accent

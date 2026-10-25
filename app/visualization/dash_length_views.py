@@ -54,7 +54,7 @@ DATE_TOKEN = re.compile(r"\d{4}\.\d{2}\.\d{2}")
 
 
 def lines_tube(tubes, selected_tube: Any) -> int | None:
-    """The tube the Growth Lines view plots: the dropdown's, else the first.
+    """The tube the Depth Profile view plots: the dropdown's, else the first.
 
     ``tubes`` are the dataset's tube numbers (``DataCache.tubes``).
     """
@@ -119,7 +119,7 @@ def render_view(
 
 
 def faceted_outputs(dashboard: "LengthDashboard", tubes, dates) -> tuple:
-    """(figure, message, tube-selector style) of the faceted view."""
+    """(figure, message, tube-selector style) of the Depth Profile Grid view."""
     count = len(tubes or [])
     if count == 0 or count > MAX_TUBES:
         if count > MAX_TUBES:
@@ -140,7 +140,7 @@ def faceted_outputs(dashboard: "LengthDashboard", tubes, dates) -> tuple:
 
 
 def faceted_styles(tubes) -> tuple:
-    """(main-graph style, image-container style) of the faceted view."""
+    """(main-graph style, image-container style) of the Depth Profile Grid view."""
     drawable = 0 < len(tubes or []) <= MAX_TUBES
     return (FACETED_GRAPH_STYLE if drawable else GRAPH_STYLE), HIDDEN
 
