@@ -2,9 +2,11 @@
 
 One Save / Discard / Cancel box names what is unsaved ("mask", "skeleton", "mask and
 skeleton", "GT"), and a second box follows a failed save (Discard / Keep editing). A third
-asks before a save replaces a file the editor could not show (Replace / Keep it). The
-wording is the editors' of before the merge, word for word. Answers come back as plain
-strings (:data:`SAVE`, :data:`DISCARD`, :data:`CANCEL`, :data:`KEEP`, :data:`REPLACE`), so the
+asks before a save replaces a file the editor could not show (Replace / Keep it), a fourth
+before a save overwrites a file that changed on disk since it was opened (Overwrite / Reload
+(lose my edits) / Cancel). The wording of the first two is the editors' of before the merge,
+word for word. Answers come back as plain strings (:data:`SAVE`, :data:`DISCARD`,
+:data:`CANCEL`, :data:`KEEP`, :data:`REPLACE`, :data:`OVERWRITE`, :data:`RELOAD`), so the
 session logic that asks them stays Qt-free; Esc or closing the box is the safe answer (Cancel /
 Keep editing / Keep it). Each box is freed once answered.
 """
@@ -19,15 +21,19 @@ __all__ = [
     "CANCEL",
     "DISCARD",
     "KEEP",
+    "OVERWRITE",
+    "RELOAD",
     "REPLACE",
     "SAVE",
     "ask_after_failed_save",
+    "ask_changed_on_disk",
     "ask_replace_unloaded",
     "ask_unsaved",
     "join_nouns",
 ]
 
 SAVE, DISCARD, CANCEL, KEEP, REPLACE = "save", "discard", "cancel", "keep", "replace"
+OVERWRITE, RELOAD = "overwrite", "reload"
 
 _Button = QMessageBox.StandardButton
 
@@ -127,3 +133,27 @@ def ask_replace_unloaded(parent: QWidget | None, noun: str, label: str) -> str:
         rename={_Button.Save: "Replace", _Button.Cancel: "Keep it"},
     )
     return REPLACE if choice == _Button.Save else CANCEL
+
+
+def ask_changed_on_disk(parent: QWidget | None, noun: str, label: str) -> str:
+    """Before a save of ``noun`` overwrites ``label``, a file that changed on disk after the
+    editor opened (or last saved) it.
+
+    Returns :data:`OVERWRITE`, :data:`RELOAD` ("Reload (lose my edits)") or :data:`CANCEL`
+    (also the default, Esc and close).
+    """
+    choice = _ask(
+        parent,
+        QMessageBox.Icon.Warning,
+        f"{noun[:1].upper()}{noun[1:]} changed on disk",
+        f"{label} changed on disk after you opened it.",
+        "Overwrite it with your edits, reload it from disk (your edits are lost), or cancel.",
+        _Button.Save | _Button.Discard | _Button.Cancel,
+        _Button.Cancel,
+        rename={_Button.Save: "Overwrite", _Button.Discard: "Reload (lose my edits)"},
+    )
+    if choice == _Button.Save:
+        return OVERWRITE
+    if choice == _Button.Discard:
+        return RELOAD
+    return CANCEL

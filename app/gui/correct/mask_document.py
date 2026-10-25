@@ -140,6 +140,18 @@ class MaskDocument:
         """True while a mask file found at open was not loaded and nothing was written over it."""
         return bool(self._not_loaded)
 
+    def matches_disk(self) -> bool:
+        """True when :meth:`open` would now open exactly the saved state: the mask files
+        read (:meth:`read`; no usable file reads as empty) give the baseline, and the same
+        file, if any, is not shown. Reads the files: call it only after a stamp changed."""
+        baseline = self._baseline
+        if baseline is None or not self.image_path:
+            return False
+        height, width = baseline.shape
+        read = self.read(self.image_path, (width, height))
+        plane = read.plane if read.plane is not None else np.zeros_like(baseline)
+        return read.not_loaded == self._not_loaded and _planes_equal(plane, baseline)
+
     def status(self) -> LayerStatus:
         """The save state: a failed save (until the next edit) > unsaved > a file not shown >
         saved > no mask."""

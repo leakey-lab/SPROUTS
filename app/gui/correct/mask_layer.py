@@ -41,6 +41,7 @@ from app.gui.correct.layer import (
     SaveOutcome,
     SizeSpec,
     ToolSpec,
+    project_label,
 )
 from app.gui.correct.mask_document import MaskDocument, MaskRead, MaskSaveResult
 from app.gui.correct.mask_tools import (
@@ -109,6 +110,7 @@ class MaskLayer:
         self._opacity = self.DEFAULT_OPACITY
         self._active = True
         self._visible = True
+        self._root = ""  # the project folder the file labels are relative to
         self._apply_opacity()
 
     @property
@@ -131,9 +133,10 @@ class MaskLayer:
         """Open the saved mask of ``image_path`` (``size`` = (w, h)); the notices to show.
 
         A stroke in progress is committed first. The mask lives next to the image, so
-        ``images_base_folder`` is not used. ``ahead`` is a :meth:`read_ahead` result.
+        ``images_base_folder`` only roots the file labels. ``ahead``: a :meth:`read_ahead` result.
         """
         self.finish_gesture()
+        self._root = images_base_folder or os.path.dirname(image_path)
         read = ahead if isinstance(ahead, MaskRead) else None
         notices = self.document.open(image_path, size, read)
         self._replaced()
@@ -150,8 +153,13 @@ class MaskLayer:
         return self.document.is_open()
 
     def file_stamps(self) -> tuple:
-        """The document's pinned mask files, stamped or absent (``()`` when closed)."""
+        """The document's pinned mask files, stamped or absent (``()`` when closed); also
+        the files a save writes or removes (``DiskGuardedLayer.write_stamps``)."""
         return self.document.file_stamps()
+
+    def matches_disk(self) -> bool:
+        """``DiskGuardedLayer``: reading the mask files now would open the saved mask."""
+        return self.document.matches_disk()
 
     def is_dirty(self) -> bool:
         """True when the plane differs from the saved mask (a pixel comparison)."""
@@ -175,8 +183,7 @@ class MaskLayer:
         found = [stamp[0] for stamp in document.file_stamps() if stamp[1:] != (None,)]
         if not found:  # gone since the open: nothing left to replace
             return ""
-        folder = os.path.dirname(document.image_path)
-        return os.path.relpath(found[0], folder).replace(os.sep, "/")
+        return project_label(found[0], self._root)
 
     def revert(self) -> list[Notice]:
         """Discard: back to the saved mask in memory, history cleared (no notices)."""

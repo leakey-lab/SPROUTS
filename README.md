@@ -294,12 +294,19 @@ its last point.
 - A saved mask that *Correct* cannot show (another size than the photo, or a file it
   cannot read) shows *Mask not shown* and is kept: `Ctrl+S` with nothing painted leaves
   it, painting over it asks before replacing it, and `PgDn` stays on the image.
+- If the file a layer saves to changed on disk after you opened it (another program, or a
+  *Generate* run), **Save** asks first: **Overwrite**, **Reload (lose my edits)** or
+  **Cancel**. A file rewritten with the same pixels asks nothing, and a layer without edits
+  just reloads. `PgDn` / `PgUp` never ask: they stay on the image and say why. An image
+  open in *Correct* without unsaved edits shows the new results when a *Generate* run
+  finishes.
 - A polyline you are placing (two or more points) counts as unsaved: **Save** and
   `Ctrl+S` finish it first.
 - Every other way of leaving an image with unsaved changes (another image, another stage,
   opening a folder, closing the window) asks once and names the unsaved layers:
-  **Save**, **Discard** (the unsaved layers go back to what is on disk) or **Cancel**
-  (stay).
+  **Save**, **Discard** (the unsaved layers go back to how they were opened or last
+  saved; a layer whose file changed on disk meanwhile is read again from disk) or
+  **Cancel** (stay).
   If a save fails, a second question offers **Discard** or **Keep editing**.
 - Coming back to the same image keeps your zoom and position; the layers reload only when
   their files changed on disk (for example after *Generate*).

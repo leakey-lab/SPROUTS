@@ -646,6 +646,7 @@ class MainWindow(QMainWindow):
         discard = getattr(self.correct_editor, "discard_read_ahead", None)
         if callable(discard):
             discard()
+        editors.follow_generated_outputs(self)  # the image open in Correct shows them
 
     # ==================== The library (window/navigator.py) ====================
 

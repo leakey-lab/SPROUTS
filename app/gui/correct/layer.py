@@ -24,11 +24,14 @@ Rules every layer follows:
 - Optional (``ReadAheadLayer``): a layer with ``read_ahead`` lets the page read the
   document of the next image on a worker thread and open it from that payload.
 - Optional (``DiskGuardedLayer``): a layer with ``unloaded_label`` names a file it found
-  but did not show; the session asks before a save replaces it.
+  but did not show; the session asks before a save replaces it. ``write_stamps`` and
+  ``matches_disk`` tell the session when a file a save would overwrite changed on disk
+  since the layer opened or saved it.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -292,17 +295,42 @@ class ReadAheadLayer(Protocol):
 
 
 class DiskGuardedLayer(Protocol):
-    """Optional part of an ``EditLayer``: a file on disk its document did not show.
+    """Optional part of an ``EditLayer``: files on disk its document does not show.
 
     A layer that could not load a file it found (a mask of another size than the photo,
     an undecodable one) names the file a save would replace without having shown it, so
-    the session asks first (``app.gui.correct.save_gate``).
+    the session asks first (``app.gui.correct.save_gate``). The session also compares the
+    layer's write stamps with those it took at open, reload, save and Discard: a file
+    changed on disk since then is not overwritten unasked, and Discard reads it again.
+    ``write_stamps`` may be left out: the session then uses ``file_stamps``.
     """
 
     def unloaded_label(self) -> str:
-        """The project-relative file (``"mask/a.png"``, ``/`` separators) a save would
+        """The project-relative file (``"mask/a.png"``: :func:`project_label`) a save would
         replace unshown; ``""`` when none (also while the plane is empty: that save keeps
         the file)."""
+
+    def write_stamps(self) -> tuple:
+        """``(path, mtime_ns, size)`` / ``(path, None)`` of every file ``save()`` writes or
+        removes, read afresh per call. An open layer returns at least one entry (an absent
+        file as ``(path, None)``); ``()`` only when closed, which the gate reads as "nothing
+        to compare"."""
+
+    def matches_disk(self) -> bool:
+        """True when reading the layer's files now would open exactly its saved state (the
+        "no false alarm" check of a file rewritten as it was). It reads the files, so the
+        session asks it only after a stamp changed."""
+
+
+def project_label(path: str, root: str) -> str:
+    """``path`` as the prompts name a file: relative to the project folder ``root`` (the
+    ``images_base_folder``, else the image's folder), ``/`` separators (``"mask/a.png"``);
+    as it is when it lies on another drive."""
+    try:
+        path = os.path.relpath(path, root) if root and path else path
+    except ValueError:  # another drive
+        pass
+    return path.replace(os.sep, "/")
 
 
 def _declared_members(protocol: type) -> dict[str, bool]:

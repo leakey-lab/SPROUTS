@@ -63,6 +63,13 @@ Five passes, not yet released:
     of *Generate all* went to the newly opened folder and replaced its skeletons); the
     skeleton pass is bound to the folder the mask pass ran on, and a job is refused while a
     folder loads (W1-T1, R7, O15).
+  - Correct: a mask or skeleton correction that changed on disk while open (another
+    program, a *Generate* run) is no longer lost or overwritten unasked. **Discard** reads
+    such a layer again from disk; **Save** asks first (**Overwrite** / **Reload (lose my
+    edits)** / **Cancel**, Cancel by default); a file rewritten with the same pixels asks
+    nothing; `Ctrl+S` without edits reloads the file and writes nothing; `PgDn` stays on the
+    image and says why. The image open in *Correct* without unsaved edits (and no drag in
+    progress) shows the new outputs when a *Generate* run finishes (W1-T4, E2, O19).
   - Paths: `app.io_utils.path_key` / `same_file` compare paths the way the platform's file
     system does (case-insensitive and Unicode-normalising on macOS APFS); the recent
     projects and the Library read-ahead use it. Temp names of atomic writes stay within 255

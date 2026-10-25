@@ -3,13 +3,16 @@
 ``FakeLayer`` implements ``app.gui.correct.layer.EditLayer``:
 
 - **Call recording.** Every command is appended to ``calls`` as ``(name, *args)``; the
-  side-effect-free queries (``is_open``, ``is_dirty``, ``file_stamps``, ``status``,
-  ``can_undo``, ``can_redo``, ``gesture_active``, ``tool_hint``, ``size_spec``, ``size``,
-  ``is_active``, ``is_visible``, ``opacity``) are not. ``names()`` lists the names only.
-- **Scriptable results:** ``dirty``, ``stamps``, ``open_notices``, ``revert_notices``,
-  ``save_outcomes`` (consumed in order; then a default ok outcome with a path),
-  ``key_result``, ``status_override``, ``draft_points`` (what ``undo_in_gesture`` pops),
-  ``unloaded`` (what ``unloaded_label`` names: a file a save would replace unshown).
+  side-effect-free queries (``is_open``, ``is_dirty``, ``file_stamps``, ``write_stamps``,
+  ``matches_disk``, ``status``, ``can_undo``, ``can_redo``, ``gesture_active``,
+  ``tool_hint``, ``size_spec``, ``size``, ``is_active``, ``is_visible``, ``opacity``) are
+  not. ``names()`` lists the names only.
+- **Scriptable results:** ``dirty``, ``stamps`` (``file_stamps`` and ``write_stamps``),
+  ``open_notices``, ``revert_notices``, ``save_outcomes`` (consumed in order; then a
+  default ok outcome with a path), ``key_result``, ``status_override``, ``draft_points``
+  (what ``undo_in_gesture`` pops), ``unloaded`` (what ``unloaded_label`` names: a file a
+  save would replace unshown), ``disk_same`` (what ``matches_disk`` says: reading the
+  files now would open the saved state).
 - **A bounded fake history** (``history_limit``, 25 like the skeleton's): ``act()``
   records one undoable action and reports it to the host; past the limit the oldest
   action is evicted, so ``undo()`` returns False once the stack is empty while a journal
@@ -83,6 +86,7 @@ class FakeLayer:
         self.status_override: LayerStatus | None = None
         self.draft_points = 0
         self.unloaded = ""
+        self.disk_same = False
         self.gesture = False
         self.dirty_on_finish = False
         # state
@@ -170,6 +174,14 @@ class FakeLayer:
     def unloaded_label(self):
         """``DiskGuardedLayer``: the scripted ``unloaded`` label."""
         return self.unloaded
+
+    def write_stamps(self):
+        """``DiskGuardedLayer``: the scripted ``stamps`` (the files a save writes)."""
+        return self.stamps
+
+    def matches_disk(self):
+        """``DiskGuardedLayer``: the scripted ``disk_same`` flag."""
+        return self.disk_same
 
     def revert(self):
         """Discard: clean, empty history, no draft; returns ``revert_notices``."""
@@ -378,15 +390,17 @@ class FakeHost:
 class FakePrompts:
     """The session's prompts with scripted answers; records every question.
 
-    ``unsaved``, ``after_failed`` and ``replace`` are queues of answers ("save", "discard",
-    "cancel", "keep", "replace"); ``asked`` holds ``(prompt, parent, noun, name)`` per
-    question (``name`` is the file label for "replace").
+    ``unsaved``, ``after_failed``, ``replace`` and ``changed`` are queues of answers ("save",
+    "discard", "cancel", "keep", "replace", "overwrite", "reload"); ``asked`` holds
+    ``(prompt, parent, noun, name)`` per question (``name`` is the file label for "replace"
+    and "changed").
     """
 
-    def __init__(self, unsaved=(), after_failed=(), replace=()) -> None:
+    def __init__(self, unsaved=(), after_failed=(), replace=(), changed=()) -> None:
         self.unsaved = list(unsaved)
         self.after_failed = list(after_failed)
         self.replace = list(replace)
+        self.changed = list(changed)
         self.asked: list[tuple] = []
 
     def ask_unsaved(self, parent, noun, name):
@@ -403,3 +417,8 @@ class FakePrompts:
         """The next ``replace`` answer ("cancel", i.e. Keep it, when none is left)."""
         self.asked.append(("replace", parent, noun, label))
         return self.replace.pop(0) if self.replace else "cancel"
+
+    def ask_changed_on_disk(self, parent, noun, label):
+        """The next ``changed`` answer ("cancel" when none is left)."""
+        self.asked.append(("changed", parent, noun, label))
+        return self.changed.pop(0) if self.changed else "cancel"

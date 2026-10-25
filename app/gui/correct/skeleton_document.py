@@ -399,6 +399,20 @@ class SkeletonDocument:
             return ()
         return _stamps_of(self.files())
 
+    def write_stamps(self) -> tuple:
+        """The file :meth:`save` writes or removes, the correction, stamped afresh (``()``
+        when closed): a Generate run, which rewrites only the generated file, is no change."""
+        return (_stamp(self.files().correction_path),) if self.image_path else ()
+
+    def matches_disk(self) -> bool:
+        """True when :meth:`reopen` would now open exactly the saved skeleton: the start file
+        thinned at the image size (none, or an unreadable one: empty). Reads the file."""
+        saved = self.model.saved_mask
+        if not self.image_path or saved is None:
+            return False
+        path, _kind = self.files().start_file()
+        return is_generated_as_opened(saved, path, self._size)  # any file, as opened
+
 
 def _stamps_of(files: SkeletonFiles) -> tuple:
     """``(correction, generated)`` stamps; the generated path is the resolver's file when it

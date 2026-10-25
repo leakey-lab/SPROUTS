@@ -4,9 +4,10 @@
 the one undo timeline (``EditJournal``) over the layers' own stacks, the aggregate dirty
 state, saving (one summary toast, one report per layer save attempt) and the one
 unsaved-changes prompt. Before each layer save it asks its ``SaveGate``
-(``app.gui.correct.save_gate``), which may ask the user first or decline the save. It
-drives the layers only through ``EditLayer`` and reaches the UI only through the
-callbacks it is given, so it runs without Qt.
+(``app.gui.correct.save_gate``), which may ask the user first, decline the save, or read
+the layer again when its file changed on disk; Discard, too, reads such a layer again
+instead of reverting it to a stale copy. It drives the layers only through ``EditLayer``
+and reaches the UI only through the callbacks it is given, so it runs without Qt.
 
 Gestures first: every call that saves, prompts, opens, closes or reloads first ends a
 drag in progress (``finish_gestures``), so a stroke it commits is saved or prompted for
@@ -19,6 +20,7 @@ import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from app.editing.journal import EditJournal
+from app.gui.correct import save_gate
 from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome
 from app.gui.correct.save_gate import CANCEL, DISCARD, KEEP, SAVE, Prompts, SaveGate, SaveReport
 
@@ -99,7 +101,7 @@ class CorrectSession:
         self.image_path = ""
         self._prompts = prompts
         self._parent = parent
-        self._gate = SaveGate(prompts, parent)
+        self._gate = SaveGate(prompts, parent, reopen=self._reopen, root=self._root)
         self._on_dirty_changed = on_dirty_changed
         self._on_notice = on_notice
         self._on_history_changed = on_history_changed
@@ -158,6 +160,7 @@ class CorrectSession:
             self.journal.clear()
             self.image_path = ""
             self._stamps = {}
+            self._gate.forget()
             self._image_stamp = ()
 
     def files_changed(self) -> bool:
@@ -190,7 +193,27 @@ class CorrectSession:
                 layer.open(*args) if payload is None else layer.open(*args, ahead=payload)
             )
         self.journal.clear()
-        self._stamps = {layer_id: layer.file_stamps() for layer_id, layer in self.layers.items()}
+        for layer_id in self.layers:
+            self._take(layer_id)
+
+    def _take(self, layer_id: str) -> None:
+        """``layer_id``'s files hold its saved state: take its file and write stamps."""
+        layer = self.layers[layer_id]
+        self._stamps[layer_id] = layer.file_stamps()
+        self._gate.take(layer_id, layer)
+
+    def _reopen(self, layer_id: str) -> None:
+        """Read ``layer_id`` again from disk (its file changed): its notices are shown, its
+        timeline entries forgotten and its stamps taken again."""
+        self._stale = True  # inside a batch: its end refreshes the page
+        layer = self.layers[layer_id]
+        self._forward(layer.open(self.image_path, self._size, self._images_base_folder))
+        self.journal.forget(layer_id)
+        self._take(layer_id)
+
+    def _root(self) -> str:
+        """The project folder the gate's file labels are relative to."""
+        return self._images_base_folder or os.path.dirname(self.image_path)
 
     # ------------------------------------------------------------------- gestures
     def finish_gestures(self) -> None:
@@ -281,7 +304,7 @@ class CorrectSession:
                 if outcome is None:
                     outcome = layer.save()
                 if outcome.ok and layer_id in self._stamps:
-                    self._stamps[layer_id] = layer.file_stamps()
+                    self._take(layer_id)
                 outcomes.append(outcome)
                 self._on_saved(outcome)
         self._announce(outcomes)
@@ -348,12 +371,20 @@ class CorrectSession:
         return _join_nouns([self.layers[layer_id].noun for layer_id in layer_ids])
 
     def _revert(self, layer_ids: Sequence[str]) -> None:
+        """Discard: each layer back to its saved state; one whose files changed on disk
+        since (and would not open that state) is read again from disk, with a notice."""
         self._stale = True  # inside a batch: its end refreshes the page
         for layer_id in layer_ids:
             layer = self.layers[layer_id]
+            changed = layer.file_stamps() != self._stamps.get(layer_id)
+            if changed and not save_gate.matches_disk_of(layer):
+                self._reopen(layer_id)
+                self._on_notice(save_gate.reloaded_message(layer.noun), "info")
+                continue
             self._forward(layer.revert())
             if not (layer.can_undo() or layer.can_redo()):  # its history was cleared
                 self.journal.forget(layer_id)  # (a skeleton that only lost a draft keeps it)
+            self._take(layer_id)
 
     def _forward(self, notices: Iterable[Notice]) -> None:
         for notice in notices:

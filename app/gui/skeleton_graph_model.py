@@ -507,6 +507,11 @@ class SkeletonCorrectionModel:
                 self._unsaved = not np.array_equal(saved, mask)
         return self._unsaved
 
+    @property
+    def saved_mask(self) -> np.ndarray | None:
+        """The mask as last loaded or saved (read-only: compare with it, never change it)."""
+        return self._saved_mask
+
     def mark_saved(self) -> None:
         """Take the current mask as the saved state (call after a successful save)."""
         self._saved_mask = None if self._mask is None else self._mask.copy()

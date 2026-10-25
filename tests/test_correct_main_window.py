@@ -53,9 +53,12 @@ from tests.test_correct_editor import (  # noqa: E402
     DISCARD,
     SAVE,
     H,
+    Mouse,
     W,
     answer_prompts,
     box_plane,
+    bump,
+    click,
     draw_line,
     paint,
     plane,
@@ -822,3 +825,84 @@ def test_a_failing_prewarm_is_logged_not_raised(make_window, monkeypatch, caplog
         )
         assert QThreadPool.globalInstance().waitForDone(5000)
     assert hooked == []
+
+
+# ============================================================ the open image and Generate
+def skeleton_rows(editor) -> set[int]:
+    """The rows of the open skeleton that hold a line."""
+    return set(np.flatnonzero(raster(editor).any(axis=1)).tolist())
+
+
+def test_the_open_image_follows_a_finished_generate_run(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    assert skeleton_rows(window.correct_editor) == {110}
+    write_skeleton(project.generated(0), row=60)  # the run rewrote the skeleton
+    bump(project.generated(0))
+
+    window.on_outputs_changed()
+    settle()
+
+    assert skeleton_rows(window.correct_editor) == {60}
+
+
+def test_an_image_with_unsaved_edits_does_not_follow_generate(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    draw_line(editor)
+    edited = raster(editor).copy()
+    write_skeleton(project.generated(0), row=60)
+    bump(project.generated(0))
+
+    window.on_outputs_changed()
+    settle()
+
+    assert np.array_equal(raster(editor), edited) and editor.has_unsaved_changes()
+
+
+def rewrite_generated(project: Project) -> None:
+    """A Generate run rewrote the skeleton of image 0 (one line on row 60)."""
+    write_skeleton(project.generated(0), row=60)
+    bump(project.generated(0))
+
+
+def test_a_drag_in_progress_is_not_cut_off_by_a_finished_generate_run(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    skeleton = editor.layers[SKELETON]
+    editor.request_tool(SKELETON, "connect")
+    editor.router.canvas_press(QPoint(20, 110), Mouse())  # on the line's left endpoint
+    assert skeleton.gesture_active() and not editor.has_unsaved_changes()
+    rewrite_generated(project)
+
+    window.on_outputs_changed()  # the mouse is still held
+    settle()
+
+    assert skeleton.gesture_active() and skeleton_rows(editor) == {110}
+
+
+def test_a_pending_polyline_keeps_its_image_from_following_generate(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    editor.controls.tool_buttons[(SKELETON, "polyline")].click()
+    click(editor, (40, 125))
+    click(editor, (160, 135))
+    assert editor.layers[SKELETON].draft.pending()
+    rewrite_generated(project)
+
+    window.on_outputs_changed()
+    settle()
+
+    assert editor.layers[SKELETON].draft.pending() and skeleton_rows(editor) == {110}
+
+
+def test_the_image_left_in_correct_does_not_follow_while_another_page_shows(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    enter(window, "Library")
+    assert window.right_panel.currentIndex() != Panel.CORRECT
+    assert window.correct_editor.current_image_path  # still open in the page
+    rewrite_generated(project)
+
+    window.on_outputs_changed()
+    settle()
+
+    assert skeleton_rows(window.correct_editor) == {110}

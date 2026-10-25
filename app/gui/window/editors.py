@@ -96,6 +96,26 @@ def sync_open_correction(window: "MainWindow") -> None:
         window.library_index.refresh_status(stem)
 
 
+def follow_generated_outputs(window: "MainWindow") -> None:
+    """A Generate run finished: the image open in Correct shows its new outputs.
+
+    Only while Correct is the page on screen, the image has no unsaved edits (those are
+    never replaced; a pending polyline counts) and no drag is in progress (a stroke or a
+    Connect drag is never cut off): opening the same image again reads the files that
+    changed. Entering Correct later does the same. Not bound on the window:
+    ``on_outputs_changed`` calls it.
+    """
+    editor = window.correct_editor
+    path = editor.current_image_path
+    if window.right_panel.currentIndex() != Panel.CORRECT or not path:
+        return
+    if editor.has_unsaved_changes():
+        return
+    if any(layer.gesture_active() for layer in editor.layers.values()):
+        return
+    editor.load_image(path, images_base_folder=window.image_manager.original_folder)
+
+
 def generated_skeleton_for(window: "MainWindow", image_path: str) -> str | None:
     """The skeleton the last generation run wrote for ``image_path`` (None: editor default)."""
     base = getattr(window.image_manager, "processed_base_path", None)
