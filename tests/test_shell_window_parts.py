@@ -203,6 +203,9 @@ class Index:
     def sources(self) -> dict:
         return {"length": "root_lengths.csv", "area": "root_areas.csv"}
 
+    def by_content(self) -> dict:
+        return {"length": True, "area": False}
+
     def prewarm(self) -> None:
         self.prewarmed += 1
 
@@ -264,6 +267,8 @@ def test_the_bar_shows_the_status_and_the_measured_values():
             "area_source": "root_areas.csv",
             "length_note": None,
             "status_tip": None,
+            "by_time": False,
+            "area_by_time": True,
         }
     ]
 

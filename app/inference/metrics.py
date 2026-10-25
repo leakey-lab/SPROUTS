@@ -48,8 +48,26 @@ def _mostly_white(binary: np.ndarray) -> bool:
     return cv2.countNonZero(binary) * 255 > 127 * binary.size
 
 
-def preprocess_image(image_path: str) -> np.ndarray:
+def _read_grey(path: str, data: bytes | None) -> np.ndarray | None:
+    """The grey image at ``path``, or decoded from ``data`` (the file's bytes, already read).
+
+    Both decode with the same ``cv2.imdecode`` as :func:`app.io_utils.imread_unicode`, so
+    the pixels are identical; ``None`` when nothing can be decoded (empty ``data`` too).
+    """
+    if data is None:
+        return imread_unicode(path, cv2.IMREAD_GRAYSCALE)
+    if not data:
+        return None
+    try:
+        return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+    except cv2.error:
+        return None
+
+
+def preprocess_image(image_path: str, *, data: bytes | None = None) -> np.ndarray:
     """Read an image and return its 1px skeleton (uint8 0/255).
+
+    ``data``: the file's bytes, already read (Measure reads each input once, R5).
 
     Otsu threshold, inverted when mostly white, then thinned (skimage's Zhang
     method). The result is the same, pixel for pixel, as the former
@@ -59,7 +77,7 @@ def preprocess_image(image_path: str) -> np.ndarray:
     # Imported here: scikit-image (and scipy behind it) stays out of the app's start-up.
     from skimage.morphology import skeletonize
 
-    img = imread_unicode(image_path, cv2.IMREAD_GRAYSCALE)
+    img = _read_grey(image_path, data)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
     _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -69,9 +87,9 @@ def preprocess_image(image_path: str) -> np.ndarray:
     return skeleton.view(np.uint8) * np.uint8(255)
 
 
-def load_mask(image_path: str) -> np.ndarray:
-    """Read a mask image and return a binary (0/255) array."""
-    img = imread_unicode(image_path, cv2.IMREAD_GRAYSCALE)
+def load_mask(image_path: str, *, data: bytes | None = None) -> np.ndarray:
+    """Read a mask image and return a binary (0/255) array (``data``: its bytes, read)."""
+    img = _read_grey(image_path, data)
     if img is None:
         raise FileNotFoundError(f"Could not read mask: {image_path}")
     _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
@@ -173,16 +191,24 @@ def _metric_row(
         }
 
 
-def length_row(name: str, path: str) -> dict:
-    """The ``root_lengths.csv`` row for the skeleton image at ``path``."""
+def length_row(name: str, path: str, *, data: bytes | None = None) -> dict:
+    """The ``root_lengths.csv`` row for the skeleton image at ``path`` (``data``: its bytes,
+    already read; the row is the same)."""
     return _metric_row(
-        name, path, lambda p: root_length_mm(preprocess_image(p)), LENGTH_VALUE_COLUMN, "Length"
+        name,
+        path,
+        lambda p: root_length_mm(preprocess_image(p, data=data)),
+        LENGTH_VALUE_COLUMN,
+        "Length",
     )
 
 
-def area_row(name: str, path: str) -> dict:
-    """The ``root_areas.csv`` row for the mask image at ``path``."""
-    return _metric_row(name, path, lambda p: root_area_mm2(load_mask(p)), AREA_VALUE_COLUMN, "Area")
+def area_row(name: str, path: str, *, data: bytes | None = None) -> dict:
+    """The ``root_areas.csv`` row for the mask image at ``path`` (``data``: its bytes,
+    already read; the row is the same)."""
+    return _metric_row(
+        name, path, lambda p: root_area_mm2(load_mask(p, data=data)), AREA_VALUE_COLUMN, "Area"
+    )
 
 
 # ----------------------------- CSV -----------------------------------------

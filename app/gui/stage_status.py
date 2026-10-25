@@ -2,9 +2,10 @@
 
 The Qt side of :mod:`app.gui.stage_summary`: :meth:`StageStatus.text` phrases the library
 state for the stage on screen, and :meth:`StageStatus.check` counts, in the thread pool,
-each metric's inputs and those written after its CSV (one ``os.scandir`` per folder,
-~60 ms at 46k files, never on the GUI thread); ``changed`` is emitted once that count is
-in. A newer check, or :meth:`StageStatus.reset` (another project), makes an older count void.
+each metric's inputs and those changed since its CSV (one ``os.scandir`` per folder,
+~60 ms at 46k files, never on the GUI thread; against the CSV's record of its inputs when
+there is one, R5); ``changed`` is emitted once that count is in. A newer check, or
+:meth:`StageStatus.reset` (another project), makes an older count void.
 
 Generate's phrase walks every image name twice (~5 ms on the GUI thread at 46k images), and
 the status line asks for it on every idle refresh while Generate is on screen (V8). It is
@@ -18,6 +19,7 @@ import os
 
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 
+from app.inference.measure_inputs import load_inputs_record
 from app.project_layout import SKELETON_SUFFIX
 
 from .stage_summary import Freshness, generate_text, input_freshness, measure_text
@@ -100,12 +102,13 @@ class StageStatus(QObject):
         self._freshness = self._token = self._generate = None
 
     def check(self, index, layout, *, locate: bool = True) -> None:
-        """Count each metric's inputs, and those written after its CSV, in the thread pool.
+        """Count each metric's inputs, and those changed since its CSV, in the thread pool.
 
         ``index`` is the window's MeasurementIndex (where the CSVs are); ``locate`` lets it
         look for them first (a few stats; pass False while a pool job parses them, since
         that call would wait for it). The inputs are the files next to each CSV, or the
-        folders Measure would read when there is no CSV yet.
+        folders Measure would read when there is no CSV yet. Each CSV's record of its inputs
+        (``<csv>.inputs.json``) is read in the pool too; with one, content is compared.
         """
         if index is None or layout is None:
             return
@@ -120,12 +123,17 @@ class StageStatus(QObject):
             area_dir = layout.resolve_masks_dir() or layout.mask_dir
         token = self._token = object()
         signals = self._signals
+        root = layout.root
+
+        def freshness(folder, suffix, csv_path) -> Freshness:
+            record = load_inputs_record(csv_path) if csv_path else None
+            return input_freshness(folder, suffix, csv_path, record=record, project_root=root)
 
         def work() -> None:
             try:
                 result = {
-                    "length": input_freshness(length_dir, SKELETON_SUFFIX, length_csv),
-                    "area": input_freshness(area_dir, ".png", area_csv),
+                    "length": freshness(length_dir, SKELETON_SUFFIX, length_csv),
+                    "area": freshness(area_dir, ".png", area_csv),
                 }
             except Exception:  # noqa: BLE001 - the idle text then keeps the plain counts
                 logger.exception("Could not count the Measure inputs")

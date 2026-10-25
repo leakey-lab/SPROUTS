@@ -136,6 +136,7 @@ chose last (root length at first); with nothing to chart yet it says what to run
 | `skeleton_corrections/<stem>_skeleton.png` | skeleton corrected in *Correct* (1-pixel lines at the photo's resolution, so a saved correction reopens unchanged); not measured |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
+| `<csv>.inputs.json` | the files a CSV was measured from: each one's size, time and SHA-256, and the CSV's SHA-256 (what "changed since measured" compares) |
 | `mask/_sprouts_run.json`, `skeletons/_sprouts_run.json` | the latest generation run into that folder: model SHA-256, device and precision, parameters, failed inputs |
 | `mask/_sprouts_runs.jsonl`, `skeletons/_sprouts_runs.jsonl` | one line per generation run that wrote or failed an input (the run file holds the latest) |
 

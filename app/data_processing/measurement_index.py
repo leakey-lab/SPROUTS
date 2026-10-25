@@ -13,7 +13,8 @@ Contract:
   them; a row whose ``Error`` column is filled gives ``None`` plus the message,
   never the ``0`` the thread writes for failures.
 * A CSV is parsed once and re-parsed only when its ``(mtime_ns, size)``
-  changes, so a warm lookup is one ``os.stat`` per metric plus a dict get.
+  changes, so a warm lookup is one ``os.stat`` per metric (two with the record of its
+  inputs, ``<csv>.inputs.json``, read with it) plus a dict get.
 * Qt-free and thread-safe: :meth:`MeasurementIndex.prewarm` is meant for a
   worker thread; ``lookup(stem, load=False)`` never parses and never blocks,
   which is what the GUI thread should call.
@@ -35,6 +36,13 @@ from functools import partial
 from typing import NamedTuple
 
 from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN
+from app.inference.measure_inputs import (
+    InputsRecord,
+    content_sha256,
+    input_key,
+    inputs_record_path,
+    load_inputs_record,
+)
 from app.naming import image_stem
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
 
@@ -45,6 +53,8 @@ __all__ = ["Measurement", "MetricTable", "MeasurementIndex"]
 _IMAGE_COLUMN = "Image"
 _ERROR_COLUMN = "Error"
 _Signature = tuple[int, int]
+#: A table's signature: its CSV's and its record's (``None``: no record file).
+_TableSignature = tuple[_Signature, _Signature | None]
 
 
 class Measurement(NamedTuple):
@@ -70,6 +80,13 @@ def _signature(path: str) -> _Signature | None:
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size)
+
+
+def _table_signature(path: str) -> _TableSignature | None:
+    """The CSV's ``(mtime_ns, size)`` and its inputs record's (a record written after the
+    CSV changes it); ``None`` when the CSV is absent."""
+    sig = _signature(path)
+    return None if sig is None else (sig, _signature(inputs_record_path(path)))
 
 
 def _read_metric_csv(path: str, value_column: str) -> dict[str, _Row]:
@@ -104,7 +121,8 @@ class MetricTable:
     is the search the GUI thread's calls (``get(load=False)``, :meth:`needs_load`) use,
     while :meth:`load` and ``get(load=True)`` (a worker's) use ``locate``, which may walk
     folders. A path that was found is re-used until it disappears; a failed search is
-    retried at most every ``relocate_after_s`` seconds.
+    retried at most every ``relocate_after_s`` seconds. The record of the CSV's inputs
+    (``<csv>.inputs.json``, R5) is read with it: :attr:`record`.
     """
 
     def __init__(
@@ -125,24 +143,31 @@ class MetricTable:
         self._path: str | None = None
         self._searched_at: float | None = None  # the last search (either kind)
         self._searched_full_at: float | None = None  # the last full search
-        self._loaded_sig: _Signature | None = None
+        self._loaded_sig: _TableSignature | None = None
         self._rows: dict[str, _Row] = {}
+        self._record: InputsRecord | None = None
 
     @property
     def path(self) -> str | None:
         """The CSV in use, or ``None`` when none has been found."""
         return self._path
 
+    @property
+    def record(self) -> InputsRecord | None:
+        """The record of the inputs the loaded CSV was measured from; ``None`` when it has
+        none (or one written for another CSV)."""
+        return self._record
+
     def invalidate(self) -> None:
         """Forget the located path and the parsed rows (e.g. after a Measure run)."""
         with self._lock:
             self._path, self._searched_at, self._searched_full_at = None, None, None
-            self._loaded_sig, self._rows = None, {}
+            self._loaded_sig, self._rows, self._record = None, {}, None
 
-    def _resolve(self, full: bool) -> tuple[str, _Signature] | None:
+    def _resolve(self, full: bool) -> tuple[str, _TableSignature] | None:
         """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
         if self._path is not None:
-            sig = _signature(self._path)
+            sig = _table_signature(self._path)
             if sig is not None:
                 return self._path, sig
             self._path = None  # moved or deleted: search again now
@@ -155,10 +180,13 @@ class MetricTable:
         if full:
             self._searched_full_at = now
         path = (self._locate if full else self._locate_fast)()
-        sig = _signature(path) if path else None
+        if not path:
+            return None
+        path = os.path.normpath(path)
+        sig = _table_signature(path)
         if sig is None:
             return None
-        self._path = os.path.normpath(path)
+        self._path = path
         return self._path, sig
 
     def _current(self, load: bool) -> dict[str, _Row] | None:
@@ -167,13 +195,15 @@ class MetricTable:
         ``load=False`` (the GUI thread) searches with ``locate_fast`` only."""
         found = self._resolve(full=load)
         if found is None:
-            self._loaded_sig, self._rows = None, {}
+            self._loaded_sig, self._rows, self._record = None, {}, None
             return None
         path, sig = found
         if sig != self._loaded_sig:
             if not load:
                 return None
-            self._rows = _read_metric_csv(path, self.value_column)
+            if self._loaded_sig is None or sig[0] != self._loaded_sig[0]:
+                self._rows = _read_metric_csv(path, self.value_column)
+            self._record = load_inputs_record(path)
             self._loaded_sig = sig
         return self._rows
 
@@ -265,20 +295,30 @@ class MeasurementIndex:
         """``{"length": csv path | None, "area": csv path | None}`` currently in use."""
         return {"length": self._length.path, "area": self._area.path}
 
+    def by_content(self) -> dict[str, bool]:
+        """``{"length": bool, "area": bool}``: whether :meth:`outdated` compares that
+        metric's inputs by content (its CSV has a record of them) rather than file time."""
+        return {"length": self._length.record is not None, "area": self._area.record is not None}
+
     def outdated(self, stem: str) -> dict[str, bool]:
         """``{"length": bool, "area": bool}``: whether the input each value of ``stem`` was
-        measured from changed after its CSV was written.
+        measured from changed since it was measured.
 
         Each metric against its own input: length against the generated skeleton
         ``<csv dir>/<stem>_fake.png``, area against the mask ``<csv dir>/<stem>.png`` (the
         handlers write each CSV next to the files they measured), so a saved mask never
-        outdates the length. A metric without a row for ``stem`` is never outdated. mtime
-        based, so a copied folder may report ``True`` spuriously; it never changes a value.
+        outdates the length. A metric without a row for ``stem`` is never outdated. With
+        the record of the CSV's inputs (``<csv>.inputs.json``, R5) the input is compared
+        with its entry: equal size and time, else equal content, is current (a copied or
+        restamped folder stays current); an input that is gone, or has no entry, is
+        outdated. Without a record, an input written after the CSV is outdated (mtime, so
+        a copied folder may report ``True`` spuriously). It never changes a value.
         """
         stem = _key(stem)
+        root = self.layout.root
         return {
-            "length": self._table_outdated(self._length, stem, stem + SKELETON_SUFFIX),
-            "area": self._table_outdated(self._area, stem, stem + ".png"),
+            "length": self._table_outdated(self._length, stem, stem + SKELETON_SUFFIX, root),
+            "area": self._table_outdated(self._area, stem, stem + ".png", root),
         }
 
     def is_outdated(self, stem: str) -> bool:
@@ -286,10 +326,29 @@ class MeasurementIndex:
         return any(self.outdated(stem).values())
 
     @staticmethod
-    def _table_outdated(table: MetricTable, stem: str, file_name: str) -> bool:
+    def _table_outdated(table: MetricTable, stem: str, file_name: str, root: str) -> bool:
         csv_path = table.path
         if csv_path is None or table.get(stem, load=False) is None:
             return False
+        source = os.path.join(os.path.dirname(csv_path), file_name)
+        record = table.record
+        if record is not None:
+            return _differs_from_record(record, source, root)
         csv_sig = _signature(csv_path)
-        src_sig = _signature(os.path.join(os.path.dirname(csv_path), file_name))
+        src_sig = _signature(source)
         return csv_sig is not None and src_sig is not None and src_sig[0] > csv_sig[0]
+
+
+def _differs_from_record(record: InputsRecord, source: str, root: str) -> bool:
+    """True when ``source`` is gone, has no entry in ``record``, or its content differs
+    from the recorded one (hashed only when its size or time differ)."""
+    try:
+        st = os.stat(source)
+    except OSError:
+        return True
+    entry = record.inputs.get(input_key(source, root))
+    if entry is None:
+        return True
+    if (st.st_size, st.st_mtime_ns) == entry[:2]:
+        return False
+    return content_sha256(source, st.st_size, st.st_mtime_ns) != entry[2]

@@ -15,7 +15,8 @@ computes anything. Measured values come from the Measure CSVs through
 :class:`app.data_processing.measurement_index.MeasurementIndex` (read by the
 caller); a failed measurement shows ``failed`` with its message, and a value
 whose inputs changed after it was measured is shown in the warning colour with a
-"Measure again" tooltip. A value that is not a number (a CSV edited to hold ``nan``
+"Measure again" tooltip (plus a line saying so when the comparison was by file time:
+the CSV has no record of its inputs). A value that is not a number (a CSV edited to hold ``nan``
 or ``inf``) shows ``—`` in the failure colour, never "nan mm". The FOV text is derived from
 :data:`app.config.CALIBRATION` (the single source of the field of view). The
 value QLabels keep their ``—`` fallback text (and their ``_length_value`` /
@@ -43,6 +44,8 @@ _OUTDATED_TIP = "{} changed after this measurement — run Measure again for a c
 #: The CSV row holds no number to show (``nan``, ``inf``): ``{}`` the CSV, ``{}`` the value.
 _NO_NUMBER_TIP = "{} holds no valid number for this image ({})"
 _LENGTH_INPUT = "The generated skeleton"
+#: An outdated value whose CSV has no record of its inputs: compared by file time (R5).
+_BY_TIME_TIP = "Compared by file time: this CSV has no record of its inputs."
 _ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
 _AREA_INPUT = "The mask"
 
@@ -226,6 +229,8 @@ class MetricsBar(QWidget):
         area_source: str | None = None,
         length_note: str | None = None,
         status_tip: str | None = None,
+        by_time: bool = False,
+        area_by_time: bool | None = None,
     ) -> None:
         """Update the displayed values (read-only). Empty cells are hidden.
 
@@ -236,7 +241,9 @@ class MetricsBar(QWidget):
         value's too unless ``area_stale`` / ``area_source`` give AREA its own.
         ``length_note`` is one more line for the LENGTH tooltip (e.g. that a corrected
         skeleton exists and is not what was measured); ``status_tip`` is the STATUS
-        cell's tooltip.
+        cell's tooltip. ``by_time`` says the LENGTH value's staleness was judged by file
+        time (its CSV has no record of its inputs), and the AREA value's too unless
+        ``area_by_time`` gives AREA its own; an outdated value's tooltip then says so.
         """
         length_error = error if error and length is None else None
         area_error = error if error and length is not None and area is None else None
@@ -244,6 +251,8 @@ class MetricsBar(QWidget):
             area_stale = stale
         if area_source is None:
             area_source = source
+        if area_by_time is None:
+            area_by_time = by_time
         self._show_metric(
             self._length_cell,
             self._length_value,
@@ -254,6 +263,7 @@ class MetricsBar(QWidget):
             source,
             changed=_LENGTH_INPUT,
             note=length_note,
+            by_time=by_time,
         )
         self._show_metric(
             self._area_cell,
@@ -264,6 +274,7 @@ class MetricsBar(QWidget):
             area_stale,
             area_source,
             changed=_AREA_INPUT,
+            by_time=area_by_time,
         )
         self._status_value.setText(status if status else _DASH)
         self._name_value.setText(name if name else _DASH)
@@ -339,9 +350,11 @@ class MetricsBar(QWidget):
         *,
         changed: str = "Its input",
         note: str | None = None,
+        by_time: bool = False,
     ) -> None:
         """Fill one metric cell: a value, ``failed`` + message, or hidden. ``changed`` names
-        the input an outdated value was measured from; ``note`` is one more tooltip line.
+        the input an outdated value was measured from; ``note`` is one more tooltip line;
+        ``by_time``: an outdated value was judged by file time (said in its tooltip).
         A value that is not a finite number shows the dash in the failure colour."""
         if value is not None and not math.isfinite(value):
             label.setText(_DASH)
@@ -357,6 +370,8 @@ class MetricsBar(QWidget):
             tips = [f"Measured value from {source}" if source else "Measured value"]
             if outdated:
                 tips.append(_OUTDATED_TIP.format(changed))
+                if by_time:
+                    tips.append(_BY_TIME_TIP)
             if note:
                 tips.append(note)
         elif error:

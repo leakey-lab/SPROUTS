@@ -125,6 +125,7 @@ class MetricsController:
         measured = Measurement(None, None, None)
         outdated: dict[str, bool] = {}
         sources: dict[str, str | None] = {}
+        by_content: dict[str, bool] = {}
         index = self.index
         if stored_name and index is not None:
             try:
@@ -136,6 +137,8 @@ class MetricsController:
                 # Each value against its own input: a saved mask outdates AREA, never LENGTH.
                 outdated = index.outdated(stored_name)
                 sources = index.sources()
+                # Without a record of its inputs, a CSV's staleness is by file time (R5).
+                by_content = index.by_content()
             except Exception:
                 logger.exception("Could not read the measured values of %s", stored_name)
 
@@ -151,6 +154,8 @@ class MetricsController:
             area_source=sources.get("area"),
             length_note=CORRECTION_NOT_MEASURED if corrected else None,
             status_tip=CORRECTED_STATUS_TIP if corrected else None,
+            by_time=not by_content.get("length", True),
+            area_by_time=not by_content.get("area", True),
         )
 
     def refresh_if_current(self, image_name):

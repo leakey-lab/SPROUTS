@@ -1,16 +1,19 @@
 """One Measure run (root length or root area), Qt-free.
 
 A :class:`MeasureRun` computes the per-image rows once, keeps them, and writes
-the metric CSV plus its provenance sidecar. Keeping the rows lets a caller retry
-only the write (e.g. after the user closes the CSV in Excel) without measuring
+the metric CSV plus its provenance sidecar and the record of the files it measured
+(``<csv>.inputs.json``, :mod:`app.inference.measure_inputs`, R5). Keeping the rows lets
+a caller retry only the write (e.g. after the user closes the CSV in Excel) without measuring
 46k images again. The Qt thread wrapper lives in
 :mod:`app.inference.metric_thread`.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -23,6 +26,8 @@ from app.config import (
     ROOT_AREAS_CSV,
     ROOT_LENGTHS_CSV,
 )
+from app.inference import measure_inputs
+from app.inference.measure_inputs import Fingerprint
 from app.inference.metrics import area_row, length_row, run_metric_pool, write_metric_csv
 
 logger = logging.getLogger(__name__)
@@ -40,7 +45,7 @@ class MetricSpec:
     csv_name: str
     headers: tuple[str, ...]
     value_column: str
-    row: Callable[[str, str], dict]  # (image name, path) -> CSV row
+    row: Callable[..., dict]  # row(image name, path, data=<file bytes | None>) -> CSV row
     parameters: Mapping[str, object]
 
 
@@ -97,6 +102,9 @@ class MeasureRun:
         self.output_dir = output_dir
         self.project_root = project_root or os.path.dirname(os.path.abspath(output_dir))
         self.rows: list[dict] | None = None  # set once every image was measured
+        #: input key -> (size, mtime_ns, sha256) of each file measured (filled by compute()).
+        self.fingerprints: dict[str, Fingerprint] = {}
+        self._fingerprints_lock = threading.Lock()
 
     @property
     def csv_path(self) -> str:
@@ -109,14 +117,33 @@ class MeasureRun:
     ) -> list[dict] | None:
         """Measure every image (skipped if already done); ``None`` if stopped early."""
         if self.rows is None:
-            rows = run_metric_pool(self.images, self.spec.row, progress_cb, should_stop)
+            self.fingerprints = {}
+            rows = run_metric_pool(self.images, self._measure, progress_cb, should_stop)
             if should_stop is not None and should_stop():
                 return None
             self.rows = rows
         return self.rows
 
+    def _measure(self, name: str, path: str) -> dict:
+        """One row, from the file read once: its bytes are measured and hashed, and its
+        size and time recorded as they were when it was read (R5). A file that cannot be
+        opened gets the row ``spec.row(name, path)`` gives it, and no fingerprint."""
+        try:
+            with open(path, "rb") as fh:
+                st = os.fstat(fh.fileno())
+                data = fh.read()
+        except OSError:
+            return self.spec.row(name, path)
+        digest = hashlib.sha256(data).hexdigest()
+        measure_inputs.remember_sha256(path, st.st_size, st.st_mtime_ns, digest)
+        key = measure_inputs.input_key(path, self.project_root)
+        with self._fingerprints_lock:
+            self.fingerprints[key] = (st.st_size, st.st_mtime_ns, digest)
+        return self.spec.row(name, path, data=data)
+
     def write(self) -> str:
-        """Atomically write the CSV (then its provenance sidecar); return the CSV path.
+        """Atomically write the CSV (then its provenance sidecar and the record of its
+        inputs); return the CSV path.
 
         Raises:
             app.io_utils.FileLockedError: the CSV is open in another program;
@@ -128,7 +155,38 @@ class MeasureRun:
         csv_path = self.csv_path
         write_metric_csv(self.rows, csv_path, list(self.spec.headers))
         self._write_provenance(csv_path)
+        self._write_inputs_record(csv_path)
         return csv_path
+
+    def _write_inputs_record(self, csv_path: str) -> None:
+        """Best effort: a failed record is logged and never fails the measurement. The
+        record of an earlier run is removed then: it names that run's CSV, and a CSV
+        measured again can hold the same bytes while its inputs differ."""
+        try:
+            measure_inputs.write_inputs_record(csv_path, self.fingerprints)
+        except Exception:  # the record is additive; the CSV is already safe
+            logger.warning("Could not record the inputs of %s", csv_path, exc_info=True)
+            try:
+                os.remove(measure_inputs.inputs_record_path(csv_path))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning("Could not remove the earlier record of %s", csv_path)
+
+    def unchanged(self) -> bool:
+        """True when the CSV's record names exactly :attr:`images` and none of them
+        changed since it was written (size and time, else content); False without a
+        record that matches the CSV on disk."""
+        record = measure_inputs.load_inputs_record(self.csv_path)
+        if record is None:
+            return False
+        wanted = {measure_inputs.input_key(p, self.project_root) for p in self.images.values()}
+        folders = {os.path.dirname(os.path.abspath(p)) for p in self.images.values()}
+        current: dict[str, measure_inputs.Stamp] = {}
+        for folder in folders:
+            stamps = measure_inputs.scan_stamps(folder, "", self.project_root)
+            current.update((key, stamp) for key, stamp in stamps.items() if key in wanted)
+        return measure_inputs.is_unchanged(record, current)
 
     def _write_provenance(self, csv_path: str) -> None:
         """Best effort: a failed sidecar is logged and never fails the measurement."""

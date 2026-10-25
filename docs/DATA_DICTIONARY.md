@@ -67,6 +67,18 @@ dashboards.
 Each run rewrites the whole file. Rows are sorted by `Tube`, then `Date`, `Time` and
 `Position`; rows without a tube come last.
 
+Beside each CSV, Measure writes `<csv>.inputs.json` (e.g. `mask/root_areas.csv.inputs.json`):
+`{"csv_sha256": "<SHA-256 of the CSV bytes>", "inputs": {"mask/<stem>.png": [size, mtime_ns, "<SHA-256>"], ...}}`,
+one entry per file measured, keyed by its path relative to the project folder. "Changed since
+measured" (the Measure status line, the metrics bar) compares each input with its entry: size
+and modification time first, the content only when they differ, so a copied or restamped
+folder stays current and a repainted file with an older time is changed; inputs added or
+removed since are reported. A record whose `csv_sha256` does not match the CSV on disk (the
+CSV was edited or replaced) is ignored, and so is a missing one: the comparison then falls
+back to file times (an input written after the CSV is changed). If the record cannot be
+written, the previous one is removed so it can never describe the new CSV. The record never
+changes a CSV value.
+
 ### Columns
 
 | Column | Type | Unit | Meaning |

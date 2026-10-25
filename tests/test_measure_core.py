@@ -20,7 +20,7 @@ import pytest
 
 from app import provenance
 from app.config import AREA_CSV_HEADERS, CALIBRATION, LENGTH_CSV_HEADERS
-from app.inference import measure_run, metrics
+from app.inference import measure_inputs, measure_run, metrics
 from app.inference.measure_run import AREA, LENGTH, MeasureRun
 
 # --------------------------------------------------------------------------- legacy reference
@@ -319,6 +319,31 @@ def test_sidecar_failure_does_not_fail_the_measurement(tmp_path, monkeypatch):
     run = MeasureRun(AREA, images, str(tmp_path))
     run.compute()
     assert os.path.isfile(run.write())
+
+
+def test_the_record_does_not_touch_the_csv(tmp_path, monkeypatch):
+    """The ``<csv>.inputs.json`` step (R5) changes no CSV byte, and its failure fails
+    nothing."""
+    images = _make_dataset(tmp_path / "in", "area", _NAMES[:3])
+    recorded = MeasureRun(AREA, images, str(tmp_path / "recorded"), project_root=str(tmp_path))
+    os.makedirs(recorded.output_dir)
+    recorded.compute()
+    with_record = open(recorded.write(), "rb").read()
+    assert os.path.isfile(measure_inputs.inputs_record_path(recorded.csv_path))
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(measure_inputs, "write_inputs_record", broken)
+    plain = MeasureRun(AREA, images, str(tmp_path / "plain"), project_root=str(tmp_path))
+    os.makedirs(plain.output_dir)
+    plain.compute()
+    without_record = open(plain.write(), "rb").read()
+    assert not os.path.exists(measure_inputs.inputs_record_path(plain.csv_path))
+    assert without_record == with_record
+    # Measured again with the same bytes: the earlier run's record goes (it may differ).
+    assert open(recorded.write(), "rb").read() == with_record
+    assert not os.path.exists(measure_inputs.inputs_record_path(recorded.csv_path))
 
 
 def test_rows_with_equal_sort_keys_keep_input_order():
