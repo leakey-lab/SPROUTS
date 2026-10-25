@@ -18,6 +18,8 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
   skeletons/root_lengths.csv              root length per skeleton
   skeleton_corrections/<stem>_skeleton.png   hand-corrected skeletons
   gt/<stem>.png, gt/classes.json          multi-class ground truth (Trace GT)
+  gt/mask/<stem>.png                      GT root mask: a mask saved after a human edit
+  gt/skeletons/<stem>.png                 GT skeleton: a skeleton saved after a human edit
 ```
 
 `<stem>` is the image file name without its extension. Images are read in their stored
@@ -168,8 +170,12 @@ run.
 
 ## Ground truth (`gt/`)
 
-Hand-traced, multi-class ground truth for training segmentation models. It never reads
-or writes `mask/` or `skeletons/` and is never produced or measured by a model.
+Everything a person saves lives under `gt/`; the model's predictions in `mask/` and
+`skeletons/` are never written by the editor. `gt/mask/<stem>.png` and
+`gt/skeletons/<stem>.png` hold a root mask and a skeleton saved after a human edit (the
+GT that Measure prefers over the prediction, once the editor and Measure use them); the
+class labels below are hand-traced, multi-class ground truth for training segmentation
+models.
 
 ### `gt/<stem>.png`
 

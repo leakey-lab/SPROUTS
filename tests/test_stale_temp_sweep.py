@@ -182,6 +182,8 @@ def test_output_dirs_are_the_folders_the_app_writes_into(tmp_path):
         join(root, "skeletonizer", "test_latest", "images"),
         join(root, "skeleton_corrections"),
         join(root, "gt"),
+        join(root, "gt", "mask"),
+        join(root, "gt", "skeletons"),
     )
     assert os.listdir(tmp_path) == []  # describing the folders creates none
 

@@ -192,6 +192,16 @@ def test_gt_path_matches_gt_store(tmp_path, layout):
     assert layout.gt_dir == gt_store.gt_dir(str(tmp_path))
 
 
+def test_gt_mask_and_skeleton_paths_sit_under_gt(tmp_path, layout):
+    root = str(tmp_path)
+    assert layout.gt_mask_dir == os.path.join(root, "gt", "mask")
+    assert layout.gt_skeletons_dir == os.path.join(root, "gt", "skeletons")
+    assert layout.gt_mask_path(STEM) == os.path.join(root, "gt", "mask", f"{STEM}.png")
+    assert layout.gt_skeleton_path(f"{STEM}.jpg") == os.path.join(
+        root, "gt", "skeletons", f"{STEM}.png"
+    )
+
+
 # ------------------------------------------------------------------ legacy folders
 
 

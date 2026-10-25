@@ -9,7 +9,9 @@ A SPROUTS project is a folder of images. Every stage writes next to them::
     <root>/skeletons/<stem>_fake.png                generated skeleton
     <root>/skeletons/root_lengths.csv               Measure (length)
     <root>/skeleton_corrections/<stem>_skeleton.png corrected skeleton
-    <root>/gt/<stem>.png                            ground-truth tracing
+    <root>/gt/<stem>.png                            GT class labels
+    <root>/gt/mask/<stem>.png                       GT mask (a saved edit)
+    <root>/gt/skeletons/<stem>.png                  GT skeleton (a saved edit)
 
 Older runs used ``output/mask`` and ``[output/]skeletonizer/test_latest/images``
 (plus a ``test_latest`` folder found by a bounded walk); the ``resolve_*`` and
@@ -45,6 +47,7 @@ __all__ = [
     "CORRECTED_SKELETON_SUFFIX",
     "MASK_EXTENSIONS",
     "SKELETON_SUFFIX",
+    "GtStems",
     "ImageScan",
     "ProjectLayout",
     "find_by_stem",
@@ -254,6 +257,19 @@ class ImageScan:
 
 
 @dataclass(frozen=True)
+class GtStems:
+    """The stems with GT, one set per kind (:meth:`ProjectLayout.scan_gt_stems`).
+
+    Each set holds the stems as the scans list them, the winners' real stems (not their
+    :func:`~app.naming.stem_key`): one per name without case (O7).
+    """
+
+    mask: frozenset[str]
+    skeleton: frozenset[str]
+    labels: frozenset[str]
+
+
+@dataclass(frozen=True)
 class ProjectLayout:
     """Paths of one project folder (``root`` holds the images).
 
@@ -296,6 +312,16 @@ class ProjectLayout:
         return self._path(GT_DIRNAME)
 
     @property
+    def gt_mask_dir(self) -> str:
+        """``gt/mask/``: the GT of ``mask/``, same ``<stem>.png`` names."""
+        return self._path(GT_DIRNAME, MASK_DIRNAME)
+
+    @property
+    def gt_skeletons_dir(self) -> str:
+        """``gt/skeletons/``: the GT of ``skeletons/``, ``<stem>.png`` (no ``_fake``)."""
+        return self._path(GT_DIRNAME, SKELETONS_DIRNAME)
+
+    @property
     def mask_dir_candidates(self) -> tuple[str, str]:
         """Mask folders in Measure-area priority: legacy ``output/mask`` first, as today."""
         return self._path(*_LEGACY_MASK_DIR), self.mask_dir
@@ -311,14 +337,16 @@ class ProjectLayout:
 
         The mask and skeleton candidates (generation writes there, and Measure writes
         its CSV and ``.provenance.json`` into the folder it measured),
-        ``skeleton_corrections/`` and ``gt/``. Not the image folder (nothing writes
-        there) and no legacy ``test_latest`` walk: nothing is read from disk.
+        ``skeleton_corrections/``, ``gt/``, ``gt/mask/`` and ``gt/skeletons/``. Not the image
+        folder (nothing writes there) and no legacy ``test_latest`` walk: nothing is read from disk.
         """
         return (
             *self.mask_dir_candidates,
             *self.skeleton_dir_candidates,
             self.corrections_dir,
             self.gt_dir,
+            self.gt_mask_dir,
+            self.gt_skeletons_dir,
         )
 
     @staticmethod
@@ -441,8 +469,59 @@ class ProjectLayout:
 
     # ------------------------------------------------------------------ GT
     def gt_path(self, stem: str) -> str:
-        """Ground-truth tracing ``gt/<stem>.png`` (same as ``app.gt.store.gt_path``)."""
+        """GT class labels ``gt/<stem>.png`` (same as ``app.gt.store.gt_path``)."""
         return self._path(GT_DIRNAME, self.stem(stem) + ".png")
+
+    def gt_mask_path(self, stem: str) -> str:
+        """GT mask ``gt/mask/<stem>.png`` (what a saved mask edit writes)."""
+        return self._path(GT_DIRNAME, MASK_DIRNAME, self.stem(stem) + ".png")
+
+    def gt_skeleton_path(self, stem: str) -> str:
+        """GT skeleton ``gt/skeletons/<stem>.png`` (what a saved skeleton edit writes)."""
+        return self._path(GT_DIRNAME, SKELETONS_DIRNAME, self.stem(stem) + ".png")
+
+    def _find_gt_png(self, directory: str, stem: str) -> str | None:
+        """``<directory>/<stem>.png`` when it exists, else a ``.png`` file (any case of the
+        extension) whose stem differs only in case: what :func:`_scan_ranked` lists."""
+        stem = self.stem(stem)
+        path = os.path.join(directory, stem + ".png")
+        if os.path.isfile(path):
+            return path
+        return _find_without_case(directory, stem, (".png",), fold_endings=True)
+
+    def find_gt_mask(self, stem: str) -> str | None:
+        """Existing ``gt/mask/<stem>.png``, found as :meth:`scan_gt_masks` lists it (O7)."""
+        return self._find_gt_png(self.gt_mask_dir, stem)
+
+    def find_gt_skeleton(self, stem: str) -> str | None:
+        """Existing ``gt/skeletons/<stem>.png``, found as :meth:`scan_gt_skeletons` lists
+        it (O7)."""
+        return self._find_gt_png(self.gt_skeletons_dir, stem)
+
+    def find_gt_labels(self, stem: str) -> str | None:
+        """Existing ``gt/<stem>.png``, found as :meth:`scan_gt_labels` lists it (O7)."""
+        return self._find_gt_png(self.gt_dir, stem)
+
+    def scan_gt_masks(self) -> dict[str, str]:
+        """``stem -> path`` of ``gt/mask/*.png``: one file per stem without case."""
+        return _scan_ranked(self.gt_mask_dir, (".png",))
+
+    def scan_gt_skeletons(self) -> dict[str, str]:
+        """``stem -> path`` of ``gt/skeletons/*.png``: one file per stem without case."""
+        return _scan_ranked(self.gt_skeletons_dir, (".png",))
+
+    def scan_gt_labels(self) -> dict[str, str]:
+        """``stem -> path`` of ``gt/*.png`` (files only: ``classes.json`` and the two
+        folders under ``gt/`` are not labels)."""
+        return _scan_ranked(self.gt_dir, (".png",))
+
+    def scan_gt_stems(self) -> GtStems:
+        """The stems with GT of each kind: three scans, one scandir each."""
+        return GtStems(
+            mask=frozenset(self.scan_gt_masks()),
+            skeleton=frozenset(self.scan_gt_skeletons()),
+            labels=frozenset(self.scan_gt_labels()),
+        )
 
     # ------------------------------------------------------------------ metric CSVs
     def _lengths_csv_candidates(self, search_test_latest: bool) -> Iterator[str]:

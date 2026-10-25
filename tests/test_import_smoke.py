@@ -64,6 +64,7 @@ APP_MODULES = [
     "app.editing.history",
     "app.enhancement",
     "app.gt.export",
+    "app.gt.files",
     "app.gt.registry",
     "app.gt.store",
     "app.gui._lazy",

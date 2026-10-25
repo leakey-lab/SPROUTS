@@ -25,6 +25,7 @@ MAX_LINES = 450
 QT_FREE = [
     "app.editing.journal",
     "app.editing.thinning",
+    "app.gt.files",
     "app.gui.correct.layer",
     "app.gui.correct.session",
     "app.gui.correct.save_gate",

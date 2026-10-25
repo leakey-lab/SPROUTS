@@ -1,9 +1,10 @@
 """Library state: which images a project folder has, and which have masks / skeletons.
 
 :class:`ImageManager` is the single source of truth for per-image output status
-(``has_mask`` / ``has_skeleton``): it is filled by one folder scan and kept current by
-the editors' save/clear signals and by :meth:`ImageManager.refresh_outputs` after a
-generation run, so nothing on the GUI thread stats files per image.
+(``has_mask`` / ``has_skeleton``, and ``has_gt_*`` for the GT under ``gt/``): it is filled
+by one folder scan and kept current by the editors' save/clear signals and by
+:meth:`ImageManager.refresh_outputs` after a generation run, so nothing on the GUI thread
+stats files per image.
 
 :class:`ImageLoaderThread` scans a folder off the GUI thread and also builds the library
 hierarchy there. Opening another folder never kills a scan: the old one is asked to stop
@@ -24,11 +25,13 @@ from functools import partial
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog
 
+from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.gui.library_index import index_names
 from app.io_utils import sweep_stale_temp_files
 from app.naming import image_stem, parse_image_name
 from app.project_layout import (
     SKELETON_SUFFIX,
+    GtStems,
     ImageScan,
     ProjectLayout,
     find_by_stem,
@@ -48,6 +51,15 @@ def _stems_of(found: set[str], images) -> set[str]:
     """``found`` (output stems) under the Library's stems: an output whose name differs
     from its image's only in case belongs to that image (O7)."""
     return set(key_to_stems(dict.fromkeys(found), images))
+
+
+def _gt_of(found: GtStems, images) -> GtStems:
+    """``found`` (GT stems) under the Library's stems, as :func:`_stems_of` does (O7)."""
+    return GtStems(
+        mask=frozenset(_stems_of(found.mask, images)),
+        skeleton=frozenset(_stems_of(found.skeleton, images)),
+        labels=frozenset(_stems_of(found.labels, images)),
+    )
 
 
 def sweep_project_temp_files(layout: ProjectLayout) -> list[str]:
@@ -76,9 +88,10 @@ class ImageLoaderThread(QThread):
 
     An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
     ``scan`` (the folder listing, with the files it does not list), ``hierarchy``,
-    ``labels`` (library row texts), ``skeleton_stems`` and ``corrected_stems`` (images
-    with a skeleton correction) hold the extra results. Masks, skeletons and
-    corrections are keyed by the Library's stems (O7: ``mask/a.png`` is ``A.png``'s).
+    ``labels`` (library row texts), ``skeleton_stems``, ``corrected_stems`` (images
+    with a skeleton correction) and ``gt`` (the images with GT mask, skeleton and class
+    labels) hold the extra results. Masks, skeletons, corrections and GT are keyed by the
+    Library's stems (O7: ``mask/a.png`` is ``A.png``'s).
     """
 
     progress = pyqtSignal(int)
@@ -93,6 +106,7 @@ class ImageLoaderThread(QThread):
         self.labels: dict[str, str] = {}
         self.skeleton_stems: set[str] = set()
         self.corrected_stems: set[str] = set()
+        self.gt = GtStems(frozenset(), frozenset(), frozenset())
 
     def run(self):
         try:
@@ -109,6 +123,7 @@ class ImageLoaderThread(QThread):
                 return
             self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), images)
             self.corrected_stems = _stems_of(layout.scan_corrected_stems(), images)
+            self.gt = _gt_of(layout.scan_gt_stems(), images)
             if self._stop(85):
                 return
             self.hierarchy, self.labels = index_names(images)
@@ -162,6 +177,10 @@ class ImageManager:
         # Images with a skeleton correction (display only: Measure reads the generated
         # skeleton, FR-03).
         self.corrected_stems: set[str] = set()
+        # Images with GT under gt/ (a saved edit; a prediction is never GT).
+        self.gt_mask_stems: set[str] = set()
+        self.gt_skeleton_stems: set[str] = set()
+        self.gt_label_stems: set[str] = set()
         self.has_fake_real_pairs = False
         self.original_folder = None
         # The newest delivered scan's listing (what it did not list too); None before one.
@@ -268,6 +287,7 @@ class ImageManager:
                 "labels": thread.labels,
                 "skeleton_stems": thread.skeleton_stems,
                 "corrected_stems": thread.corrected_stems,
+                "gt": thread.gt,
             }
         try:
             self.on_loading_finished(images, fake_images, masks, pairs, **extra)
@@ -305,10 +325,11 @@ class ImageManager:
         labels=None,
         skeleton_stems=None,
         corrected_stems=None,
+        gt=None,
     ):
         """Adopt a scan result as the library (``original_folder`` is already set).
 
-        ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``corrected_stems`` come
+        ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``corrected_stems`` / ``gt`` come
         precomputed from the loader thread; without them they are computed here (the
         first two lazily).
         """
@@ -327,10 +348,19 @@ class ImageManager:
             self.corrected_stems = set(corrected_stems)
         elif self.original_folder:
             self.corrected_stems = _stems_of(self._layout().scan_corrected_stems(), images)
+        if gt is None and self.original_folder:
+            gt = _gt_of(self._layout().scan_gt_stems(), images)
+        if gt is not None:
+            self._adopt_gt(gt)
         if self.main_window:
             self.main_window.on_loading_finished(
                 images, self.fake_images, masks, self.has_fake_real_pairs
             )
+
+    def _adopt_gt(self, gt: GtStems) -> None:
+        self.gt_mask_stems = set(gt.mask)
+        self.gt_skeleton_stems = set(gt.skeleton)
+        self.gt_label_stems = set(gt.labels)
 
     def _clear_images(self):
         self.images = {}
@@ -340,6 +370,7 @@ class ImageManager:
         self.masks = {}
         self.skeleton_stems = set()
         self.corrected_stems = set()
+        self._adopt_gt(GtStems(frozenset(), frozenset(), frozenset()))
         self.processed_base_path = None
         # Invalidate cache
         self._hierarchy_cache = None
@@ -366,13 +397,14 @@ class ImageManager:
         self.processed_base_path = skeletons if os.path.isdir(skeletons) else None
 
     def refresh_outputs(self):
-        """Re-read mask/ and skeletons/ after a generation run (two scandirs), keyed by
-        the Library's stems (O7)."""
+        """Re-read mask/, skeletons/ and the GT under gt/ after a generation run or a GT
+        save (five scandirs), keyed by the Library's stems (O7)."""
         if not self.original_folder:
             return
         layout = self._layout()
         self.masks = key_to_stems(layout.scan_masks(), self.images)
         self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), self.images)
+        self._adopt_gt(_gt_of(layout.scan_gt_stems(), self.images))
         self.fake_images.clear()
         self._fake_misses.clear()
         self._find_processed_base_path()
@@ -400,6 +432,44 @@ class ImageManager:
 
     def has_skeleton(self, name) -> bool:
         return name in self.skeleton_stems
+
+    def has_gt_mask(self, name) -> bool:
+        return name in self.gt_mask_stems
+
+    def has_gt_skeleton(self, name) -> bool:
+        return name in self.gt_skeleton_stems
+
+    def has_gt_labels(self, name) -> bool:
+        return name in self.gt_label_stems
+
+    def set_gt(self, name, kind: str, present: bool) -> None:
+        """Record whether ``name`` (stem or image path) has GT of ``kind``: ``"mask"``,
+        ``"skeleton"`` or ``"labels"``."""
+        stems = {
+            "mask": self.gt_mask_stems,
+            "skeleton": self.gt_skeleton_stems,
+            "labels": self.gt_label_stems,
+        }.get(kind)
+        if stems is None:
+            raise ValueError(f"Unknown GT kind {kind!r}: use 'mask', 'skeleton' or 'labels'")
+        stem = image_stem(name)
+        if present:
+            stems.add(stem)
+        else:
+            stems.discard(stem)
+
+    def mask_state(self, name) -> str:
+        """Where the mask of ``name`` comes from: ``"gt"`` (a saved edit), ``"prediction"``
+        or ``"none"``. GT wins over a prediction."""
+        if self.has_gt_mask(name):
+            return SOURCE_GT
+        return SOURCE_PREDICTION if self.has_mask(name) else SOURCE_NONE
+
+    def skeleton_state(self, name) -> str:
+        """Where the skeleton of ``name`` comes from: as :meth:`mask_state`."""
+        if self.has_gt_skeleton(name):
+            return SOURCE_GT
+        return SOURCE_PREDICTION if self.has_skeleton(name) else SOURCE_NONE
 
     def has_correction(self, name) -> bool:
         """True when a skeleton correction of ``name`` was found (display only, FR-03)."""
