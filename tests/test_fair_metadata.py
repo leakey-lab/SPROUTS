@@ -89,3 +89,14 @@ def test_changelog_top_release_is_the_package_version():
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     sections = re.findall(r"^## \[([^\]]+)\]", text, flags=re.MULTILINE)
     assert sections[:2] == ["Unreleased", app.__version__]
+
+
+def test_the_pix2pix_bsd_notice_is_reproduced():
+    text = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    for needle in (
+        "Copyright (c) 2017, Jun-Yan Zhu and Taesung Park",
+        "Copyright (c) 2016, Phillip Isola and Jun-Yan Zhu",
+        "Copyright (c) 2015, Facebook, Inc.",
+        "Redistributions of source code must retain the above copyright notice",
+    ):
+        assert needle in text

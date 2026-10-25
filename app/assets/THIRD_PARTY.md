@@ -50,3 +50,5 @@ plotly.js version `plotly.offline.get_plotlyjs_version()` reports, replace
 `plotly-basic.min.js` unmodified, update its row and run
 `pytest tests/test_viz_dash_plotly_bundle.py`. If a dashboard needs a trace type the
 basic bundle lacks, delete the file instead: dcc.Graph then loads the full bundle.
+
+Code outside this folder: see `THIRD_PARTY_NOTICES.md` at the repository root.

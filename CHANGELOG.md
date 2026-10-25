@@ -335,6 +335,8 @@ Five passes, not yet released:
     and 2000 %; a two-finger double tap (smart zoom) toggles fit and 100 %. Ignored while a
     stroke is drawn. Windows precision touchpads keep zooming through Ctrl+wheel (WX-T3,
     O21).
+  - `THIRD_PARTY_NOTICES.md` reproduces the pytorch-CycleGAN-and-pix2pix BSD licence for
+    the skeleton generator code derived from it (W1-T7, F1).
 - FAIR metadata: `CITATION.cff` (GitHub "Cite this repository"), `codemeta.json`, this
   changelog, a model card (`docs/MODELS.md`, with the SHA-256 of both checkpoints) and a
   data dictionary (`docs/DATA_DICTIONARY.md`: every output file, column, unit and
