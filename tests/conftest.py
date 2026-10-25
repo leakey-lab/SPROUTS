@@ -27,11 +27,16 @@ from __future__ import annotations
 
 import gc
 import os
+import shutil
+import tempfile
 import time
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# The suite logs into its own folder, never into the user's application log (X5).
+_TEST_LOG_DIR = tempfile.mkdtemp(prefix="sprouts-test-logs-")
+os.environ.setdefault("SPROUTS_LOG_DIR", _TEST_LOG_DIR)
 
 try:  # before any QApplication exists (see the module docstring)
     from PyQt6 import QtWebEngineWidgets  # noqa: F401
@@ -55,6 +60,11 @@ def _no_qt_object_in_sight() -> bool:
     return not any(
         issubclass(type(obj), sip.wrapper) and obj is not application for obj in gc.get_objects()
     )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Remove the session's log folder."""
+    shutil.rmtree(_TEST_LOG_DIR, ignore_errors=True)
 
 
 def pytest_collection_finish(session):

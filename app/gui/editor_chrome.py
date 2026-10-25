@@ -66,13 +66,16 @@ def _grouped(widget: QWidget) -> bool:
 def _tab_stops(root: QWidget) -> list[QWidget]:
     """``root`` and its descendants that Tab can reach, and every grouped button, in the
     order they were added: the order on screen in the rail, the dock and the panels (their
-    layouts add in order)."""
+    layouts add in order). A combo box's drop-down list is a window of its own (a popup):
+    it is no stop, and Qt refuses a tab order across windows."""
+    window = root.window()
     return [
         widget
         for widget in (root, *root.findChildren(QWidget))
         # A stale wrapper can be typed as a widget for another object (see
         # widgets.focus.keep_canvas_focus): touch widgets only.
         if widget.isWidgetType()
+        and widget.window() is window
         and (widget.focusPolicy() & Qt.FocusPolicy.TabFocus or _grouped(widget))
     ]
 

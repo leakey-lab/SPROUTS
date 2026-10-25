@@ -139,7 +139,7 @@ sprouts
 Logs go to `app.log` in `%LOCALAPPDATA%\SPROUTS\Logs` (Windows),
 `~/.local/state/sprouts/log` (Linux) or `~/Library/Logs/SPROUTS` (macOS); set
 `SPROUTS_LOG_DIR` to use another folder. A native crash writes the stacks of every thread
-to `fault.log` next to it; an unexpected Python error is logged and shown in a dialog
+to `fault.log` next to it (the file also records handled Windows exceptions such as `0x8001010d`, so an entry alone is not a sign of a crash); an unexpected Python error is logged and shown in a dialog
 instead of closing the app.
 
 Set `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0` to draw the canvases without OpenGL; About (row

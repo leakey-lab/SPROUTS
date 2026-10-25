@@ -57,6 +57,10 @@ Five passes, not yet released:
     projects and the Library read-ahead use it. Temp names of atomic writes stay within 255
     bytes on Linux and macOS (also for non-UTF-8 names). The no-driver device note on macOS
     no longer mentions NVIDIA (WX-T4, O21).
+  - Start-up no longer logs eight `QWidget::setTabOrder` warnings (a combo box's popup list
+    was in the editor's Tab chain); tests log into a temporary folder instead of the user's
+    log; CI also runs on `feat/**` and `fix/**` pushes; README says `fault.log` also records
+    handled Windows exceptions (W5-T6, X5, X6, X7).
   - Dependencies: `pywin32` is no longer a dependency (nothing imported it) and OpenCV is
     `opencv-python-headless` (no OpenCV window is ever opened; avoids a second Qt on
     Linux); Linux and macOS are listed as supported (WX-T2, O21).

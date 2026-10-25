@@ -48,7 +48,8 @@ $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
 
 - Test suite pins the scientific calibration (length/area), skeleton
   vectorization, the CSV schema, and an import-smoke of every app module.
-- CI: `.github/workflows/ci.yml` runs that suite on push. Two CI gotchas already
+- CI: `.github/workflows/ci.yml` runs that suite on pushes to `main`, `v3`, `refactor/**`,
+  `feat/**` and `fix/**` and on pull requests, on Ubuntu, Windows and macOS. Two CI gotchas already
   fixed (memory `ci-deps-install-gotchas`): `requirements.txt` must stay UTF-8
   (was UTF-16), and `pywin32` was removed (O21: no Windows-only package; OpenCV is
   `opencv-python-headless`). `.pre-commit-config.yaml` mirrors the lint/format hooks.
