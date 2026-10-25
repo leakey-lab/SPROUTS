@@ -1,6 +1,6 @@
 # SPROUTS — known issues and open decisions
 
-Status of 2026-10-25 at HEAD `607a7f9` on `feat/unified-correct-editor`. Every owner
+Status of 2026-10-25 at HEAD `cce3af8` on `feat/unified-correct-editor`. Every owner
 question of the 2026-10-12 audit is answered (table 1); each answer names the task that
 builds it in `docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`. Table 2 lists
 every engineering item with its ID, the old names it was known by, and the task. Table 3
@@ -16,12 +16,12 @@ end of each wave.
 | O | Decision | Built by |
 |---|---|---|
 | O1 | Measure reads GT first for both length and area; last column `Source` (`gt` or `prediction`) | WG-T8 |
-| O2 | An unedited Save is not acceptance; a layer is written only when it differs from what it would otherwise read | W1-T3, WG-T2, WG-T3 |
+| O2 | An unedited Save is not acceptance; a layer is written only when it differs from what it would otherwise read | W1-T3 (done, 4850564), WG-T2, WG-T3 |
 | O3 | Same camera model (Bartz BTC-100X); 18 x 13.5 mm, confirmed by Rajurkar et al. 2022 (Plant Methods 18:39); one calibration per project file | W3-T2 |
-| O4 | Fixed-shape batches; stop on out-of-memory; default on after a GPU session | W2-T3 (done, 41f371e: batch shapes and out-of-memory events in the run record), W3-T3 |
+| O4 | Fixed-shape batches; stop on out-of-memory; default on after a GPU session; masks run at N = 4 (16 needs about 12 GiB free), a build decision to be confirmed by the owner | W2-T3 (done, 41f371e: batch shapes and out-of-memory events in the run record), W3-T3 (done, 1fbc34c) |
 | O5 | Deterministic cuDNN stays the default | W0-T2 (docs only; done, 705377d..dc67e12) |
-| O6 | PNG and JPEG only, any case | W1-T5 |
-| O7 | Stems compare without case on every platform | W1-T5 |
+| O6 | PNG and JPEG only, any case | W1-T5 (done, 1ff9d6c) |
+| O7 | Stems compare without case on every platform | W1-T5 (done, 1ff9d6c) |
 | O8 | Generate keeps the model size; nearest on display | W3-T4 |
 | O9 | A cleared mask stays as an empty GT mask; Generate never touches GT | WG-T2, WG-T7 |
 | O10 | One mask threshold, 127 | W2-T6 |
@@ -29,13 +29,13 @@ end of each wave.
 | O12 | Keep the 8-connected arc length; pixels are square; fix the 4.4 % bias with the Vossepoel-Smeulders corner-count estimator (research memo) | W3-T8 |
 | O13 | Old 341 x 256 corrections are never measured and are flagged | WG-T3, WG-T8 |
 | O14 | Say that the mask gives area, the skeleton gives length, independently | W2-T8a, WG-T10 |
-| O15 | Refuse a folder change while a job runs | W1-T1 |
+| O15 | Refuse a folder change while a job runs | W1-T1 (done, 2d94694) |
 | O16 | A run that writes nothing keeps the record; keep a run history | W2-T1 (done, 51b8136) |
 | O17 | Buttons "Measure Length" / "Measure Area"; no incremental Measure | W2-T8a |
 | O18 | One Clear, in the dock; Save accent only while something is unsaved | W4-T1 |
-| O19 | Discard reloads a changed file; Save asks first | W1-T4, WG-T4 |
+| O19 | Discard reloads a changed file; Save asks first | W1-T4 (done, 1b585d9), WG-T4 |
 | O20 | Toast when a smoothed, uncommitted pick is dropped | W4-T2 |
-| O21 | Linux and macOS; GPU optional on macOS; no Windows-only packages | WX-T1 (done, 6bd8a31: start-up flags), WX-T8 (done, 607a7f9: macOS raster default), WX-T2 to WX-T5 |
+| O21 | Linux and macOS; GPU optional on macOS; no Windows-only packages | WX-T1 (done, 6bd8a31: start-up flags), WX-T2 (done, 0849735: dependencies), WX-T3 (done, 0c00749: pinch zoom), WX-T4 (done, 08b1605: path identity), WX-T5 (done, 69091cb: font chains), WX-T6 (done, 8e2d09a: CI on macOS), WX-T7, WX-T8 (done, 607a7f9: macOS raster default), WX-T9 (done, 1e6683c: tie order), WX-T10 (done, 7e1a077: backslash stems) |
 | O22 | "Smooth JPEG blocks" switch only; no display upscaler meets the bar | W4-T5 (done, 3ceea64) |
 | O23 | One unified editor: Trace GT becomes a layer of Correct | WG-T4, WG-T5 |
 | O24 | Restore retired classes; Remove GT; GT in the Library; per-class pixel counts; no COCO | WG-T6, WG-T9 |
@@ -46,13 +46,13 @@ end of each wave.
 | O29 | Canvas indicator: warn toast and About row | W2-T9 (done, 28b71f3) |
 | O30 | Do not build the editor pages after the first paint | closed (table 3) |
 | O31 | Uninstall `pipreqs` and `ipython` from the runtime venv (the owner runs it) | W6-T4 |
-| O32 | GPL-3.0-or-later code, CC-BY-4.0 weights; copyright "the SPROUTS authors" | W5-T1 |
-| O33 | Only the weights go to Zenodo; `checkpoints.zip` is untracked | W5-T2 |
-| O34 | Cite as "SPROUTS"; authors Kinjalk Parth, Sebastian Varela, Andrew D. B. Leakey; the tag is the owner's | W5-T3 |
+| O32 | GPL-3.0-or-later code, CC-BY-4.0 weights; copyright "the SPROUTS authors" | W5-T1 (done, 758f161) |
+| O33 | Only the weights go to Zenodo; `checkpoints.zip` is untracked | W5-T2 (done, f5031db) |
+| O34 | Cite as "SPROUTS"; authors Kinjalk Parth, Sebastian Varela, Andrew D. B. Leakey; the tag is the owner's | W5-T3 (done, 5c329e3) |
 | O35 | A few example images with mask, skeleton and a result graph: the audit's three example images | W5-T4 |
 | O36 | Delete `docs/Architecture_2 useful.*` and `docs/BUILD_EXECUTABLE.md` | W5-T7 |
-| O37 | Masks, skeletons and GT files whose image is gone are skipped and recorded, never deleted | W2-T11 |
-| O38 | Only the file name in `Error` cells | W3-T7 |
+| O37 | Masks, skeletons and GT files whose image is gone are skipped and recorded, never deleted | W2-T11 (done, 280ff95) |
+| O38 | Only the file name in `Error` cells | W3-T7 (done, 3ca1576) |
 | Chat | GT design = "GT folder": Trace GT becomes a third layer of Correct; human-saved edits go to `gt/`, predictions are never overwritten, Measure reads GT first with a `Source` column; existing hand-corrected files are copied into `gt/` once (originals kept) | Wave G (WG-T*) |
 
 ## Open: engineering
@@ -60,25 +60,25 @@ end of each wave.
 | ID | Also known as | Item | Decision, built by |
 |---|---|---|---|
 | L1 | FR-03 | Corrected skeletons are not measured | O1, WG-T8 |
-| L2 | V1 | Save with nothing unsaved writes a correction | O2, W1-T3 |
+| L2 | V1 | Save with nothing unsaved writes a correction | O2, W1-T3 (done, 4850564) |
 | L3 | | Mask and skeleton are independent and the pages do not say so | O14, W2-T8a, WG-T10 |
 | L5 | Q1 leftover | Two thinning paths; old 341 x 256 corrections | O13, WG-T3, WG-T8 |
-| M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2, W3-T4 |
+| M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2 (done, 7d5ae3e), W3-T4 |
 | M2 | | One field of view for every image | O3, W2-T4, W3-T2 |
 | M4 | | Mask origin by PNG colour type; a cleared mask is regenerated | O9, WG-T2, WG-T7 |
 | M5 | | Area of editor masks; two thresholds | O10, W2-T6 |
-| R1 | batch-size item of section 7 | Batch size changes GPU outputs | O4, W2-T3 (done, 41f371e: step 1, batch shapes in the run record), W3-T3 (open) |
-| R3 | supported formats | Formats differ per reader | O6, W1-T5 |
-| R4 | case-variant stems | Case-variant stems | O7, W1-T5 |
-| R5 | "Changed since measured" | Compares file times | W2-T2 |
+| R1 | batch-size item of section 7 | Batch size changes GPU outputs | O4, W2-T3 (done, 41f371e: step 1, batch shapes in the run record), W3-T3 (done, 1fbc34c) |
+| R3 | supported formats | Formats differ per reader | O6, W1-T5 (done, 1ff9d6c) |
+| R4 | case-variant stems | Case-variant stems | O7, W1-T5 (done, 1ff9d6c) |
+| R5 | "Changed since measured" | Compares file times | W2-T2 (done, a3dc3c7) |
 | R6 | | A run that writes nothing replaces `_sprouts_run.json` | O16, W2-T1 (done, 51b8136) |
-| R7 | | A job ends after another folder was opened | O15, W1-T1 |
+| R7 | | A job ends after another folder was opened | O15, W1-T1 (done, 2d94694) |
 | R8 | W12 | Measure buttons are nouns | O17, W2-T8a (incremental Measure closed, table 3) |
 | E1 | W16 | Save placement and states | O18, W4-T1 |
-| E2 | | Discard / Save after an external change | O19, W1-T4, WG-T4 |
+| E2 | | Discard / Save after an external change | O19, W1-T4 (done, 1b585d9), WG-T4 |
 | E3 | J1 | Smooth on a picked branch | O20, W4-T2 |
 | E4 | | A click with brush size 1 paints nothing | O11, W3-T5 |
-| E6 | | Pinch zoom (bicubic refine closed, table 3) | O21, WX-T3 |
+| E6 | | Pinch zoom (bicubic refine closed, table 3) | O21, WX-T3 (done, 0c00749) |
 | E7 | Q2 | JPEG deblock | O22, W4-T5 (done, 3ceea64) |
 | G1 | | Two tracing interfaces | O23, WG-T4, WG-T5 |
 | G2 | | Trace GT v1 limits; retired classes cannot return | O24, WG-T6, WG-T9 |
@@ -89,22 +89,22 @@ end of each wave.
 | D2 | | Pre-Generate scan as a warm-up | O28, W6-T3 (optional) |
 | D5 | | IPython in the venv | O31, W6-T4 |
 | D7 | W19 | Dashboard view names and date colours | O27, W4-T6 (done, 1c9f043) |
-| F1 | FR-01 | No licence; Pix2Pix notice missing | O32, W1-T7, W5-T1 |
-| F2 | FR-07 | `checkpoints.zip` tracked; no DOI; no mask model | O33, W5-T2 |
-| F3 | | Metadata placeholders; citation not shipped | O34, W5-T3 |
+| F1 | FR-01 | No licence; Pix2Pix notice missing | O32, W1-T7 (done, 73cd67f), W5-T1 (done, 758f161) |
+| F2 | FR-07 | `checkpoints.zip` tracked; no DOI; no mask model | O33, W5-T2 (done, f5031db) |
+| F3 | | Metadata placeholders; citation not shipped | O34, W5-T3 (done, 5c329e3) |
 | F4 | Q3 | Real images as test data; stale gate | O35, W5-T4 |
 | F5 | CQ-10 | Compat shims; stamp helpers | W5-T5 |
 | F6 | | Script teardown note | W5-T7 (note moves to `CLAUDE.md`) |
-| F7 | | Documents consistent; this file | W0-T1, W0-T2 (done, 705377d..dc67e12), W5-T7, O36 |
+| F7 | | Documents consistent; this file | W0-T1 (done, b69d422), W0-T2 (done, 705377d..dc67e12), W5-T7, O36 |
 | X1 | | The length estimator reads about 4.4 % long | O12, W3-T8 |
-| X2 | | Measure measures masks whose image is gone | O37, W2-T11 |
-| X3 | | `Error` cells hold absolute paths | O38, W3-T7 |
-| X5 | | pytest writes into the user's log | W5-T6 |
-| X6 | | `fault.log` wording; start-up Qt warnings | W5-T6 |
-| X7 | | CI has not run since 2026-07-25 | W5-T6, WX-T5 |
+| X2 | | Measure measures masks whose image is gone | O37, W2-T11 (done, 280ff95) |
+| X3 | | `Error` cells hold absolute paths | O38, W3-T7 (done, 3ca1576) |
+| X5 | | pytest writes into the user's log | W5-T6 (done, aacef21) |
+| X6 | | `fault.log` wording; start-up Qt warnings | W5-T6 (done, aacef21) |
+| X7 | | CI has not run since 2026-07-25 | W5-T6 (done, aacef21), WX-T5 (done, 69091cb) |
 | X8 | | Stamp helpers defined six times | W5-T5 |
 | X9 | | Correct with no image shows a tool hint | W2-T8a |
-| XP1 | | Linux and macOS support (new) | O21, WX-T1 (done, 6bd8a31: start-up flags), WX-T8 (done, 607a7f9: macOS raster default), WX-T2 to WX-T5 |
+| XP1 | | Linux and macOS support (new) | O21, WX-T1 (done, 6bd8a31: start-up flags), WX-T2 (done, 0849735: dependencies), WX-T3 (done, 0c00749: pinch zoom), WX-T4 (done, 08b1605: path identity), WX-T5 (done, 69091cb: font chains), WX-T6 (done, 8e2d09a: CI on macOS), WX-T7, WX-T8 (done, 607a7f9: macOS raster default), WX-T9 (done, 1e6683c: tie order), WX-T10 (done, 7e1a077: backslash stems) |
 
 ## Closed on 2026-10-25 (accepted, nothing to build)
 
