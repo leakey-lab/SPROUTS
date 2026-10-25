@@ -52,6 +52,12 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
+The runtime environment needs neither `pipreqs` nor `ipython`; if an older environment has
+them, remove them (`pip uninstall -y pipreqs ipython`): IPython adds about 250 ms to the
+first dashboard import. An older environment may also hold `opencv-python`: uninstall it
+before installing the requirements (`pip uninstall -y opencv-python`), because it and
+`opencv-python-headless` write the same `cv2` folder.
+
 Results published so far were produced with a PyTorch nightly
 (`torch 2.8.0.dev20250325+cu128`) that is no longer downloadable; torch 2.8.0 above is
 the matching stable release. GPU results can differ from another build or from CPU in
