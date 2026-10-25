@@ -52,6 +52,11 @@ Five passes, not yet released:
     of *Generate all* went to the newly opened folder and replaced its skeletons); the
     skeleton pass is bound to the folder the mask pass ran on, and a job is refused while a
     folder loads (W1-T1, R7, O15).
+  - Paths: `app.io_utils.path_key` / `same_file` compare paths the way the platform's file
+    system does (case-insensitive and Unicode-normalising on macOS APFS); the recent
+    projects and the Library read-ahead use it. Temp names of atomic writes stay within 255
+    bytes on Linux and macOS (also for non-UTF-8 names). The no-driver device note on macOS
+    no longer mentions NVIDIA (WX-T4, O21).
   - Dependencies: `pywin32` is no longer a dependency (nothing imported it) and OpenCV is
     `opencv-python-headless` (no OpenCV window is ever opened; avoids a second Qt on
     Linux); Linux and macOS are listed as supported (WX-T2, O21).

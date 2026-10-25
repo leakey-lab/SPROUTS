@@ -21,6 +21,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
+from app.io_utils import path_key
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["RecentProject", "RecentProjectsStore", "SETTINGS_KEY", "MAX_ENTRIES"]
@@ -55,7 +57,7 @@ class RecentProject:
 
 
 def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+    return path_key(os.path.normpath(a)) == path_key(os.path.normpath(b))
 
 
 class RecentProjectsStore:

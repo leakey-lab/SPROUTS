@@ -29,7 +29,9 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import sys
 import time
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import IO, TYPE_CHECKING, Any
@@ -47,6 +49,8 @@ __all__ = [
     "atomic_write_text",
     "imread_unicode",
     "imwrite_unicode",
+    "path_key",
+    "same_file",
     "sweep_stale_temp_files",
 ]
 
@@ -68,8 +72,9 @@ _TEMP_TOKEN_BYTES = 4  # secrets.token_hex: two hex digits per byte
 _TEMP_SUFFIX = ".tmp"
 _HEX_DIGITS = frozenset("0123456789abcdef")
 # (X1) A temp path must fit wherever its target fits: Windows without long-path support
-# allows paths of up to 259 characters (MAX_PATH less the NUL), and NTFS / ext4 file
-# names of up to 255. The temp name is 14 characters longer than the target's.
+# allows paths of up to 259 characters (MAX_PATH less the NUL), and file names are limited
+# to 255 characters on NTFS but to 255 UTF-8 bytes on ext4 and APFS (O21). The temp name is
+# 14 characters longer than the target's.
 _MAX_PATH_CHARS = 259
 _MAX_NAME_CHARS = 255
 
@@ -92,21 +97,57 @@ class FileLockedError(PermissionError):
         return (type(self), (self.path,))
 
 
-def _temp_path(target: str) -> str:
+def _current_platform() -> str:
+    """``sys.platform``, read through one accessor that tests replace (never ``sys``)."""
+    return sys.platform
+
+
+def path_key(path: str | os.PathLike[str], platform: str | None = None) -> str:
+    """A string that is equal for two spellings of one file on ``platform``.
+
+    Windows folds case (``normcase``); macOS (APFS) also folds case and treats composed and
+    decomposed Unicode as one name, so it compares NFC, case-folded; elsewhere paths are
+    compared as written. The darwin key uses the full ``casefold()``, so ``"ß"`` and ``"ss"``
+    compare equal: it errs on the "same file" side. The path is made absolute first. ``platform=None`` is this machine's
+    platform, read at call time.
+    """
+    platform = _current_platform() if platform is None else platform
+    absolute = os.path.abspath(path)
+    if platform == "win32":
+        return os.path.normcase(absolute)
+    if platform == "darwin":
+        return unicodedata.normalize("NFC", absolute).casefold()
+    return absolute
+
+
+def same_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) -> bool:
+    """True when ``a`` and ``b`` name one path on this platform (:func:`path_key`)."""
+    return path_key(a) == path_key(b)
+
+
+def _temp_path(target: str, platform: str | None = None) -> str:
     """A unique sibling of ``target`` that no image/CSV scanner will pick up.
 
     ``.<target name>.<token>.tmp``, with the target name cut short (to one character at
     least) where the full one would make the temp path longer than a target path that
-    fits in MAX_PATH, or the temp name longer than 255 characters (X1). A target path
-    over MAX_PATH exists only with long paths enabled: then only the name limit applies.
+    fits in MAX_PATH, or the temp name longer than 255 characters (X1) - 255 UTF-8 bytes
+    off Windows, where ext4 and APFS count bytes. A target path over MAX_PATH exists only
+    with long paths enabled: then only the name limit applies.
     """
+    platform = _current_platform() if platform is None else platform
     folder, name = os.path.split(target)
     tail = f".{secrets.token_hex(_TEMP_TOKEN_BYTES)}{_TEMP_SUFFIX}"
     keep = _MAX_NAME_CHARS - 1 - len(tail)
     full = len(os.path.abspath(target))
     if full <= _MAX_PATH_CHARS:
         keep = min(keep, _MAX_PATH_CHARS - (full - len(name)) - 1 - len(tail))
-    return os.path.join(folder, f".{name[: max(1, keep)]}{tail}")
+    kept = name[: max(1, keep)]
+    if platform != "win32":
+        # os.fsencode counts the bytes the file system sees, and accepts the surrogate escapes
+        # of a name that is not valid UTF-8 (os.listdir returns those on Linux and macOS).
+        while len(kept) > 1 and len(os.fsencode(f".{kept}{tail}")) > _MAX_NAME_CHARS:
+            kept = kept[:-1]
+    return os.path.join(folder, f".{kept}{tail}")
 
 
 def _is_temp_name(name: str) -> bool:

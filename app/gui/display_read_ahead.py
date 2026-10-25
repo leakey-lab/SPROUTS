@@ -38,6 +38,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from app.io_utils import path_key
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["DisplayReadAhead", "file_stamp"]
@@ -58,7 +60,7 @@ def file_stamp(path: str) -> tuple:
 
 
 def _key(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
+    return path_key(path)
 
 
 def _readable(stamp: tuple) -> bool:

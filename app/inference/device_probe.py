@@ -36,6 +36,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app import io_utils
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -338,12 +340,16 @@ def _hides_every_device(value: str | None) -> bool:
 
 
 def guess_device(
-    driver: DriverInfo, build: TorchBuild, environ: Mapping[str, str] | None = None
+    driver: DriverInfo,
+    build: TorchBuild,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
 ) -> DeviceGuess:
     """The device the first inference will run on, as far as ``driver`` and ``build`` tell
     (``torch.cuda.is_available()`` needs the same things; see the module doc).
 
-    ``environ`` (``os.environ`` when None) supplies ``CUDA_VISIBLE_DEVICES``.
+    ``environ`` (``os.environ`` when None) supplies ``CUDA_VISIBLE_DEVICES``; ``platform``
+    (this machine's, when None) words the note when there is no driver: macOS has no CUDA.
     """
     if not build.installed:
         return DeviceGuess("unknown", problem="PyTorch is not installed: Generate cannot run.")
@@ -359,6 +365,8 @@ def guess_device(
             "CPU", note=f"PyTorch {build.version} is a CPU-only build: {cpu}{unused}."
         )
     if not driver.found:
+        if (io_utils._current_platform() if platform is None else platform) == "darwin":
+            return DeviceGuess("CPU", note=f"No CUDA GPU on macOS: {cpu}.")
         return DeviceGuess("CPU", note=f"No NVIDIA driver found: {cpu}.")
     if driver.error:
         return DeviceGuess("CPU", note=f"The NVIDIA driver reported {driver.error}: {cpu}.")

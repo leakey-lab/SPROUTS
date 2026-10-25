@@ -16,6 +16,7 @@ import types
 
 import pytest
 
+from app import io_utils
 from app.inference import device_probe
 from app.inference.device_probe import DeviceGuess, DriverInfo, TorchBuild, guess_device
 
@@ -309,3 +310,18 @@ def test_the_driver_calls_get_c_types():
     device_probe.probe_driver(lambda: lib)
     assert lib.cuInit.argtypes == [ctypes.c_uint] and lib.cuInit.restype is ctypes.c_int
     assert lib.cuDeviceGetName.argtypes == [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+
+
+def test_macos_note_does_not_mention_nvidia():
+    guess = guess_device(DriverInfo(found=False), CUDA_BUILD, environ={}, platform="darwin")
+    assert (guess.device, guess.text) == ("CPU", "CPU")
+    assert "NVIDIA" not in guess.note
+    assert "macOS" in guess.note
+
+
+def test_the_platform_is_read_at_call_time_by_default(monkeypatch):
+    monkeypatch.setattr(io_utils, "_current_platform", lambda: "darwin")
+    guess = guess_device(DriverInfo(found=False), CUDA_BUILD, environ={})
+    assert "macOS" in guess.note
+    monkeypatch.setattr(io_utils, "_current_platform", lambda: "linux")
+    assert "No NVIDIA driver" in guess_device(DriverInfo(found=False), CUDA_BUILD, environ={}).note

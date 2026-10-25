@@ -303,3 +303,46 @@ def test_durable_writes_fsync_and_bulk_writes_can_skip_it(tmp_path, monkeypatch)
         "s.csv",
         "t.txt",
     ]
+
+
+def test_temp_name_fits_255_utf8_bytes_on_posix(tmp_path):
+    """ext4 and APFS cap a name at 255 UTF-8 bytes, not characters: 80 CJK characters plus
+    ".png" is 244 bytes, its temp name 14 characters more (O21)."""
+    target = tmp_path / ("\u6839" * 80 + ".png")
+    name = os.path.basename(io_utils._temp_path(str(target), "linux"))
+    assert len(name.encode("utf-8")) <= 255
+    assert io_utils._is_temp_name(name)
+    assert name.startswith(".\u6839")  # the name is cut from its end, not emptied
+
+
+def test_temp_name_keeps_all_characters_on_windows(tmp_path):
+    """NTFS counts UTF-16 units, so the whole 84-character name stays."""
+    target = tmp_path / ("\u6839" * 80 + ".png")
+    name = os.path.basename(io_utils._temp_path(str(target), "win32"))
+    assert name.startswith("." + "\u6839" * 80 + ".png.")
+
+
+def test_a_cjk_name_near_the_byte_limit_is_written_atomically(tmp_path):
+    target = tmp_path / ("\u6839" * 80 + ".png")
+    atomic_write_bytes(target, b"data")
+    assert target.read_bytes() == b"data"
+    assert _leftovers(tmp_path) == [target.name]
+
+
+def test_temp_name_of_a_non_utf8_file_name_fits_255_bytes_on_posix(tmp_path):
+    """os.listdir returns an undecodable name with surrogate escapes; counting its bytes
+    must not raise, or no atomic write to such a file would work."""
+    target = tmp_path / ("a\udcff" * 120 + ".png")
+    name = os.path.basename(io_utils._temp_path(str(target), "linux"))
+    assert len(os.fsencode(name)) <= 255
+    assert io_utils._is_temp_name(name)
+
+
+def test_a_surrogate_escaped_name_is_written_atomically(tmp_path):
+    target = tmp_path / "a\udcff.png"
+    try:
+        atomic_write_bytes(target, b"data")
+    except (OSError, UnicodeError):
+        pytest.skip("this file system cannot hold a non-UTF-8 name")
+    assert target.read_bytes() == b"data"
+    assert _leftovers(tmp_path) == [target.name]
