@@ -16,9 +16,13 @@ A save writes the GT file only, white on transparent RGBA (PNG colour type 6),
 atomically, and never writes or removes a prediction: a plane without edits writes
 nothing (O2); a plane equal to the prediction removes the GT file; any other plane is
 written, an empty one too (O9: Measure then gives 0 for it). A file the document chose
-but could not load (another size than the image, undecodable) is not shown and is kept:
+but could not load (a GT mask of another size than the image, undecodable) is not shown
+and is kept:
 the open says so, the status reads "Mask not shown", and a save of the empty plane
-leaves it (the session asks before a save of painted pixels replaces a GT file).
+leaves it (the session asks before a save of painted pixels replaces a GT file). A
+prediction of another size opens stretched to the image with nearest neighbour (O8): the
+open says so, and the stretched plane is the prediction (the baseline, "Load prediction",
+the save rule); a save writes the image's size.
 
 The owner changes the plane only through ``history`` and calls
 :meth:`MaskDocument.touch` after each change (commit, undo, redo), so
@@ -51,16 +55,28 @@ from app.project_layout import ProjectLayout
 logger = logging.getLogger(__name__)
 
 # MaskRead and the sources live in mask_files; the document's callers import them here.
-__all__ = ["SOURCE_GT", "SOURCE_PREDICTION", "MaskDocument", "MaskRead", "MaskSaveResult"]
+__all__ = [
+    "RESIZED_TEXT",
+    "SOURCE_GT",
+    "SOURCE_PREDICTION",
+    "MaskDocument",
+    "MaskRead",
+    "MaskSaveResult",
+]
+
+#: The open notice of a prediction stretched to the photo (``MaskRead.resized_from``).
+RESIZED_TEXT = (
+    "Mask is {fw} x {fh}; shown at the photo's {w} x {h}. Saving stores it at the photo's size."
+)
 
 # Why the chosen mask file was not loaded (``MaskRead.not_loaded``) -> the open notice /
-# status tooltip, for a GT file (a save may replace it) and for a prediction (never written).
+# status tooltip, for a GT file (a save may replace it) and for a prediction (never written;
+# only an unreadable one: another size is stretched).
 _NOT_SHOWN = {
     (SOURCE_GT, "size"): "Saved mask size does not match the image: it is not shown and is"
     " kept unless you save over it",
     (SOURCE_GT, "unreadable"): "Saved mask could not be read: it is not shown and is kept"
     " unless you save over it",
-    (SOURCE_PREDICTION, "size"): "The prediction's size does not match the image: it is not shown",
     (SOURCE_PREDICTION, "unreadable"): "The prediction could not be read: it is not shown",
 }
 
@@ -114,6 +130,7 @@ class MaskDocument:
         self._save_error = ""
         self._error_revision = -1  # the revision a failed save happened at
         self._not_loaded = ""  # MaskRead.not_loaded of the open file, until a write
+        self._prediction_resized_from: tuple[int, int] | None = None  # as read at open
         self._prediction_stamps: tuple = ()  # the prediction's names as read at open
         self._root = ""  # the project folder the file labels are relative to
 
@@ -147,9 +164,21 @@ class MaskDocument:
         while closed): the plane belongs to these files, whatever is on disk now."""
         return self._prediction_stamps
 
+    @property
+    def prediction_resized_from(self) -> tuple[int, int] | None:
+        """The ``(w, h)`` of the prediction file when :meth:`prediction` is stretched from it."""
+        return self._prediction_resized_from
+
+    @property
+    def resized_from(self) -> tuple[int, int] | None:
+        """The ``(w, h)`` of the prediction file when the saved mask is that prediction,
+        stretched to the image (a fresh open of it gives the stretch notice), else None."""
+        return self._prediction_resized_from if self.source == SOURCE_PREDICTION else None
+
     def prediction(self) -> np.ndarray | None:
-        """The prediction's 0/1 plane as opened (None: no usable prediction). Read only:
-        "Load prediction" commits a copy of it."""
+        """The prediction's 0/1 plane as opened, at the image's size (stretched when the file
+        has another; None: no usable prediction). Read only: "Load prediction" commits a
+        copy of it."""
         return self._prediction
 
     def unloaded_file(self) -> bool:
@@ -223,10 +252,12 @@ class MaskDocument:
 
         The GT mask, else the prediction, as saved (grey above 200) becomes the plane and
         the baseline: clean, with an empty history. No file opens empty; a chosen file that
-        cannot be decoded or has another size opens empty too, is not shown and is kept
-        (:meth:`unloaded_file`), with a warning notice. ``read`` (a :meth:`read` done
-        ahead) is used while the mask files are still the ones it read. ``root``: the
-        project folder the file labels are relative to (None: the image's folder).
+        cannot be decoded, or a GT mask of another size, opens empty too, is not shown and
+        is kept (:meth:`unloaded_file`), with a warning notice. A prediction of another size
+        is stretched to the image (nearest neighbour), with an info notice. ``read`` (a
+        :meth:`read` done ahead) is used while the mask files are still the ones it read.
+        ``root``: the project folder the file labels are relative to (None: the image's
+        folder).
         """
         layout = ProjectLayout.for_image(image_path)
         gt_path = gt_mask_of(layout, image_path)  # looked up once per open
@@ -254,12 +285,16 @@ class MaskDocument:
         )
         self._prediction = prediction
         self._not_loaded = read.not_loaded
+        self._prediction_resized_from = read.prediction_resized_from
         self._baseline = plane.copy()
         self.history.reset(plane)
         self._restart()
-        if not read.not_loaded:
-            return []
-        return [Notice(_NOT_SHOWN[read.source, read.not_loaded], "warn")]
+        if read.not_loaded:
+            return [Notice(_NOT_SHOWN[read.source, read.not_loaded], "warn")]
+        if read.resized_from is not None:
+            fw, fh = read.resized_from
+            return [Notice(RESIZED_TEXT.format(fw=fw, fh=fh, w=width, h=height), "info")]
+        return []
 
     def close(self) -> None:
         """Forget the document: no plane, no history, no file."""
@@ -269,7 +304,7 @@ class MaskDocument:
         self.source, self.gt_path, self.prediction_path = None, "", None
         self._prediction = None
         self._prediction_stamps, self._root = (), ""
-        self._not_loaded = ""
+        self._not_loaded, self._prediction_resized_from = "", None
         self._baseline = None
         self.history.reset(None)
         self._restart()

@@ -1,6 +1,7 @@
 """A saved (GT) mask the Correct page cannot show is never removed or replaced silently (M1-A).
 
-A 2048 x 1536 photo with a 640 x 480 GT mask ``gt/mask/a.png`` (or an undecodable one) opens
+A model prediction of another size opens stretched to the photo (O8, W3-T4). A 2048 x 1536
+photo with a 640 x 480 GT mask ``gt/mask/a.png`` (or an undecodable one) opens
 with the mask not shown and says so. ``Ctrl+S`` with nothing painted writes nothing (O2), a
 save after painting asks before replacing it ("Replace" / "Keep it"), and ``PgDn`` stays on
 the image with a warning. Driven on the real page, with the helpers of ``test_correct_editor.py``.
@@ -40,6 +41,9 @@ NOT_SHOWN_SIZE = (
 )
 NOT_SHOWN_UNREADABLE = (
     "Saved mask could not be read: it is not shown and is kept unless you save over it"
+)
+RESIZED = (
+    "Mask is 640 x 480; shown at the photo's 2048 x 1536. Saving stores it at the photo's size."
 )
 NOTHING_UNSAVED = ("Nothing unsaved", "info")
 PROMPT = ("Replace the saved mask?", "gt/mask/a.png exists but could not be shown. Replace it?")
@@ -112,6 +116,32 @@ def test_a_2048_photo_never_loses_its_unshown_mask(make_editor, tmp_path, answer
     assert cv2.imread(mask, cv2.IMREAD_UNCHANGED).shape[:2] == (1536, 2048)
     assert answers.seen[-1] == PROMPT
     assert editor.layers[MASK].status() == LayerStatus("clean", "GT", "gt/mask/a.png")
+
+
+def test_a_2048_photo_shows_its_640_prediction(make_editor, tmp_path):  # O8
+    photo, folder, gt = photo_and_mask(tmp_path)
+    small = np.zeros((480, 640), np.uint8)
+    small[100:200, 100:300] = 255
+    prediction = os.path.join(folder, "mask", "a.png")
+    os.makedirs(os.path.dirname(prediction))
+    assert cv2.imwrite(prediction, small)
+    before = read_bytes(prediction)
+    editor = make_editor()
+    notices = record(editor.notice)
+    editor.load_image(photo, folder)
+
+    layer = editor.layers[MASK]
+    shown = layer.document.history.plane
+    assert shown.shape == (1536, 2048)
+    assert np.array_equal(
+        shown, cv2.resize(small // 255, (2048, 1536), interpolation=cv2.INTER_NEAREST)
+    )
+    assert layer.status().label == "Prediction" and not layer.is_dirty()
+    assert (RESIZED, "info") in notices
+
+    assert editor.save() is False  # nothing to save: the prediction stays as it is
+    assert notices[-1] == NOTHING_UNSAVED
+    assert read_bytes(prediction) == before and not os.path.exists(gt)
 
 
 def test_an_undecodable_mask_gives_a_notice_and_survives_ctrl_s(make_editor, tmp_path):

@@ -21,7 +21,10 @@ import pytest
 from app.gui.correct import mask_document
 from app.gui.correct.layer import LayerStatus, Notice
 from app.gui.correct.mask_document import MaskDocument, MaskSaveResult
+from app.gui.correct.read_back import mask_read_back
+from app.inference import metrics
 from app.io_utils import imread_unicode, imwrite_unicode
+from app.masks import write_mask_file
 from tests.correct_goldens_support import (
     SYNTH_STEM,
     describe_mask_file,
@@ -41,7 +44,7 @@ NOT_SHOWN_SIZE = (
 NOT_SHOWN_UNREADABLE = (
     "Saved mask could not be read: it is not shown and is kept unless you save over it"
 )
-PREDICTION_NOT_SHOWN_SIZE = "The prediction's size does not match the image: it is not shown"
+PREDICTION_NOT_SHOWN_UNREADABLE = "The prediction could not be read: it is not shown"
 GT_LABEL = f"gt/mask/{STEM}.png"  # the "GT" status tooltip: relative to the project folder
 MASK_EXTENSIONS = (".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG")  # lookup order
 SYNTH_CASES = ("synth_model_mask_and_skeleton", "synth_blank_png")
@@ -212,17 +215,123 @@ def test_an_undecodable_mask_is_not_shown_says_so_and_is_kept(tmp_path):
     _assert_not_shown_and_kept(doc, _gt_path(tmp_path), NOT_SHOWN_UNREADABLE, b"not a png")
 
 
-def test_a_prediction_of_another_size_is_not_shown_and_never_written(tmp_path):
-    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
-    before = _bytes(_mask_path(tmp_path))
+def test_an_unreadable_prediction_is_not_shown_and_never_written(tmp_path):
+    os.makedirs(os.path.dirname(_mask_path(tmp_path)))
+    with open(_mask_path(tmp_path), "wb") as fh:
+        fh.write(b"not a png")
     doc = MaskDocument()
 
-    assert doc.open(_image(tmp_path), (100, 50)) == [Notice(PREDICTION_NOT_SHOWN_SIZE, "warn")]
+    assert doc.open(_image(tmp_path), SIZE) == [Notice(PREDICTION_NOT_SHOWN_UNREADABLE, "warn")]
 
     assert doc.source == "prediction" and doc.prediction() is None
-    _assert_not_shown_and_kept(doc, _mask_path(tmp_path), PREDICTION_NOT_SHOWN_SIZE, before)
+    _assert_not_shown_and_kept(
+        doc, _mask_path(tmp_path), PREDICTION_NOT_SHOWN_UNREADABLE, b"not a png"
+    )
     _paint(doc, (10, 10, 5, 5))
-    assert doc.save().path == _gt_path(tmp_path) and _bytes(_mask_path(tmp_path)) == before
+    assert doc.save().path == _gt_path(tmp_path) and _bytes(_mask_path(tmp_path)) == b"not a png"
+
+
+def test_a_half_size_prediction_opens_stretched_exactly(tmp_path):
+    src = np.zeros((30, 40), np.uint8)
+    src[5:10, 8:20] = 255
+    _write(_mask_path(tmp_path), src)
+    doc = MaskDocument()
+
+    assert doc.open(_image(tmp_path), (80, 60)) == [
+        Notice(
+            "Mask is 40 x 30; shown at the photo's 80 x 60. Saving stores it at the photo's size.",
+            "info",
+        )
+    ]
+
+    plane = doc.history.plane
+    assert plane.shape == (60, 80) and plane.dtype == np.uint8
+    assert np.array_equal(plane, np.kron(src > 0, np.ones((2, 2))).astype(np.uint8))
+    assert not doc.is_dirty() and doc.status() == _prediction_status()
+    assert doc.source == "prediction" and doc.has_saved_file and not doc.unloaded_file()
+    assert np.array_equal(doc.prediction(), plane) and doc.prediction() is not plane
+    assert metrics.root_area_mm2(plane * 255) == pytest.approx(metrics.root_area_mm2(src))
+
+
+@pytest.mark.parametrize("size", [(2048, 1536), (1920, 1080), (800, 600)])
+def test_a_prediction_opens_stretched_at_any_ratio(tmp_path, size):
+    src = np.zeros((480, 640), np.uint8)
+    cv2.circle(src, (320, 240), 90, 255, -1)
+    cv2.line(src, (0, 0), (639, 479), 255, 9)
+    _write(_mask_path(tmp_path), src)
+    width, height = size
+
+    read = MaskDocument.read(_image(tmp_path), size)
+    doc = MaskDocument()
+    notices = doc.open(_image(tmp_path), size)
+
+    assert read.resized_from == (640, 480) and read.not_loaded == ""
+    assert [n.kind for n in notices] == ["info"]
+    plane = doc.history.plane
+    assert plane.shape == (height, width) and set(np.unique(plane)) <= {0, 1}
+    assert not doc.is_dirty() and np.array_equal(doc.prediction(), plane)
+    ratio = metrics.root_area_mm2(plane * 255) / metrics.root_area_mm2(src)
+    assert ratio == pytest.approx(1.0, abs=0.01)
+
+
+def test_an_edited_save_of_a_stretched_prediction_writes_the_photo_size(tmp_path):
+    _write(_mask_path(tmp_path), np.full((30, 40), 255, np.uint8))
+    before = _bytes(_mask_path(tmp_path))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), (80, 60))
+    _paint(doc, (10, 10, 5, 5), 0)
+
+    result = doc.save()
+
+    assert result.ok and result.path == _gt_path(tmp_path)
+    assert read_rgba_shape(result.path) == (60, 80)
+    assert _bytes(_mask_path(tmp_path)) == before  # the prediction is never written
+
+
+def test_an_untouched_save_of_a_stretched_prediction_writes_nothing(tmp_path):
+    _write(_mask_path(tmp_path), np.full((30, 40), 255, np.uint8))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), (80, 60))
+
+    assert doc.save() == MaskSaveResult(ok=True)
+
+    assert not os.path.exists(_gt_path(tmp_path))
+
+
+def test_a_gt_shown_over_a_prediction_of_another_size_keeps_the_stretched_prediction(tmp_path):
+    src = np.zeros((30, 40), np.uint8)
+    src[5:10, 8:20] = 255
+    _write(_mask_path(tmp_path), src)
+    _write(_gt_path(tmp_path), np.zeros((60, 80), np.uint8))
+    doc = MaskDocument()
+
+    assert doc.open(_image(tmp_path), (80, 60)) == []  # GT opens: no stretch notice
+
+    assert doc.source == "gt" and not doc.history.plane.any()
+    assert np.array_equal(doc.prediction(), np.kron(src > 0, np.ones((2, 2))).astype(np.uint8))
+    assert MaskDocument.read(_image(tmp_path), (80, 60)).resized_from is None
+
+
+def test_a_hand_back_keeps_the_size_a_prediction_was_stretched_from(tmp_path):
+    _write(_mask_path(tmp_path), np.full((30, 40), 255, np.uint8))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), (80, 60))
+
+    handed = mask_read_back(doc, (80, 60), doc.file_stamps())
+
+    assert handed.resized_from == (40, 30) and handed.source == "prediction"
+    again = MaskDocument()
+    assert again.open(_image(tmp_path), (80, 60), handed) == doc.open(_image(tmp_path), (80, 60))
+
+
+def test_an_editor_saved_mask_of_another_size_is_still_not_shown(tmp_path):
+    write_mask_file(_gt_path(tmp_path), np.ones((60, 80), bool))
+
+    read = MaskDocument.read(_image(tmp_path), (100, 50))
+    notices = MaskDocument().open(_image(tmp_path), (100, 50))
+
+    assert notices == [Notice(NOT_SHOWN_SIZE, "warn")]
+    assert read.not_loaded == "size" and read.resized_from is None
 
 
 def test_painting_over_an_unshown_mask_then_saving_replaces_it(tmp_path):
@@ -269,7 +378,11 @@ def test_a_read_says_why_a_file_was_not_loaded(tmp_path, which):
     assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == ""
     _write(path, np.full((60, 80), 255, np.uint8))
     assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == ""
-    assert MaskDocument.read(_image(tmp_path), (100, 50)).not_loaded == "size"
+    other = MaskDocument.read(_image(tmp_path), (100, 50))
+    # a GT mask of another size is not shown; a prediction is stretched (O8)
+    assert (other.not_loaded, other.resized_from) == (
+        ("size", None) if which == "gt" else ("", (80, 60))
+    )
     with open(path, "wb") as fh:
         fh.write(b"not a png")
     read = MaskDocument.read(_image(tmp_path), SIZE)

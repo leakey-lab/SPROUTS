@@ -25,6 +25,7 @@ from app.gt import files as gt_files  # noqa: E402
 from app.gui.correct import mask_document  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON, LayerStatus  # noqa: E402
 from app.gui.correct.mask_document import MaskDocument  # noqa: E402
+from app.gui.correct.read_back import mask_read_back  # noqa: E402
 from app.inference import metrics  # noqa: E402
 from app.io_utils import imread_unicode  # noqa: E402
 from app.masks import write_mask_file  # noqa: E402
@@ -275,7 +276,8 @@ def test_an_unreadable_or_wrong_size_gt_mask_is_not_shown_and_kept(
 
 
 def test_an_unshown_prediction_names_no_file_to_replace(make_editor, project):
-    write_mask_file(project.mask(), np.ones((60, 80), bool))  # a prediction of another size
+    with open(project.mask(), "wb") as fh:
+        fh.write(b"not a png")  # an unreadable prediction
     editor = make_editor(project.a, project.folder)
     layer = editor.layers[MASK]
 
@@ -350,12 +352,57 @@ def test_a_prediction_rewritten_while_editing_is_not_taken_for_the_gt(make_edito
 def test_a_prediction_that_cannot_be_shown_disables_load_prediction_and_says_so(
     make_editor, project
 ):
-    write_mask(project.mask(), np.ones((60, 80), np.uint8))  # another size than the photo
+    with open(project.mask(), "wb") as fh:
+        fh.write(b"not a png")  # unreadable
     editor = make_editor(project.a, project.folder)
 
     button = editor.controls.prediction_button
     assert not button.isEnabled()
     assert button.toolTip() == "The prediction for this image could not be shown"
+
+
+def stretched_prediction(project) -> np.ndarray:
+    """Replace the prediction by a 60 x 80 one (the photo is H x W); returns the plane it
+    must open as: every pixel stretched with nearest neighbour."""
+    small = np.zeros((60, 80), np.uint8)
+    small[20:40, 10:50] = 1
+    write_mask(project.mask(), small)
+    return cv2.resize(small, (W, H), interpolation=cv2.INTER_NEAREST)
+
+
+def test_load_prediction_works_over_a_gt_shown_above_a_prediction_of_another_size(
+    make_editor, project
+):  # O8: the stretched plane is the prediction
+    expected = stretched_prediction(project)
+    write_mask_file(gt_mask(project), one_block() > 0)
+    editor = make_editor(project.a, project.folder)
+    button = editor.controls.prediction_button
+
+    assert button.isEnabled()
+    assert button.toolTip() == "Load the prediction into the mask (undoable)"
+    assert editor.layers[MASK].document.source == "gt"
+
+    editor.load_prediction()
+
+    assert (plane(editor) == expected).all() and editor.layers[MASK].is_dirty()
+    editor.undo()
+    assert (plane(editor) == one_block()).all()
+
+
+def test_load_prediction_then_save_removes_the_gt_over_a_stretched_prediction(make_editor, project):
+    stretched_prediction(project)
+    gt = gt_mask(project)
+    write_mask_file(gt, one_block() > 0)
+    prediction_bytes = file_bytes(project.mask())
+    editor = make_editor(project.a, project.folder)
+    seen = signals_of(editor)
+
+    editor.load_prediction()
+    assert editor.save() is True
+
+    assert not os.path.exists(gt) and file_bytes(project.mask()) == prediction_bytes
+    assert seen["mask_cleared"] == [project.a] and seen["mask_saved"] == []
+    assert editor.layers[MASK].document.source == "prediction"
 
 
 def test_file_labels_are_relative_to_the_project_folder(make_editor, tmp_path):
@@ -392,6 +439,23 @@ def test_an_open_looks_the_gt_mask_up_once(project, monkeypatch):
     assert len(calls) == 1
 
 
+def test_a_hand_back_after_load_prediction_and_save_says_the_stretch_again(make_editor, project):
+    stretched_prediction(project)
+    write_mask_file(gt_mask(project), one_block() > 0)  # a GT is shown: no stretch notice
+    editor = make_editor(project.a, project.folder)
+    document = editor.layers[MASK].document
+    assert document.resized_from is None and document.prediction_resized_from == (80, 60)
+    editor.load_prediction()
+    assert editor.save() is True and not os.path.exists(gt_mask(project))
+
+    handed = mask_read_back(document, (W, H), document.file_stamps())
+
+    assert document.resized_from == (80, 60) and handed.resized_from == (80, 60)
+    fresh = MaskDocument()
+    notices = fresh.open(project.a, (W, H))
+    assert notices and MaskDocument().open(project.a, (W, H), handed) == notices
+
+
 def test_a_prediction_of_another_size_under_a_gt_mask_logs_no_warning(project, caplog):
     write_mask_file(gt_mask(project), one_block() > 0)
     write_mask(project.mask(), np.ones((60, 80), np.uint8))
@@ -399,7 +463,7 @@ def test_a_prediction_of_another_size_under_a_gt_mask_logs_no_warning(project, c
     with caplog.at_level(logging.DEBUG, logger="app.gui.correct.mask_files"):
         read = MaskDocument.read(project.a, (W, H))
 
-    assert read.source == "gt" and read.prediction_plane is None
+    assert read.source == "gt" and read.prediction_plane.shape == (H, W)  # stretched (O8)
     records = [r for r in caplog.records if r.name == "app.gui.correct.mask_files"]
     assert records and all(r.levelno == logging.DEBUG for r in records)
 

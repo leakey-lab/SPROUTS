@@ -6,7 +6,9 @@ too; ``source`` "prediction"), else nothing (``source`` None). :func:`read_mask`
 chosen file and the prediction (kept for "Load prediction" and the save rule of
 :class:`~app.gui.correct.mask_document.MaskDocument`) on any thread, as
 :class:`MaskRead`; :func:`mask_stamps` pins the files it read. A file of another size than
-the photo, or one that cannot be decoded, is not loaded (``not_loaded``).
+the photo, or one that cannot be decoded, is not loaded (``not_loaded``); the exception is a
+prediction of another size: it is stretched to the photo with nearest neighbour (O8,
+``resized_from``), and the stretched plane is the prediction everywhere.
 """
 
 from __future__ import annotations
@@ -53,6 +55,9 @@ class MaskRead:
     open warns about it). ``source``: ``"gt"``, ``"prediction"`` or None (no file);
     ``prediction_plane``: the prediction as opened (None: none usable); ``gt_path``: the
     GT file a save writes; ``prediction_path``: the prediction file found, else None.
+    ``resized_from``: the file's ``(w, h)`` when the plane opened is a prediction of another
+    size stretched to the photo, else None (a GT mask of another size is not loaded).
+    ``prediction_resized_from``: the same for the prediction file, whichever mask is shown.
     """
 
     image_path: str
@@ -65,6 +70,8 @@ class MaskRead:
     prediction_plane: np.ndarray | None = None
     gt_path: str = ""
     prediction_path: str | None = None
+    resized_from: tuple[int, int] | None = None
+    prediction_resized_from: tuple[int, int] | None = None
 
     @property
     def nbytes(self) -> int:
@@ -82,14 +89,20 @@ def read_mask(image_path: str, size: tuple[int, int], *, gt_path: str | None = N
     stamps = mask_stamps(layout, gt_path, image_path)
     has_gt = stamps[0][1:] != (None,)  # a GT mask exists: it is the one shown, or not shown
     store = MaskStore(layout)
-    found, prediction, why = _read_prediction(store, image_path, size, quiet=has_gt)
-    common = {"prediction_plane": prediction, "gt_path": gt_path, "prediction_path": found}
+    found, prediction, why, stretched = _read_prediction(store, image_path, size, quiet=has_gt)
+    common = {
+        "prediction_plane": prediction,
+        "gt_path": gt_path,
+        "prediction_path": found,
+        "prediction_resized_from": stretched,
+    }
     if has_gt:
         plane, gt_why = _read_gt(gt_path, size)
         has_file = plane is not None
         return MaskRead(image_path, size, stamps, plane, has_file, gt_why, SOURCE_GT, **common)
     source = SOURCE_PREDICTION if found is not None else None
     has_file = prediction is not None
+    common["resized_from"] = stretched
     return MaskRead(image_path, size, stamps, prediction, has_file, why, source, **common)
 
 
@@ -130,25 +143,39 @@ def zero_one_plane(on: np.ndarray) -> np.ndarray:
 
 def _read_prediction(
     store: MaskStore, image_path: str, size: tuple[int, int], *, quiet: bool = False
-) -> tuple[str | None, np.ndarray | None, str]:
-    """``(path found, plane at size, why not loaded)`` of the prediction of ``image_path``.
+) -> tuple[str | None, np.ndarray | None, str, tuple[int, int] | None]:
+    """``(path found, plane at size, why not loaded, size stretched from)`` of the prediction
+    of ``image_path``.
 
-    ``quiet``: a GT mask is shown instead, so a prediction of another size or one that
-    cannot be read is logged at debug level only (it would be logged on every open)."""
+    A prediction of another size is stretched to ``size`` with nearest neighbour (O8): the
+    last item is then the file's ``(w, h)``, else None. ``quiet``: a GT mask is shown instead,
+    so a prediction that cannot be read is logged at debug level only (it would be logged on
+    every open)."""
     path = store.find(image_path)
     if path is None:
-        return None, None, ""
+        return None, None, "", None
     try:
         on = store.read(image_path)
     except MaskFileError as exc:
         level = logging.DEBUG if quiet else logging.WARNING
         logger.log(level, "Failed to load existing mask: %s", exc)
-        return path, None, "unreadable"
+        return path, None, "unreadable", None
     if on is None:  # gone since the lookup
-        return None, None, ""
-    if _wrong_size(on, size, image_path, level=logging.DEBUG if quiet else logging.WARNING):
-        return path, None, "size"
-    return path, zero_one_plane(on), ""
+        return None, None, "", None
+    plane = zero_one_plane(on)
+    width, height = size
+    if plane.shape == (height, width):
+        return path, plane, "", None
+    file_size = (plane.shape[1], plane.shape[0])
+    logger.log(
+        logging.DEBUG if quiet else logging.INFO,
+        "Mask of %s is %sx%s, image is %sx%s; stretching it",
+        image_path,
+        *file_size,
+        width,
+        height,
+    )
+    return path, cv2.resize(plane, (width, height), interpolation=cv2.INTER_NEAREST), "", file_size
 
 
 def _read_gt(path: str, size: tuple[int, int]) -> tuple[np.ndarray | None, str]:
@@ -163,15 +190,12 @@ def _read_gt(path: str, size: tuple[int, int]) -> tuple[np.ndarray | None, str]:
     return zero_one_plane(grey > MASK_THRESHOLD), ""
 
 
-def _wrong_size(
-    on: np.ndarray, size: tuple[int, int], name: str, *, level: int = logging.WARNING
-) -> bool:
-    """True (and logged at ``level``) when ``on`` is not ``size`` ``(w, h)``."""
+def _wrong_size(on: np.ndarray, size: tuple[int, int], name: str) -> bool:
+    """True (and logged) when ``on`` is not ``size`` ``(w, h)``."""
     width, height = size
     if on.shape[:2] == (height, width):
         return False
-    logger.log(
-        level,
+    logger.warning(
         "Mask of %s is %sx%s, image is %sx%s; ignoring it",
         name,
         on.shape[1],

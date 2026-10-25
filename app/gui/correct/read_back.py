@@ -63,11 +63,13 @@ def read_back(layer: object, size: tuple[int, int], stamps: tuple | None) -> obj
 
 def mask_read_back(document: MaskDocument, size: tuple[int, int], stamps: tuple) -> MaskRead | None:
     """The saved mask as :meth:`MaskDocument.read` would read it again, from the document:
-    the plane, where it came from (GT or the prediction) and the prediction as opened.
+    the plane, where it came from (GT or the prediction), the prediction as opened and the
+    size it was stretched from, if any (so the next open says so again).
 
     None while nothing is open or the plane differs from the saved mask, and when a mask
-    file is there that the document could not use (another size, undecodable): the next
-    open reads it again and says so again, as it would without a hand-back. The prediction
+    file is there that the document could not use (a GT mask of another size, an undecodable
+    file): the next open reads it again and says so again, as it would without a hand-back.
+    The prediction
     part carries the stamps the prediction was read at (``prediction_stamps``), not the
     session's: a prediction rewritten since (a Generate run) no longer matches, so the next
     open reads it again instead of pairing new stamps with the old plane.
@@ -89,4 +91,6 @@ def mask_read_back(document: MaskDocument, size: tuple[int, int], stamps: tuple)
         prediction_plane=document.prediction(),
         gt_path=document.gt_path,
         prediction_path=document.prediction_path,
+        resized_from=document.resized_from,
+        prediction_resized_from=document.prediction_resized_from,
     )

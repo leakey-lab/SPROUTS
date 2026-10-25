@@ -54,11 +54,11 @@ Five passes, not yet released:
   - Start-up: the D3D11 / ANGLE flags are set on Windows only; Linux and macOS take Qt's
     default RHI (on Linux Qt failed to create its RHI and the dashboards were black). Fusion
     style off Windows; desktop file name `sprouts` for Wayland icons (WX-T1, O21).
-  - Correct: a saved mask it cannot show (another size than the photo, e.g. a 640 x 480
-    model mask beside a 2048 x 1536 photo, or an undecodable file) is no longer removed by
-    `Ctrl+S`. The mask row reads *Mask not shown*, the open warns, a save with nothing
-    painted keeps the file, a save after painting asks **Replace** / **Keep it**, and
-    `PgDn` stays on the image with a warning (W1-T2, M1 part A).
+  - Correct: a saved mask it cannot show (a GT mask of another size than the photo, or an
+    undecodable file; a prediction of another size opens stretched since W3-T4) is no
+    longer removed by `Ctrl+S`. The mask row reads *Mask not shown*, the open warns, a save
+    with nothing painted keeps the file, a save after painting asks **Replace** / **Keep
+    it**, and `PgDn` stays on the image with a warning (W1-T2, M1 part A).
   - Generate: opening another folder while a job runs is refused (the chained skeleton pass
     of *Generate all* went to the newly opened folder and replaced its skeletons); the
     skeleton pass is bound to the folder the mask pass ran on, and a job is refused while a
@@ -648,6 +648,15 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **A prediction of another size opens stretched (2026-10-25, W3-T4, O8).** A prediction
+  mask of another size than its photo (the model writes 640 x 480) opens in *Correct*
+  stretched to the photo with nearest neighbour and says so, instead of not opening at all;
+  **Load prediction** loads the stretched mask, and a save equal to it removes the GT, as
+  for a same-size prediction. Nothing changes until such a mask is edited and saved; the
+  saved GT mask is then at the photo's size. Its area against the prediction's: identical
+  for integer factors (x2); on the audit's 17 masks, x3.2 total +0.013 % (worst image
+  1.45 %), 16:9 +0.026 % (0.70 %), x1.25 +0.069 % (3.11 %). A GT mask of another size is
+  still not shown and is kept. All 640 x 480 photos: no change.
 - **Fixed-shape batches (2026-10-25, W3-T3, O4).** Generation runs every batch at one fixed
   size (masks 4, skeletons 64 on a GPU; 4 and 8 on the CPU), the last batch padded with zeros
   whose outputs are dropped; a GPU run checks free memory first (3.6 GiB for masks, 3.8 GiB

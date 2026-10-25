@@ -232,7 +232,8 @@ def test_a_photo_changed_after_the_image_was_left_is_decoded_again(
 def test_an_unusable_mask_file_is_read_again_and_warned_about_again(
     make_editor, project, third, monkeypatch
 ):
-    write_mask(project.mask(), np.ones((10, 10), np.uint8))  # another size than the photo
+    with open(project.mask(), "wb") as fh:
+        fh.write(b"not a png")  # a prediction that cannot be read (another size is stretched)
     editor = make_editor()
     editor.set_neighbour_provider(ring(project.a, project.b, third))
     notices = record(editor.notice)
@@ -246,6 +247,35 @@ def test_an_unusable_mask_file_is_read_again_and_warned_about_again(
 
     assert "a.png" in reads.jobs  # the worker read it again, as without a hand-back
     assert len(notices) == 2 and notices[1] == notices[0]
+
+
+def test_a_stretched_prediction_is_handed_back_and_says_so_again(
+    make_editor, project, third, monkeypatch
+):
+    small = np.zeros((60, 80), np.uint8)  # the photo is 200 x 150: stretched x 2.5
+    small[20:40, 10:50] = 1
+    write_mask(project.mask(), small)
+    editor = make_editor()
+    editor.set_neighbour_provider(ring(project.a, project.b, third))
+    notices = record(editor.notice)
+    editor.load_image(project.a, project.folder)
+    read_ahead_done(editor)
+    stretched = (
+        "Mask is 80 x 60; shown at the photo's 200 x 150. Saving stores it at the photo's size.",
+        "info",
+    )
+    assert notices == [stretched]
+    reads = Reads(monkeypatch)
+
+    editor.load_image(project.b, project.folder)  # a is kept as read
+    read_ahead_done(editor)
+    editor.load_image(project.a, project.folder)
+
+    assert reads.jobs == [] and reads.on_gui() == []  # no second read of the file
+    assert notices.count(stretched) == 2
+    got = state(editor)
+    assert got["mask_status"].label == "Prediction" and not got["dirty"]
+    assert_same_state(got, fresh_state(make_editor, project.a, project.folder))
 
 
 def test_a_skeleton_loaded_from_another_file_is_read_again(

@@ -1071,13 +1071,32 @@ def test_unloaded_label_names_the_gt_file_that_was_not_shown(scene, tmp_path):
 
 
 def test_an_unshown_prediction_is_never_named_for_replacing(scene, tmp_path):
-    write_model_mask(tmp_path, np.ones((H + 1, W), np.uint8))  # a prediction of another size
+    os.makedirs(os.path.dirname(mask_file(tmp_path)))
+    with open(mask_file(tmp_path), "wb") as fh:
+        fh.write(b"not a png")  # an unreadable prediction
     layer = MaskLayer(FakeHost(), scene)
     layer.open(image_path(tmp_path), (W, H), None)
 
     stroke(layer, [(20, 20), (40, 40)])
 
     assert layer.unloaded_label() == ""  # a save writes gt/mask, never the prediction
+
+
+def test_open_stretches_a_prediction_of_another_size_and_says_so(scene, tmp_path):
+    write_model_mask(tmp_path, np.ones((H + 1, W), np.uint8))  # a prediction of another size
+    layer = MaskLayer(FakeHost(), scene)
+
+    notices = layer.open(image_path(tmp_path), (W, H), None)
+
+    assert notices == [
+        Notice(
+            f"Mask is {W} x {H + 1}; shown at the photo's {W} x {H}."
+            " Saving stores it at the photo's size.",
+            "info",
+        )
+    ]
+    assert plane_of(layer).shape == (H, W) and plane_of(layer).all()
+    assert layer.status() == PREDICTION and not layer.is_dirty()
 
 
 def test_a_save_with_nothing_painted_keeps_the_unshown_file(scene, tmp_path):

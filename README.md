@@ -319,7 +319,10 @@ its last point.
 - A saved GT mask that *Correct* cannot show (another size than the photo, or a file it
   cannot read) shows *Mask not shown* and is kept: `Ctrl+S` with nothing painted writes
   nothing, painting over it asks before replacing it, and `PgDn` stays on the image. A
-  prediction that cannot be shown is never replaced: a save writes `gt/mask/`.
+  prediction that cannot be shown is never replaced: a save writes `gt/mask/`. A
+  prediction of another size than the photo (Generate keeps the model's 640 x 480) opens
+  stretched to the photo with nearest neighbour and says so; saving an edit stores it at
+  the photo's size.
 - If the file a layer saves to changed on disk after you opened it (another program, or a
   *Generate* run), **Save** asks first: **Overwrite**, **Reload (lose my edits)** or
   **Cancel**. A file rewritten with the same pixels asks nothing, and a layer without edits
