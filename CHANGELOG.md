@@ -75,6 +75,9 @@ Five passes, not yet released:
     projects and the Library read-ahead use it. Temp names of atomic writes stay within 255
     bytes on Linux and macOS (also for non-UTF-8 names). The no-driver device note on macOS
     no longer mentions NVIDIA (WX-T4, O21).
+  - File names: a Windows path (`C:\x\a.jpg`) in a CSV cell or a path string splits on `\`
+    on every OS, so Linux and macOS read the same stem; a literal backslash in a POSIX file
+    name is treated as a separator too (WX-T10, O21).
   - Start-up no longer logs eight `QWidget::setTabOrder` warnings (a combo box's popup list
     was in the editor's Tab chain); tests log into a temporary folder instead of the user's
     log; CI also runs on `feat/**` and `fix/**` pushes; README says `fault.log` also records
