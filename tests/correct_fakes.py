@@ -8,7 +8,8 @@
   ``is_active``, ``is_visible``, ``opacity``) are not. ``names()`` lists the names only.
 - **Scriptable results:** ``dirty``, ``stamps``, ``open_notices``, ``revert_notices``,
   ``save_outcomes`` (consumed in order; then a default ok outcome with a path),
-  ``key_result``, ``status_override``, ``draft_points`` (what ``undo_in_gesture`` pops).
+  ``key_result``, ``status_override``, ``draft_points`` (what ``undo_in_gesture`` pops),
+  ``unloaded`` (what ``unloaded_label`` names: a file a save would replace unshown).
 - **A bounded fake history** (``history_limit``, 25 like the skeleton's): ``act()``
   records one undoable action and reports it to the host; past the limit the oldest
   action is evicted, so ``undo()`` returns False once the stack is empty while a journal
@@ -81,6 +82,7 @@ class FakeLayer:
         self.key_result = False
         self.status_override: LayerStatus | None = None
         self.draft_points = 0
+        self.unloaded = ""
         self.gesture = False
         self.dirty_on_finish = False
         # state
@@ -164,6 +166,10 @@ class FakeLayer:
             self.dirty = False
         self._changed()
         return outcome
+
+    def unloaded_label(self):
+        """``DiskGuardedLayer``: the scripted ``unloaded`` label."""
+        return self.unloaded
 
     def revert(self):
         """Discard: clean, empty history, no draft; returns ``revert_notices``."""
@@ -372,13 +378,15 @@ class FakeHost:
 class FakePrompts:
     """The session's prompts with scripted answers; records every question.
 
-    ``unsaved`` and ``after_failed`` are queues of answers ("save", "discard", "cancel",
-    "keep"); ``asked`` holds ``(prompt, parent, noun, name)`` per question.
+    ``unsaved``, ``after_failed`` and ``replace`` are queues of answers ("save", "discard",
+    "cancel", "keep", "replace"); ``asked`` holds ``(prompt, parent, noun, name)`` per
+    question (``name`` is the file label for "replace").
     """
 
-    def __init__(self, unsaved=(), after_failed=()) -> None:
+    def __init__(self, unsaved=(), after_failed=(), replace=()) -> None:
         self.unsaved = list(unsaved)
         self.after_failed = list(after_failed)
+        self.replace = list(replace)
         self.asked: list[tuple] = []
 
     def ask_unsaved(self, parent, noun, name):
@@ -390,3 +398,8 @@ class FakePrompts:
         """The next ``after_failed`` answer ("keep" when none is left)."""
         self.asked.append(("after_failed", parent, noun, name))
         return self.after_failed.pop(0) if self.after_failed else "keep"
+
+    def ask_replace_unloaded(self, parent, noun, label):
+        """The next ``replace`` answer ("cancel", i.e. Keep it, when none is left)."""
+        self.asked.append(("replace", parent, noun, label))
+        return self.replace.pop(0) if self.replace else "cancel"

@@ -1,11 +1,12 @@
 """The unsaved-changes prompts of the canvas editors (Correct and Trace GT), contract C11.
 
 One Save / Discard / Cancel box names what is unsaved ("mask", "skeleton", "mask and
-skeleton", "GT"), and a second box follows a failed save (Discard / Keep editing). The
+skeleton", "GT"), and a second box follows a failed save (Discard / Keep editing). A third
+asks before a save replaces a file the editor could not show (Replace / Keep it). The
 wording is the editors' of before the merge, word for word. Answers come back as plain
-strings (:data:`SAVE`, :data:`DISCARD`, :data:`CANCEL`, :data:`KEEP`), so the session logic
-that asks them stays Qt-free; Esc or closing the box is the safe answer (Cancel / Keep
-editing). Each box is freed once answered.
+strings (:data:`SAVE`, :data:`DISCARD`, :data:`CANCEL`, :data:`KEEP`, :data:`REPLACE`), so the
+session logic that asks them stays Qt-free; Esc or closing the box is the safe answer (Cancel /
+Keep editing / Keep it). Each box is freed once answered.
 """
 
 from __future__ import annotations
@@ -18,13 +19,15 @@ __all__ = [
     "CANCEL",
     "DISCARD",
     "KEEP",
+    "REPLACE",
     "SAVE",
     "ask_after_failed_save",
+    "ask_replace_unloaded",
     "ask_unsaved",
     "join_nouns",
 ]
 
-SAVE, DISCARD, CANCEL, KEEP = "save", "discard", "cancel", "keep"
+SAVE, DISCARD, CANCEL, KEEP, REPLACE = "save", "discard", "cancel", "keep", "replace"
 
 _Button = QMessageBox.StandardButton
 
@@ -106,3 +109,21 @@ def ask_after_failed_save(parent: QWidget | None, noun: str, name: str) -> str:
         rename={_Button.Cancel: "Keep editing"},
     )
     return DISCARD if choice == _Button.Discard else KEEP
+
+
+def ask_replace_unloaded(parent: QWidget | None, noun: str, label: str) -> str:
+    """Before a save of ``noun`` replaces ``label``, a file the editor could not show.
+
+    Returns :data:`REPLACE` or :data:`CANCEL` ("Keep it", also the default, Esc and close).
+    """
+    choice = _ask(
+        parent,
+        QMessageBox.Icon.Warning,
+        f"Replace the saved {noun}?",
+        f"{label} exists but could not be shown. Replace it?",
+        "Your edits replace the whole file. Keep it leaves the file as it is.",
+        _Button.Save | _Button.Cancel,
+        _Button.Cancel,
+        rename={_Button.Save: "Replace", _Button.Cancel: "Keep it"},
+    )
+    return REPLACE if choice == _Button.Save else CANCEL

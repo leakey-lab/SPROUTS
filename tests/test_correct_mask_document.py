@@ -34,7 +34,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STEM = "plot_T001_L001_2024.07.18_111530_001_SMM"
 SIZE = (80, 60)  # (w, h)
-WRONG_SIZE = Notice("Saved mask size does not match the image; starting empty", "warn")
+NOT_SHOWN_SIZE = (
+    "Saved mask size does not match the image: it is not shown and is kept unless you save over it"
+)
+NOT_SHOWN_UNREADABLE = (
+    "Saved mask could not be read: it is not shown and is kept unless you save over it"
+)
 MASK_EXTENSIONS = (".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG")  # lookup order
 SYNTH_CASES = ("synth_model_mask_and_skeleton", "synth_blank_png")
 
@@ -131,27 +136,96 @@ def test_opens_the_synthetic_mask_as_the_goldens_saw_it(tmp_path, case):
     assert doc.has_saved_file == (case == "synth_model_mask_and_skeleton")
 
 
-def test_wrong_size_mask_opens_empty_with_a_warning(tmp_path):
+def _bytes(path: str) -> bytes:
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _assert_not_shown_and_kept(doc: MaskDocument, tmp_path, text: str, before: bytes) -> None:
+    """Empty, clean, flagged; status says so; a save writes and removes nothing."""
+    assert not doc.history.plane.any() and doc.unloaded_file() and not doc.is_dirty()
+    assert not doc.has_saved_file
+    assert doc.status() == LayerStatus("error", "Mask not shown", text)
+
+    assert doc.save() == MaskSaveResult(ok=True, kept=True)
+
+    assert _bytes(_mask_path(tmp_path)) == before  # nothing written or removed
+    assert doc.unloaded_file() and doc.status() == LayerStatus("error", "Mask not shown", text)
+
+
+def test_a_mask_of_another_size_is_not_shown_and_is_kept(tmp_path):
     _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    before = _bytes(_mask_path(tmp_path))
     doc = MaskDocument()
 
-    assert doc.open(_image(tmp_path), (100, 50)) == [WRONG_SIZE]
+    assert doc.open(_image(tmp_path), (100, 50)) == [Notice(NOT_SHOWN_SIZE, "warn")]
 
-    assert doc.history.plane.shape == (50, 100) and not doc.history.plane.any()
-    assert not doc.has_saved_file and not doc.is_dirty()
-    assert doc.status() == LayerStatus("none", "No mask")
+    assert doc.history.plane.shape == (50, 100)
+    _assert_not_shown_and_kept(doc, tmp_path, NOT_SHOWN_SIZE, before)
 
 
-def test_undecodable_mask_opens_empty(tmp_path):
+def test_an_undecodable_mask_is_not_shown_says_so_and_is_kept(tmp_path):
     os.makedirs(tmp_path / "mask")
     with open(_mask_path(tmp_path), "wb") as fh:
         fh.write(b"not a png")
     doc = MaskDocument()
 
-    assert doc.open(_image(tmp_path), SIZE) == []
+    assert doc.open(_image(tmp_path), SIZE) == [Notice(NOT_SHOWN_UNREADABLE, "warn")]
 
-    assert doc.history.plane.shape == (60, 80) and not doc.history.plane.any()
-    assert not doc.has_saved_file and not doc.is_dirty()
+    assert doc.history.plane.shape == (60, 80)
+    _assert_not_shown_and_kept(doc, tmp_path, NOT_SHOWN_UNREADABLE, b"not a png")
+
+
+def test_painting_over_an_unshown_mask_then_saving_replaces_it(tmp_path):
+    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), (100, 50))
+    _paint(doc, (10, 10, 5, 5))
+    assert doc.status() == LayerStatus("dirty")  # unsaved edits win over "not shown"
+
+    result = doc.save()
+
+    assert result.ok and not result.kept and result.path == _mask_path(tmp_path)
+    assert read_rgba_shape(result.path) == (50, 100)
+    assert not doc.unloaded_file() and doc.has_saved_file
+    assert doc.status() == LayerStatus("clean")
+
+
+def test_a_failed_save_over_an_unshown_mask_says_so_and_keeps_it_flagged(tmp_path, monkeypatch):
+    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), (100, 50))
+    _paint(doc, (10, 10, 5, 5))
+    monkeypatch.setattr(os, "replace", _boom("disk full"))
+
+    assert not doc.save().ok
+
+    assert doc.unloaded_file() and doc.status() == LayerStatus("error", "Not saved", "disk full")
+
+
+def test_closing_forgets_the_unshown_file(tmp_path):
+    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    doc = MaskDocument()
+    doc.open(_image(tmp_path), (100, 50))
+
+    doc.close()
+
+    assert not doc.unloaded_file()
+    assert doc.open(_image(tmp_path / "other"), SIZE) == [] and not doc.unloaded_file()
+
+
+def test_a_read_says_why_a_file_was_not_loaded(tmp_path):
+    assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == ""
+    _write(_mask_path(tmp_path), np.full((60, 80), 255, np.uint8))
+    assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == ""
+    assert MaskDocument.read(_image(tmp_path), (100, 50)).not_loaded == "size"
+    with open(_mask_path(tmp_path), "wb") as fh:
+        fh.write(b"not a png")
+    assert MaskDocument.read(_image(tmp_path), SIZE).not_loaded == "unreadable"
+
+
+def read_rgba_shape(path: str) -> tuple[int, int]:
+    return imread_unicode(path, cv2.IMREAD_UNCHANGED).shape[:2]
 
 
 def test_opening_another_image_starts_fresh(tmp_path, monkeypatch):

@@ -3,8 +3,10 @@
 ``CorrectSession`` owns what the mask and skeleton layers share: which image is open,
 the one undo timeline (``EditJournal``) over the layers' own stacks, the aggregate dirty
 state, saving (one summary toast, one report per layer save attempt) and the one
-unsaved-changes prompt. It drives the layers only through ``EditLayer`` and reaches
-the UI only through the callbacks it is given, so it runs without Qt.
+unsaved-changes prompt. Before each layer save it asks its ``SaveGate``
+(``app.gui.correct.save_gate``), which may ask the user first or decline the save. It
+drives the layers only through ``EditLayer`` and reaches the UI only through the
+callbacks it is given, so it runs without Qt.
 
 Gestures first: every call that saves, prompts, opens, closes or reloads first ends a
 drag in progress (``finish_gestures``), so a stroke it commits is saved or prompted for
@@ -15,41 +17,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Protocol
 
 from app.editing.journal import EditJournal
 from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome
+from app.gui.correct.save_gate import CANCEL, DISCARD, KEEP, SAVE, Prompts, SaveGate, SaveReport
 
-# The prompts' answers (the values of the constants in app.gui.editor_prompts).
-SAVE, DISCARD, CANCEL, KEEP = "save", "discard", "cancel", "keep"
-
-
-class Prompts(Protocol):
-    """The unsaved-changes questions (the ``app.gui.editor_prompts`` module in the app)."""
-
-    def ask_unsaved(self, parent: object, noun: str, name: str) -> str:
-        """Save / Discard / Cancel for the unsaved ``noun`` of image ``name``."""
-
-    def ask_after_failed_save(self, parent: object, noun: str, name: str) -> str:
-        """Discard / Keep editing after ``noun`` could not be saved."""
-
-
-@dataclass(frozen=True)
-class SaveReport:
-    """What one save did: one outcome per layer save attempt, mask first."""
-
-    outcomes: tuple[SaveOutcome, ...] = ()
-
-    @property
-    def ok(self) -> bool:
-        """Every outcome ok (True when nothing was saved)."""
-        return all(outcome.ok for outcome in self.outcomes)
-
-    @property
-    def failed(self) -> tuple[str, ...]:
-        """Ids of the layers whose save failed."""
-        return tuple(outcome.layer_id for outcome in self.outcomes if not outcome.ok)
+# The answers, Prompts and SaveReport live in save_gate; the session's callers import them here.
+__all__ = ["CANCEL", "DISCARD", "KEEP", "SAVE", "CorrectSession", "Prompts", "SaveReport"]
 
 
 def _join_nouns(nouns: Sequence[str]) -> str:
@@ -125,6 +99,7 @@ class CorrectSession:
         self.image_path = ""
         self._prompts = prompts
         self._parent = parent
+        self._gate = SaveGate(prompts, parent)
         self._on_dirty_changed = on_dirty_changed
         self._on_notice = on_notice
         self._on_history_changed = on_history_changed
@@ -278,21 +253,23 @@ class CorrectSession:
             return SaveReport()
         with self._batch:
             self.finish_gestures()
-            return self._save(self.dirty_layers() or [active_id])
+            return self._save(self.dirty_layers() or [active_id], ask=True)
 
     def save_dirty(self) -> SaveReport:
         """PgDn / PgUp: save the dirty layers only; an empty report (and no refresh of the
-        page) when none is."""
+        page) when none is. Never asks: a save the gate would ask about is declined."""
         with self._quiet:
             self.finish_gestures()
             dirty = self.dirty_layers()
-            return self._save(dirty) if dirty else SaveReport()
+            return self._save(dirty, ask=False) if dirty else SaveReport()
 
-    def _save(self, layer_ids: Iterable[str]) -> SaveReport:
+    def _save(self, layer_ids: Iterable[str], *, ask: bool) -> SaveReport:
         """Save ``layer_ids`` mask first; report each attempt; a failure stops nothing.
 
-        A layer's own write is no change on disk: its file stamps are taken again, so
-        coming back to the image keeps the documents and their history.
+        The gate comes first (``ask``: it may ask the user); a declined save is reported
+        like any attempt, and the layer is not saved. A layer's own write is no change on
+        disk: its file stamps are taken again, so coming back to the image keeps the
+        documents and their history.
         """
         self._stale = True  # inside a batch: its end refreshes the page
         targets = set(layer_ids)
@@ -300,7 +277,9 @@ class CorrectSession:
         for layer_id, layer in self.layers.items():
             if layer_id in targets:
                 layer.finish_gesture()
-                outcome = layer.save()
+                outcome = self._gate.before_save(layer_id, layer, ask=ask)
+                if outcome is None:
+                    outcome = layer.save()
                 if outcome.ok and layer_id in self._stamps:
                     self._stamps[layer_id] = layer.file_stamps()
                 outcomes.append(outcome)
@@ -331,7 +310,8 @@ class CorrectSession:
         the image. Discard reverts them and forgets the timeline entries of each layer
         whose history the revert cleared; Cancel stays; Save saves them (each attempt
         reported) and, if one fails, asks about the failed layers only: Discard reverts
-        them, Keep editing stays. Nothing to ask, or Cancel, changes nothing and refreshes
+        them, Keep editing stays. A save the user declined (the gate's Keep it) stays too,
+        without that question. Nothing to ask, or Cancel, changes nothing and refreshes
         nothing.
         """
         with self._quiet:
@@ -346,14 +326,16 @@ class CorrectSession:
                 return True
             if answer != SAVE:
                 return False
-            failed = self._save(dirty).failed
-            if not failed:
-                return True
-            answer = self._prompts.ask_after_failed_save(self._parent(), self._nouns(failed), name)
-            if answer == DISCARD:
-                self._revert(failed)
-                return True
-            return False
+            report = self._save(dirty, ask=True)
+            failed, moves_on = report.failed, True
+            if failed:
+                nouns = self._nouns(failed)
+                moves_on = (
+                    self._prompts.ask_after_failed_save(self._parent(), nouns, name) == DISCARD
+                )
+                if moves_on:
+                    self._revert(failed)
+            return moves_on and not report.declined
 
     def reset(self) -> bool:
         """A new folder: the prompt, then close. False (nothing changed) when the user stays."""

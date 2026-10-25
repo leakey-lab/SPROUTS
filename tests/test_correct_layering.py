@@ -26,6 +26,7 @@ QT_FREE = [
     "app.editing.journal",
     "app.gui.correct.layer",
     "app.gui.correct.session",
+    "app.gui.correct.save_gate",
     "app.gui.correct.mask_document",
     "app.gui.correct.skeleton_document",
 ]

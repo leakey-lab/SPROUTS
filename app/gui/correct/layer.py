@@ -23,6 +23,8 @@ Rules every layer follows:
   Nothing is ever dropped silently.
 - Optional (``ReadAheadLayer``): a layer with ``read_ahead`` lets the page read the
   document of the next image on a worker thread and open it from that payload.
+- Optional (``DiskGuardedLayer``): a layer with ``unloaded_label`` names a file it found
+  but did not show; the session asks before a save replaces it.
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ class SaveOutcome:
     cleared: bool = False  # mask only: an empty mask removed an existing saved file
     message: str = ""  # detail for a toast ("" = nothing beyond the summary)
     kind: str = "success"
+    declined: bool = False  # the user declined the write (ok is False); nothing was written
 
 
 @dataclass(frozen=True)
@@ -286,6 +289,20 @@ class ReadAheadLayer(Protocol):
         ahead: object | None = None,
     ) -> list[Notice]:
         """``EditLayer.open``, from ``ahead`` (a reader's payload) when it is current."""
+
+
+class DiskGuardedLayer(Protocol):
+    """Optional part of an ``EditLayer``: a file on disk its document did not show.
+
+    A layer that could not load a file it found (a mask of another size than the photo,
+    an undecodable one) names the file a save would replace without having shown it, so
+    the session asks first (``app.gui.correct.save_gate``).
+    """
+
+    def unloaded_label(self) -> str:
+        """The project-relative file (``"mask/a.png"``, ``/`` separators) a save would
+        replace unshown; ``""`` when none (also while the plane is empty: that save keeps
+        the file)."""
 
 
 def _declared_members(protocol: type) -> dict[str, bool]:

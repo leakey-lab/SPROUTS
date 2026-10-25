@@ -74,5 +74,5 @@ def mask_read_back(document: MaskDocument, size: tuple[int, int], stamps: tuple)
         return None
     plane = document.history.plane if document.has_saved_file else None
     return MaskRead(
-        document.image_path, tuple(size), tuple(stamps), plane, document.has_saved_file, False
+        document.image_path, tuple(size), tuple(stamps), plane, document.has_saved_file, ""
     )

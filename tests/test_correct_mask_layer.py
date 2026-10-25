@@ -56,6 +56,9 @@ NO_MODS = Qt.KeyboardModifier.NoModifier
 MASK_COLOUR = QColor(tokens.MASK)
 CLEARED = "Mask cleared. Ctrl+Z to undo, Save to remove the file."
 FILL_MISS = "Fill works inside a closed outline. Close the loop first."
+NOT_SHOWN_SIZE_TEXT = (
+    "Saved mask size does not match the image: it is not shown and is kept unless you save over it"
+)
 
 
 @pytest.fixture(scope="module")
@@ -1034,8 +1037,49 @@ def test_open_hands_back_the_documents_notices(scene, tmp_path):
 
     notices = layer.open(image_path(tmp_path), (W, H), None)
 
-    assert notices == [Notice("Saved mask size does not match the image; starting empty", "warn")]
+    assert notices == [Notice(NOT_SHOWN_SIZE_TEXT, "warn")]
     assert layer.is_open() and not plane_of(layer).any()
+
+
+def test_unloaded_label_names_the_file_only_while_something_is_painted(scene, tmp_path):
+    path = mask_file(tmp_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_mask_file(path, np.ones((H // 2, W // 2), bool))  # an editor-saved mask, other size
+    layer = MaskLayer(FakeHost(), scene)
+    layer.open(image_path(tmp_path), (W, H), None)
+    assert layer.unloaded_label() == ""  # a save of the empty plane keeps the file
+
+    stroke(layer, [(20, 20), (40, 40)])
+
+    assert layer.unloaded_label() == f"mask/{STEM}.png"
+    assert layer.status() == LayerStatus("dirty")
+
+
+def test_a_save_with_nothing_painted_keeps_the_unshown_file(scene, tmp_path):
+    path = mask_file(tmp_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_mask_file(path, np.ones((H // 2, W // 2), bool))
+    with open(path, "rb") as fh:
+        before = fh.read()
+    layer = MaskLayer(FakeHost(), scene)
+    layer.open(image_path(tmp_path), (W, H), None)
+
+    outcome = layer.save()
+
+    assert outcome == SaveOutcome(
+        "mask", ok=True, message="Nothing to save: the saved mask was kept", kind="info"
+    )
+    with open(path, "rb") as fh:
+        assert fh.read() == before
+    assert layer.status() == LayerStatus("error", "Mask not shown", NOT_SHOWN_SIZE_TEXT)
+
+
+def test_a_layer_with_its_mask_shown_names_no_unloaded_file(scene, tmp_path):
+    layer, _ = open_layer(scene, tmp_path, boxes_plane())
+
+    stroke(layer, [(20, 20), (40, 40)])
+
+    assert layer.unloaded_label() == ""
 
 
 def test_open_shows_the_saved_mask(scene, tmp_path):

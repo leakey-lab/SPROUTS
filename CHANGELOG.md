@@ -43,6 +43,11 @@ Five passes, not yet released:
   - Start-up: the D3D11 / ANGLE flags are set on Windows only; Linux and macOS take Qt's
     default RHI (on Linux Qt failed to create its RHI and the dashboards were black). Fusion
     style off Windows; desktop file name `sprouts` for Wayland icons (WX-T1, O21).
+  - Correct: a saved mask it cannot show (another size than the photo, e.g. a 640 x 480
+    model mask beside a 2048 x 1536 photo, or an undecodable file) is no longer removed by
+    `Ctrl+S`. The mask row reads *Mask not shown*, the open warns, a save with nothing
+    painted keeps the file, a save after painting asks **Replace** / **Keep it**, and
+    `PgDn` stays on the image with a warning (W1-T2, M1 part A).
   - Dependencies: `pywin32` is no longer a dependency (nothing imported it) and OpenCV is
     `opencv-python-headless` (no OpenCV window is ever opened; avoids a second Qt on
     Linux); Linux and macOS are listed as supported (WX-T2, O21).

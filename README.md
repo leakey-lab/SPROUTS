@@ -242,6 +242,9 @@ its last point.
   image. If a save fails, you stay on the image and a message says why. An unfinished
   polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you
   finish it (Enter) or cancel it (Esc), and bring the skeleton forward if it was hidden.
+- A saved mask that *Correct* cannot show (another size than the photo, or a file it
+  cannot read) shows *Mask not shown* and is kept: `Ctrl+S` with nothing painted leaves
+  it, painting over it asks before replacing it, and `PgDn` stays on the image.
 - A polyline you are placing (two or more points) counts as unsaved: **Save** and
   `Ctrl+S` finish it first.
 - Every other way of leaving an image with unsaved changes (another image, another stage,

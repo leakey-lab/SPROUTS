@@ -166,6 +166,18 @@ class MaskLayer:
         self._changed()
         return self._outcome(result)
 
+    def unloaded_label(self) -> str:
+        """``DiskGuardedLayer``: ``"mask/<stem>.png"`` while a mask file found at open was not
+        shown and something is painted (a save would replace it); ``""`` otherwise."""
+        document, plane = self.document, self.document.history.plane
+        if not document.unloaded_file() or plane is None or not plane.any():
+            return ""
+        found = [stamp[0] for stamp in document.file_stamps() if stamp[1:] != (None,)]
+        if not found:  # gone since the open: nothing left to replace
+            return ""
+        folder = os.path.dirname(document.image_path)
+        return os.path.relpath(found[0], folder).replace(os.sep, "/")
+
     def revert(self) -> list[Notice]:
         """Discard: back to the saved mask in memory, history cleared (no notices)."""
         self.finish_gesture()
@@ -175,7 +187,8 @@ class MaskLayer:
         return []
 
     def status(self) -> LayerStatus:
-        """Save state: a failed save until the next edit, unsaved, saved or "No mask"."""
+        """Save state: a failed save until the next edit, unsaved, "Mask not shown", saved or
+        "No mask"."""
         return self.document.status()
 
     def clear(self) -> bool:
@@ -405,6 +418,9 @@ class MaskLayer:
 
     def _outcome(self, result: MaskSaveResult) -> SaveOutcome:
         """A document save as the workspace reports it (the texts of C15)."""
+        if result.ok and result.kept:
+            message = "Nothing to save: the saved mask was kept"
+            return SaveOutcome(self.layer_id, ok=True, message=message, kind="info")
         if result.ok and result.removed:
             name = os.path.basename(self.document.image_path)
             message = f"Empty mask: removed saved mask for {name}"

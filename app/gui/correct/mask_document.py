@@ -10,7 +10,10 @@ notices come back as :class:`app.gui.correct.layer.Notice` values and a save ret
 
 On disk the mask is ``mask/<stem>.png``, white on transparent RGBA (PNG colour type 6),
 written atomically; legacy ``.jpg`` / ``.jpeg`` masks (any case) are still read and
-removed. An empty plane removes every saved variant instead of writing a file.
+removed. An empty plane removes every saved variant instead of writing a file. A mask
+file the document could not load (another size than the image, undecodable) is not shown
+and is kept: the open says so, the status reads "Mask not shown", and a save of the empty
+plane leaves the file (the session asks before a save of painted pixels replaces it).
 
 The owner changes the plane only through ``history`` and calls
 :meth:`MaskDocument.touch` after each change (commit, undo, redo), so
@@ -35,23 +38,32 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["MaskDocument", "MaskRead", "MaskSaveResult"]
 
-_SIZE_MISMATCH = "Saved mask size does not match the image; starting empty"
+# Why a mask file was not loaded (``MaskRead.not_loaded``) -> the open notice / status tooltip.
+_NOT_SHOWN = {
+    "size": "Saved mask size does not match the image: it is not shown and is kept unless you"
+    " save over it",
+    "unreadable": "Saved mask could not be read: it is not shown and is kept unless you save"
+    " over it",
+}
 
 
 @dataclass(frozen=True)
 class MaskSaveResult:
     """What :meth:`MaskDocument.save` did.
 
-    ``ok``: the file now holds the plane (written, or removed for an empty plane).
-    ``path``: the mask file written, or the one a failed write was aimed at; None when
-    the plane was empty (nothing to write). ``removed``: an empty plane removed an
-    existing saved file. ``error``: why the save failed (the exception text), else "".
+    ``ok``: the file now holds the plane (written, or removed for an empty plane), or a
+    file that was not loaded was kept. ``path``: the mask file written, or the one a failed
+    write was aimed at; None when the plane was empty (nothing to write). ``removed``: an
+    empty plane removed an existing saved file. ``error``: why the save failed (the
+    exception text), else "". ``kept``: the plane was empty and a mask file the document
+    did not load was left as it is (nothing written or removed).
     """
 
     ok: bool
     path: str | None = None
     removed: bool = False  # an empty mask removed an existing file
     error: str = ""
+    kept: bool = False  # an empty plane left a file that was not loaded
 
 
 @dataclass(frozen=True)
@@ -59,8 +71,9 @@ class MaskRead:
     """The saved mask of one image, read ahead on a worker thread (:meth:`MaskDocument.read`).
 
     ``stamps`` are the mask files' stamps taken before the read (``file_stamps`` order);
-    ``plane`` is the 0/1 plane at ``size`` (None: no usable file); ``mismatch``: a file of
-    another size was found (the open warns about it).
+    ``plane`` is the 0/1 plane at ``size`` (None: no usable file); ``not_loaded``: why a
+    mask file that exists was not loaded, ``"size"`` (another size) or ``"unreadable"``
+    (undecodable), else ``""`` (the open warns about it).
     """
 
     image_path: str
@@ -68,7 +81,7 @@ class MaskRead:
     stamps: tuple
     plane: np.ndarray | None
     has_saved_file: bool
-    mismatch: bool
+    not_loaded: str
 
     @property
     def nbytes(self) -> int:
@@ -81,7 +94,8 @@ class MaskDocument:
 
     ``history.plane`` is the ``uint8`` 0/1 ``(h, w)`` plane (None while closed);
     ``image_path`` is ``""`` while closed; ``has_saved_file`` says whether a mask file
-    of the image holds the saved state (the status shows "No mask" otherwise).
+    of the image holds the saved state (the status shows "No mask" otherwise);
+    :meth:`unloaded_file` says whether a mask file was found but not loaded.
     ``on_history_change`` becomes the history's ``on_change`` (undo/redo availability).
     """
 
@@ -96,6 +110,7 @@ class MaskDocument:
         self._dirty_revision = 0  # the revision _dirty was computed for
         self._save_error = ""
         self._error_revision = -1  # the revision a failed save happened at
+        self._not_loaded = ""  # MaskRead.not_loaded of the open file, until a write
 
     # ------------------------------------------------------------------ state
     @property
@@ -121,14 +136,21 @@ class MaskDocument:
             self._dirty_revision = self._revision
         return self._dirty
 
+    def unloaded_file(self) -> bool:
+        """True while a mask file found at open was not loaded and nothing was written over it."""
+        return bool(self._not_loaded)
+
     def status(self) -> LayerStatus:
-        """The save state: a failed save (until the next edit) > unsaved > saved > no mask."""
+        """The save state: a failed save (until the next edit) > unsaved > a file not shown >
+        saved > no mask."""
         if not self.is_open():
             return LayerStatus("none")
         if self._save_error and self._error_revision == self._revision:
             return LayerStatus("error", "Not saved", self._save_error)
         if self.is_dirty():
             return LayerStatus("dirty")
+        if self._not_loaded:
+            return LayerStatus("error", "Mask not shown", _NOT_SHOWN[self._not_loaded])
         if self.has_saved_file:
             return LayerStatus("clean")
         return LayerStatus("none", "No mask")
@@ -156,9 +178,10 @@ class MaskDocument:
             on = store.read(image_path)
         except MaskFileError as exc:
             logger.warning("Failed to load existing mask: %s", exc)
-            on = None
+            exists = any(stamp[1:] != (None,) for stamp in stamps)
+            return MaskRead(image_path, size, stamps, None, False, "unreadable" if exists else "")
         if on is None:
-            return MaskRead(image_path, size, stamps, None, False, False)
+            return MaskRead(image_path, size, stamps, None, False, "")
         if on.shape != (height, width):
             logger.warning(
                 "Mask of %s is %sx%s, image is %sx%s; ignoring it",
@@ -168,8 +191,8 @@ class MaskDocument:
                 width,
                 height,
             )
-            return MaskRead(image_path, size, stamps, None, False, True)
-        return MaskRead(image_path, size, stamps, _zero_one_plane(on), True, False)
+            return MaskRead(image_path, size, stamps, None, False, "size")
+        return MaskRead(image_path, size, stamps, _zero_one_plane(on), True, "")
 
     def open(
         self, image_path: str, size: tuple[int, int], read: MaskRead | None = None
@@ -178,8 +201,9 @@ class MaskDocument:
 
         The mask as saved (grey above 200) becomes the plane and the baseline: clean,
         with an empty history. No saved mask, an undecodable one or one of another size
-        opens empty; a size mismatch also returns a warning notice. ``read`` (a
-        :meth:`read` done ahead) is used while the mask files are still the ones it read.
+        opens empty; the last two are not shown and are kept (:meth:`unloaded_file`), with
+        a warning notice. ``read`` (a :meth:`read` done ahead) is used while the mask
+        files are still the ones it read.
         """
         store = MaskStore.for_image(image_path)
         current = tuple(_stamp(path) for path in store.layout.mask_candidates(image_path))
@@ -194,16 +218,18 @@ class MaskDocument:
         self._store = store
         self.image_path = image_path
         self.has_saved_file = read.has_saved_file
+        self._not_loaded = read.not_loaded
         self._baseline = plane.copy()
         self.history.reset(plane)
         self._restart()
-        return [Notice(_SIZE_MISMATCH, "warn")] if read.mismatch else []
+        return [Notice(_NOT_SHOWN[read.not_loaded], "warn")] if read.not_loaded else []
 
     def close(self) -> None:
         """Forget the document: no plane, no history, no file."""
         self._store = None
         self.image_path = ""
         self.has_saved_file = False
+        self._not_loaded = ""
         self._baseline = None
         self.history.reset(None)
         self._restart()
@@ -223,10 +249,12 @@ class MaskDocument:
     def save(self) -> MaskSaveResult:
         """Write the plane as ``mask/<stem>.png`` (atomically; the old file survives errors).
 
-        An empty plane removes every saved variant instead. On success the plane
-        becomes the saved state. On failure the previous mask file is kept (the write is
-        atomic; a failed removal keeps the variants it had not reached), the document
-        stays dirty and :meth:`status` reports the error until the next :meth:`touch`.
+        An empty plane removes every saved variant instead, unless a mask file was not
+        loaded (:meth:`unloaded_file`): that file is kept, nothing is touched
+        (``kept``). On success the plane becomes the saved state. On failure the previous
+        mask file is kept (the write is atomic; a failed removal keeps the variants it had
+        not reached), the document stays dirty and :meth:`status` reports the error until
+        the next :meth:`touch`.
         """
         plane, store = self.history.plane, self._store
         if plane is None or store is None or not self.image_path:
@@ -234,6 +262,9 @@ class MaskDocument:
         on = plane > 0
 
         if not on.any():
+            if self._not_loaded:
+                self._saved(plane)
+                return MaskSaveResult(ok=True, kept=True)
             try:
                 removed = store.remove(self.image_path)
             except OSError as exc:
@@ -248,6 +279,7 @@ class MaskDocument:
         except (OSError, ValueError) as exc:
             return self._failed(path, exc)
         self.has_saved_file = True
+        self._not_loaded = ""
         self._saved(plane)
         return MaskSaveResult(ok=True, path=path)
 
