@@ -44,7 +44,9 @@ not in v1:
 - (Resolved 2026-09-28) The topbar used to need about 1170 px; it now switches to a
   compact density (icon-only unselected stages, names in tooltips) and the window
   shrinks to about 1000 px. The compact density changes the "names always visible" rule
-  and still needs design sign-off.
+  and still needs design sign-off. (Audit 2026-10-12, offscreen with the app theme: all
+  six names need 1040 px, the full row comes back at 1064 px and the window shrinks to
+  about 700 px, not 1000. The sign-off question is G3 in section 8.)
 
 ## 5. Open after the 2026-09-28 optimization pass (branch `feat/ui-perf-refinement`)
 
@@ -56,9 +58,17 @@ Owner decisions (not made by the tooling):
   `skeleton_corrections/` are never measured. Using them changes values for corrected images.
 - **Weights**: `checkpoints.zip` (48 MB) is tracked in git although the README says the
   checkpoints are not committed; the weights have no DOI (FR-07, `docs/MODELS.md`).
+  (Audit 2026-10-12: the README mismatch is resolved, `README.md:67` has said that the zip
+  is tracked since `9fd535a`; `CLAUDE.md`, `app/models.py:10` and
+  `scripts/build_support.py:64` still say the checkpoints are not committed. Still open:
+  no DOI, and the zip holds the skeleton model only, so the mask model cannot be obtained
+  from the repository. F2 in section 8.)
 - **Deterministic cuDNN** changes GPU outputs within the previous run-to-run noise
   (see CHANGELOG "Scientific output changes"); `SPROUTS_CUDNN_BENCHMARK=1` restores
-  autotuning.
+  autotuning. (Resolved in code, checked 2026-10-12: `app/inference/runtime.py:152-154`
+  sets it and every run record carries the flags, so nothing is left to build. Left: the
+  owner's confirmation of the default, and `docs/MODELS.md:54,82`, which still describe
+  autotuning. R2 in section 8.)
 
 Remaining low-severity review items:
 
@@ -74,10 +84,16 @@ Remaining low-severity review items:
   process start to first paint 438.4 -> 441.7 ms, n = 20). Track B: `dash_app.py`
   (845 -> 178 lines) composes `dash_length_layout.py`, `dash_length_views.py` and
   `dash_length_callbacks.py`; the served layout, callbacks, clientside JS and figure JSON
-  are pinned identical by `tests/test_viz_dash_split_golden.py`. Building the editor pages
+  are pinned identical by `tests/test_viz_dash_split_golden.py` (audit 2026-10-12: it pins
+  the layout hash, the callback wiring and the clientside JS hash; it compares no figure
+  JSON). Building the editor pages
   after the first paint was not part of the move: see the owner question in #7.
 - The compat shims `app/gui/widgets/tokens.py` (token re-export) and
-  `shell_chrome.build_ribbon` have no deprecation plan (CQ-10).
+  `shell_chrome.build_ribbon` have no deprecation plan (CQ-10). (Audit 2026-10-12:
+  `build_ribbon` has no caller left and can be deleted; `widgets/tokens.py` is imported by
+  61 files and is better kept as the Qt-side name of the tokens. Not listed here: the
+  re-exports `app/handlers/worker_base.py` and `app/gui/feedback.py`, and the deprecated
+  `app/handlers/window_feedback.py`. F5 in section 8.)
 - (Resolved 2026-09-29) CQ-10 for `app/handlers/mask_handler.py`: deleted with the old
   mask editor. CQ-11: `RasterEditorBase` now lives in `app/gui/raster_editor_base.py`
   (Trace GT's editor, built on the shared canvas parts).
@@ -139,16 +155,29 @@ Owner questions (science or product scope; nothing here blocks use):
   bilinear upscale (see CHANGELOG, Scientific output changes). Corrections saved before
   the fix are still 341 x 256 and keep their lost fragments. Measuring corrections stays
   an owner decision (FR-03); their lengths are now within a few percent of the generated
-  file's instead of 8-22 % of it.
+  file's instead of 8-22 % of it. (Audit 2026-10-12: on 285 real files over 5 mm a
+  correction reads a median 0.8 % longer than Measure's value for the same generated
+  skeleton, 90 % of the files between -1.0 % and +3.9 %, extremes -3.4 % and +11.3 %. The
+  published `main` (`81d8bcc`) still saves the old format; an old correction is detected
+  exactly by its size differing from the photo's. L1 and L5 in section 8.)
 - **Q2 JPEG deblock.** A display-only "Smooth JPEG blocks" toggle (default off, never
   written to disk or used by inference)? The images are JPEG quality ~39: smooth zoom
   removes the renderer's pixel squares, but the 8 x 8 compression blocks only fade.
 - **Q3 Real images as test data.** Commit 2-3 small dataset images as golden inputs, or
   keep only the synthetic goldens in the repository (current) with the real ones as a
   pre-merge gate?
-- **Q4 EXIF orientation in generation.** Generated masks come from OpenCV (EXIF applied)
-  while the editors use Qt's geometry (EXIF ignored): an EXIF-rotated image would get a
-  "mask size does not match" warning. None of the 40 harness images carries the tag.
+- **Q4 EXIF orientation in generation — NOT AN ISSUE (closed 2026-10-12).** The entry was
+  wrong: no reader applies the EXIF orientation. Mask and skeleton generation decode with
+  Pillow, which ignores the tag (masks did so before `abc34fa` too); the Library, Correct
+  and Trace GT read with `IMREAD_IGNORE_ORIENTATION`; GT export checks the stored size. A
+  JPEG stored 640 x 480 with Orientation 6 gets a mask that opens in Correct without a
+  notice. The app uses the stored pixel grid everywhere, which is also what the
+  calibration assumes. Left (M3 in section 8): write that policy down, pin it with a test
+  per reader, and flag tagged photos in GT export, because the export copies the photo
+  with its tag and a reader that applies it (`cv2.imread`) sees the image rotated against
+  its label. (Recorded before: "Generated masks come from OpenCV (EXIF applied) while the
+  editors use Qt's geometry (EXIF ignored): an EXIF-rotated image would get a 'mask size
+  does not match' warning. None of the 40 harness images carries the tag.")
 - **Q5 First frame at a new zoom on a dense 2048 px skeleton (OpenGL) — mostly resolved
   (2026-09-30).** The skeleton's vector tiles, the photo's next pyramid level and the
   mask's tiles are made ahead in idle slices, and the endpoint markers are culled and drawn
@@ -162,7 +191,12 @@ Follow-ups:
   25 commits at 2048 px hold 3.0 MiB instead of 75 MiB (one base copy plus patches).
 - A local branch pick for Select (1.5 s → 0.13 ms on a dense 2048 px skeleton; it
   disagrees with today's pick in 1-3 % of clicks next to junctions, so it needs a
-  semantics decision).
+  semantics decision). (Audit 2026-10-12: today's pick costs about 1.1 s for the first
+  click after an open or an edit on the dense 2048 px skeleton, 70 ms for later clicks and
+  11 ms on a real 640 x 480 one. The nearest-pixel pick differs in 2.4-3.4 % of clicks
+  within 3 px of the skeleton and in 5.9-9.2 % within 5 px of a junction. An exact
+  windowed pick returned today's polyline in 9,000 of 9,000 clicks at about 40 ms, so the
+  speed needs no semantics decision. E5 in section 8.)
 - (Resolved 2026-09-30) Windowed endpoints and a partial marker repaint: a polyline commit
   plus its paint on the dense 2048 px stress skeleton takes 4.7 ms instead of 29.6 ms.
 - (Resolved 2026-09-30) The next and previous images are read ahead on a worker thread:
@@ -186,7 +220,9 @@ Follow-ups:
   it now brings the skeleton forward, so Enter and Esc reach the draft.
 - (Resolved 2026-09-30) The floating panels' drop shadow is cached on the raster canvas: a
   full frame at 400 % takes 2.8 ms instead of 3.9 ms (1.2 ms instead of 2.6 ms at 100 %).
-- Scripts that build an editor page and leave it and the `QApplication` to interpreter
+- (Closed 2026-10-12: a note for script authors, not a product issue; `main.main`,
+  `tests/qt_teardown.py` and the one tracked page-building script already tear down.)
+  Scripts that build an editor page and leave it and the `QApplication` to interpreter
   shutdown can end with an access violation (about 1 in 30 runs); tear pages down first:
   `close()`, `deleteLater()`, then a few rounds of `sendPostedEvents(None, DeferredDelete)`
   each followed by `sendPostedEvents()` (PyQt frees the signal proxies of deleted widgets
@@ -219,6 +255,9 @@ Limits measured during the build (not regressions):
   of about 10 ms. The first frame after opening such a photo (about 7 ms) remains.
 - A single click with brush size 1 paints nothing (Qt's non-antialiased 1 x 1 ellipse
   fills no pixel); the old editors did the same. Fixing it changes saved pixels.
+  (Audit 2026-10-12: 0 px at 600 of 600 positions in Correct and in Trace GT, eraser
+  included, and the click still adds an empty undo step. A fix limited to size 1 changes
+  no golden: every op of both golden cases replays identically. E4 in section 8.)
 - (Resolved 2026-09-30) The skeleton's semi-transparent halo is composited once, so it no
   longer looks darker at sharp bends.
 
@@ -241,7 +280,12 @@ Owner questions (science or product scope; nothing here blocks use):
   free VRAM can change the outputs of the images they touch (`_sprouts_run.json` records
   `batch_size` and `effective_batch_size`). A fixed batch per model, without halving, would
   make runs reproducible across machines but changes outputs: it sits next to the
-  deterministic-cuDNN decision in section 5.
+  deterministic-cuDNN decision in section 5. (Audit 2026-10-12: the 300 images were
+  synthetic, and a fixed batch makes runs reproducible per GPU model and software stack,
+  not across machines. Two more causes: the last batch of every run is smaller, and a
+  *Keep existing masks* run batches only the missing stems; the run record cannot say
+  which image ran at which size. On the CPU, 8 real images gave identical masks at batch
+  4, 2 and 1. R1 in section 8.)
 - **Supported formats.** Skeleton generation also reads `.bmp`, `.tif`, `.tiff` and `.ppm`,
   which the Library, mask generation and Measure-area ignore: such an image gets a skeleton
   and a `root_lengths.csv` row, but no mask and no Library entry. Changing either side
@@ -249,7 +293,11 @@ Owner questions (science or product scope; nothing here blocks use):
 - **Case-variant stems on Windows.** `A.png` and `a.jpg` are two Library images but share
   one output file on NTFS (`mask/A.png`), so their saves still race (two files with exactly
   the same stem no longer do). It needs case-insensitive stems in the Library and in
-  generation together. Rare.
+  generation together. Rare. (Audit 2026-10-12, worse than recorded: with `A.png` and
+  `a.jpg` the winner is random (10 against 10 in 20 runs), the mask and the skeleton of
+  one run can come from different images, and a *Keep existing masks* run regenerates the
+  other-case stem every time and replaced a hand-corrected mask without a prompt. R4 in
+  section 8.)
 - **Save placement in Correct (W16).** Correct's only top-bar action is the destructive
   *Clear*, which the dock also has, while *Save* sits only in the dock; the accent-filled
   *Save* (and Trace GT's *Save GT*) stays highlighted when there is nothing to save. Left as
@@ -264,11 +312,19 @@ Owner questions (science or product scope; nothing here blocks use):
   became a 640 x 480 file of 45.99 mm (-1.7 %), which would change root length if
   corrections were measured (FR-03). Keep it as an acceptance, write nothing and say
   "Nothing to save", apply D7 to the mask only, or write a correction only when it differs
-  from the generated skeleton? Best decided together with W16.
+  from the generated skeleton? Best decided together with W16. (Audit 2026-10-12: the
+  Library shows the image as corrected only after another image is selected or the
+  project is reopened, and the owner's project holds one such unedited correction. On the
+  mask layer the same Save removes a mask file that Correct did not load: M1 in
+  section 8. L2 in section 8.)
 - **Build the editor pages after the first paint?** The hidden Correct and Trace GT pages
   cost about 140 ms of the `MainWindow()` build (214.7 -> 74.1 ms with empty stand-ins,
   n = 12): their constructors take about 50 ms, the rest is reparenting and style work.
-  That is about a third of process start to first paint (about 440 ms). The split left
+  That is about a third of process start to first paint (about 440 ms). (Audit 2026-10-12:
+  true offscreen only. On the real platform the pages are about 130 ms of the 0.87 s
+  before the window shows, and logged launches took 1 to 5 s to reach the event loop. A
+  deferred-build prototype gave the same first paint and then two GUI blocks of 83 ms and
+  39 ms: the cost moves, it does not shrink. P1 in section 8.) The split left
   them as they are because building them later is not a clean move:
   `tests/test_shell_chrome_smoke.py::test_main_window_contract` checks the pages on a window
   that is never shown; pages made after the first paint join the end of the Tab chain;
@@ -280,6 +336,10 @@ Owner questions (science or product scope; nothing here blocks use):
   the image has unsaved edits, *Discard* returns to the copy in memory and the chip says
   Saved although the file on disk differs; the next selection reloads it. The Correct mask
   layer behaves the same way. Reload a changed file on *Discard*, or say that it changed?
+  (Audit 2026-10-12, worse than recorded: Save, the prompt's Save and `PgDn` overwrite a
+  file that changed on disk without asking, in both editors, and a Generate run is such a
+  writer, since it does not refresh the image open in Correct. The skeleton layer already
+  re-reads on Discard. E2 in section 8.)
 - **Smooth on a picked branch (J1).** Pressing `S` on a picked branch without moving it is
   not an unsaved change, so leaving drops the smoothed preview without a prompt. Counting it
   would prompt after a mere pick whenever Smooth is on; the recommendation is to keep the
@@ -378,7 +438,15 @@ Follow-ups:
   `scandir`, so a click lists the two folders only (about 0.2 s).
 - "Changed since measured" compares file times, so a copied folder can report changes that
   did not happen. (`Ctrl+S` with nothing unsaved: see the owner question V1 above.)
-- Check that a normal launch gets hardware OpenGL: in the test sessions Qt picked its
+  (Audit 2026-10-12: a copy that keeps the file times, such as `Copy-Item`, raises no
+  false alarm. Files stamped anew, or regenerated identically, are all flagged (40 of
+  40), and real changes are missed: a repainted mask with an older time reads as current
+  and a deleted input is never reported. In the real 46k project 1,152 masks are flagged
+  and 1,116 of them still measure the CSV's exact value. R5 in section 8.)
+- (Checked 2026-10-12: all 16 launches through `main.py` in the per-user log say "OpenGL
+  canvas viewports available (NVIDIA GeForce RTX 5070 Ti/PCIe/SSE2)"; only headless runs
+  log "off". Left: nothing in the window says which path is active, P6 in section 8.)
+  Check that a normal launch gets hardware OpenGL: in the test sessions Qt picked its
   software renderer (the adapter read as vendor 0x0), which turns the OpenGL canvases off.
   The app log says "OpenGL canvas viewports available" or "off: software renderer"; raster
   frames are about 10x slower.
@@ -417,5 +485,109 @@ Second walkthrough (V1-V11, 2026-09-30); V1 is the owner question above, the res
   have a GT tracing" reworded.
 - Still open from that walkthrough: a batch job that finishes after another folder was
   opened still reports the previous project (refuse or ask before opening while a job
-  runs, or name the project in the job's toasts?). (Resolved 2026-10-02: a long file name
+  runs, or name the project in the job's toasts?). (Audit 2026-10-12, worse than
+  recorded: for Generate it is a correctness bug. With folder B opened during the mask
+  pass of A, A got its masks and no skeletons, and the chained skeleton pass wrote into B
+  and replaced B's existing skeleton, because it reads the open project when it starts
+  (`generate_skeleton_handler.py:113`). Measure writes into the right folder. R7 in
+  section 8.) (Resolved 2026-10-02: a long file name
   is elided in the middle so the save toast keeps one line.)
+
+## 8. Audit of 2026-10-12 (branch `feat/unified-correct-editor`, HEAD `6c52ae1`)
+
+Eight read-only audits, one agent per package, checked every open item above against the
+code, reproduced what a script could reproduce, and looked at the questions the owner
+asked (why there are two tracing interfaces, what happens to a corrected skeleton, what
+else is ambiguous). Nothing was fixed. An entry above carries an "Audit 2026-10-12" note
+where the audit corrected it. The resolution plan is
+`docs/superpowers/plans/2026-10-12-known-issues-resolution.md`; the full reports and the
+scripts are in `.claude/handoff/issue-audit-2026-10-12/` (git-ignored). The IDs below (L,
+M, R, E, G, P, D, F, X) are the plan's. "Run" means a script produced the result; "read"
+means it comes from reading the code.
+
+Closed by the audit (already resolved, or not an issue):
+
+- Q4, EXIF orientation (section 6): not an issue, the entry was wrong (run).
+- Deterministic cuDNN (section 5): resolved in code; the owner's confirmation and a stale
+  passage in `docs/MODELS.md` are left (read; the runtime tests pass).
+- "Check that a normal launch gets hardware OpenGL" (section 7): checked, hardware in 16 of
+  16 logged launches. The missing on-screen indicator is P6.
+- The README and `checkpoints.zip` (section 5): the README is right. The DOI and the
+  missing mask model stay open (F2).
+- The script teardown note (section 6): a note for script authors, not a product issue.
+- L4, the name `<stem>_fake.png`: not an issue. It is the Pix2Pix name for a generated
+  image, built in five places and present in no CSV, dashboard or UI text. Explain it in
+  the docs and keep one constant; a rename would need a reader for both names for good.
+- M5, Measure-area on masks saved by the editor: right. The editor writes only 0 and 255
+  and Measure counts them exactly (19,200 of 19,200 px). Left for files from other
+  programs: Measure thresholds at 127 and Correct at 200, and Measure ignores alpha.
+
+Worse than recorded, each reproduced by a run (noted in place above): R7 (a chained
+skeleton pass writes into a project opened during the mask pass), R4 (case-variant stems
+replace a hand-corrected mask), E2 (Save overwrites a file changed on disk without
+asking), and un-retiring a GT class (section 4: a retired class has no row in the class
+editor, its key cannot be added again, and its pixels export as 255; only a hand edit of
+`gt/classes.json` brings it back, G2).
+
+New, not recorded before:
+
+- **M1 A model mask on a photo that is not 640 x 480 (run).** Masks are generated at
+  640 x 480 whatever the photo. On a photo of another size Correct opens the mask empty
+  ("No mask"); `Ctrl+S` with nothing edited then deletes `mask/<stem>.png` without a
+  prompt, and one stroke followed by Save or `PgDn` writes a photo-sized mask that holds
+  only the stroke (26.96 mm² became 0.04 mm²). A mask that cannot be decoded takes the
+  same path, with no notice at open. The Library draws no mask for such an image. All 40
+  harness images and 384 sampled source images are 640 x 480, so today's data is not hit.
+- **M2 One field of view for every image (run).** Calibration assumes that each image
+  covers 18 x 13 mm whatever its size, aspect or crop: a mask covering a quarter of a
+  640 x 480 frame, of a 320 x 240 crop and of a 1920 x 1080 frame all measure 58.5 mm²,
+  with no warning, and provenance records the field of view but no pixel sizes. The pixel
+  is not square (0.028125 x 0.027083 mm); the constant has been in the code since the
+  first commit, without a source. With 18 x 13.5 mm the pixel is square, every area grows
+  by 3.85 % and lengths by 1.1 to 3.7 %. Which value the cameras have is the owner's to
+  confirm.
+- **M4 Hand-corrected and model masks are told apart by the PNG colour type only (run).**
+  A hand mask flattened to grey counts as a model mask, and a model mask saved again as
+  RGBA as hand-corrected. The origin only feeds the wording of the Generate prompt, so it
+  never causes a silent overwrite. One real case does: a mask cleared by hand is a deleted
+  file, so *Keep existing masks* generates it again.
+- **L3 The mask and the skeleton are independent, and Correct does not say so (run).** A
+  corrected mask changes area only; the README and the data dictionary say it, the
+  Correct page does not, and the sentence written for the Generate page is never shown
+  (`shell_chrome.py:365-369` overwrites it). In every 15th image of the 2024 EF project
+  the mask model reports a root and the skeleton model none in 32 % of the images, so
+  area and length describe different sets of images.
+- **L5 Two ways of thinning the same skeleton (run).** Measure thins the generated file
+  at 341 x 256; the editor upscales it to the photo first. Neither is closer to the
+  truth: on synthetic lines of known length both read about 4.4 % long (0 % at 0° and
+  45°, +8.2 % at 22.5°), which is the 8-connected arc-length estimator (X1, a science
+  question for the owner: a change moves every length in every CSV).
+- **D7 Date colours in the dashboards (run).** Worse than W19 says: colourway slots 1, 5
+  and 3 are exactly the mask green, the skeleton orange and the selection purple; slots 4
+  and 5 are hard to tell apart; the colours repeat from the eleventh date; and the area
+  profile indexes only the plotted tube's dates, so a date changes colour between tubes.
+- **F1 The Pix2Pix licence notice is missing (run).** `app/inference/skeleton_inference.py`
+  lines 59-252 come from pytorch-CycleGAN-and-pix2pix (added in `d24d0eb`) without the BSD
+  notice that licence requires. It can be added before the licence decision.
+- **F3 The shipped app shows no citation (read; no bundle was built).** `CITATION.cff` is
+  in neither the PyInstaller data files nor the wheel, so the About dialog's "How to cite"
+  block is missing outside a checkout.
+- **F4 The real-image golden gate is stale (run).** It lives in a git-ignored handoff
+  folder; at HEAD it fails with 153 differing lines, all in the skeleton layers, because
+  its goldens predate the Q1 change. Real skeleton saves are unchecked.
+- **R6, addition (run).** The record a no-op run writes also names the checkpoint
+  installed now, which made none of the masks in the folder.
+- **X, smaller findings.** Measure-area measures every `*.png` in `mask/`, including a
+  mask whose image is gone (read). The `Error` cell of the Measure CSVs holds the absolute
+  path of the unreadable file (run). A Generate run can overwrite a mask saved by hand
+  while it runs (read, not reproduced). pytest writes into the user's application log
+  (`tests/conftest.py` sets no `SPROUTS_LOG_DIR`). CI has not run since 2026-07-25: it
+  triggers on `main`, `v3`, `refactor/**` and pull requests only. `fault.log` holds four
+  benign `0x8001010d` entries from normal launches, while the README calls it a crash
+  log. Each start logs 8 `setTabOrder` and 6 `QFont::setPointSize` warnings.
+
+The two tracing interfaces (G1): Trace GT and Correct already share the canvas, the paint
+engine and the chrome (the same strokes give the same 19,899 pixels in both); what is
+duplicated is the page logic. They stay two stages on purpose: Trace GT must never show
+or write the model's mask. The plan keeps two editors, fixes the wording (G4) and leaves
+the code merge as an owner decision.
