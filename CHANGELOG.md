@@ -421,8 +421,9 @@ Four passes, not yet released:
     `dash_length_layout.py`, `dash_length_views.py` and `dash_length_callbacks.py`
     (`dash_app.py` 845 -> 178 lines). Both are pure moves:
     `tests/test_shell_window_split_surface.py` pins the window's API surface and
-    `tests/test_viz_dash_split_golden.py` the dashboard's served layout, callbacks and
-    figure JSON. A scripted golden run of the window gave identical session states, signal
+    `tests/test_viz_dash_split_golden.py` the hash of the dashboard's served layout, its
+    callback wiring and the hash of its clientside JS. A scripted golden run of the window
+    gave identical session states, signal
     receivers and QObject trees, and start-up stayed within noise (`MainWindow()`
     221.0 -> 218.9 ms, process start to first paint 438.4 -> 441.7 ms, n = 20).
   - Generation ignores a folder named like an image (`x.jpg/`), as the Library does; it was
@@ -543,14 +544,16 @@ Four passes, not yet released:
   unsaved, so Save or `PgDn` writes it as the correction; Trace GT *Discard* reverts.
 - **Correction (2026-09-30): the batch size can change GPU outputs slightly.** BatchNorm
   runs in eval mode, but the kernel cuDNN picks depends on the batch shape, also with
-  deterministic cuDNN. On 300 images, masks made with batch 16 and batch 8 differed in 148
-  files (327 pixels flipped between 0 and 255); skeletons made with batch 128 and batch 8
-  differed in 1 file (43 values by one grey level), with 128 and 1 in 208 files (by at most
-  5 levels). Runs with the same batch sizes are reproducible; the halving after an
-  out-of-memory error and the skeleton batch sized from free VRAM can change the outputs of
-  the images they touch (`_sprouts_run.json` records `batch_size` and
-  `effective_batch_size`). This section used to say that batch sizes do not change outputs;
-  CPU runs were not measured. A fixed batch per model is an owner decision
+  deterministic cuDNN. On 300 synthetic images, masks made with batch 16 and batch 8
+  differed in 148 files (327 pixels flipped between 0 and 255); skeletons made with batch
+  128 and batch 8 differed in 1 file (43 values by one grey level), with 128 and 1 in 208
+  files (by at most 5 levels). Runs with the same batch sizes are reproducible; the
+  halving after an out-of-memory error and the skeleton batch sized from free VRAM can
+  change the outputs of the images they touch (`_sprouts_run.json` records `batch_size`
+  and `effective_batch_size`). This section used to say that batch sizes do not change
+  outputs.
+  On the CPU, 8 real images gave identical masks at batch 4, 2 and 1; skeletons at batch 8
+  and 1 differed in one value. A fixed batch per model is an owner decision
   (`docs/KNOWN_ISSUES.md` #7).
 - **Skeleton corrections are saved at image resolution (Q1 fixed).**
   `skeleton_corrections/<stem>_skeleton.png` is now written at the photo's size, exactly
@@ -560,7 +563,9 @@ Four passes, not yet released:
   now reopens pixel for pixel. Opening a generated `skeletons/<stem>_fake.png` (or an older
   small correction) upscales the grey file bilinearly before thresholding and thinning, not
   nearest neighbour: lines keep their connectivity (0 splits in 300 random files) and
-  their length (within 0.6-2.3 % of the generated file on the real data, was 2.5-4.2 %).
+  their length (a median 0.8 % longer than the generated file's on the real data, 90 % of
+  285 files over 5 mm between -1.0 % and +3.9 %, extremes -3.4 % and +11.3 %, audit
+  2026-10-12; was 2.5-4.2 %).
   Generated skeletons and Measure are unchanged, and corrections are still not measured
   (FR-03), so no CSV value changes. Corrections saved before this change stay 341 x 256
   and keep the fragments they lost. The skeleton pixel goldens were re-recorded for this
