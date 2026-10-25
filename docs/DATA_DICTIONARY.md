@@ -20,7 +20,8 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
   gt/<stem>.png, gt/classes.json          multi-class ground truth (Trace GT)
 ```
 
-`<stem>` is the image file name without its extension. Older projects may have skeletons
+`<stem>` is the image file name without its extension. Images are read in their stored
+orientation (EXIF orientation ignored). Older projects may have skeletons
 in `output/skeletonizer/test_latest/images/` or masks in `output/mask/`; Measure still
 finds them there.
 

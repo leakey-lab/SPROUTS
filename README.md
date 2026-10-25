@@ -172,6 +172,11 @@ a quarter-covered mask of a 640 × 480 frame, of a 320 × 240 crop and of a 1920
 frame all measure the same area. The pixel is not square (0.028125 × 0.027083 mm for
 640 × 480).
 
+**Orientation.** Every stage uses the image's stored pixel grid; EXIF orientation is never
+applied. A photo with an orientation tag is shown as stored (not as a photo viewer shows
+it), and its mask, skeleton and GT line up with it. The field of view belongs to the
+sensor's stored axes, so this is also the calibrated orientation.
+
 If your imaging system has a different FOV, change it in one place:
 `app/config.py`.
 
