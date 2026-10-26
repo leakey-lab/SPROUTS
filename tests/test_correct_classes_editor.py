@@ -9,7 +9,7 @@ GT actions live in ``PageActions``: Load skeleton file, Load prediction, Classes
 class editor) and Remove GT… (the topbar Correct page holds Clear, Classes…, Export
 dataset… and Remove GT…).
 
-Ported here (the Trace GT files stay until WG-T11): the page cases of
+Ported here (the Trace GT files were deleted in WG-T11): the page cases of
 ``test_gt_tracing_interface.py`` (keys, PgDn, the class panel, the class editor),
 ``test_gt_class_panel_keyboard.py``, four cases each of ``test_gt_editor_discard.py`` and
 ``test_gt_editor_open.py``, and ``test_gt_editor_ux.py`` (the class panel, the class editor
@@ -1105,8 +1105,7 @@ def test_the_correct_page_holds_the_gt_actions(window_with_project):
         "Remove GT…",
     ]
     assert window.gt_remove_button is window.correct_editor.actions.remove_button
-    trace_gt = window.action_bar_stack.widget(topbar._pages["Trace GT"])
-    assert trace_gt.findChildren(QPushButton) == []
+    assert "Trace GT" not in topbar._pages  # the stage and its page are gone (WG-T11)
 
 
 def test_the_topbar_classes_button_opens_the_page_class_editor(window_with_project, monkeypatch):
@@ -1181,6 +1180,21 @@ def test_a_class_label_save_marks_the_library_row(window_with_project):
 
     assert window.image_manager.has_gt_labels("a")
     assert window.metrics_bar._status_value.text().endswith("Classes: traced")
+
+
+def test_a_class_label_save_shows_one_toast_the_pages_summary(window_with_project, monkeypatch):
+    window, editor = window_with_project.window, window_with_project.editor
+    toasts: list[str] = []
+    real = window.notify
+    monkeypatch.setattr(
+        window, "notify", lambda message, *a, **k: toasts.append(message) or real(message, *a, **k)
+    )
+    editor.set_active_layer(CLASSES)
+    paint(editor, (20, 100), (80, 110))
+
+    assert editor.save()
+
+    assert toasts == [f"Saved class labels · {os.path.basename(window_with_project.project.a)}"]
 
 
 # ==================================================================== the class panel
@@ -1830,7 +1844,10 @@ def test_export_with_no_traced_image_explains_and_stays_off(made, tmp_path):
     images = _traced_project(tmp_path, n_images=3, n_traced=0)
     dlg = ExportDatasetDialog(str(tmp_path), images, default_registry())
     made.append(dlg)
-    assert "No image" in dlg.traced_label.text()
+    assert dlg.traced_label.text() == (
+        "No image in this folder has class labels yet. Paint some on the Correct page (G) first."
+    )  # the Trace GT stage is gone (WG-T11): the label names where to paint them
+    assert "Trace GT" not in dlg.only_complete_check.toolTip()
     dlg.output_edit.setText(str(tmp_path / "out"))
     assert not dlg.export_button.isEnabled()
     dlg.start_export()

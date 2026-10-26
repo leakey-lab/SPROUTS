@@ -7,7 +7,7 @@ every id kept from each patch, ids read back from the canvas by exact colour mat
 the open of a remapped, unreadable or read-only file. It never reads ``mask/`` or
 ``skeletons/``.
 
-Ported here (the old files stay until WG-T11): ``tests/test_gt_editor_save_order.py`` (the
+Ported here (the old files were deleted in WG-T11): ``tests/test_gt_editor_save_order.py`` (the
 registry first) and ``tests/test_gt_editor_speed_paths.py`` (``ids_from_argb``'s fallback,
 the counts from patches, the exact histogram, Save's checks).
 """

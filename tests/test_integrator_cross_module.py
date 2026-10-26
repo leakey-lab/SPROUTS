@@ -63,20 +63,6 @@ def test_correct_sheet_documents_every_skeleton_tool_key():
     assert len(actions) == len(set(actions))
 
 
-# --------------------------------------------------------------------------- GT paging
-def test_gt_navigate_is_the_public_alias_of_the_save_then_move_step():
-    from app.gui.gt_tracing_interface import GtTracingInterface
-
-    calls = []
-
-    class Stub:
-        def _navigate(self, delta):
-            calls.append(delta)
-
-    GtTracingInterface.navigate(Stub(), -1)
-    assert calls == [-1]
-
-
 # --------------------------------------------------------------------------- overlays
 def test_escape_closes_the_open_enhance_popover(app):
     from app.gui.widgets import EnhancePopover
@@ -100,13 +86,10 @@ def test_escape_closes_the_open_enhance_popover(app):
         host.close()
 
 
-@pytest.mark.parametrize("editor", ["CorrectEditor", "GtTracingInterface"])
-def test_editor_enhance_button_shows_whether_the_popover_is_open(app, editor):
+def test_editor_enhance_button_shows_whether_the_popover_is_open(app):
     from app.gui.correct.editor import CorrectEditor
-    from app.gui.gt_tracing_interface import GtTracingInterface
 
-    cls = {"CorrectEditor": CorrectEditor, "GtTracingInterface": GtTracingInterface}[editor]
-    iface = cls()
+    iface = CorrectEditor()
     try:
         assert iface.enhance_button.isCheckable() and not iface.enhance_button.isChecked()
         iface.enhance_button.click()

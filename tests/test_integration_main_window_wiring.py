@@ -155,13 +155,12 @@ def test_missing_folder_changes_nothing(mw, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-#  Editor lifecycle (Correct / Trace GT)
+#  Editor lifecycle (Correct)
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("attr", ["correct_editor", "gt_tracing_interface"])
-def test_leaving_an_editor_that_refuses_stays_put(mw, attr):
+def test_leaving_an_editor_that_refuses_stays_put(mw):
     from app.gui.panels import Panel
 
-    editor = getattr(mw, attr)
+    editor = mw.correct_editor
     mw.right_panel.setCurrentWidget(editor)
     editor.maybe_save_changes = lambda: False
     assert mw.switch_right_panel(Panel.DISPLAY) is False

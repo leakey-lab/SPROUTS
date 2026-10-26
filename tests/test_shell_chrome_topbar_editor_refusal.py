@@ -2,7 +2,7 @@
 
 F1 - a stage click the open editor refuses (unsaved-changes prompt answered
      Cancel, or a failed save) keeps the EDITOR's stage highlighted and its
-     action page shown, for every editor, not only Trace GT.
+     action page shown (Correct, the one editor since WG-T11).
 F2 - the topbar density does not depend on which action page is current:
      switching to a stage with a wider action page never leaves the row
      squeezed below its minimum (stage names elided, "Cor...ton").
@@ -26,7 +26,6 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 STAGES = [
     "Library",
-    "Trace GT",
     "Generate",
     "Correct",
     "Measure",
@@ -76,8 +75,7 @@ def refusing_editor(mw, app, monkeypatch):
     """
     for editor in mw._editors().values():
         monkeypatch.setattr(editor, "maybe_save_changes", lambda: False)
-    for name in ("toggle_correct", "toggle_gt_tracing"):
-        monkeypatch.setattr(mw, name, lambda: None)
+    monkeypatch.setattr(mw, "toggle_correct", lambda: None)
     yield
     monkeypatch.undo()
     mw.switch_right_panel("display")
@@ -90,9 +88,8 @@ def refusing_editor(mw, app, monkeypatch):
     [
         (Panel.CORRECT, "Correct", "Measure"),
         (Panel.CORRECT, "Correct", "Library"),
-        (Panel.CORRECT, "Correct", "Trace GT"),
-        (Panel.GT_TRACING, "Trace GT", "Generate"),
-        (Panel.GT_TRACING, "Trace GT", "Correct"),
+        (Panel.CORRECT, "Correct", "Generate"),
+        (Panel.CORRECT, "Correct", "Visualize"),
     ],
 )
 def test_refused_stage_click_keeps_the_editor_stage(

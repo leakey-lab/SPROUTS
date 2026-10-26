@@ -43,7 +43,7 @@ def test_registry_module_is_qt_free():
 
 
 def test_every_scope_has_rows_and_scopes_are_ordered():
-    assert sc.SCOPES == (sc.GLOBAL, sc.LIBRARY, sc.TRACE_GT, sc.CORRECT)
+    assert sc.SCOPES == (sc.GLOBAL, sc.LIBRARY, sc.CORRECT)
     for scope in sc.SCOPES:
         assert sc.specs_for(scope), scope
 
@@ -64,10 +64,9 @@ def test_global_keys_conflict_with_every_editor_scope():
     assert [c[0] for c in sc.find_conflicts(dup)] == ["F1"]
 
 
-def test_redo_is_ctrl_y_and_ctrl_shift_z_in_every_editor():
-    for scope in (sc.TRACE_GT, sc.CORRECT):
-        assert sc.keys_for("redo", scope) == ("Ctrl+Y", "Ctrl+Shift+Z")
-        assert sc.keys_for("undo", scope) == ("Ctrl+Z",)
+def test_redo_is_ctrl_y_and_ctrl_shift_z_in_the_editor():
+    assert sc.keys_for("redo", sc.CORRECT) == ("Ctrl+Y", "Ctrl+Shift+Z")
+    assert sc.keys_for("undo", sc.CORRECT) == ("Ctrl+Z",)
 
 
 def test_global_keys_the_integrator_wires():
@@ -75,7 +74,7 @@ def test_global_keys_the_integrator_wires():
     assert sc.keys_for("open_folder", sc.GLOBAL) == ("Ctrl+O",)
     assert sc.keys_for("next_image", sc.GLOBAL) == ("PgDown",)
     assert sc.keys_for("previous_image", sc.GLOBAL) == ("PgUp",)
-    assert sc.STAGE_KEYS == tuple(f"Alt+{i}" for i in range(1, 7))
+    assert sc.STAGE_KEYS == tuple(f"Alt+{i}" for i in range(1, 6))
     assert sc.keys_for("go_to_stage", sc.GLOBAL) == sc.STAGE_KEYS
 
 
@@ -96,8 +95,8 @@ def test_correct_sheet_lists_both_layers_keys_and_gestures():
     assert {"B", "S", "ENTER", "ESC", "DELETE", "BACKSPACE"} <= canvas_keys
 
 
-def test_gt_sheet_lists_class_digits():
-    spec = sc.find_spec("select_class", sc.TRACE_GT)
+def test_correct_sheet_lists_class_digits():
+    spec = sc.find_spec("select_class", sc.CORRECT)
     assert spec is not None
     assert set(spec.keys) == {str(n) for n in range(10)}
     assert "Ignore" in spec.description
@@ -105,12 +104,13 @@ def test_gt_sheet_lists_class_digits():
 
 def test_tooltip_appends_the_first_key():
     assert sc.tooltip("Eraser", "eraser", sc.CORRECT) == "Eraser (E)"
-    assert sc.tooltip("Redo", "redo", sc.TRACE_GT) == "Redo (Ctrl+Y)"
+    assert sc.tooltip("Redo", "redo", sc.CORRECT) == "Redo (Ctrl+Y)"
     assert sc.tooltip("Nothing", "no_such_action", sc.CORRECT) == "Nothing"
 
 
 def test_scope_for_stage():
-    assert sc.scope_for_stage("Trace GT") == sc.TRACE_GT
+    assert sc.scope_for_stage("Trace GT") is None  # the stage is gone (WG-T11)
+    assert sc.scope_for_stage("Library") == sc.LIBRARY
     assert sc.scope_for_stage("Correct") == sc.CORRECT
     assert sc.scope_for_stage("Generate") is None
 
@@ -140,10 +140,9 @@ def test_install_shortcuts_rejects_unknown_or_non_shortcut_actions(app):
 def test_every_live_editor_shortcut_is_documented(app):
     """No binding may exist without its row on the F1 sheet."""
     from app.gui.correct.editor import CorrectEditor
-    from app.gui.gt_tracing_interface import GtTracingInterface
 
     global_keys = {_portable(k) for s in sc.specs_for(sc.GLOBAL) for k in s.keys}
-    for cls, scope in ((CorrectEditor, sc.CORRECT), (GtTracingInterface, sc.TRACE_GT)):
+    for cls, scope in ((CorrectEditor, sc.CORRECT),):
         w = cls()
         try:
             live = _live_keys(w)
@@ -200,7 +199,7 @@ def test_shortcuts_dialog_is_deleted_on_close(app):
 
 
 def test_install_shortcuts_accepts_one_slot_per_key(app):
-    """Alt+1 … Alt+6 each go to their own stage."""
+    """Alt+1 … Alt+5 each go to their own stage."""
     w = QWidget()
     hits = []
     slots = [lambda i=i: hits.append(i) for i in range(len(sc.STAGE_KEYS))]

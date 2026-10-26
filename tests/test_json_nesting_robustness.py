@@ -4,7 +4,8 @@
 ``ValueError``) for input nested deeper than the recursion limit. Every reader that
 already turns malformed JSON into its own error must treat it the same way: a
 hand-broken ``gt/classes.json`` once escaped ``load_registry`` and reached the crash
-hook instead of the Trace GT "invalid registry" notice.
+hook instead of the "invalid registry" notice (Trace GT then; the Correct page's class
+labels now).
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from app.config import GT_META_CHUNK  # noqa: E402
 from app.gt.registry import RegistryError, load_registry  # noqa: E402
 from app.gt.store import GtFileError, gt_path, read_tracing  # noqa: E402
 from app.provenance import BUILD_INFO_FILENAME, git_commit  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
 
 _DEPTH = 100_000
 NESTED = {
@@ -113,9 +113,7 @@ def test_recent_projects_ignore_a_deeply_nested_list(kind):
     assert RecentProjectsStore(_Settings()).entries() == []
 
 
-# ------------------------------------------------------------------ Trace GT
-
-
+# ------------------------------------------------------------------ the class labels
 @pytest.fixture(scope="module")
 def app():
     from PyQt6.QtWidgets import QApplication
@@ -124,18 +122,21 @@ def app():
 
 
 @pytest.fixture
-def gt_editor(app, monkeypatch):
+def page(app, monkeypatch, tmp_path):
+    """The Correct page with its notices recorded; no modal box, no GL, no user config."""
     from PyQt6.QtWidgets import QMessageBox
 
-    from app.gui.gt_tracing_interface import GtTracingInterface
+    from app.gui.correct.editor import CorrectEditor
+    from tests.qt_teardown import delete_widgets
 
     monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("unexpected modal dialog"))
-    editor = GtTracingInterface()
+    monkeypatch.setenv("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
+    editor = CorrectEditor()
     editor.notices = []
     editor.notice.connect(lambda msg, kind: editor.notices.append((msg, kind)))
     yield editor
-    editor.deleteLater()
-    flush_deleted()
+    delete_widgets([editor])
 
 
 def _image(folder) -> str:
@@ -144,29 +145,39 @@ def _image(folder) -> str:
     return str(path)
 
 
-def test_trace_gt_reports_a_deeply_nested_classes_json_instead_of_crashing(gt_editor, tmp_path):
+def test_the_class_labels_report_a_deeply_nested_classes_json_instead_of_crashing(page, tmp_path):
+    from app.gui.correct.layer import CLASSES
+    from tests.test_correct_editor import drag
+
     image = _image(tmp_path)
     _write_classes_json(tmp_path, NESTED["array"])
 
-    gt_editor.load_image(image)  # RecursionError used to escape to the crash hook
+    page.load_image(image, images_base_folder=str(tmp_path))  # RecursionError used to escape
+    page.set_active_layer(CLASSES)
+    drag(page, (5, 5), (20, 5))  # the first edit is refused with the notice users see
 
-    assert gt_editor.current_image_path == image
-    assert any(kind == "danger" and "classes.json" in msg for msg, kind in gt_editor.notices)
-    assert gt_editor.save_mask() is False  # the invalid-registry path: saving is off
+    assert page.current_image_path == image
+    assert any(kind == "danger" and "classes.json" in msg for msg, kind in page.notices)
+    assert "Read-only" in page.status_chip.state_label.text()
+    assert page.save() is False  # the invalid-registry path: saving is off
     assert not os.path.exists(gt_path(image))
 
 
-def test_trace_gt_opens_empty_for_a_deeply_nested_meta_chunk(gt_editor, tmp_path):
+def test_the_class_labels_open_empty_for_a_deeply_nested_meta_chunk(page, tmp_path):
+    from app.gui.correct.layer import CLASSES
+
     image = _image(tmp_path)
     path = gt_path(image)
     _write_png_with_meta(path, NESTED["object"])
     with open(path, "rb") as fh:
         before = fh.read()
 
-    gt_editor.load_image(image)
+    page.load_image(image, images_base_folder=str(tmp_path))
+    page.set_active_layer(CLASSES)
 
-    assert gt_editor.current_image_path == image
-    assert any(kind == "danger" and "Could not read GT" in m for m, kind in gt_editor.notices)
-    assert "GT unreadable" in gt_editor.state_label.text()
+    assert page.current_image_path == image
+    assert any(kind == "warn" and "could not be read" in msg for msg, kind in page.notices)
+    assert "Class labels not shown" in page.status_chip.state_label.text()
+    assert not page.layers[CLASSES].document.history.plane.any()
     with open(path, "rb") as fh:
         assert fh.read() == before  # left as is unless the user saves

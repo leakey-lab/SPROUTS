@@ -3,7 +3,7 @@ library | pages body over the status line), the loading card, the status surface
 the toasts, which keep clear of the chrome at the bottom and at the side.
 
 The right panel's pages are added in the fixed order of :class:`~app.gui.panels.Panel`
-(display, Correct, the Visualize page, Trace GT; the dashboards are appended after them).
+(display, Correct, the Visualize page; the dashboards are appended after them).
 While a dashboard is on screen the library is collapsed, so the dashboard gets the width;
 the keyboard focus the library held goes to the dashboard page meanwhile, and comes back
 with the library (V2).
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 #: The editors' floating overlays in the bottom row, under the toast column.
 _EDITOR_CHROME = ("dock", "zoom_cluster")
-#: The editors' side panels (Correct's Layers, Trace GT's Classes), right of the toast column.
+#: The editor's side panels (Correct's Layers and Classes), right of the toast column.
 _EDITOR_SIDE_CHROME = ("layer_panel", "class_panel")
 
 
@@ -153,8 +153,8 @@ def build_body(window: "MainWindow") -> QWidget:
 
     Returns a container widget holding the QSplitter. The ``right_panel``
     pages are added in the fixed order of :class:`Panel`: 0 display,
-    1 Correct, 2 visualization placeholder, 3 Trace GT (dashboards are
-    appended after them).
+    1 Correct, 2 visualization placeholder (dashboards are appended after
+    them).
     """
     from app.gui.widgets import tokens
 
@@ -189,7 +189,6 @@ def build_body(window: "MainWindow") -> QWidget:
     window.visualization_widget = VisualizeEmptyState()
     window.visualization_widget.stage_requested.connect(window._go_to_stage)
     window.right_panel.addWidget(window.visualization_widget)
-    window.right_panel.addWidget(window.gt_tracing_interface)  # Panel.GT_TRACING
     splitter.addWidget(window.right_panel)
 
     splitter.setStretchFactor(0, 0)

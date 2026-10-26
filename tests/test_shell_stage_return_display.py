@@ -1,6 +1,6 @@
 """Back on the Library page, the display shows the library's selection (review finding).
 
-The Correct and Trace GT pages move the library selection when they page (PgDn) or open a
+The Correct page moves the library selection when they page (PgDn) or open a
 clicked row, and the metrics bar follows the selection on every stage, but the display page
 kept its last image: back in the Library (or Generate / Measure) the photo of one image sat
 over the name and measured values of another. The display page now shows the selected image
@@ -84,12 +84,11 @@ def _selected(window) -> str:
     return window.file_list.currentItem().data(0, USER)
 
 
-@pytest.mark.parametrize("stage", ["Correct", "Trace GT"])
 @pytest.mark.parametrize("back", ["Library", "Measure", "Generate"])
-def test_after_paging_in_an_editor_the_display_shows_the_selected_image(window, stage, back):
+def test_after_paging_in_the_editor_the_display_shows_the_selected_image(window, back):
     select(window, 0)
-    enter(window, stage)
-    editor = window._editors()[window.right_panel.currentIndex()]
+    enter(window, "Correct")
+    editor = window.correct_editor
     editor.navigate(1)  # PgDn: saves nothing (clean), opens image 1, moves the selection
     settle()
     assert same_path(editor.current_image_path, window.project.image(1))

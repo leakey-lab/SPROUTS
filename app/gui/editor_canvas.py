@@ -1,10 +1,9 @@
-"""The canvas of every editor (Correct and Trace GT): :class:`EditorCanvasView` (contract C8).
+"""The canvas of the editor (Correct): :class:`EditorCanvasView` (contract C8).
 
 Zoom, fit, pan and the OpenGL viewport come from :class:`~app.gui.canvas_view.CanvasViewMixin`,
 shared with the Library canvas. The view itself holds no tool logic: it hands the input
-that is not a pan to an :class:`InputSink` (the Correct ``ToolRouter``, the Trace GT
-editor), with pointer positions already floored to an image pixel and clamped to the
-image:
+that is not a pan to an :class:`InputSink` (the Correct ``ToolRouter``), with pointer
+positions already floored to an image pixel and clamped to the image:
 
 * a left press (not panning, an image open) starts a drag when the sink accepts it; the
   drag's moves and its release go to the sink, and hover moves go there too
@@ -87,8 +86,8 @@ class InputSink(Protocol):
 
 
 class EditorCanvasView(CanvasViewMixin, QGraphicsView):
-    """The canvas of every editor (Correct and Trace GT): zoom/pan/fit from the mixin,
-    tool input to an InputSink."""
+    """The canvas of the editor (Correct): zoom/pan/fit from the mixin, tool input to an
+    InputSink."""
 
     def __init__(self, sink: InputSink | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)

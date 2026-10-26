@@ -280,7 +280,6 @@ def test_window_exposes_job_registry_and_toggles_every_view(mw, monkeypatch):
     views = [
         mw.display_controller.magnifying_view,
         mw.correct_editor.graphics_view,
-        mw.gt_tracing_interface.graphics_view,
     ]
     for v in views:
         monkeypatch.setattr(v, "set_opengl_viewport_enabled", lambda e, v=v: seen.append((v, e)))

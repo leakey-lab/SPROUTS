@@ -1,6 +1,6 @@
 """The floating overlays every canvas editor shares: :class:`EditorChrome` (contract C10).
 
-A canvas editor (Correct, Trace GT) is a widget whose canvas, an
+A canvas editor (Correct) is a widget whose canvas, an
 :class:`~app.gui.editor_canvas.EditorCanvasView`, fills it; the controls float over the
 canvas. The chrome builds the parts every editor has and wires them once:
 

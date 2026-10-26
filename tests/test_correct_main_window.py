@@ -1,12 +1,12 @@
 """MainWindow with the Correct stage (plan P8b, contracts C17 and C19).
 
 One Correct stage (``MainWindow.correct_editor``, right-panel page ``Panel.CORRECT``)
-replaced the two editors of the mask and the skeleton: six stages with Alt+1 … Alt+6; one
-prompt when leaving it (a refused leave keeps the stage and its page); Trace GT and Correct
-hand over to each other; tree clicks, the arrow-key debounce and PgDn / PgUp open images in
-it; the editor's save reports reach the Library badge and the metrics bar once, on every
-save path, and a skeleton save reaches neither (FR-03); the generated-skeleton resolver, the
-OpenGL switch, the toast offset and the F1 sheet know the page; scikit-image is imported in
+replaced the two editors of the mask and the skeleton, then the Trace GT editor (WG-T11):
+five stages with Alt+1 … Alt+5; one prompt when leaving it (a refused leave keeps the stage
+and its page); tree clicks, the arrow-key debounce and PgDn / PgUp open images in it; the
+editor's save reports reach the Library badge and the metrics bar once, on every save path,
+a GT skeleton's too (measured first, O1); the generated-skeleton resolver, the OpenGL
+switch, the toast offset and the F1 sheet know the page; scikit-image is imported in
 the thread pool once the event loop runs, never on the GUI thread.
 
 Offscreen. Every project is a tmp_path folder of four 200x150 photos, the first with a
@@ -23,6 +23,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -72,7 +73,7 @@ from tests.test_correct_editor import (  # noqa: E402
 )
 
 STEMS = tuple(f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (21, 22, 23, 24))
-STAGE_NAMES = ["Library", "Trace GT", "Generate", "Correct", "Measure", "Visualize"]
+STAGE_NAMES = ["Library", "Generate", "Correct", "Measure", "Visualize"]
 #: The code under test: an exception it raises inside a Qt slot fails the test.
 UNDER_TEST = tuple(
     os.path.normcase(os.path.join("app", "gui", *part))
@@ -278,43 +279,59 @@ def in_correct(make_window, tmp_path, image: int = 0, project: Project | None = 
 
 
 # ======================================================================= stages and pages
-def test_the_topbar_has_six_stages_with_alt_1_to_alt_6(make_window):
+def test_the_topbar_has_five_stages_with_alt_1_to_alt_5(make_window):
     window = make_window(show=False)
 
-    assert list(window.ribbon_buttons) == STAGE_NAMES
-    assert [stage[0] for stage in shell_chrome.STAGES] == STAGE_NAMES
-    assert shortcuts.STAGE_KEYS == ("Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6")
+    assert list(window.ribbon_buttons) == STAGE_NAMES == [s[0] for s in shell_chrome.STAGES]
+    assert shortcuts.STAGE_KEYS == ("Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5")
     assert len(shortcuts.STAGE_KEYS) == len(shell_chrome.STAGES)
     bound = [s.key().toString() for s in window._global_shortcuts["go_to_stage"]]
     assert bound == list(shortcuts.STAGE_KEYS)
     assert window.ribbon_buttons["Correct"].toolTip() == (
-        "Correct — Fix the mask (area) and the skeleton (length) of an image on one canvas. (Alt+4)"
+        "Correct — Fix the model's mask (area) and skeleton (length), and paint class labels "
+        "(GT for training), on one canvas. (Alt+3)"
     )
-    assert window.welcome.stage_labels() == STAGE_NAMES  # six welcome chips
+    assert window.welcome.stage_labels() == STAGE_NAMES  # five welcome chips
 
 
-def test_the_correct_editor_is_page_one_of_the_four_right_panel_pages(make_window):
+def test_there_is_no_trace_gt_stage_scope_or_panel(make_window):
     window = make_window(show=False)
 
-    assert window.right_panel.count() == 4
+    assert "Trace GT" not in shortcuts.SCOPES and shortcuts.scope_for_stage("Trace GT") is None
+    assert not hasattr(Panel, "GT_TRACING") and [int(p) for p in Panel] == [0, 1, 2]
+    assert not hasattr(window, "gt_tracing_interface")
+    assert not hasattr(window, "toggle_gt_tracing")
+    assert window._editors() == {Panel.CORRECT: window.correct_editor}
+    assert window.right_panel.count() == len(Panel)  # no dashboard built yet
+
+
+def test_the_deleted_editor_modules_are_gone():
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    assert not (app_dir / "gui" / "raster_editor_base.py").exists()
+    assert not (app_dir / "gui" / "gt_tracing_interface.py").exists()
+    sources = [p.read_text(encoding="utf-8") for p in app_dir.rglob("*.py")]
+    assert not any("gt_tracing_interface" in text for text in sources)
+    assert not any("RasterEditorBase" in text for text in sources)
+
+
+def test_the_correct_editor_is_page_one_of_the_three_right_panel_pages(make_window):
+    window = make_window(show=False)
+
+    assert window.right_panel.count() == 3
     assert window.right_panel.widget(Panel.DISPLAY) is not None
     assert window.right_panel.widget(Panel.CORRECT) is window.correct_editor
-    assert window.right_panel.widget(Panel.GT_TRACING) is window.gt_tracing_interface
-    assert window._editors() == {
-        Panel.CORRECT: window.correct_editor,
-        Panel.GT_TRACING: window.gt_tracing_interface,
-    }
+    assert window.right_panel.widget(Panel.VISUALIZATION) is window.visualization_widget
 
 
-def test_alt_4_enters_correct_once_a_folder_is_open(make_window, tmp_path):
+def test_alt_3_enters_correct_once_a_folder_is_open(make_window, tmp_path):
     window = make_window()
-    alt_4 = window._global_shortcuts["go_to_stage"][3]
-    alt_4.activated.emit()
+    alt_3 = window._global_shortcuts["go_to_stage"][2]
+    alt_3.activated.emit()
     assert window.right_panel.currentIndex() == Panel.DISPLAY  # the Welcome screen: nothing
 
     open_project(window, new_project(tmp_path))
     select(window, 0)
-    alt_4.activated.emit()
+    alt_3.activated.emit()
     settle()
 
     assert window.right_panel.currentIndex() == Panel.CORRECT
@@ -372,34 +389,6 @@ def test_a_refused_leave_keeps_the_correct_stage_its_page_and_the_edits(
     assert window.action_bar_stack.currentIndex() == window._action_bar_pages["Correct"]
     assert editor.has_unsaved_changes() and window.isWindowModified()
     assert same_path(editor.current_image_path, project.image(0))
-
-
-def test_trace_gt_and_correct_hand_over_with_one_prompt_each_way(
-    make_window, tmp_path, monkeypatch
-):
-    window, project = in_correct(make_window, tmp_path, 0)
-    editor, gt = window.correct_editor, window.gt_tracing_interface
-    paint(editor, (20, 100), (60, 100))
-    answers = answer_prompts(monkeypatch).will(SAVE)
-
-    enter(window, "Trace GT")
-
-    assert [title for title, _ in answers.seen] == ["Unsaved mask"]
-    assert window.right_panel.currentWidget() is gt
-    assert same_path(gt.current_image_path, project.image(0))
-    saved = cv2.imread(project.gt_mask(0), cv2.IMREAD_UNCHANGED)
-    assert saved.shape == (H, W, 4) and saved[100, 40, 3] == 255  # the stroke was saved
-
-    gt.begin_stroke(QPoint(10, 10))
-    gt.continue_stroke(QPoint(30, 10))
-    gt.end_stroke()
-    answers.will(DISCARD)
-    enter(window, "Correct")
-
-    assert [title for title, _ in answers.seen] == ["Unsaved mask", "Unsaved GT"]
-    assert window.right_panel.currentWidget() is editor
-    assert same_path(editor.current_image_path, project.image(0))
-    assert plane(editor)[100, 40] == 1 and not editor.has_unsaved_changes()
 
 
 def test_open_folder_asks_once_then_closes_both_layers(make_window, tmp_path, monkeypatch):
@@ -475,11 +464,9 @@ def test_arrow_keys_open_the_image_they_come_to_rest_on(make_window, tmp_path):
     assert wait(lambda: same_path(editor.current_image_path, project.image(1)), 2.0)
 
 
-@pytest.mark.parametrize("stage", ["Correct", "Trace GT"])
-def test_arrow_keys_keep_browsing_the_tree_in_the_editors(make_window, tmp_path, stage):
+def test_arrow_keys_keep_browsing_the_tree_in_the_editor(make_window, tmp_path):
     window, project = in_correct(make_window, tmp_path, 0)
-    enter(window, stage)
-    editor = window._editors()[window.right_panel.currentIndex()]
+    editor = window.correct_editor
     activate(window)
     window.file_list.setFocus()
 
@@ -578,9 +565,9 @@ def test_the_editor_signals_are_connected_once_whatever_the_stage_visits(make_wi
         editor.gt_saved,  # WG-T5: the class labels, Remove GT… and a cleared GT skeleton
         editor.gt_removed,
         editor.skeleton_cleared,
+        editor.skeleton_saved,  # WG-T11: a GT skeleton reaches the Library and the metrics
     ):
         assert editor.receivers(signal) == 1
-    assert editor.receivers(editor.skeleton_saved) == 0  # FR-03
     saved = record(window.mask_saved)
     editor.mask_saved.emit(project.image(1))
     assert saved == [project.image(1)]
@@ -710,27 +697,28 @@ def test_re_entering_correct_after_a_skeleton_save_shows_the_saved_correction(
     assert editor.layers[SKELETON].document.source == "gt"
 
 
-def test_a_skeleton_save_changes_neither_has_skeleton_nor_the_metrics_bar(
+def test_a_skeleton_save_reaches_the_library_and_the_metrics_bar_at_once(
     make_window, tmp_path, monkeypatch
 ):
     window, project = in_correct(make_window, tmp_path, 1)  # no generated skeleton
     editor = window.correct_editor
-    before = window.metrics_bar._status_value.text()
-    calls = []
-    real = window.metrics_bar.set_metrics
+    assert editor.receivers(editor.skeleton_saved) == 1
+    refreshed = []
+    real = window.metrics.refresh_if_current
     monkeypatch.setattr(
-        window.metrics_bar, "set_metrics", lambda *a, **k: calls.append(k) or real(*a, **k)
+        window.metrics, "refresh_if_current", lambda stem: refreshed.append(stem) or real(stem)
     )
+    # Only the save's own report may tell the Library: the dirty_changed sync is off.
+    monkeypatch.setattr(window, "_sync_open_correction", lambda: None)
 
     draw_line(editor)
     assert editor.save()
-    settle()
 
     assert os.path.isfile(project.correction(1))
-    assert editor.receivers(editor.skeleton_saved) == 0
-    assert not window.image_manager.has_skeleton(STEMS[1])
+    assert window.image_manager.has_gt_skeleton(STEMS[1])
+    assert not window.image_manager.has_skeleton(STEMS[1])  # a GT, never a prediction
     assert window.library_index.status_of(STEMS[1]) == ("none", "gt", False)
-    assert calls == [] and window.metrics_bar._status_value.text() == before
+    assert refreshed == [STEMS[1]]
 
 
 # ============================================================================ the page
@@ -750,14 +738,11 @@ def test_the_generated_skeleton_resolver_reaches_the_skeleton_layer(make_window,
     assert editor.layers[SKELETON].document.source == "prediction"
 
 
-def test_the_opengl_switch_reaches_the_display_correct_and_trace_gt_canvases(
-    make_window, monkeypatch
-):
+def test_the_opengl_switch_reaches_the_display_and_correct_canvases(make_window, monkeypatch):
     window = make_window(show=False)
     views = [
         window.display_controller.magnifying_view,
         window.correct_editor.graphics_view,
-        window.gt_tracing_interface.graphics_view,
     ]
     seen = []
     for view in views:
@@ -798,7 +783,7 @@ def test_f1_opens_the_sheet_on_the_correct_keys_in_the_correct_stage(make_window
 
     window.show_shortcuts()
 
-    assert sections == [["Correct", "Global", "Library", "Trace GT"]]
+    assert sections == [["Correct", "Global", "Library"]]
 
 
 def test_holding_b_on_the_canvas_says_how_to_resize_the_brush(make_window, tmp_path):

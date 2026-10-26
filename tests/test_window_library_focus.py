@@ -7,7 +7,7 @@ Space left the dashboard, and back in the Library the arrow keys were dead until
 was clicked. The focus now goes to the dashboard page when the library hides with it, and
 the library gets it back when it returns. Only the two dashboards hide the library (the
 Visualize stage's page without a CSV keeps it), so both are tested, entered by a click and
-by Alt+6, and left for every other stage.
+by Alt+5, and left for every other stage.
 
 Offscreen; the dashboards are stand-ins (building one needs Dash and a browser).
 """
@@ -182,7 +182,7 @@ def highlighted_stages(window) -> list[str]:
 
 
 # ================================================================ entering a dashboard
-@pytest.mark.parametrize("how", ["click", "Alt+6"])
+@pytest.mark.parametrize("how", ["click", "Alt+5"])
 @pytest.mark.parametrize("kind", ["length", "area"])
 def test_the_dashboard_page_takes_the_focus_the_library_had(window, kind, how):
     page = enter_dashboard(window, kind, how)
@@ -206,7 +206,7 @@ def test_a_loaded_dashboard_keeps_the_focus_inside_its_page(window, kind):
     for name in DASHBOARD_CLASSES:
         setattr(vm, name, LoadedStubDashboard)
 
-    page = enter_dashboard(window, kind, "Alt+6")
+    page = enter_dashboard(window, kind, "Alt+5")
 
     focus = QApplication.focusWidget()
     assert focus is page or page.isAncestorOf(focus), focus
@@ -229,10 +229,9 @@ def test_switching_dashboards_keeps_the_focus_on_the_page(window):
 # ================================================================ leaving it again
 def keyboard_owner(window, stage: str):
     """Who has the keyboard after ``stage`` is entered from the Library with the tree
-    focused: the editor's canvas in Correct and Trace GT (an editor takes the keys when it
-    shows and when it opens an image), else the tree."""
-    editor = {"Correct": window.correct_editor, "Trace GT": window.gt_tracing_interface}
-    return editor[stage].graphics_view if stage in editor else window.file_list
+    focused: the editor's canvas in Correct (the editor takes the keys when it shows and
+    when it opens an image), else the tree."""
+    return window.correct_editor.graphics_view if stage == "Correct" else window.file_list
 
 
 @pytest.mark.parametrize("how", ["click", "Alt+n"])
@@ -255,7 +254,7 @@ def test_leaving_the_dashboard_gives_the_keyboard_as_from_the_library(window, st
 
 
 def test_back_in_the_library_the_arrow_keys_browse_again(window):
-    enter_dashboard(window, "area", "Alt+6")
+    enter_dashboard(window, "area", "Alt+5")
     go_to(window, "Library", "Alt+n")
 
     press(Qt.Key.Key_Down)
@@ -268,7 +267,7 @@ def test_the_library_gives_back_only_the_focus_it_had(window):
     canvas.setFocus()
     settle()
     assert QApplication.focusWidget() is canvas
-    enter_dashboard(window, "length", "Alt+6")
+    enter_dashboard(window, "length", "Alt+5")
 
     go_to(window, "Library", "Alt+n")
 

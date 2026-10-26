@@ -36,7 +36,6 @@ from .correct.editor import CorrectEditor
 from .device_check import DeviceCheck
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
-from .gt_tracing_interface import GtTracingInterface
 from .image_manager import ImageManager, project_layout_of
 from .recent_projects import RecentProjectsStore
 from .stage_status import StageStatus
@@ -153,12 +152,9 @@ class MainWindow(QMainWindow):
         self.display_controller = DisplayController(self)
         self.skeleton_handler = SkeletonHandler(self)
         self.mask_generation_handler = MaskGenerationHandler(self)
-        # The Correct stage: the mask (root area) and the skeleton (root length) of an
-        # image on one canvas.
+        # The Correct stage: the mask (root area), the skeleton (root length) and the
+        # class labels (GT for training) of an image on one canvas.
         self.correct_editor = CorrectEditor(settings=settings)
-        # Multi-class ground-truth editor (Trace GT stage). Independent of the
-        # ML pipeline: it reads/writes only gt/, never mask/ or skeletons/.
-        self.gt_tracing_interface = GtTracingInterface()
         self.root_length_viz = None
         self.root_area_viz = None
 
@@ -173,13 +169,13 @@ class MainWindow(QMainWindow):
             editor.notice.connect(self._on_editor_notice)
             editor.dirty_changed.connect(self._on_editor_dirty_changed)
             editor.navigate_requested.connect(self.navigate_image)
-        # The Correct page reports every mask it writes or removes, on every save path
-        # (Ctrl+S, PgDn, the prompt's Save). Connected once, here. Its skeleton_saved
-        # stays unconnected: the Library follows a GT skeleton through the editor's
-        # dirty_changed (sync_open_correction), and Measure finds it on disk (O1).
+        # The Correct page reports every mask and GT skeleton it writes or removes, on
+        # every save path (Ctrl+S, PgDn, the prompt's Save). Connected once, here: the
+        # Library and the metrics bar learn of a GT skeleton at once (measured first, O1).
         correct = self.correct_editor
         correct.mask_saved.connect(self.on_mask_saved)
         correct.mask_cleared.connect(self.on_mask_cleared)
+        correct.skeleton_saved.connect(self._on_skeleton_saved)
         # Its class labels, Remove GT… and a skeleton GT removed (equal to the prediction)
         # reach the Library's GT marks, the row and the metrics the same way (WG-T5).
         correct.gt_saved.connect(self._on_gt_saved)
@@ -187,7 +183,6 @@ class MainWindow(QMainWindow):
         correct.skeleton_cleared.connect(self._on_skeleton_cleared)
         correct.b_key_status_changed.connect(self.on_b_key_status_changed)
         correct.set_generated_skeleton_resolver(self._generated_skeleton_for)
-        self.gt_tracing_interface.gt_saved.connect(self._on_gt_saved)
 
         # Keyboard browsing: the image whose row was last loaded, and the debounce
         # that loads the tree's current row once the arrow keys come to rest.
@@ -375,7 +370,6 @@ class MainWindow(QMainWindow):
         views = (
             ("display", getattr(self.display_controller, "magnifying_view", None)),
             ("Correct", getattr(self.correct_editor, "graphics_view", None)),
-            ("Trace GT", getattr(self.gt_tracing_interface, "graphics_view", None)),
         )
         for label, view in views:
             if view is None or not hasattr(view, "set_opengl_viewport_enabled"):
@@ -669,13 +663,14 @@ class MainWindow(QMainWindow):
     _kept_other_image = navigator.kept_other_image
     _show_selection_on_display = navigator.show_selection_on_display
 
-    # ==================== The editors, Correct and Trace GT (window/editors.py) ============
+    # ==================== The editor, Correct (window/editors.py) ====================
 
     _editors = editors.editors
     _editor_canvas = editors.editor_canvas
     _on_editor_notice = editors.on_editor_notice
     _on_gt_saved = editors.on_gt_saved
     _on_gt_removed = editors.on_gt_removed
+    _on_skeleton_saved = editors.on_skeleton_saved
     _on_skeleton_cleared = editors.on_skeleton_cleared
     _sync_window_modified = editors.sync_window_modified
     _on_editor_dirty_changed = editors.on_editor_dirty_changed
@@ -683,7 +678,6 @@ class MainWindow(QMainWindow):
     _generated_skeleton_for = editors.generated_skeleton_for
     switch_right_panel = editors.switch_right_panel
     toggle_correct = editors.toggle_correct
-    toggle_gt_tracing = editors.toggle_gt_tracing
     _toggle_editor = editors.toggle_editor
     on_b_key_status_changed = editors.on_b_key_status_changed
     on_mask_saved = editors.on_mask_saved
@@ -701,8 +695,8 @@ class MainWindow(QMainWindow):
         # cancelled, do not export without them.
         if not all(_released(editor) for editor in self._editors().values()):
             return
-        # The folder's own registry: the editor's copy is only in sync once Trace
-        # GT has opened an image from this folder (it holds the defaults before).
+        # The folder's own registry: the editor's copy is only in sync once Correct
+        # has opened an image from this folder (it holds the defaults before).
         try:
             registry = load_registry(folder)
         except RegistryError as exc:

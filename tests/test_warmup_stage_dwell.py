@@ -144,7 +144,7 @@ def test_the_same_stage_reported_again_keeps_its_dwell(made):
     assert asked.keys() == [("torch", "models")]
 
 
-@pytest.mark.parametrize("stage", ["Library", "Trace GT", "Correct", "Visualize", None])
+@pytest.mark.parametrize("stage", ["Library", "Correct", "Visualize", None])
 def test_a_stage_without_warmups_starts_no_dwell(made, stage):
     intent, asked = make_intent(made, dwell_ms=50)
     intent.stage_changed(stage)

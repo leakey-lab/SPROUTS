@@ -1,13 +1,11 @@
-"""The editor pages (Correct and Trace GT): entering and leaving them, and their reports.
+"""The editor page (Correct): entering and leaving it, and its reports.
 
-The right panel shows one page at a time (:class:`~app.gui.panels.Panel`); leaving an
+The right panel shows one page at a time (:class:`~app.gui.panels.Panel`); leaving the
 editor first offers to save its pending edits, and an editor the user keeps editing
-refuses the switch. The window follows the editors' reports: their notices (toasts; a
-save's toast, worded alike in both editors, updates in place, as does Remove GT's), the
-title's unsaved marker, a saved or removed mask, skeleton or class labels and Remove GT…
-(the Library badge's GT marks and the metrics), B held on the Correct canvas, and the GT
-skeleton of the image open in Correct (measured first, O1; the Library follows it through
-the editor's ``dirty_changed``).
+refuses the switch. The window follows the editor's reports: its notices (toasts; a
+save's toast updates in place, as does Remove GT's), the title's unsaved marker, a saved
+or removed mask, skeleton or class labels and Remove GT… (the Library badge's GT marks and
+the metrics; a GT skeleton is measured first, O1), and B held on the Correct canvas.
 
 These are functions of the window, bound as :class:`~app.gui.main_window.MainWindow`
 methods under their old names (``MainWindow.switch_right_panel`` is
@@ -39,10 +37,7 @@ _SAVED_PREFIXES = ("Saved ", "Removed GT ")
 
 def editors(window: "MainWindow") -> dict:
     """The editor pages that hold unsaved work, by right-panel index."""
-    return {
-        Panel.CORRECT: window.correct_editor,
-        Panel.GT_TRACING: window.gt_tracing_interface,
-    }
+    return {Panel.CORRECT: window.correct_editor}
 
 
 def editor_canvas(window: "MainWindow"):
@@ -63,10 +58,9 @@ def on_editor_notice(window: "MainWindow", message: str, kind: str) -> None:
 
 
 def on_gt_saved(window: "MainWindow", image_path: str) -> None:
-    """Class labels were written (Trace GT, or the Correct page's class labels): the
-    Library's class-label mark and row, the metrics bar's status ("Classes: traced") and
-    the editors' save toast (V6; Correct's own summary then updates it in place)."""
-    window.notify(f"Saved GT · {os.path.basename(image_path)}", key=SAVED_TOAST)
+    """The Correct page's class labels were written: the Library's class-label mark and
+    row, and the metrics bar's status ("Classes: traced"). The page's own summary is the
+    save toast; no second toast here."""
     stem = image_stem(image_path)
     window.image_manager.set_gt(stem, "labels", True)
     window.library_index.refresh_status(stem)
@@ -82,6 +76,15 @@ def on_gt_removed(window: "MainWindow", image_path: str) -> None:
     found = None if layout is None else gt_files(layout, stem)
     for kind in ("mask", "skeleton", "labels"):
         manager.set_gt(stem, kind, found is not None and getattr(found, kind) is not None)
+    window.library_index.refresh_status(stem)
+    window.metrics.refresh_if_current(stem)
+
+
+def on_skeleton_saved(window: "MainWindow", path: str) -> None:
+    """Correct wrote a GT skeleton (``gt/skeletons/<stem>.png``, measured first, O1): the
+    Library's skeleton mark, the row and the metrics bar learn of it at once."""
+    stem = image_stem(path)
+    window.image_manager.set_gt(stem, "skeleton", True)
     window.library_index.refresh_status(stem)
     window.metrics.refresh_if_current(stem)
 
@@ -111,10 +114,9 @@ def sync_open_correction(window: "MainWindow") -> None:
     """Keep the Library's GT-skeleton state of the image open in Correct in step with
     the disk (W17; a GT skeleton is measured, O1, WG-T8).
 
-    Correct's ``skeleton_saved`` stays unconnected: the Library follows a GT skeleton
-    through the editor's ``dirty_changed``, so this runs when the editor's unsaved state
-    changes (a save) and whenever another image is selected: one ``os.path.isfile`` of
-    that image's ``gt/skeletons/<stem>.png``.
+    A save reports itself (:func:`on_skeleton_saved`, :func:`on_skeleton_cleared`); this
+    catches the rest. It runs when the editor's unsaved state changes and whenever another
+    image is selected: one ``os.path.isfile`` of that image's ``gt/skeletons/<stem>.png``.
     """
     manager = window.image_manager
     path = getattr(window.correct_editor, "current_image_path", "")
@@ -163,9 +165,8 @@ def switch_right_panel(window: "MainWindow", panel) -> bool:
     """Show ``panel`` (a :class:`Panel`, its index or its key); returns False
     (and stays put) if the editor being left refuses. An unknown key does nothing.
 
-    Leaving the Correct or Trace GT editor first offers to save pending
-    edits; the editor refuses when the user cancels, or when its save failed
-    and the user kept editing.
+    Leaving the Correct editor first offers to save pending edits; the editor refuses
+    when the user cancels, or when its save failed and the user kept editing.
     """
     try:
         target = Panel.coerce(panel)
@@ -185,11 +186,6 @@ def toggle_correct(window: "MainWindow") -> None:
     there (or in the Library). A leave the editor refuses (unsaved edits the user keeps)
     stays in it."""
     window._toggle_editor(Panel.CORRECT)
-
-
-def toggle_gt_tracing(window: "MainWindow") -> None:
-    """Enter / leave the multi-class GT editor (``Panel.GT_TRACING``), like Correct."""
-    window._toggle_editor(Panel.GT_TRACING)
 
 
 def toggle_editor(window: "MainWindow", panel: Panel) -> None:

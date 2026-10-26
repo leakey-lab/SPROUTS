@@ -26,11 +26,11 @@ from app.gui.panels import Panel
 
 
 def test_panel_values_pin_the_right_panel_contract():
-    assert [int(p) for p in Panel] == [0, 1, 2, 3]
+    assert [int(p) for p in Panel] == [0, 1, 2]
     assert Panel.DISPLAY == 0
     assert Panel.CORRECT == 1
     assert Panel.VISUALIZATION == 2
-    assert Panel.GT_TRACING == 3
+    assert not hasattr(Panel, "GT_TRACING")  # Trace GT is a layer of Correct (WG-T11)
 
 
 @pytest.mark.parametrize(
@@ -39,7 +39,6 @@ def test_panel_values_pin_the_right_panel_contract():
         ("display", Panel.DISPLAY),
         ("correct", Panel.CORRECT),
         ("visualization", Panel.VISUALIZATION),
-        ("gt_tracing", Panel.GT_TRACING),
     ],
 )
 def test_panel_key_round_trips_switch_keys(key, panel):
@@ -49,14 +48,14 @@ def test_panel_key_round_trips_switch_keys(key, panel):
 
 
 def test_panel_coerce_accepts_panels_and_indices():
-    assert Panel.coerce(Panel.GT_TRACING) is Panel.GT_TRACING
+    assert Panel.coerce(Panel.VISUALIZATION) is Panel.VISUALIZATION
     assert Panel.coerce(1) is Panel.CORRECT
 
 
 @pytest.mark.parametrize(
     "bad",
-    # the removed editors' keys and index: the Correct stage replaced them (no aliases)
-    ["mask_tracing", "skeleton_correction", 4, "nope", "", 7, -1, None, 1.5],
+    # the removed editors' keys and indices: the Correct stage replaced them (no aliases)
+    ["mask_tracing", "skeleton_correction", "gt_tracing", 3, 4, "nope", "", 7, -1, None, 1.5],
 )
 def test_panel_coerce_rejects_unknown_values(bad):
     with pytest.raises(ValueError):

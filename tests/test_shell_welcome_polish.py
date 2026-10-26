@@ -28,7 +28,7 @@ from app.gui.recent_projects import RecentProjectsStore  # noqa: E402
 from app.gui.welcome_screen import RecentRow, WelcomeWidget  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
 
-STAGES = ["Library", "Trace GT", "Generate", "Correct", "Measure", "Visualize"]
+STAGES = ["Library", "Generate", "Correct", "Measure", "Visualize"]
 QSS_PATH = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 
 

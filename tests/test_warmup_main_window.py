@@ -170,7 +170,7 @@ def test_staying_in_generate_warms_up_torch_once_off_the_gui_thread(make_window,
 
 def test_measure_warms_up_the_dashboards_and_never_torch(make_window, warmups):
     window = make_window(warm_up=True)
-    for stage in ("Library", "Trace GT", "Correct", "Measure"):
+    for stage in ("Library", "Correct", "Measure"):
         window.on_stage_changed(stage)
     assert wait(lambda: warmups.keys() == [warmup.DASHBOARDS])
     window.on_stage_changed("Visualize")

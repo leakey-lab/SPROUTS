@@ -1,4 +1,4 @@
-"""Class editor dialog for GT tracing (spec Sec 3.6).
+"""Class editor dialog for the class labels of Correct (spec Sec 3.6).
 
 Modal dialog over a :class:`~app.gt.registry.Registry`: add (name, key
 auto-slugged from the name and editable, colour picker), rename, recolour and

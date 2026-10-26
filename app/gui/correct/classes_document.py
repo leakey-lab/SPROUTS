@@ -3,7 +3,7 @@
 :class:`ClassesDocument` is the class labels of one image (``gt/<stem>.png``) and the
 registry ``gt/classes.json``, through :mod:`app.gt` only (never ``mask/`` or ``skeletons/``):
 the id plane with its patch history, the "checked" ticks, the pixels per id and all three as
-last saved; the Trace GT editor's storage half without Qt (colours: ``classes_paint``; the
+last saved; the former Trace GT editor's storage half without Qt (colours: ``classes_paint``; the
 files read: ``classes_files``).
 
 The rules (the GT goldens pin them): reviewed (what Save writes) = the hand ticks + the

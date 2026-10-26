@@ -4,9 +4,9 @@ A class-id plane is shown on the page's :class:`~app.gui.paint_canvas.PaintCanva
 registry's colours: :func:`class_lut` gives the canvas colour (B, G, R, A) of each id and
 :func:`canvas_ids` reads a painted canvas box back to ids by exact colour match, the
 committed plane's id kept under any colour no class owns (registry colours are unique,
-retired classes included). :func:`histogram` counts ids exactly at any size. The Trace GT
-editor's code (``gt_tracing_interface.py``), moved verbatim without Qt: a colour is parsed
-from ``#rrggbb`` instead of through ``QColor``.
+retired classes included). :func:`histogram` counts ids exactly at any size. The former
+Trace GT editor's code, moved verbatim without Qt: a colour is parsed from ``#rrggbb``
+instead of through ``QColor``.
 """
 
 from __future__ import annotations

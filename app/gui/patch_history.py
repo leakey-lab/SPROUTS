@@ -1,5 +1,5 @@
 """
-Patch-based undo/redo for the raster editors (Correct Mask and Trace GT).
+Patch-based undo/redo for the raster layers of Correct (the mask, the class labels).
 
 Qt-free. An editor keeps its document as one ``(h, w)`` uint8 *plane* (mask:
 0/1, GT: class ids) next to the ARGB canvas it paints on. :class:`PatchHistory`

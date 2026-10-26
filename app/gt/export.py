@@ -163,7 +163,7 @@ def _check_out_dir(project_dir: str, out_dir: str) -> None:
 def _check_image_size(image_path: str, shape: tuple[int, ...]) -> None:
     """Raise ``ValueError`` when a tracing is not the size of its source image.
 
-    Trace GT treats such a file as unreadable (the image was replaced or resized
+    Correct treats such a file as unusable (the image was replaced or resized
     after tracing); exported, the pair would be misaligned. Reads the image
     header only; a missing or unidentifiable image raises ``OSError``, one Pillow
     refuses as too large ``DecompressionBombError``.
@@ -231,7 +231,7 @@ def export_dataset(
     without a GT file are silently skipped. A GT file that fails to read
     (``GtFileError``), a missing/unreadable source image, a tracing or image
     Pillow refuses as too large (over about 179 Mpx), a tracing whose size
-    is not the image's (Trace GT does not open it either), or a failure while
+    is not the image's (Correct does not show it either), or a failure while
     writing that stem's mask/copy (``OSError``/``ValueError``) is recorded in
     ``errors`` and the export continues with the remaining stems (spec §5.4);
     any partial mask/image already written for that stem is removed so it is

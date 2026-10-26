@@ -451,24 +451,26 @@ def test_a_gt_file_held_open_raises_file_locked_error(tmp_path, monkeypatch, whi
     assert os.listdir(tmp_path / "gt") == [os.path.basename(path)]
 
 
-def test_trace_gt_reports_a_locked_gt_file(app, tmp_path, monkeypatch):
+def test_the_class_labels_report_a_locked_gt_file(app, tmp_path, monkeypatch):
     import cv2
-    from PyQt6.QtCore import QPoint
     from PyQt6.QtWidgets import QMessageBox
 
-    from app.gui.gt_tracing_interface import GtTracingInterface
+    from app.gui.correct.editor import CorrectEditor
+    from app.gui.correct.layer import CLASSES
+    from tests.test_correct_editor import drag
 
     monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("unexpected modal dialog"))
+    monkeypatch.setenv("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
     image = str(tmp_path / f"{STEM}.png")
     cv2.imwrite(image, np.full((30, 40, 3), 90, np.uint8))
     notices = []
-    editor = GtTracingInterface()
+    editor = CorrectEditor()
     editor.resize(900, 700)
     editor.notice.connect(lambda msg, kind: notices.append((msg, kind)))
-    editor.load_image(image)
-    editor.begin_stroke(QPoint(5, 5))
-    editor.continue_stroke(QPoint(20, 5))
-    editor.end_stroke()
+    editor.load_image(image, images_base_folder=str(tmp_path))
+    editor.set_active_layer(CLASSES)
+    drag(editor, (5, 5), (20, 5))
 
     def locked(src, dst):
         raise _sharing_violation(dst)
@@ -477,7 +479,7 @@ def test_trace_gt_reports_a_locked_gt_file(app, tmp_path, monkeypatch):
     monkeypatch.setattr(io_utils.time, "sleep", lambda s: None)
     notices.clear()
 
-    assert editor.save_mask() is False  # reported, not raised
+    assert editor.save() is False  # reported, not raised
     assert any(kind == "danger" and "open in another program" in msg for msg, kind in notices)
     assert editor.has_unsaved_changes()
     assert read_tracing(gt_path(image)) is None

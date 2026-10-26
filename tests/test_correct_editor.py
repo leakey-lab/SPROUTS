@@ -51,6 +51,7 @@ from app.gui.widgets import (  # noqa: E402
     ZoomCluster,
     tokens,
 )
+from app.masks import MASK_THRESHOLD  # noqa: E402
 from app.project_layout import ProjectLayout  # noqa: E402
 from tests.correct_goldens_support import png_colour_type  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
@@ -1367,7 +1368,7 @@ def test_saving_writes_the_gt_mask_and_never_the_class_labels(make_editor, proje
     assert saved[10, 25] == 255 and saved[140, 190] == 0
 
     editor.load_image(project.b, project.folder)  # the saved files read back
-    assert np.array_equal(alpha(editor) > 0, saved > 200)
+    assert np.array_equal(alpha(editor) > 0, saved > MASK_THRESHOLD)
 
 
 def test_a_session_without_edits_writes_nothing(make_editor, project):

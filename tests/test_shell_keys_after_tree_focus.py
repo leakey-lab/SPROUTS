@@ -2,7 +2,7 @@
 
 The library tree keeps the keyboard while the arrow keys browse (an editor takes it only
 when a click opens an image), so page-scoped shortcuts (``WidgetWithChildrenShortcut`` on
-the Correct / Trace GT page) were dead there: plain keys went to the tree's type-ahead
+the editor pages) were dead there: plain keys went to the tree's type-ahead
 ("2" jumped the selection to a date row) and Ctrl+S / Ctrl+Z / the zoom keys did nothing.
 The pages' shortcuts are now window-wide while their page is on screen (Qt ignores the
 shortcuts of a hidden widget), the Library's zoom keys are shortcuts of its display
@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui import canvas_gl, shortcuts  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.correct.layer import CLASSES, MASK, SKELETON  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.test_correct_editor import paint, plane, qapp  # noqa: E402
@@ -219,29 +219,31 @@ def test_pgdn_after_a_tree_click_in_correct_opens_the_next_image_once(window):
     assert ambiguous == []
 
 
-# ================================================================================ Trace GT
-def test_trace_gt_tool_and_class_keys_work_after_a_tree_click(window):
-    gt = in_stage(window, "Trace GT")
+# ====================================================================== class labels
+def test_correct_class_label_keys_work_after_a_tree_click(window):
+    editor = in_stage(window, "Correct")
     tree = window.file_list
-    assert gt is window.gt_tracing_interface
-    assert same_path(gt.current_image_path, window.project.image(1))
+    layer = editor.layers[CLASSES]
 
+    key(tree, Qt.Key.Key_G)
+    assert editor.active_layer_id == CLASSES
     key(tree, Qt.Key.Key_E)
-    assert gt.eraser_button.isChecked()
+    assert layer.current_tool == "eraser"
     key(tree, Qt.Key.Key_F)
-    assert gt.fill_button.isChecked()
-    first_key = gt.class_panel.key_for_shortcut(1)
-    second_key = gt.class_panel.key_for_shortcut(2)
+    assert layer.current_tool == "fill"
+    first_key = editor.class_panel.key_for_shortcut(1)
+    second_key = editor.class_panel.key_for_shortcut(2)
     if second_key is not None:
         key(tree, Qt.Key.Key_2)
-        assert gt._active_key == second_key
+        assert layer.active_class() == second_key
     key(tree, Qt.Key.Key_1)
-    assert gt._active_key == first_key
+    assert layer.active_class() == first_key
     assert tree.currentItem() is leaf(window, 1)  # no type-ahead jump
 
-    view = gt.graphics_view
+    view = editor.graphics_view
     key(tree, Qt.Key.Key_1, CTRL)
     assert view.target_zoom == pytest.approx(1.0)
+    assert tree.hasFocus()
 
 
 # ================================================================================ Library
@@ -279,7 +281,7 @@ def test_the_library_keeps_tree_type_ahead_and_a_hidden_editor_never_reacts(wind
         key(window.file_list, k)
 
     assert editor.active_layer_id == layer and editor.layers[MASK].current_tool == tool
-    assert window.gt_tracing_interface.eraser_button.isChecked() is False
+    assert editor.layers[CLASSES].current_tool != "eraser"
 
 
 def test_a_modal_dialog_keeps_the_page_keys_to_itself(window):
@@ -357,15 +359,17 @@ def test_a_hold_ends_when_the_tree_loses_the_keyboard_elsewhere(window):
     assert editor.layers[MASK].current_tool == "eraser"  # a lost hold is not a B tap
 
 
-def test_trace_gt_b_tap_reaches_its_canvas_from_the_tree(window):
-    gt = in_stage(window, "Trace GT")
+def test_a_b_tap_reaches_the_class_labels_from_the_tree(window):
+    editor = in_stage(window, "Correct")
     tree = window.file_list
+    key(tree, Qt.Key.Key_G)
     key(tree, Qt.Key.Key_E)
-    assert gt.eraser_button.isChecked()
+    assert editor.layers[CLASSES].current_tool == "eraser"
 
     key(tree, Qt.Key.Key_B)
 
-    assert gt.brush_button.isChecked()
+    assert editor.active_layer_id == CLASSES
+    assert editor.layers[CLASSES].current_tool == "brush"
     assert tree.hasFocus()
 
 
@@ -378,7 +382,7 @@ def test_the_library_tree_keeps_space_and_letters_in_the_library(window):
 
 
 # ======================================================================= no ambiguous keys
-@pytest.mark.parametrize("stage", ["Library", "Correct", "Trace GT", "Measure"])
+@pytest.mark.parametrize("stage", ["Library", "Correct", "Measure"])
 def test_no_shortcut_key_is_ambiguous_in_any_stage_or_focus(window, stage):
     """Every registry shortcut key, pressed with the keyboard in the tree, on the canvas and
     in the search field, never fires ``activatedAmbiguously`` (an ambiguous key does

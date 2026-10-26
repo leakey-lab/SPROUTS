@@ -1,16 +1,16 @@
 """Named indices for the main window's right-panel ``QStackedWidget``.
 
 The page order is a hard contract shared by ``MainWindow``, the shell chrome and the
-tests: 0 display (the Library), 1 Correct (the mask and the skeleton of an image on one
-canvas), 2 visualization placeholder, 3 Trace GT. Dashboards are appended after these
+tests: 0 display (the Library), 1 Correct (the mask, the skeleton and the class labels of
+an image on one canvas), 2 visualization placeholder. Dashboards are appended after these
 fixed pages. ``Panel`` is an ``IntEnum``, so it can be passed to ``setCurrentIndex`` /
 ``widget`` directly and compares equal to the plain ints; name pages with its members,
 never int literals (``tests/test_right_panel_contract.py``).
 
-The Correct stage replaced the separate mask and skeleton editors, and the pages were
-renumbered on purpose without aliases: the keys and indices of those two editors
-(``mask_tracing``, ``skeleton_correction``, index 4) name no page any more, so
-:meth:`Panel.coerce` rejects them.
+The Correct stage replaced the separate mask and skeleton editors and then the Trace GT
+editor, and the pages were renumbered on purpose without aliases: the keys and indices of
+those editors (``mask_tracing``, ``skeleton_correction``, ``gt_tracing``, indices 3 and 4)
+name no page any more, so :meth:`Panel.coerce` rejects them.
 """
 
 from __future__ import annotations
@@ -24,11 +24,10 @@ class Panel(IntEnum):
     DISPLAY = 0
     CORRECT = 1
     VISUALIZATION = 2
-    GT_TRACING = 3
 
     @property
     def key(self) -> str:
-        """The ``switch_right_panel`` string key, e.g. ``"gt_tracing"``."""
+        """The ``switch_right_panel`` string key, e.g. ``"visualization"``."""
         return self.name.lower()
 
     @classmethod
@@ -36,7 +35,7 @@ class Panel(IntEnum):
         """Return the panel named by a ``Panel``, a page index or a string key.
 
         String keys are matched case-insensitively (``"display"``, ``"correct"``,
-        ``"visualization"``, ``"gt_tracing"``).
+        ``"visualization"``).
 
         Raises:
             ValueError: ``value`` names no panel.

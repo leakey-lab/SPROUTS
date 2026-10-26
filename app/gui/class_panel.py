@@ -1,4 +1,4 @@
-"""Floating class panel overlay for GT tracing (spec Sec 3.3).
+"""Class panel of the class labels on the Correct page (spec Sec 3.3).
 
 A vertical floating panel, pinned to the right edge of the host canvas and
 vertically centred, showing one row per active class in registry order:

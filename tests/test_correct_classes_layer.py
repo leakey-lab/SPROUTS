@@ -7,7 +7,7 @@ checked, and an invalid ``gt/classes.json`` makes it read-only with one notice p
 A recording ``FakeHost`` stands in for the page; a real ``CorrectSession`` with
 ``FakePrompts`` answers "would the page ask?".
 
-Ported here (the old files stay until WG-T11): the class semantics of
+Ported here (the old files were deleted in WG-T11): the class semantics of
 ``tests/test_gt_tracing_interface.py`` and every case of ``tests/test_gt_unsaved_state.py``
 (unsaved = the ids or the ticks differ from the saved ones; a remap on open stays unsaved
 until it is saved or discarded). Keys, PgDn, the class panel and the prompts' wording are

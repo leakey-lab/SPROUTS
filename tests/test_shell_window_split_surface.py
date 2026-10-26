@@ -132,7 +132,6 @@ SIGNATURES = {
     "stage_summary": "() -> str | None",
     "switch_right_panel": "(panel) -> bool",
     "toggle_correct": "() -> None",
-    "toggle_gt_tracing": "() -> None",
     "toggle_root_area_visualization": "()",
     "toggle_root_length_visualization": "()",
     "unhighlight_cleared_mask": "(image_path)",
@@ -152,7 +151,7 @@ INSTANCE_ATTRIBUTES = (
     "calculate_length_button collapse_all_button correct_editor device_check display_area "
     "display_controller display_page_stack empty_state expand_all_button feedback file_list "
     "generate_all_button generate_button generate_mask_button gt_classes_button "
-    "gt_export_button gt_remove_button gt_tracing_interface image_manager jobs left_panel "
+    "gt_export_button gt_remove_button image_manager jobs left_panel "
     "library_index "
     "library_search library_search_controller library_search_status load_images_button "
     "loading_overlay mask_generation_handler metrics_bar recent_projects ribbon "
@@ -235,7 +234,6 @@ BOUND = {
     "_generated_skeleton_for": editors.generated_skeleton_for,
     "switch_right_panel": editors.switch_right_panel,
     "toggle_correct": editors.toggle_correct,
-    "toggle_gt_tracing": editors.toggle_gt_tracing,
     "_toggle_editor": editors.toggle_editor,
     "on_b_key_status_changed": editors.on_b_key_status_changed,
     "on_mask_saved": editors.on_mask_saved,
@@ -244,6 +242,8 @@ BOUND = {
     "_on_gt_saved": editors.on_gt_saved,
     "_on_gt_removed": editors.on_gt_removed,
     "_on_skeleton_cleared": editors.on_skeleton_cleared,
+    # WG-T11: a GT skeleton saved in Correct reaches the Library and the metrics at once.
+    "_on_skeleton_saved": editors.on_skeleton_saved,
 }
 
 
@@ -412,7 +412,7 @@ def test_the_hot_paths_never_run_a_forwarding_method(app, tmp_path, monkeypatch)
             window.file_list.setCurrentItem(leaves[1])  # an arrow key: the debounce loads it
             QTest.qWait(3 * main_window.TREE_LOAD_DELAY_MS)
             window._page_image(1)  # PgDn from the library
-            for key in ("Trace GT", "Generate", "Correct", "Measure", "Visualize", "Library"):
+            for key in ("Generate", "Correct", "Measure", "Visualize", "Library"):
                 if key == "Correct":
                     window.ribbon_buttons[key].click()
                     window.correct_editor.navigate_requested.emit(-1)  # PgUp in Correct

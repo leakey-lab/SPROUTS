@@ -24,7 +24,6 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 STAGES = [
     "Library",
-    "Trace GT",
     "Generate",
     "Correct",
     "Measure",
@@ -183,7 +182,7 @@ def test_generate_page_offers_skeletons_only(mw, app):
 
 def test_the_correct_page_offers_clear_and_the_gt_actions(mw, app):
     """WG-T5: Classes…, Export dataset… and Remove GT… follow the Correct page's Clear (the
-    Trace GT page is empty until WG-T11 removes that stage)."""
+    Trace GT stage and its page are gone, WG-T11)."""
     _enter(mw, app, "Correct")
     page = mw.action_bar_stack.currentWidget()
     try:

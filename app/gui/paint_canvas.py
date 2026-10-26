@@ -1,6 +1,6 @@
-"""The editable raster canvas of the Correct mask layer and of Trace GT (plan contract C9).
+"""The editable raster canvas of the Correct mask and class labels (plan contract C9).
 
-A raster editor's document is a ``(h, w)`` uint8 *plane* (mask: 0/1, GT: class ids)
+A raster layer's document is a ``(h, w)`` uint8 *plane* (mask: 0/1, labels: class ids)
 committed in a :class:`~app.gui.patch_history.PatchHistory`. :class:`PaintCanvas` shows it
 as an ARGB canvas, each plane value in its lookup-table colour (0 = transparent), and
 paints on it. The painting is today's ``MaskDrawingMixin`` moved verbatim: pixel centres,
@@ -102,7 +102,7 @@ def _rect(qrect: QRect) -> Rect:
 
 
 class PaintCanvas:
-    """The editable ARGB canvas over a PatchHistory plane (Correct mask layer, Trace GT).
+    """The editable ARGB canvas over a PatchHistory plane (Correct mask, class labels).
 
     Painting is today's MaskDrawingMixin, moved verbatim (mask_drawing_tools.py:85-223):
     pixel centres, round caps (a 1 px dab is exactly its pixel), no antialiasing,

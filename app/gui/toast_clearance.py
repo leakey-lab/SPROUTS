@@ -9,7 +9,7 @@ resizes, shows or hides (a page switch shows the metrics bar; an editor places i
 overlays a moment after it was resized), not only when the window resizes.
 
 Lifting the stack above an editor's dock and zoom cluster moves it up the right edge,
-where the editor's side panel sits (Correct's Layers, Trace GT's Classes). The optional
+where the editor's side panel sits (Correct's Layers and Classes). The optional
 ``side`` chrome keeps the stack in its corner while it fits below such a panel and moves
 it to the panel's left when it does not (more toasts, longer ones, a shorter window).
 

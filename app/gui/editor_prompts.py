@@ -1,7 +1,7 @@
-"""The unsaved-changes prompts of the canvas editors (Correct and Trace GT), contract C11.
+"""The unsaved-changes prompts of the canvas editor (Correct), contract C11.
 
 One Save / Discard / Cancel box names what is unsaved ("mask", "skeleton", "mask and
-skeleton", "GT"), and a second box follows a failed save (Discard / Keep editing). A third
+skeleton", "class labels"), and a second box follows a failed save (Discard / Keep editing). A third
 asks before a save replaces a file the editor could not show (Replace / Keep it), a fourth
 before a save overwrites a file that changed on disk since it was opened (Overwrite / Reload
 (lose my edits) / Cancel). The wording of the first two is the editors' of before the merge,

@@ -1,19 +1,20 @@
-"""Zoom quality of the Trace GT and Library canvases (spec section 10, plan P3 Step 6).
+"""Zoom quality of the editor and Library canvases (spec section 10, plan P3 Step 6).
 
-Rendered offscreen on the raster viewport through the real canvases: the Trace GT editor
-(``GtTracingInterface`` on ``RasterEditorBase``) and the Library display
-(``DisplayController`` on ``MagnifyingGraphicsView``). Thresholds come from the contracts
-scout (``scratch/contracts-tests/render``), whose measurements of the pre-merge canvases
-fail every photo threshold here:
+Rendered offscreen on the raster viewport through the real canvases: the Correct editor with
+its class labels (``CorrectEditor``; the Trace GT editor measured here until WG-T11 removed
+it) and the Library display (``DisplayController`` on ``MagnifyingGraphicsView``). Thresholds
+come from the contracts scout (``scratch/contracts-tests/render``), whose measurements of the
+pre-merge canvases fail every photo threshold here:
 
 * the photo is smooth when magnified (sine step ratio <= 1.5 / z, equal neighbours
   <= 0.05), exact at 100 %, and does not alias when zoomed out (chirp, 1 px stripes);
-* the GT class layer shows exact pixels when magnified and a 1 px stroke never vanishes
+* the class labels show exact pixels when magnified and a 1 px stroke never vanishes
   when zoomed out;
 * Enhance and the next image never leave a stale level; an OpenGL on/off swap keeps it;
 * the Library overlay draws a generated file (2 px lines) soft, without pixel blocks.
 """
 
+import contextlib
 import os
 
 import pytest
@@ -32,9 +33,10 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gui import canvas_gl  # noqa: E402
+from app.gui import canvas_gl, editor_prompts  # noqa: E402
+from app.gui.correct.editor import CorrectEditor  # noqa: E402
+from app.gui.correct.layer import CLASSES  # noqa: E402
 from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.gt_tracing_interface import GtTracingInterface  # noqa: E402
 from app.gui.image_manager import ImageManager  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
@@ -48,11 +50,12 @@ from tests.render_metrics import (  # noqa: E402
     sine_step_ratio,
     stripes_image,
 )
+from tests.test_correct_editor import drag  # noqa: E402
 
 W, H = 640, 480  # photo patterns
 CHIRP_H = 64
 VIEW_SIZE = (1100, 800)
-CANVASES = ("gt", "library")
+CANVASES = ("editor", "library")
 
 
 @pytest.fixture(scope="module")
@@ -114,8 +117,8 @@ class _Canvas:
 
     def __init__(self, kind: str, folder: str, images: dict[str, str]):
         self.kind = kind
-        if kind == "gt":
-            self.editor = GtTracingInterface()
+        if kind == "editor":
+            self.editor = CorrectEditor()
             self.widget, self.view = self.editor, self.editor.graphics_view
         else:
             self.library = _Library(folder, images)
@@ -131,16 +134,19 @@ class _Canvas:
 
     def show(self, name: str, path: str) -> None:
         """Open the image ``path`` (library name ``name``) in the canvas."""
-        if self.kind == "gt":
-            self.editor._set_clean()
-            self.editor.load_image(path)
-            self.editor.mask_visible_button.setChecked(False)  # the photo alone
+        if self.kind == "editor":
+            with _discarding():
+                self.editor.load_image(path, images_base_folder=os.path.dirname(path))
+            for layer_id in self.editor.layers:  # the photo alone
+                self.editor.set_layer_visible(layer_id, False)
         else:
             self.library.image_manager.images[name] = path
             self.library.controller.display_selected_image_by_name(name)
 
     def grab(self, zoom: float, centre: tuple[float, float]) -> np.ndarray:
-        """RGB of the viewport at ``zoom``, centred on image point ``centre``."""
+        """RGB of the viewport at ``zoom``, centred on image point ``centre`` (no brush ring)."""
+        if self.kind == "editor":
+            self.editor.router.canvas_hover_left()
         self.view.set_zoom(zoom)
         self.view.centerOn(QPointF(*centre))
         self.view.viewport().repaint()
@@ -160,12 +166,21 @@ class _Canvas:
         return rgb[y0:y1, x0:x1]
 
     def close(self) -> None:
-        """Close the canvas widget (its image is clean)."""
-        if self.kind == "gt":
-            self.editor._set_clean()
+        """Close the canvas widget (its edits discarded)."""
+        if self.kind == "editor":
+            with _discarding():
+                self.editor.reset()
         self.widget.close()
         self.widget.deleteLater()
         flush_deleted()  # deterministic
+
+
+@contextlib.contextmanager
+def _discarding():
+    """The unsaved-changes prompt answers Discard meanwhile."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(editor_prompts, "ask_unsaved", lambda *_a: editor_prompts.DISCARD)
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -269,7 +284,7 @@ def test_the_next_image_leaves_nothing_of_the_last_one_when_zoomed_out(canvases,
 def test_enhance_on_and_off_changes_the_zoomed_out_photo(app, patterns, monkeypatch, tmp_path):
     monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
     monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    canvas = _Canvas("gt", "", {}).present()  # its own editor: Enhance sticks to an editor
+    canvas = _Canvas("editor", "", {}).present()  # its own editor: Enhance sticks to it
     try:
         canvas.show("gradient", patterns["gradient"])
         raw = _gray(canvas.content(canvas.grab(0.25, (W / 2, H / 2)), W, H))
@@ -301,7 +316,7 @@ def test_an_opengl_swap_keeps_the_view_config_and_the_smooth_photo(
         canvas.view.set_opengl_viewport_enabled(False)
         assert not canvas.view.viewport().inherits("QOpenGLWidget")
         assert canvas.view.renderHints() == hints
-        if kind == "gt":  # the editor view leaves pixmap smoothing to its items
+        if kind == "editor":  # the editor view leaves pixmap smoothing to its items
             assert not hints & QPainter.RenderHint.SmoothPixmapTransform
         canvas.present()
         canvas.show("sine", patterns["sine"])
@@ -312,25 +327,30 @@ def test_an_opengl_swap_keeps_the_view_config_and_the_smooth_photo(
         canvas.close()
 
 
-# ------------------------------------------------------------------ the GT class layer
-def _dab(editor, x: int, y: int) -> None:
-    editor.begin_stroke(QPoint(x, y))
-    editor.end_stroke()
+# ------------------------------------------------------------------ the class labels
+def _paint_classes(editor, size: int) -> None:
+    """The class labels edited with the root class's brush of ``size``, shown."""
+    editor.set_active_layer(CLASSES)
+    editor.layers[CLASSES].set_active_class("root")
+    editor.controls.size_changed.emit(size)  # the dock's size slider
+
+
+def _class_ids(editor) -> np.ndarray:
+    return editor.layers[CLASSES].document.history.plane
 
 
 @pytest.mark.parametrize("zoom", [4, 8])
-def test_gt_layer_shows_exact_pixels_when_magnified(canvases, patterns, zoom):
-    canvas = canvases["gt"]
+def test_class_labels_show_exact_pixels_when_magnified(canvases, patterns, zoom):
+    canvas = canvases["editor"]
     editor = canvas.editor
     canvas.show("flat", patterns["flat"])
-    editor.mask_visible_button.setChecked(True)
-    editor.set_active_class("root")
-    editor.size_slider.setValue(2)  # one pixel per click (size 2, the default of this test)
+    editor.set_layer_visible(CLASSES, True)
+    _paint_classes(editor, 2)
     rng = np.random.default_rng(zoom)
     x0, y0, n = 300, 220, 24
     for x, y in rng.integers(0, n, size=(80, 2)):
-        _dab(editor, x0 + int(x), y0 + int(y))
-    plane = editor.edits.plane[y0 : y0 + n, x0 : x0 + n] > 0
+        drag(editor, (x0 + int(x), y0 + int(y)))
+    plane = _class_ids(editor)[y0 : y0 + n, x0 : x0 + n] > 0
     assert 0 < plane.sum() < n * n
 
     rgb = canvas.grab(float(zoom), (x0 + n / 2, y0 + n / 2))
@@ -347,20 +367,17 @@ def test_gt_layer_shows_exact_pixels_when_magnified(canvases, patterns, zoom):
 
 
 @pytest.mark.parametrize("row", [240, 241, 242, 243])
-def test_a_1px_gt_stroke_stays_visible_when_zoomed_out(canvases, patterns, row):
+def test_a_1px_class_label_stroke_stays_visible_when_zoomed_out(canvases, patterns, row):
     """Every row parity: the stroke shows as coverage, it never drops out of the render."""
-    canvas = canvases["gt"]
+    canvas = canvases["editor"]
     editor = canvas.editor
     canvas.show("flat", patterns["flat"])
-    editor.set_active_class("root")
-    editor.size_slider.setValue(1)
-    editor.begin_stroke(QPoint(40, row))
-    editor.continue_stroke(QPoint(600, row))
-    editor.end_stroke()
+    _paint_classes(editor, 1)
+    drag(editor, (40, row), (600, row))
     for zoom in (0.25, 0.33, 0.5, 0.75):
-        editor.mask_visible_button.setChecked(True)
+        editor.set_layer_visible(CLASSES, True)
         shown = canvas.grab(zoom, (W / 2, H / 2)).astype(int)
-        editor.mask_visible_button.setChecked(False)
+        editor.set_layer_visible(CLASSES, False)
         hidden = canvas.grab(zoom, (W / 2, H / 2)).astype(int)
         start = canvas.view.mapFromScene(QPointF(40, row + 0.5))
         end = canvas.view.mapFromScene(QPointF(600, row + 0.5))

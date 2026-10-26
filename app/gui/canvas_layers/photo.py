@@ -1,4 +1,4 @@
-"""The photo layer of every image canvas (Correct, Trace GT, Library).
+"""The photo layer of every image canvas (Correct, Library).
 
 :class:`PhotoLayerItem` draws a decoded image (BGR or gray numpy array), smooth at every
 zoom: the level of an area-averaged pyramid (:mod:`app.imaging.pyramid`) chosen from the

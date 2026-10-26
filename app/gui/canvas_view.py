@@ -1,8 +1,8 @@
 """Shared zoom / pan / fit / viewport behaviour of every image canvas.
 
 ``CanvasViewMixin`` is mixed into each image ``QGraphicsView`` as
-``class X(CanvasViewMixin, QGraphicsView)``: the Library display, the Correct
-canvas and the Trace GT canvas. So all of them behave the same way:
+``class X(CanvasViewMixin, QGraphicsView)``: the Library display and the Correct
+canvas. So both behave the same way:
 
 Zoom
     The view transform is the single source of truth. ``zoom_factor`` is read

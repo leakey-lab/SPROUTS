@@ -195,9 +195,8 @@ def test_a_skeleton_saved_in_correct_reaches_the_library(window, tmp_path):
     assert os.path.isfile(project.correction(1))
     assert window.image_manager.has_gt_skeleton(STEMS[1])
     assert window.library_index.status_of(STEMS[1])[1] == "gt"
-    # Nothing listens to skeleton_saved (dirty_changed carries the save), and it is not a
-    # generated skeleton.
-    assert editor.receivers(editor.skeleton_saved) == 0
+    # The window hears skeleton_saved once (WG-T11), and it is not a generated skeleton.
+    assert editor.receivers(editor.skeleton_saved) == 1
     assert not window.image_manager.has_skeleton(STEMS[1])
 
     enter(window, "Library")

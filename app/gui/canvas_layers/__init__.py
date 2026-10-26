@@ -1,4 +1,4 @@
-"""Render items shared by the image canvases (Correct, Trace GT, Library).
+"""Render items shared by the image canvases (Correct, Library).
 
 Submodules (import them directly, e.g.
 ``from app.gui.canvas_layers.raster import RasterLayerItem``):

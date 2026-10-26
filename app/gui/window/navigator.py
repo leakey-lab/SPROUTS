@@ -3,8 +3,8 @@
 A click opens an image; the arrow keys move the selection and the image loads once they
 come to rest (:data:`TREE_LOAD_DELAY_MS`), so holding a key decodes only the image it stops
 on; PgDn / PgUp step through the shown images, from the image open in an editor when one
-is on screen. The selected image opens on the page on screen (the display, Correct or
-Trace GT), and the metrics bar follows.
+is on screen. The selected image opens on the page on screen (the display or Correct),
+and the metrics bar follows.
 
 These are functions of the window, bound as :class:`~app.gui.main_window.MainWindow`
 methods under their old names (``MainWindow.on_image_selected`` is
@@ -66,7 +66,7 @@ def select_tree_image(window: "MainWindow", image_path: str) -> None:
 def navigate_image(window: "MainWindow", delta: int) -> None:
     """Select and open the next/previous visible image leaf in the library tree.
 
-    In an editor (Correct, Trace GT), steps from the image open in it; otherwise
+    In the editor (Correct), steps from the image open in it; otherwise
     (or when nothing is open there) from the tree selection.
     """
     current = None
@@ -102,9 +102,9 @@ def load_current_tree_item(window: "MainWindow") -> None:
 
 def install_image_paging_shortcuts(window: "MainWindow") -> None:
     """PgDn / PgUp (registry: Global next/previous image) open the next / previous
-    image from the library, the chrome and the display. The editor pages (Correct,
-    Trace GT) bind the same keys themselves (they save first), so these are scoped
-    to the widgets outside them instead of window-wide (no ambiguity)."""
+    image from the library, the chrome and the display. The editor page (Correct)
+    binds the same keys itself (it saves first), so these are scoped to the widgets
+    outside it instead of window-wide (no ambiguity)."""
     window._paging_shortcuts = []
     owners = (
         window.left_panel,
@@ -171,10 +171,6 @@ def on_image_selected(window: "MainWindow", item):
             image_path, images_base_folder=window.image_manager.original_folder
         )
         if window._kept_other_image(window.correct_editor, image_path):
-            return
-    elif current is window.gt_tracing_interface:
-        window.gt_tracing_interface.load_image(image_path)
-        if window._kept_other_image(window.gt_tracing_interface, image_path):
             return
     else:
         window.display_controller.display_selected_image_by_name(image_name)

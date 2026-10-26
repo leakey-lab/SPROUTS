@@ -2,8 +2,8 @@
 
 ``MainWindow.right_panel`` is a ``QStackedWidget`` whose pages are named by
 ``app.gui.panels.Panel``. One Correct stage replaced the mask and skeleton editors and the
-pages were renumbered on purpose, with no aliases (spec D18): ``DISPLAY = 0``,
-``CORRECT = 1``, ``VISUALIZATION = 2``, ``GT_TRACING = 3``. Two kinds of stale caller
+pages were renumbered on purpose, with no aliases (spec D18); the Trace GT page went too
+(WG-T11): ``DISPLAY = 0``, ``CORRECT = 1``, ``VISUALIZATION = 2``. Two kinds of stale caller
 would survive that silently, so both are rejected anywhere under ``app/``:
 
 * an int literal page index: ``right_panel.setCurrentIndex(<int>)``,
@@ -161,7 +161,7 @@ def test_the_index_scan_flags_int_literals_and_passes_panel_members() -> None:
         if self.right_panel.currentIndex() in (0, Panel.CORRECT):
             pass
         self.right_panel.setCurrentIndex(Panel.CORRECT)
-        self.right_panel.widget(Panel.GT_TRACING)
+        self.right_panel.widget(Panel.VISUALIZATION)
         self.right_panel.setCurrentIndex(target)
         if self.right_panel.currentIndex() == Panel.DISPLAY:
             pass

@@ -1,5 +1,5 @@
-"""What the status line and the toasts say: about the open project, once, alike in both
-editors (V3, V6, V11).
+"""What the status line and the toasts say: about the open project, once, alike for every
+layer of the editor (V3, V6, V11).
 
 - V3: a Measure run leaves "Saved <its CSV path>" on the status line for 15 s and a toast
   for a few seconds. Both survived opening another folder: the new project's status line
@@ -8,8 +8,9 @@ editors (V3, V6, V11).
   drops the previous project's messages; a folder that is not opened changes nothing.
 - V6: Correct's save toasts had no key, so each Ctrl+S stacked another identical toast,
   and Trace GT worded its own differently ("GT saved for X.jpg"). A save's toast now
-  updates the live one in place in both editors, worded "Saved <what> · <image>"; a
-  failure's toast is never replaced by a later save's.
+  updates the live one in place, worded "Saved <what> · <image>" (the class labels too,
+  since Trace GT became a layer of Correct); a failure's toast is never replaced by a
+  later save's.
 - V11 (part 1): the Visualize page during a run read "Measuring root length is running".
 
 Offscreen; every project is a tmp_path folder of four photos (tests.test_correct_main_window).
@@ -32,12 +33,12 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.config import ROOT_LENGTHS_CSV  # noqa: E402
 from app.gui import canvas_gl, image_manager  # noqa: E402
-from app.gui.correct.layer import SKELETON  # noqa: E402
+from app.gui.correct.layer import CLASSES, SKELETON  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
 from app.gui.window import stages  # noqa: E402
 from app.handlers.deps import SAVED_PATH_STATUS_MS  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import paint, qapp  # noqa: E402
+from tests.test_correct_editor import drag, paint, qapp  # noqa: E402
 from tests.test_correct_main_window import (  # noqa: E402
     STEMS,
     enter,
@@ -241,19 +242,20 @@ def test_paging_on_after_each_edit_keeps_one_save_toast_naming_the_last_image(wi
     assert [toast.message() for toast in saved_toasts(window)] == [f"Saved mask · {STEMS[2]}.jpg"]
 
 
-def test_trace_gt_words_its_save_toast_like_correct_and_updates_it_in_place(window):
-    select(window, 1)
-    enter(window, "Trace GT")
-    gt = window.gt_tracing_interface
-    assert gt.save_mask()
+def test_a_class_labels_save_toast_is_worded_alike_and_updates_in_place(window):
+    editor = in_correct(window, 1)
+    editor.set_active_layer(CLASSES)
+    drag(editor, (20, 100), (60, 100))
+    assert editor.save()
     settle()
     [first] = saved_toasts(window)
 
-    assert gt.save_mask()
+    drag(editor, (20, 120), (60, 120))
+    assert editor.save()
     settle()
 
     assert saved_toasts(window) == [first]
-    assert first.message() == f"Saved GT · {STEMS[1]}.jpg"
+    assert first.message() == f"Saved class labels · {STEMS[1]}.jpg"
 
 
 def test_a_failed_save_stays_beside_a_later_saves_toast(window):

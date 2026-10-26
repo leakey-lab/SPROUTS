@@ -69,5 +69,5 @@ def test_no_traced_image_still_says_why_export_is_off(made, tmp_path):
     dialog = ExportDatasetDialog(str(tmp_path), _project(tmp_path, 3, 0), default_registry())
     made.append(dialog)
 
-    assert dialog.traced_label.text().startswith("No image in this folder has a GT tracing")
+    assert dialog.traced_label.text().startswith("No image in this folder has class labels")
     assert not dialog.export_button.isEnabled()

@@ -1,4 +1,4 @@
-"""An editable ARGB canvas layer (the Correct mask, the Trace GT classes).
+"""An editable ARGB canvas layer (the Correct mask, the Correct class labels).
 
 :class:`RasterLayerItem` reads its ``QImage`` through a source callable at paint time, so
 no second reference to the canvas exists (painting a stroke never detaches a copy), and

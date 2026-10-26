@@ -382,14 +382,14 @@ def test_busy_check_falls_back_to_the_calculator_threads(env):
 
 def test_an_editor_that_refuses_to_close_keeps_its_panel(env):
     mw = env.mw
-    mw.right_panel.setCurrentIndex(_PANELS["gt_tracing"])
+    mw.right_panel.setCurrentIndex(_PANELS["correct"])
     mw.leave_allowed = False
 
     vm.show_root_length_visualization(mw)
 
     assert StubLength.made == []
     assert mw.gl_calls == []
-    assert mw.right_panel.currentIndex() == _PANELS["gt_tracing"]
+    assert mw.right_panel.currentIndex() == _PANELS["correct"]
 
 
 def test_no_images_loaded_warns_and_opens_nothing(env):
@@ -655,7 +655,7 @@ def test_moving_between_other_stages_keeps_the_original_deadline(env, monkeypatc
     monkeypatch.setattr(controller._idle_timer, "start", lambda *a: started.append(a))
 
     vm.stage_changed(mw, "Library")
-    vm.stage_changed(mw, "Trace GT")
+    vm.stage_changed(mw, "Generate")
 
     assert started == []  # still counting from when Visualize was left
     assert controller.idle_release_pending()

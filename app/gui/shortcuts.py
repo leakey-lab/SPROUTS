@@ -18,15 +18,15 @@ Kinds:
 * ``gesture`` — mouse or wheel gestures, documentation only.
 
 Scopes: :data:`GLOBAL` shortcuts are window-wide and therefore overlap every
-other scope. The page scopes (:data:`LIBRARY` on the display canvas, :data:`TRACE_GT`
-and :data:`CORRECT` on their editor page) are window-wide too, but Qt ignores the
+other scope. The page scopes (:data:`LIBRARY` on the display canvas, :data:`CORRECT`
+on its editor page) are window-wide too, but Qt ignores the
 shortcuts of a hidden widget, so only the page on screen has live keys: they work
 wherever the keyboard is in the window (the library tree keeps it while the arrow keys
 browse), the pages never collide, and a text field still gets its typing (it takes the
 key first, through ``ShortcutOverride``). PgDn / PgUp are the exception: every owner
 binds them ``WidgetWithChildrenShortcut`` (MainWindow on the library, the chrome and
 the display; each editor on its own page), so exactly one is live. Stage accelerators
-are ``Alt+1 … Alt+6``, one per ribbon stage (not ``Ctrl+digit``: ``Ctrl+0`` /
+are ``Alt+1 … Alt+5``, one per ribbon stage (not ``Ctrl+digit``: ``Ctrl+0`` /
 ``Ctrl+1`` are the canvas fit / 100 % keys and a window-level ``Ctrl+1`` would
 make them ambiguous).
 
@@ -47,7 +47,6 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = [
     "GLOBAL",
     "LIBRARY",
-    "TRACE_GT",
     "CORRECT",
     "SCOPES",
     "STAGE_KEYS",
@@ -66,17 +65,16 @@ __all__ = [
 # Scope names equal the ribbon stage keys (app.gui.shell_chrome._STAGES).
 GLOBAL = "Global"
 LIBRARY = "Library"
-TRACE_GT = "Trace GT"
 CORRECT = "Correct"
-SCOPES: tuple[str, ...] = (GLOBAL, LIBRARY, TRACE_GT, CORRECT)
+SCOPES: tuple[str, ...] = (GLOBAL, LIBRARY, CORRECT)
 
 Kind = Literal["shortcut", "key", "gesture"]
 SHORTCUT: Kind = "shortcut"
 KEY: Kind = "key"
 GESTURE: Kind = "gesture"
 
-#: Alt+1 … Alt+6 select the six ribbon stages in order (``shell_chrome.STAGES``).
-STAGE_KEYS: tuple[str, ...] = tuple(f"Alt+{i}" for i in range(1, 7))
+#: Alt+1 … Alt+5 select the five ribbon stages in order (``shell_chrome.STAGES``).
+STAGE_KEYS: tuple[str, ...] = tuple(f"Alt+{i}" for i in range(1, 6))
 
 #: 1 … 9, then 0: the class keys (the n-th labelled class; 0 = Ignore).
 CLASS_KEYS: tuple[str, ...] = tuple(str(n) for n in (*range(1, 10), 0))
@@ -147,21 +145,6 @@ def _library_rows() -> list[tuple]:
     ]
 
 
-def _paint_editor_rows() -> list[tuple]:
-    """Trace GT's painting bindings (its ``RasterEditorBase`` installs them)."""
-    return [
-        *_history_rows(),
-        ("save", ("Ctrl+S",), "Save"),
-        ("brush", ("B",), "Brush (tap); hold B and scroll to resize the brush", KEY),
-        ("eraser", ("E",), "Eraser"),
-        ("fill", ("F",), "Fill a closed outline"),
-        ("toggle_overlay", ("H",), "Show or hide the overlay"),
-        ("brush_smaller", ("[",), "Smaller brush"),
-        ("brush_larger", ("]",), "Larger brush"),
-        *_canvas_rows(SHORTCUT),
-    ]
-
-
 def _correct_rows() -> list[tuple]:
     """The unified Correct stage: the mask, the skeleton and the class labels, one scope
     (spec section 6; the layer keys are letters, the digits pick a class: one key, one
@@ -225,28 +208,15 @@ REGISTRY: tuple[ShortcutSpec, ...] = (
             (
                 "go_to_stage",
                 STAGE_KEYS,
-                "Go to stage 1–6 in ribbon order (Library … Visualize)",
+                "Go to stage 1–5 in ribbon order (Library … Visualize)",
                 SHORTCUT,
-                "Alt+1 … Alt+6",
+                "Alt+1 … Alt+5",
             ),
             ("next_image", ("PgDown",), "Next image (editors save or ask first)"),
             ("previous_image", ("PgUp",), "Previous image"),
         ],
     ),
     *_rows(LIBRARY, _library_rows()),
-    *_rows(
-        TRACE_GT,
-        [
-            *_paint_editor_rows(),
-            (
-                "select_class",
-                CLASS_KEYS,
-                "Pick the n-th labelled class; 0 = Ignore",
-                SHORTCUT,
-                "1–9, 0",
-            ),
-        ],
-    ),
     *_rows(CORRECT, _correct_rows()),
 )
 
@@ -315,7 +285,7 @@ def install_shortcuts(
     """Create one ``QShortcut`` per registry key for each action in ``handlers``.
 
     A handler is one callable for every key of the action, or a sequence with
-    one callable per key (``go_to_stage``: Alt+1 … Alt+6).
+    one callable per key (``go_to_stage``: Alt+1 … Alt+5).
 
     ``context`` defaults to ``WindowShortcut``: the keys work wherever the keyboard is
     in ``widget``'s window while ``widget`` is on screen (Qt ignores the shortcuts of a

@@ -1,6 +1,6 @@
 """A stray letter in an editor stage does not switch the image being edited (V5).
 
-The library tree keeps the keyboard in Correct and Trace GT while the arrow keys browse
+The library tree keeps the keyboard in Correct while the arrow keys browse
 (W1), so a letter that is no shortcut went to the tree's type-ahead: "L" jumped to the next
 "L…" row and, 40 ms later, that image opened in the editor, or the unsaved-changes prompt
 came up with nothing on screen to say why ("T" left the selection on a tube row while the
@@ -116,9 +116,8 @@ def edited_image(window, editor) -> str | None:
 
 
 # ===================================================================== editor stages
-@pytest.mark.parametrize("stage", ["Correct", "Trace GT"])
-def test_a_stray_letter_neither_moves_the_selection_nor_switches_the_image(window, stage):
-    editor = in_stage(window, stage)
+def test_a_stray_letter_neither_moves_the_selection_nor_switches_the_image(window):
+    editor = in_stage(window, "Correct")
     tree = window.file_list
 
     type_keys(tree, *plain(Qt.Key.Key_L, Qt.Key.Key_T, Qt.Key.Key_G), (Qt.Key.Key_L, SHIFT))
@@ -157,9 +156,8 @@ def test_typed_text_from_an_input_method_does_not_move_the_selection(window):
     assert tree.currentItem() is leaf(window, 1)
 
 
-@pytest.mark.parametrize("stage", ["Correct", "Trace GT"])
-def test_arrows_page_keys_and_home_end_keep_browsing_in_the_editors(window, stage):
-    editor = in_stage(window, stage)
+def test_arrows_page_keys_and_home_end_keep_browsing_in_the_editor(window):
+    editor = in_stage(window, "Correct")
     tree = window.file_list
 
     type_keys(tree, *plain(Qt.Key.Key_Down))

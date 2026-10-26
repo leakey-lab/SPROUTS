@@ -45,7 +45,7 @@ _MAX_LISTED_ERRORS = 10
 _EXPORT_LABEL = "Export"
 _CLOSE_LABEL = "Close"
 _NOTHING_TRACED = (
-    "No image in this folder has a GT tracing yet. Trace some in the Trace GT stage first."
+    "No image in this folder has class labels yet. Paint some on the Correct page (G) first."
 )
 
 
@@ -212,8 +212,8 @@ class ExportDatasetDialog(QDialog):
         self.only_complete_check = QCheckBox("Only fully checked images")
         self.only_complete_check.setChecked(True)
         self.only_complete_check.setToolTip(
-            "Skip images on which some class was never checked in the Trace GT class "
-            "panel (a class with pixels counts as checked)."
+            "Skip images on which some class was never checked in the class panel of "
+            "Correct (a class with pixels counts as checked)."
         )
         layout.addWidget(self.only_complete_check)
 

@@ -3,15 +3,14 @@
 ONE chrome row on top (:class:`ShellTopbar`, 46 px) and ONE status band at the
 bottom (:class:`StatusLine`, 28 px)::
 
-    [logo SPROUTS] | Library  Trace GT  Generate  Correct  … | <stage actions> | [load]
+    [logo SPROUTS] | Library  Generate  Correct  Measure  … | <stage actions> | [load]
     ● <status message>                         <task progress · ETA · Cancel>   <device>
 
 Topbar
-    Six stages: Library, then Trace GT (hand-traced multi-class ground truth,
-    independent of the ML pipeline), then the measurement pipeline: Generate,
-    Correct (the mask, the skeleton and the class labels of an image on one canvas;
-    its page holds the GT actions Classes…, Export dataset… and Remove GT…, so the
-    Trace GT page is empty until WG-T11 removes that stage), Measure, Visualize.
+    Five stages: Library, then the measurement pipeline: Generate, Correct (the
+    mask, the skeleton and the class labels of an image on one canvas; its page
+    holds the GT actions Classes…, Export dataset… and Remove GT…), Measure,
+    Visualize.
     Each stage button forwards to its MainWindow handler and shows its per-stage
     actions on the right (a stack sized to the CURRENT page only).
 
@@ -20,8 +19,9 @@ Topbar
     shows its icon and name. Below it (with a 24 px hysteresis) the unchecked stages
     become icon-only and the wordmark hides; the checked stage keeps its name,
     and every button keeps ``text()``, its accessible name and its "name —
-    description" tooltip. That keeps the window's minimum width well under
-    900 px instead of the ~1.2-1.9k px the full row needs.
+    description" tooltip. That keeps the window's minimum width under 900 px
+    (about 880 px with the app's fonts) instead of the about 1160 px the full row
+    needs.
 
 Statusline
     The message is bound to ``mw.status_bar.messageChanged`` (every existing
@@ -31,7 +31,7 @@ Statusline
     driver in the thread pool, the chip reading "Checking GPU…" meanwhile, and the
     full runtime line replaces that once torch has resolved it).
 
-Contract kept: ``mw.ribbon`` (the topbar), ``mw.ribbon_buttons`` (six keys, in
+Contract kept: ``mw.ribbon`` (the topbar), ``mw.ribbon_buttons`` (five keys, in
 order), ``mw.action_bar_stack``, ``mw.action_bar_viz_seg``,
 ``mw._populate_action_bar``, ``mw._activate_action_stage``,
 ``mw.statusline_message`` and ``mw.statusline_info``.
@@ -111,7 +111,6 @@ def _vrule() -> QFrame:
 # --------------------------------------------------------------------------- #
 _STAGES = [
     ("Library", "Library", "image", "Browse and select minirhizotron images from the tree."),
-    ("Trace GT", "Trace GT", "layers", "Paint ground-truth classes for a segmentation dataset."),
     (
         "Generate",
         "Generate",
@@ -122,7 +121,8 @@ _STAGES = [
         "Correct",
         "Correct",
         "brush",
-        "Fix the mask (area) and the skeleton (length) of an image on one canvas.",
+        "Fix the model's mask (area) and skeleton (length), and paint class labels "
+        "(GT for training), on one canvas.",
     ),
     ("Measure", "Measure", "ruler", "Compute root length (mm) and area (mm²)."),
     ("Visualize", "Visualize", "chart", "Explore length & area trends across the trial."),
@@ -134,7 +134,6 @@ STAGES = _STAGES
 #: Editor panels -> the stage that owns them. An editor can refuse to be left
 #: (unsaved edits), so after a stage click the panel actually shown wins.
 _EDITOR_STAGES = {
-    Panel.GT_TRACING: "Trace GT",
     Panel.CORRECT: "Correct",
 }
 
@@ -319,11 +318,8 @@ class ShellTopbar(QFrame):
         """Run the MainWindow handler that opens ``key``'s page."""
         mw = self._mw
         index = mw.right_panel.currentIndex()
-        if key == "Trace GT":
-            if index != Panel.GT_TRACING:  # enter-only: never toggles the editor off
-                mw.toggle_gt_tracing()
-        elif key == "Correct":
-            if index != Panel.CORRECT:
+        if key == "Correct":
+            if index != Panel.CORRECT:  # enter-only: never toggles the editor off
                 mw.toggle_correct()
         elif key == "Visualize":
             # The highlighted dashboard opens (or its page says what to run first), never
@@ -375,7 +371,6 @@ class ShellTopbar(QFrame):
 
         pages = {
             "Library": (mw.action_bar_view_seg,),
-            "Trace GT": (),  # its GT actions are the Correct page's (WG-T11 removes the stage)
             "Generate": (mw.generate_all_button, mw.generate_button),
             # "Clear mask" / "Clear skeleton" / "Clear class labels": follows the edited
             # layer, clears it; then the GT actions (the class editor, the dataset export,

@@ -148,12 +148,8 @@ def test_without_side_chrome_nothing_changes(app):
 
 
 # ------------------------------------------------------ the main window (once wired)
-@pytest.mark.parametrize(
-    "stage, layer", [("Trace GT", None), ("Correct", "mask"), ("Correct", "classes")]
-)
-def test_the_main_window_keeps_toasts_off_the_editor_side_panels(
-    app, tmp_path, monkeypatch, stage, layer
-):
+@pytest.mark.parametrize("layer", ["mask", "classes"])
+def test_the_main_window_keeps_toasts_off_the_editor_side_panels(app, tmp_path, monkeypatch, layer):
     """Runs once MainWindow passes ``side=`` (see the R-SHELL-B cross-package request).
     On the Correct page the side card holds the Layers panel, and the class panel below it
     while the class labels are edited (WG-T5): the toasts keep clear of both."""
@@ -191,13 +187,12 @@ def test_the_main_window_keeps_toasts_off_the_editor_side_panels(
         item = window.library_index.leaves()[0]
         window.file_list.setCurrentItem(item)
         window.on_tree_item_clicked(item, 0)
-        window.ribbon_buttons[stage].click()
+        window.ribbon_buttons["Correct"].click()
         settle()
-        editor = window._editors()[window.right_panel.currentIndex()]
-        if layer is not None:
-            editor.set_active_layer(layer)
-            settle()
-        names = ("class_panel",) if layer is None else ("layer_panel", "class_panel")
+        editor = window.correct_editor
+        editor.set_active_layer(layer)
+        settle()
+        names = ("layer_panel", "class_panel")
         panels = [getattr(editor, name) for name in names if getattr(editor, name).isVisible()]
         assert panels and (layer != "classes" or len(panels) == 2)
         for text in ("Loaded 3 images", "Saved D:/data/project/root_lengths.csv", LONG):

@@ -139,7 +139,7 @@ class LibraryTree(QTreeWidget):
 
 
 def _no_editor_on_screen(main_window) -> bool:
-    """True unless an editor page (Correct, Trace GT) is on screen."""
+    """True unless the editor page (Correct) is on screen."""
     editor_canvas = getattr(main_window, "_editor_canvas", None)
     return not callable(editor_canvas) or editor_canvas() is None
 
