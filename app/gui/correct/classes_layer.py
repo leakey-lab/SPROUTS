@@ -7,8 +7,9 @@ Qt-free :class:`~app.gui.correct.classes_document.ClassesDocument` (the class-id
 (:attr:`ClassesLayer.brush_color`) while its ring, rail and row keep the layer's purple;
 Fill reads the active class's outlines only; each class keeps its own brush size.
 
-While ``gt/classes.json`` is invalid the layer is read-only: a press, Clear and a tick are
-refused, the first refusal on an image with one danger notice; Save reports why. After an
+While ``gt/classes.json`` is invalid the layer is read-only: a press, Clear, a tick and the
+page's Classes… are refused (:meth:`ClassesLayer.locked`), the first refusal on an image with
+one danger notice; Save reports why. After an
 open that sent unknown classes to Ignore, ``save_needs_prompt`` is True until a save, so
 PgDn asks instead of saving silently (``GuardedSaveLayer``). The page hears of every change
 the class panel shows through ``on_classes_changed``: an open, a save, Discard, a new
@@ -96,7 +97,7 @@ class ClassesLayer(RasterLayer):
     def set_ticked(self, key: str, on: bool) -> bool:
         """Tick (or untick) ``key``'s "checked" box; False when refused (the class has
         pixels, Ignore, read-only). The page hears of it either way."""
-        done = not self._locked() and self.document.set_ticked(key, on)
+        done = not self.locked() and self.document.set_ticked(key, on)
         if done:
             self._changed()
         self._classes_changed()
@@ -225,7 +226,7 @@ class ClassesLayer(RasterLayer):
     # ------------------------------------------------------------------ editing
     def press(self, pos: QPoint, modifiers: Qt.KeyboardModifier) -> None:
         """``RasterLayer.press``, refused while read-only (the ring still follows)."""
-        if self._locked():
+        if self.locked():
             self.finish_gesture()
             self._footprint.place(pos)
             return
@@ -233,16 +234,16 @@ class ClassesLayer(RasterLayer):
 
     def clear(self) -> bool:
         """``RasterLayer.clear``; False while read-only (or nothing is open)."""
-        return False if self._locked() else super().clear()
+        return False if self.locked() else super().clear()
 
     def replace_plane(self, plane) -> bool:
         """``RasterLayer.replace_plane``; False while read-only (no history entry)."""
-        return False if self._locked() else super().replace_plane(plane)
+        return False if self.locked() else super().replace_plane(plane)
 
-    # ------------------------------------------------------------------ internals
-    def _locked(self) -> bool:
-        """True while an open document is read-only; the first refusal on an image says why
-        (one danger notice), later ones say nothing (the status says it)."""
+    def locked(self) -> bool:
+        """True while an open document is read-only: the caller refuses its edit. The first
+        refusal on an image says why (one danger notice), later ones say nothing (the status
+        says it). The page's Classes… asks it too."""
         document = self.document
         if not (document.is_open() and document.is_read_only()):
             return False
@@ -252,6 +253,7 @@ class ClassesLayer(RasterLayer):
             self._host.notify(notice, "danger")
         return True
 
+    # ------------------------------------------------------------------ internals
     def _on_patch(self, patch: Patch, forward: bool) -> None:
         """Every plane change: the class counts follow the patch first (dirty reads them)."""
         self.document.count_patch(patch, forward)

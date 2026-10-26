@@ -428,14 +428,14 @@ KEYS = {
     "Esc": (Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
     "F": (Key.Key_F, Qt.KeyboardModifier.NoModifier),
     "E": (Key.Key_E, Qt.KeyboardModifier.NoModifier),
-    "2": (Key.Key_2, Qt.KeyboardModifier.NoModifier),
+    "L": (Key.Key_L, Qt.KeyboardModifier.NoModifier),
     "X": (Key.Key_X, Qt.KeyboardModifier.NoModifier),
     "H": (Key.Key_H, Qt.KeyboardModifier.NoModifier),
     "B": (Key.Key_B, Qt.KeyboardModifier.NoModifier),
     "Ctrl+S": (Key.Key_S, CTRL),
     "PgDn": (Key.Key_PageDown, Qt.KeyboardModifier.NoModifier),
 }
-ENDS_THE_VIEW_DRAG = {"2", "X", "PgDn"}
+ENDS_THE_VIEW_DRAG = {"L", "X", "PgDn"}
 
 
 def replay_file(tmp_path, plane_values: np.ndarray) -> np.ndarray:

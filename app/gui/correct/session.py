@@ -6,8 +6,10 @@ state, saving (one summary toast, one report per layer save attempt) and the one
 unsaved-changes prompt. Before each layer save it asks its ``SaveGate``
 (``app.gui.correct.save_gate``), which may ask the user first, decline the save, or read
 the layer again when its file changed on disk; Discard, too, reads such a layer again
-instead of reverting it to a stale copy. It drives the layers only through ``EditLayer``
-and reaches the UI only through the callbacks it is given, so it runs without Qt.
+instead of reverting it to a stale copy. What the open documents were read from (the
+image's and the layers' file stamps) is its ``ImageStamps`` (``app.gui.correct.stamps``).
+It drives the layers only through ``EditLayer`` and reaches the UI only through the
+callbacks it is given, so it runs without Qt.
 
 Gestures first: every call that saves, prompts, opens, closes or reloads first ends a
 drag in progress (``finish_gestures``), so a stroke it commits is saved or prompted for
@@ -23,6 +25,7 @@ from app.editing.journal import EditJournal
 from app.gui.correct import save_gate
 from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome
 from app.gui.correct.save_gate import CANCEL, DISCARD, KEEP, SAVE, Prompts, SaveGate, SaveReport
+from app.gui.correct.stamps import ImageStamps
 
 # The answers, Prompts and SaveReport live in save_gate; the session's callers import them here.
 __all__ = ["CANCEL", "DISCARD", "KEEP", "SAVE", "CorrectSession", "Prompts", "SaveReport"]
@@ -33,15 +36,6 @@ def _join_nouns(nouns: Sequence[str]) -> str:
     if len(nouns) < 2:
         return "".join(nouns)
     return f"{', '.join(nouns[:-1])} and {nouns[-1]}"
-
-
-def _file_stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a readable file, ``(path, None)`` otherwise."""
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return (path, None)
-    return (path, stat.st_mtime_ns, stat.st_size)
 
 
 def _by_id(layers: Sequence[EditLayer]) -> dict[str, EditLayer]:
@@ -109,8 +103,7 @@ class CorrectSession:
         self._on_saved = on_saved
         self._size: tuple[int, int] = (0, 0)
         self._images_base_folder: str | None = None
-        self._stamps: dict[str, tuple] = {}
-        self._image_stamp: tuple = ()
+        self._stamps = ImageStamps()  # what the open documents were read from
         self._dirty = False
         self._batch_depth = 0
         self._stale = False  # a sync is owed at the end of the outermost batch
@@ -137,7 +130,7 @@ class CorrectSession:
             self.image_path = image_path
             self._size = size
             self._images_base_folder = images_base_folder
-            self._image_stamp = _file_stamp(image_path)
+            self._stamps.image_opened(image_path)
             self._open_layers(ahead or {})
 
     def reload_documents(self) -> None:
@@ -159,22 +152,16 @@ class CorrectSession:
                 layer.close()
             self.journal.clear()
             self.image_path = ""
-            self._stamps = {}
+            self._stamps.clear()
             self._gate.forget()
-            self._image_stamp = ()
 
     def files_changed(self) -> bool:
         """True when any layer's ``file_stamps()`` differ from those at open (or reload)."""
-        if not self.image_path:
-            return False
-        return any(
-            layer.file_stamps() != self._stamps.get(layer_id)
-            for layer_id, layer in self.layers.items()
-        )
+        return bool(self.image_path) and self._stamps.files_changed(self.layers)
 
     def image_changed(self) -> bool:
         """True when the image file's stamp differs from the one at open."""
-        return bool(self.image_path) and _file_stamp(self.image_path) != self._image_stamp
+        return bool(self.image_path) and self._stamps.image_changed(self.image_path)
 
     def saved_stamps(self) -> dict[str, tuple] | None:
         """Each layer's file stamps at open or at its last save, while every layer is clean
@@ -182,8 +169,12 @@ class CorrectSession:
         the image back to its read-ahead when it leaves it). None otherwise."""
         if not self.image_path or self.is_dirty():
             return None
-        stamps = {layer_id: layer.file_stamps() for layer_id, layer in self.layers.items()}
-        return stamps if stamps == self._stamps else None
+        return self._stamps.held(self.layers)
+
+    def take_stamps(self, layer_id: str) -> None:
+        """``layer_id`` wrote a file of its own outside a save (Classes…: gt/classes.json):
+        its file stamps are taken again, so that is no change on disk (the save guard stays)."""
+        self._stamps.retake(layer_id, self.layers[layer_id])
 
     def _open_layers(self, ahead: Mapping[str, object] | None = None) -> None:
         args = (self.image_path, self._size, self._images_base_folder)
@@ -199,7 +190,7 @@ class CorrectSession:
     def _take(self, layer_id: str) -> None:
         """``layer_id``'s files hold its saved state: take its file and write stamps."""
         layer = self.layers[layer_id]
-        self._stamps[layer_id] = layer.file_stamps()
+        self._stamps.take(layer_id, layer)
         self._gate.take(layer_id, layer)
 
     def _reopen(self, layer_id: str) -> None:
@@ -308,7 +299,7 @@ class CorrectSession:
                 outcome = self._gate.before_save(layer_id, layer, ask=ask)
                 if outcome is None:
                     outcome = layer.save()
-                if outcome.ok and layer_id in self._stamps:
+                if outcome.ok and self._stamps.has(layer_id):
                     self._take(layer_id)
                 outcomes.append(outcome)
                 self._on_saved(outcome)
@@ -381,7 +372,7 @@ class CorrectSession:
         self._stale = True  # inside a batch: its end refreshes the page
         for layer_id in layer_ids:
             layer = self.layers[layer_id]
-            changed = layer.file_stamps() != self._stamps.get(layer_id)
+            changed = self._stamps.layer_changed(layer_id, layer)
             if changed and not save_gate.matches_disk_of(layer):
                 self._reopen(layer_id)
                 self._on_notice(save_gate.reloaded_message(layer.noun), "info")

@@ -229,13 +229,11 @@ def test_an_invalid_registry_makes_the_document_read_only(gt_project_bad_registr
 
     notices = doc.open(gt_project_bad_registry.image, (W, H))
 
-    assert doc.is_read_only() and doc.status().label == "Read-only" and notices[0].kind == "danger"
+    # The open sends no notice: the status says it, and the layer's first refused edit
+    # (LOCKED_NOTICE, once per image; review WG-T5 r1).
+    assert doc.is_read_only() and doc.status().label == "Read-only" and notices == []
     assert doc.status() == LayerStatus(
-        "error", "Read-only", f"gt/classes.json is invalid: {doc.registry_error}"
-    )
-    assert notices[0].message == (
-        f"gt/classes.json is invalid ({doc.registry_error}): the class labels are read-only. "
-        "Fix the file, then reopen the image."
+        "error", "Read-only", f"gt/classes.json is invalid: {doc.registry_error}", local=True
     )
     assert doc.registry == default_registry()
     assert doc.set_ticked("root_tip", True) is False

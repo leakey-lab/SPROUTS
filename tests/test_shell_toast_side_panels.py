@@ -148,9 +148,15 @@ def test_without_side_chrome_nothing_changes(app):
 
 
 # ------------------------------------------------------ the main window (once wired)
-@pytest.mark.parametrize("stage", ["Trace GT", "Correct"])
-def test_the_main_window_keeps_toasts_off_the_editor_side_panels(app, tmp_path, monkeypatch, stage):
-    """Runs once MainWindow passes ``side=`` (see the R-SHELL-B cross-package request)."""
+@pytest.mark.parametrize(
+    "stage, layer", [("Trace GT", None), ("Correct", "mask"), ("Correct", "classes")]
+)
+def test_the_main_window_keeps_toasts_off_the_editor_side_panels(
+    app, tmp_path, monkeypatch, stage, layer
+):
+    """Runs once MainWindow passes ``side=`` (see the R-SHELL-B cross-package request).
+    On the Correct page the side card holds the Layers panel, and the class panel below it
+    while the class labels are edited (WG-T5): the toasts keep clear of both."""
     import time
 
     from PyQt6.QtCore import QSettings
@@ -188,16 +194,22 @@ def test_the_main_window_keeps_toasts_off_the_editor_side_panels(app, tmp_path, 
         window.ribbon_buttons[stage].click()
         settle()
         editor = window._editors()[window.right_panel.currentIndex()]
-        panel = getattr(editor, "class_panel", None) or editor.layer_panel
+        if layer is not None:
+            editor.set_active_layer(layer)
+            settle()
+        names = ("class_panel",) if layer is None else ("layer_panel", "class_panel")
+        panels = [getattr(editor, name) for name in names if getattr(editor, name).isVisible()]
+        assert panels and (layer != "classes" or len(panels) == 2)
         for text in ("Loaded 3 images", "Saved D:/data/project/root_lengths.csv", LONG):
             window.notify(text, "danger" if text == LONG else "success")
         QTest.qWait(50)
         settle()
-        assert panel.isVisible()
-        panel_box = QRect(panel.mapTo(window, QPoint(0, 0)), panel.size())
+        assert all(panel.isVisible() for panel in panels)
+        boxes = [QRect(panel.mapTo(window, QPoint(0, 0)), panel.size()) for panel in panels]
         for toast in window.toasts.toasts():
             assert window.rect().contains(toast.geometry())
-            assert not toast.geometry().intersects(panel_box), toast.message()
+            for panel_box in boxes:
+                assert not toast.geometry().intersects(panel_box), toast.message()
     finally:
         for editor in window._editors().values():
             editor.maybe_save_changes = lambda: True

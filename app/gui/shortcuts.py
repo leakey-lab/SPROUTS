@@ -51,6 +51,7 @@ __all__ = [
     "CORRECT",
     "SCOPES",
     "STAGE_KEYS",
+    "CLASS_KEYS",
     "ShortcutSpec",
     "REGISTRY",
     "specs_for",
@@ -76,6 +77,9 @@ GESTURE: Kind = "gesture"
 
 #: Alt+1 … Alt+6 select the six ribbon stages in order (``shell_chrome.STAGES``).
 STAGE_KEYS: tuple[str, ...] = tuple(f"Alt+{i}" for i in range(1, 7))
+
+#: 1 … 9, then 0: the class keys (the n-th labelled class; 0 = Ignore).
+CLASS_KEYS: tuple[str, ...] = tuple(str(n) for n in (*range(1, 10), 0))
 
 
 @dataclass(frozen=True)
@@ -159,23 +163,43 @@ def _paint_editor_rows() -> list[tuple]:
 
 
 def _correct_rows() -> list[tuple]:
-    """The unified Correct stage: both layers, one scope (spec section 6)."""
+    """The unified Correct stage: the mask, the skeleton and the class labels, one scope
+    (spec section 6; the layer keys are letters, the digits pick a class: one key, one
+    meaning)."""
     return [
         *_history_rows(),
         ("save", ("Ctrl+S",), "Save the unsaved layers (nothing unsaved: the active layer)"),
-        ("mask_layer", ("1",), "Edit the mask (root area)"),
-        ("skeleton_layer", ("2",), "Edit the skeleton (root length)"),
-        ("swap_layer", ("X",), "Switch between the mask and the skeleton"),
-        ("brush", ("B",), "Mask brush (tap); hold B and scroll to resize the brush", KEY),
-        ("fill", ("F",), "Mask fill: fill a closed outline"),
+        ("mask_layer", ("M",), "Edit the mask (root area)"),
+        ("skeleton_layer", ("L",), "Edit the skeleton (root length)"),
+        ("classes_layer", ("G",), "Edit the class labels (GT for training)"),
+        ("swap_layer", ("X",), "Switch to the previous layer"),
+        (
+            "select_class",
+            CLASS_KEYS,
+            "Pick the n-th class; 0 = Ignore (class labels layer only)",
+            SHORTCUT,
+            "1–9, 0",
+        ),
+        (
+            "brush",
+            ("B",),
+            "Brush of the mask or the class labels (tap; from the skeleton: the mask's); "
+            "hold B and scroll to resize it",
+            KEY,
+        ),
+        (
+            "fill",
+            ("F",),
+            "Fill a closed outline of the mask or the class labels (from the skeleton: the mask's)",
+        ),
         ("select_tool", ("V",), "Skeleton select: pick a branch"),
         ("polyline", ("P",), "Skeleton polyline"),
         ("connect", ("C",), "Skeleton connect: drag from an endpoint to another point"),
         ("eraser", ("E",), "Eraser of the active layer"),
         ("size_smaller", ("[",), "Smaller brush or eraser"),
         ("size_larger", ("]",), "Larger brush or eraser"),
-        ("toggle_layers", ("H",), "Show or hide both layers (see the photo)"),
-        ("toggle_reference", ("Shift+H",), "Show or hide the other layer"),
+        ("toggle_layers", ("H",), "Show or hide every layer (see the photo)"),
+        ("toggle_reference", ("Shift+H",), "Show or hide the other layers"),
         ("smooth", ("S",), "Smooth the polyline (Polyline tool)", KEY),
         *_canvas_rows(SHORTCUT),
         ("finish_line", ("Enter",), "Finish the polyline", KEY),
@@ -216,7 +240,7 @@ REGISTRY: tuple[ShortcutSpec, ...] = (
             *_paint_editor_rows(),
             (
                 "select_class",
-                tuple(str(n) for n in (*range(1, 10), 0)),
+                CLASS_KEYS,
                 "Pick the n-th labelled class; 0 = Ignore",
                 SHORTCUT,
                 "1–9, 0",

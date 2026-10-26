@@ -3,9 +3,11 @@
 The right panel shows one page at a time (:class:`~app.gui.panels.Panel`); leaving an
 editor first offers to save its pending edits, and an editor the user keeps editing
 refuses the switch. The window follows the editors' reports: their notices (toasts; a
-save's toast, worded alike in both editors, updates in place), the title's unsaved marker,
-a saved or removed mask (the Library badge and the metrics), B held on the Correct canvas,
-and the corrected skeleton of the image open in Correct (display only, FR-03).
+save's toast, worded alike in both editors, updates in place, as does Remove GT's), the
+title's unsaved marker, a saved or removed mask, skeleton or class labels and Remove GT…
+(the Library badge's GT marks and the metrics), B held on the Correct canvas, and the GT
+skeleton of the image open in Correct (measured first, O1; the Library follows it through
+the editor's ``dirty_changed``).
 
 These are functions of the window, bound as :class:`~app.gui.main_window.MainWindow`
 methods under their old names (``MainWindow.switch_right_panel`` is
@@ -17,6 +19,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from app.gt.files import gt_files
 from app.naming import image_stem
 
 from ..image_manager import project_layout_of
@@ -30,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 #: The one toast of the editors' saves: a newer save updates it in place (V6).
 SAVED_TOAST = "editor-saved"
+#: The notices that are that toast: a save's summary and Remove GT's.
+_SAVED_PREFIXES = ("Saved ", "Removed GT ")
 
 
 def editors(window: "MainWindow") -> dict:
@@ -49,16 +54,45 @@ def editor_canvas(window: "MainWindow"):
 
 
 def on_editor_notice(window: "MainWindow", message: str, kind: str) -> None:
-    """An editor's notice as a toast. A save's summary ("Saved mask · X.jpg") is the one
-    keyed save toast: saving again, or paging on with PgDn, updates it in place instead of
-    stacking copies (V6). Every other notice, a failed save's among them, shows as is."""
-    key = SAVED_TOAST if kind == "success" and message.startswith("Saved ") else None
+    """An editor's notice as a toast. A save's summary ("Saved mask · X.jpg") and Remove
+    GT's ("Removed GT · X.jpg") are the one keyed save toast: saving again, or paging on
+    with PgDn, updates it in place instead of stacking copies (V6). Every other notice, a
+    failed save's among them, shows as is."""
+    key = SAVED_TOAST if kind == "success" and message.startswith(_SAVED_PREFIXES) else None
     window.notify(message, kind, key=key)
 
 
 def on_gt_saved(window: "MainWindow", image_path: str) -> None:
-    """Trace GT wrote a tracing: the editors' save toast, worded as Correct's (V6)."""
+    """Class labels were written (Trace GT, or the Correct page's class labels): the
+    Library's class-label mark and row, the metrics bar's status ("Classes: traced") and
+    the editors' save toast (V6; Correct's own summary then updates it in place)."""
     window.notify(f"Saved GT · {os.path.basename(image_path)}", key=SAVED_TOAST)
+    stem = image_stem(image_path)
+    window.image_manager.set_gt(stem, "labels", True)
+    window.library_index.refresh_status(stem)
+    window.metrics.refresh_if_current(stem)
+
+
+def on_gt_removed(window: "MainWindow", image_path: str) -> None:
+    """Remove GT… deleted the GT files of ``image_path``: the Library's three GT marks follow
+    the disk (a file that could not be deleted keeps its mark), then its row and the
+    metrics (Measure reads GT first, O1). The page's own toast says what went."""
+    manager, stem = window.image_manager, image_stem(image_path)
+    layout = project_layout_of(manager)
+    found = None if layout is None else gt_files(layout, stem)
+    for kind in ("mask", "skeleton", "labels"):
+        manager.set_gt(stem, kind, found is not None and getattr(found, kind) is not None)
+    window.library_index.refresh_status(stem)
+    window.metrics.refresh_if_current(stem)
+
+
+def on_skeleton_cleared(window: "MainWindow", image_path: str) -> None:
+    """A skeleton equal to the prediction removed its GT file: the Library's skeleton mark,
+    the row and the metrics follow (Measure now reads the prediction)."""
+    stem = image_stem(image_path)
+    window.image_manager.set_gt(stem, "skeleton", False)
+    window.library_index.refresh_status(stem)
+    window.metrics.refresh_if_current(stem)
 
 
 def sync_window_modified(window: "MainWindow", *_args) -> None:
@@ -75,11 +109,12 @@ def on_editor_dirty_changed(window: "MainWindow", *_args) -> None:
 
 def sync_open_correction(window: "MainWindow") -> None:
     """Keep the Library's GT-skeleton state of the image open in Correct in step with
-    the disk (W17, display only: Measure reads the generated skeleton, FR-03).
+    the disk (W17; a GT skeleton is measured, O1, WG-T8).
 
-    Correct's ``skeleton_saved`` stays unconnected (FR-03), so this runs when the
-    editor's unsaved state changes (a save) and whenever another image is selected:
-    one ``os.path.isfile`` of that image's ``gt/skeletons/<stem>.png``.
+    Correct's ``skeleton_saved`` stays unconnected: the Library follows a GT skeleton
+    through the editor's ``dirty_changed``, so this runs when the editor's unsaved state
+    changes (a save) and whenever another image is selected: one ``os.path.isfile`` of
+    that image's ``gt/skeletons/<stem>.png``.
     """
     manager = window.image_manager
     path = getattr(window.correct_editor, "current_image_path", "")

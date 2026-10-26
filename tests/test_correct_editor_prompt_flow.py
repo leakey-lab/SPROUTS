@@ -134,7 +134,7 @@ def test_a_failed_save_trusts_nothing_new(make_editor, project, monkeypatch):
     assert editor.save() is False
     monkeypatch.undo()
 
-    assert editor.session._stamps[MASK] == editor.layers[MASK].file_stamps()
+    assert not editor.session.files_changed()  # the stamps taken at open still hold
     assert editor.has_unsaved_changes()
 
 

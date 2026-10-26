@@ -63,6 +63,7 @@ class LayerStatus:
     state: str  # "none" | "clean" | "dirty" | "error"
     label: str | None = None
     tooltip: str = ""
+    local: bool = False  # shown on the chip only while its layer is edited (a layer's lock)
 
 
 @dataclass(frozen=True)

@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
 from app.gui import canvas_gl, shortcuts  # noqa: E402
 from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.correct.layer import CLASSES, MASK, SKELETON  # noqa: E402
 from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
 from app.gui.correct.mask_tools import argb_to_plane, fill_source, mask_lut  # noqa: E402
 from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer  # noqa: E402
@@ -455,7 +455,7 @@ def test_the_page_names_the_parts_mainwindow_and_the_shell_use(make_editor):
     editor = make_editor(show=False)
     chrome, controls = editor.chrome, editor.controls
 
-    assert editor.EDITOR_NOUN == "mask and skeleton"
+    assert editor.EDITOR_NOUN == "mask, skeleton and class labels"
     assert editor.SHORTCUT_SCOPE == shortcuts.CORRECT
     assert isinstance(editor.graphics_view, EditorCanvasView)
     assert editor.scene.parent() is editor.graphics_view  # a parented scene
@@ -470,21 +470,25 @@ def test_the_page_names_the_parts_mainwindow_and_the_shell_use(make_editor):
         assert getattr(editor, name) is getattr(controls, name)
     assert isinstance(editor.layers[MASK], MaskLayer)
     assert isinstance(editor.layers[SKELETON], SkeletonLayer)
-    assert list(editor.layers) == [MASK, SKELETON] and editor.session.layers == editor.layers
-    assert set(editor.layer_panel.rows) == {MASK, SKELETON}
+    assert list(editor.layers) == [MASK, SKELETON, CLASSES]
+    assert editor.session.layers == editor.layers
+    assert set(editor.layer_panel.rows) == {MASK, SKELETON, CLASSES}
     assert editor.photo_item.scene() is editor.scene and editor.photo_item.zValue() == 0
     for layer in editor.layers.values():
         assert layer.item.scene() is editor.scene
 
 
 RAIL_TIPS = {
-    (MASK, "brush"): "Brush (B) · hold B + scroll to resize",
+    (MASK, "brush"): "Mask brush (B) · hold B + scroll to resize",
     (MASK, "eraser"): "Mask eraser (E) · [ and ] resize",
-    (MASK, "fill"): "Fill a closed outline (F)",
+    (MASK, "fill"): "Fill a closed outline in the mask (F)",
     (SKELETON, "select"): "Select (V) · pick a branch, Delete removes it",
     (SKELETON, "eraser"): "Skeleton eraser (E) · [ and ] resize",
     (SKELETON, "polyline"): "Polyline (P) · Enter finish · Esc cancel",
     (SKELETON, "connect"): "Connect endpoints (C)",
+    (CLASSES, "brush"): "Class labels brush (B) · hold B + scroll to resize",
+    (CLASSES, "eraser"): "Class labels eraser (E) · [ and ] resize",
+    (CLASSES, "fill"): "Fill a closed outline in the class labels (F)",
 }
 
 
@@ -1709,9 +1713,11 @@ def test_dock_and_panel_clicks_leave_the_keys_on_the_canvas(make_editor, project
 LONG_NAME = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.png"
 
 
-@pytest.mark.parametrize("layer_id", [MASK, SKELETON])
+@pytest.mark.parametrize("layer_id", [MASK, SKELETON, CLASSES])
 @pytest.mark.parametrize("size", [(1400, 900), (1000, 700), (820, 560), (700, 520)])
 def test_the_overlays_never_collide(make_editor, tmp_path, size, layer_id):
+    """The side card (the Layers panel, and the class panel while the class labels are
+    edited) is one overlay: its panels are placed inside it."""
     photo = write_image(str(tmp_path / LONG_NAME))
     editor = make_editor(photo, size=size)
     controls = editor.controls
@@ -1720,14 +1726,15 @@ def test_the_overlays_never_collide(make_editor, tmp_path, size, layer_id):
         click(editor, (40, 40))
         click(editor, (90, 60))  # the prompt shows
     else:
-        controls.tool_buttons[(MASK, "eraser")].click()
+        controls.tool_buttons[(layer_id, "eraser")].click()
     editor.chrome.enhance_button.click()
     settle(editor)
 
     chrome = editor.chrome
     candidates = (chrome.rail, chrome.dock, chrome.chip, chrome.zoom, chrome.popover)
-    overlays = [w for w in (*candidates, editor.layer_panel, controls.prompt) if w.isVisible()]
-    assert editor.layer_panel in overlays and chrome.popover in overlays
+    overlays = [w for w in (*candidates, editor.side_panels, controls.prompt) if w.isVisible()]
+    assert editor.side_panels in overlays and chrome.popover in overlays
+    assert editor.class_panel.isVisible() == (layer_id == CLASSES)
     assert (controls.prompt in overlays) == (layer_id == SKELETON)
     for i, a in enumerate(overlays):
         assert editor.rect().contains(a.geometry()), (a, a.geometry())
@@ -1751,7 +1758,7 @@ def test_fit_keeps_the_photo_clear_of_every_overlay(make_editor, tmp_path, size)
 
     shown = image_rect_in(editor, 640, 480)
     chrome = editor.chrome
-    for overlay in (chrome.rail, chrome.dock, chrome.chip, chrome.zoom, editor.layer_panel):
+    for overlay in (chrome.rail, chrome.dock, chrome.chip, chrome.zoom, editor.side_panels):
         assert not shown.intersects(overlay.geometry()), (overlay, shown, overlay.geometry())
     zoom = editor.graphics_view.zoom_factor
     assert editor.zoom_cluster.zoom_pct_label.text() == f"{round(zoom * 100)}%"

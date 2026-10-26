@@ -84,6 +84,8 @@ end of each wave.
 | G2 | | Trace GT v1 limits; retired classes cannot return | O24, WG-T6 (done, 8bce201), WG-T9 |
 | G4 | | Naming: trace, correct, GT, mask | O26, WG-T6 (done, 8bce201), WG-T10 |
 | E8 | | After *Generate* writes a prediction for an image open in *Correct* with unsaved edits, **Load prediction** stays off until the image is opened again (mask and skeleton layers; the page reloads only images without edits) | known, accepted (WG-T3 review) |
+| E9 | | The window's minimum width is about 917 px with real fonts while the Correct page holds four top-bar buttons (target 900); W4-T1 removes the top-bar Clear (about 110 px) | W4-T1 (its acceptance runs the width probe with real fonts) |
+| E10 | | At 700 x 520 with the Enhance popover and the polyline prompt open, the side card gets 117 px and the Classes row is cut off; Pan and Enhance move down the rail while the class labels are edited (reserving the space breaks the 700 x 520 overlay rule) | known, accepted (WG-T5 review) |
 | M6 | | With no inputs record (its write failed, or the CSV was edited by hand), the Measure status line can miss a regenerated prediction under a GT file that was not used; the metrics bar flags it, and the next Measure run writes a fresh record | known, accepted (WG-T8 review) |
 | P2 | | First image read on the GUI thread | not built now (only for images larger than 640 x 480): W6-T1 |
 | P3 | | Deflate in the skeleton history | not built now (only for large images): W6-T2 |

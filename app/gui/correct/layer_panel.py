@@ -1,9 +1,10 @@
 """The Layers panel of the Correct page: :class:`LayerPanel` (plan contract C20).
 
-One row per edit layer, the mask on top (spec section 3.2): the layer's key (1 / 2), a
-swatch in its colour, its name, an eye for its visibility and, below the name, its save
-state as a dot and a label in the status chip's colours ("Saved", "Unsaved", "Not saved",
-or the layer's own label such as "No mask", "Prediction" or "Loaded file"). The active row
+One row per edit layer, the mask on top (spec section 3.2): the layer's key (M / L / G), a
+swatch in its colour, its name (Mask, Skeleton, Classes), an eye for its visibility and,
+below the name, its save state as a dot and a label in the status chip's colours ("Saved",
+"Unsaved", "Not saved", or the layer's own label such as "No mask", "Prediction" or "Loaded
+file"). The active row
 has a raised fill and a 2 px bar in its layer's colour; a row can flash briefly (the editor
 flashes the other layer's row when Ctrl+Z undoes one of that layer's actions).
 
@@ -13,9 +14,11 @@ editor answers with :meth:`LayerPanel.set_active` and :meth:`LayerPanel.set_visi
 A click never takes the keyboard focus, so the canvas keeps its hold keys (Space, B); Tab
 reaches each row and then its eye (W18), the focused one drawn with the focus ring: Space or
 Enter on a row asks for its layer, Space on an eye toggles it, the page's keys still work.
-The editor's ``OverlayLayout`` places it in the ``side_panel`` role (right edge) through
-:meth:`LayerPanel.preferred_height` and :meth:`LayerPanel.fit_height`. It follows the GT
-class panel's look (``app.gui.class_panel``).
+On the page it is the top of the side card (``app.gui.correct.side_panels.SidePanels``, the
+``side_panel`` role at the right edge), which sizes it through
+:meth:`LayerPanel.preferred_height` and :meth:`LayerPanel.fit_height`; alone, an
+``OverlayLayout`` can place it through them too. It follows the GT class panel's look
+(``app.gui.class_panel``).
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPainterPath, 
 from PyQt6.QtWidgets import QFrame, QGridLayout, QLabel, QWidget
 
 from app.gui import shortcuts
-from app.gui.correct.layer import LAYER_IDS, EditLayer, LayerStatus
+from app.gui.correct.layer import CLASSES, LAYER_IDS, EditLayer, LayerStatus
 from app.gui.widgets import IconButton, keep_canvas_focus, tokens
 from app.gui.widgets.icons import load_icon
 from app.gui.widgets.overlays import StatusChip, _FloatingPanel
@@ -43,6 +46,8 @@ _RADIUS = 4.0
 _FLASH_ALPHA = 0.22
 # The row's own label for a state, when the layer gives none (the chip's colours).
 _STATE_LABELS = {"clean": "Saved", "dirty": "Unsaved", "error": "Not saved", "none": ""}
+# A row's name where it is not the layer's noun ("class labels") with a capital.
+_ROW_NAMES = {CLASSES: "Classes"}
 _EYE_QSS = f"""
 QToolButton#iconBtn {{
     background: transparent;
@@ -102,7 +107,7 @@ class _EyeButton(IconButton):
         ]
         self.setToolTip(
             f"{'Hide' if shown else 'Show'} the {self._noun} "
-            f"({keys[0]}: both layers, {keys[1]}: the other one)"
+            f"({keys[0]}: every layer, {keys[1]}: the others)"
         )
 
 
@@ -138,7 +143,7 @@ class LayerRow(QFrame):
         self._ring = QColor(tokens.FOCUS)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # Tab only: a click keeps the canvas keys
-        action = f"{layer.layer_id}_layer"  # the registry's layer keys: 1 = mask, 2 = skeleton
+        action = f"{layer.layer_id}_layer"  # the registry's layer keys: M, L, G
         self.setToolTip(shortcuts.tooltip(f"Edit the {layer.noun}", action, shortcuts.CORRECT))
 
         keys = shortcuts.keys_for(action, shortcuts.CORRECT)
@@ -150,7 +155,7 @@ class LayerRow(QFrame):
         self.swatch.setStyleSheet(
             f"background-color: {layer.color}; border-radius: 2px; border: none;"
         )
-        name = f"{layer.noun[:1].upper()}{layer.noun[1:]}"
+        name = _ROW_NAMES.get(layer.layer_id, f"{layer.noun[:1].upper()}{layer.noun[1:]}")
         self.setAccessibleName(f"{name} layer")
         self.name_label = _label(name, f"color: {tokens.TEXT}; font-size: 12.5px;")
         self.eye_button = _EyeButton(layer.noun)
@@ -336,7 +341,7 @@ class LayerPanel(_FloatingPanel):
         self.rows[layer_id].flash()
 
     def preferred_height(self, host_height: int) -> int:
-        """The height that shows every row (OverlayLayout hook); two rows always fit."""
+        """The height that shows every row (OverlayLayout hook); three rows always fit."""
         return self.sizeHint().height()
 
     def fit_height(self, height: int) -> None:

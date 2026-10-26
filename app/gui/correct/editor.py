@@ -1,15 +1,16 @@
-"""The Correct page: :class:`CorrectEditor` (plan contract C17), the mask and the skeleton of
-an image on one canvas.
+"""The Correct page: :class:`CorrectEditor` (plan contract C17), the mask, the skeleton and
+the class labels of an image on one canvas.
 
 A composition root (spec section 12.2) with no document, tool or history logic: the canvas
 (``EditorCanvasView``, input to the ``ToolRouter``) shows the photo (``PhotoLayerItem``, z 0)
-under the ``MaskLayer`` and the ``SkeletonLayer``; the ``CorrectSession`` opens, saves,
-prompts (``app.gui.editor_prompts``) and keeps the one undo timeline, and its report of each
-layer save becomes a ``mask_*`` or ``skeleton_*`` signal (saved / cleared) on every path; the
-overlays are the ``EditorChrome``, the ``CorrectControls`` and the ``LayerPanel``; the keys
-are the registry's Correct rows (``keys``). ``Neighbours`` (``paging``) knows the image's place
-in the library and reads the next images ahead; ``LayerPrefs`` keeps the layers' opacity and
-visibility across restarts. The editor is the layers' ``LayerHost``, by delegation.
+under the ``MaskLayer``, the ``ClassesLayer`` and the ``SkeletonLayer``; the
+``CorrectSession`` opens, saves, prompts (``app.gui.editor_prompts``) and keeps the one undo
+timeline; ``PageActions`` (``actions``) has the page's file actions and turns the session's
+save reports into the page's signals; the overlays are the ``EditorChrome``, the
+``CorrectControls`` and the side card (``SidePanels``: the Layers panel above the class
+panel); the keys are the registry's Correct rows (``keys``). ``paging`` knows the library
+position and reads the next images ahead; ``LayerPrefs`` keeps the layers' opacity and
+visibility. The editor is the layers' ``LayerHost``, by delegation.
 Every transition (tool, layer, visibility, save, paging, open, Load, Clear, leaving) first
 ends a drag in progress as its release would (the mid-gesture rule of
 :mod:`app.gui.correct.layer`); opening, a layer switch, paging and leaving also make the
@@ -22,19 +23,23 @@ import os
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QEvent, QRectF, QSettings, QSize, pyqtSignal
-from PyQt6.QtWidgets import QFileDialog, QGraphicsScene, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGraphicsScene, QVBoxLayout, QWidget
 
 from app.gui import editor_prompts, shortcuts
 from app.gui.canvas_layers.photo import PhotoLayerItem
-from app.gui.correct.chip import chip_content, show_on_chip, title
+from app.gui.class_panel import ClassPanel
+from app.gui.correct.actions import PageActions
+from app.gui.correct.chip import ChipView, title
+from app.gui.correct.classes_layer import ClassesLayer
 from app.gui.correct.controls import CorrectControls
 from app.gui.correct.keys import install_page_shortcuts
-from app.gui.correct.layer import MASK, SKELETON, LayerStatus, SaveOutcome
+from app.gui.correct.layer import CLASSES, MASK, SKELETON
 from app.gui.correct.layer_panel import LayerPanel
 from app.gui.correct.layer_prefs import LayerPrefs
 from app.gui.correct.mask_layer import MaskLayer
 from app.gui.correct.paging import Neighbours, PagingApi
 from app.gui.correct.session import CorrectSession
+from app.gui.correct.side_panels import SidePanels
 from app.gui.correct.skeleton_layer import SkeletonLayer
 from app.gui.correct.tool_router import ToolRouter
 from app.gui.editor_canvas import EditorCanvasView
@@ -51,25 +56,25 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = ["CorrectEditor"]
 
-_SKELETON_FILES = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
-
 
 class CorrectEditor(PagingApi, QWidget):
-    """The Correct stage's page: the mask (root area) and the skeleton (root length) of one
-    image on one canvas, one of them edited at a time. The parts are attributes by name
-    (``layers``, ``session``, ``router``, ``chrome``, ``controls``, ``layer_panel``, ...)."""
+    """The Correct stage's page: the mask (root area), the skeleton (root length) and the
+    class labels (GT for training) of one image on one canvas, one edited at a time. The
+    parts are attributes by name (``layers``, ``session``, ``side_panels``, ``actions`` ...)."""
 
     notice = pyqtSignal(str, str)
     dirty_changed = pyqtSignal(bool)
     mask_saved = pyqtSignal(str)  # image path: the GT mask was written (an empty one too)
     mask_cleared = pyqtSignal(str)  # image path: a mask equal to the prediction removed its GT
-    skeleton_saved = pyqtSignal(str)  # GT skeleton path (FR-03: MainWindow does not connect it)
+    skeleton_saved = pyqtSignal(str)  # GT skeleton path (measured, O1; the Library: dirty_changed)
     skeleton_cleared = pyqtSignal(str)  # image path: the skeleton equals the prediction, GT removed
+    gt_saved = pyqtSignal(str)  # image path: its class labels were written (gt/<stem>.png)
+    gt_removed = pyqtSignal(str)  # image path: Remove GT… deleted its GT files
     b_key_status_changed = pyqtSignal(bool)
     navigate_requested = pyqtSignal(int)  # PgDn / PgUp after the dirty layers were saved
     active_layer_changed = pyqtSignal(str)
 
-    EDITOR_NOUN = "mask and skeleton"
+    EDITOR_NOUN = "mask, skeleton and class labels"
     FINISH_LINE_FIRST = "Finish the line (Enter) or cancel it (Esc) first"
     SHORTCUT_SCOPE = shortcuts.CORRECT
 
@@ -79,8 +84,7 @@ class CorrectEditor(PagingApi, QWidget):
         super().__init__(parent)
         self._size = QSize()  # the open image; empty while nothing is open (no input then)
         self._photo: np.ndarray | None = None  # its decoded photo (Enhance renders from it)
-        self._chip: tuple = ()  # what the status chip shows (it is updated on changes only)
-        self._placed: tuple = (None, None)  # (path, its library position) the chip shows
+        self.previous_layer_id: str | None = None  # the layer edited before: X goes back
         self._build_parts()
         self._build_overlays()
         self._connect()
@@ -94,7 +98,7 @@ class CorrectEditor(PagingApi, QWidget):
 
     # ------------------------------------------------------------------ building
     def _build_parts(self) -> None:
-        """The canvas and its scene (photo, mask, skeleton), the session and the router."""
+        """The canvas and its scene (photo, the layers), the actions, session and router."""
         column = QVBoxLayout(self)
         column.setContentsMargins(0, 0, 0, 0)
         self.graphics_view = view = EditorCanvasView(parent=self)
@@ -105,7 +109,9 @@ class CorrectEditor(PagingApi, QWidget):
         self.photo_item.setZValue(0)
         self.scene.addItem(self.photo_item)
         self._skeleton = skeleton = SkeletonLayer(self, self.scene)
-        self.layers: dict[str, EditLayer] = {MASK: MaskLayer(self, self.scene), SKELETON: skeleton}
+        mask, classes = MaskLayer(self, self.scene), ClassesLayer(self, self.scene)
+        self.layers: dict[str, EditLayer] = {MASK: mask, SKELETON: skeleton, CLASSES: classes}
+        self.actions = actions = PageActions(self)  # file actions and save reports
         self.session = CorrectSession(
             list(self.layers.values()),
             prompts=editor_prompts,
@@ -114,7 +120,7 @@ class CorrectEditor(PagingApi, QWidget):
             on_notice=self.notice.emit,
             on_history_changed=self._refresh,
             on_undone=self._undone,
-            on_saved=self._report,
+            on_saved=actions.report,
         )
         self.router = ToolRouter(
             self.layers,
@@ -128,13 +134,17 @@ class CorrectEditor(PagingApi, QWidget):
         self.paging = Neighbours(self, self.layers)  # library position, read-ahead
 
     def _build_overlays(self) -> None:
-        """The chrome, the page's controls on it and the Layers panel (right edge)."""
+        """The chrome, the page's controls on it and the side card (right edge)."""
         self.norm_controls = NormalizationControls(self)
         self.chrome = chrome = EditorChrome(self, self.graphics_view, self.norm_controls)
         self.controls = controls = CorrectControls(self, chrome, self.layers)
         self.layer_panel = LayerPanel(list(self.layers.values()), self)
-        chrome.register(side_panel=self.layer_panel)
+        self.class_panel = ClassPanel(self)
+        self.side_panels = SidePanels(self.layer_panel, self.class_panel, self)
+        self.side_panels.bind_classes(self.layers[CLASSES], self.graphics_view, self.edit_classes)
+        chrome.register(side_panel=self.side_panels)
         chrome.order_tab_focus()  # Tab follows the screen, not the build order
+        self._chip = ChipView(chrome.chip, self.paging.position)  # changes only
         # The parts MainWindow, the shell and the tests use by name.
         self.tool_rail, self.dock, self.enhance_popover = chrome.rail, chrome.dock, chrome.popover
         self.status_chip, self.zoom_cluster = chrome.chip, chrome.zoom
@@ -148,8 +158,8 @@ class CorrectEditor(PagingApi, QWidget):
         controls.tool_requested.connect(self.request_tool)
         controls.size_changed.connect(lambda px: self._active().set_size(px))
         controls.opacity_changed.connect(lambda value: self._active().set_opacity(value))
-        controls.load_requested.connect(self.load_skeleton_file)
-        controls.prediction_requested.connect(self.load_prediction)
+        controls.load_requested.connect(self.actions.load_skeleton_file)
+        controls.prediction_requested.connect(self.actions.load_prediction)
         controls.undo_requested.connect(self.undo)
         controls.redo_requested.connect(self.redo)
         controls.clear_requested.connect(self.clear_active_layer)
@@ -188,11 +198,11 @@ class CorrectEditor(PagingApi, QWidget):
 
     @property
     def active_layer_id(self) -> str:
-        """The edited layer: ``"mask"`` or ``"skeleton"``."""
+        """The edited layer: ``"mask"``, ``"skeleton"`` or ``"classes"``."""
         return self.router.active_id
 
     def load_image(self, image_path: str, images_base_folder: str | None = None) -> None:
-        """Open ``image_path`` with its mask and skeleton, fitted (spec section 9).
+        """Open ``image_path`` with its layers, fitted (spec section 9).
 
         The open image again keeps unsaved edits; clean, it keeps documents, history and view
         unless a file changed on disk (the documents reload, same view; a changed photo opens
@@ -252,10 +262,10 @@ class CorrectEditor(PagingApi, QWidget):
         return True
 
     def navigate(self, delta: int) -> None:
-        """PgDn / PgUp: save the unsaved layers (no prompt), then ask for the next image. A
-        polyline draft that could be finished is never saved: the page stays and says so, with
-        the skeleton edited and shown, so the Enter / Esc it names reach the draft. A branch
-        picked with Select and left as it was is dropped (nothing to keep)."""
+        """PgDn / PgUp: save the unsaved layers (``PageActions.save_for_paging``), then ask for
+        the next image. A polyline draft that could be finished is never saved: the page stays
+        and says so, with the skeleton edited and shown, so the Enter / Esc it names reach the
+        draft. A branch picked with Select and left as it was is dropped (nothing to keep)."""
         self._end_drag()
         draft = self._skeleton.draft
         if draft.pending():
@@ -264,7 +274,7 @@ class CorrectEditor(PagingApi, QWidget):
             return self.notice.emit(self.FINISH_LINE_FIRST, "warn")
         if draft.plain_pick():
             self._skeleton.cancel_polyline()
-        if self.session.save_dirty().ok:  # a failed save stays (its toast says why)
+        if self.actions.save_for_paging():  # a failed save, or Cancel, stays
             self.navigate_requested.emit(delta)
 
     def set_generated_skeleton_resolver(self, resolver: GeneratedResolver | None) -> None:
@@ -275,7 +285,7 @@ class CorrectEditor(PagingApi, QWidget):
         """``provider(path)``: ``(index, count)`` of the image in the library (1-based) or
         None, for the chip's "Image 12 / 40"."""
         self.paging.set_position_provider(provider)
-        self._placed = (None, None)  # asked again
+        self._chip.forget_position()  # asked again
         self._refresh()
 
     def save(self) -> bool:
@@ -284,11 +294,11 @@ class CorrectEditor(PagingApi, QWidget):
         return bool(report.outcomes) and report.ok
 
     def undo(self) -> None:
-        """Ctrl+Z: the newest action of either layer (a polyline draft loses a point first)."""
+        """Ctrl+Z: the newest action of any layer (a polyline draft loses a point first)."""
         self.session.undo(self.active_layer_id)
 
     def redo(self) -> None:
-        """Ctrl+Y / Ctrl+Shift+Z: the newest undone action of either layer."""
+        """Ctrl+Y / Ctrl+Shift+Z: the newest undone action of any layer."""
         self.session.redo()
 
     def clear_active_layer(self) -> None:
@@ -310,18 +320,26 @@ class CorrectEditor(PagingApi, QWidget):
     def set_active_layer(self, layer_id: str) -> bool:
         """Edit ``layer_id`` (a drag in progress ends first); True when the layer changed."""
         self.session.finish_gestures()
+        previous = self.router.active_id
         if not self.router.set_active(layer_id):
             return False
+        self.previous_layer_id = previous
         self.graphics_view.end_gesture()
         self.controls.show_layer(layer_id)
-        self.layer_panel.set_active(layer_id)
+        self.side_panels.set_active_layer(layer_id)  # its row; the class panel for the labels
         self._refresh()
         self.active_layer_changed.emit(layer_id)
         return True
 
     def swap_layer(self) -> None:
-        """X: edit the other layer."""
-        self.set_active_layer(SKELETON if self.active_layer_id == MASK else MASK)
+        """X: edit the layer edited before (none yet: the mask or the skeleton, the other)."""
+        other = SKELETON if self.active_layer_id == MASK else MASK
+        self.set_active_layer(self.previous_layer_id or other)
+
+    def select_class(self, number: int) -> None:
+        """1-9, 0: paint with the n-th class (0: Ignore), while the class labels are edited."""
+        if self.active_layer_id == CLASSES:
+            self.side_panels.pick_class(number)
 
     def request_tool(self, layer_id: str, tool_id: str) -> None:
         """A tool was asked for (rail, tool key, B tap): edit its layer with it. A switched-to
@@ -339,37 +357,33 @@ class CorrectEditor(PagingApi, QWidget):
         layer.set_visible(visible)
         self.layer_panel.set_visible_state(layer_id, layer.is_visible())
 
-    def toggle_layers(self) -> None:
-        """H: hide both layers to see the photo; show both when none is shown."""
-        show = not any(layer.is_visible() for layer in self.layers.values())
-        for layer_id in self.layers:
+    def toggle_layers(self, *, others: bool = False) -> None:
+        """H: hide every layer to see the photo (``others``: every layer but the edited one);
+        show them all when none of them is shown."""
+        ids = [i for i in self.layers if not (others and i == self.active_layer_id)]
+        show = not any(self.layers[layer_id].is_visible() for layer_id in ids)
+        for layer_id in ids:
             self.set_layer_visible(layer_id, show)
 
     def toggle_reference(self) -> None:
-        """Shift+H: show or hide the layer that is not edited."""
-        other = SKELETON if self.active_layer_id == MASK else MASK
-        self.set_layer_visible(other, not self.layers[other].is_visible())
+        """Shift+H: show or hide the layers that are not edited."""
+        self.toggle_layers(others=True)
 
     def load_prediction(self) -> None:
         """Load prediction: the edited layer's prediction as one undoable action (if any)."""
-        self.session.finish_gestures()
-        getattr(self._active(), "load_prediction", lambda: None)()
+        self.actions.load_prediction()
 
     def load_skeleton_file(self) -> None:
         """Open another skeleton file; an unsaved skeleton is asked about first."""
-        self.session.finish_gestures()
-        skeleton = self._skeleton
-        if not skeleton.is_open():
-            self.notice.emit("Open an image first", "warn")
-            return
-        start = skeleton.dialog_start()  # the generated skeleton, else skeletons/
-        path, _ = QFileDialog.getOpenFileName(self, "Select Skeleton File", start, _SKELETON_FILES)
-        if not path or not self.session.release([SKELETON]):
-            return
-        for notice in skeleton.load_file(path):
-            self.notice.emit(notice.message, notice.kind)
-        if skeleton.document.last_load_ok:  # unreadable: nothing changed, the timeline stays
-            self.session.forget(SKELETON)  # its own history is gone too
+        self.actions.load_skeleton_file()
+
+    def edit_classes(self) -> None:
+        """Classes…: the class editor; OK saves gt/classes.json and recolours the labels."""
+        self.actions.edit_classes()
+
+    def remove_gt(self) -> None:
+        """Remove GT…: delete the open image's GT files once the user confirms."""
+        self.actions.remove_gt()
 
     # ------------------------------------------------------------------ LayerHost
     def notify(self, message: str, kind: str = "info") -> None:
@@ -412,36 +426,15 @@ class CorrectEditor(PagingApi, QWidget):
             layer.set_visible(True)
             self.layer_panel.set_visible_state(layer_id, True)
 
-    def _report(self, outcome: SaveOutcome) -> None:
-        """One layer save attempt -> MainWindow's signals; a failed save reports nothing."""
-        self.paging.forget(self.session.image_path)  # its files changed: nothing read stays
-        if not outcome.ok:
-            return
-        if outcome.layer_id == MASK and (outcome.path or outcome.cleared):
-            (self.mask_saved if outcome.path else self.mask_cleared).emit(self.session.image_path)
-        elif outcome.layer_id == SKELETON and outcome.cleared:
-            self.skeleton_cleared.emit(self.session.image_path)
-        elif outcome.layer_id == SKELETON and outcome.path:
-            self.skeleton_saved.emit(outcome.path)
-
     def _refresh(self) -> None:
         """Show the layers' state: the edited layer's controls, Undo / Redo, the polyline
-        prompt, the Layers rows and the chip. Runs once per change, never per drag frame."""
+        prompt, Remove GT…, the rows and the chip. Once per change, never per drag frame."""
         layer, controls = self._active(), self.controls
         controls.sync(layer)
         controls.set_history(self.session.can_undo(), self.session.can_redo())
         controls.set_draft(self._skeleton.draft_state())
+        self.actions.sync()
         statuses = {layer_id: each.status() for layer_id, each in self.layers.items()}
         for layer_id, status in statuses.items():
             self.layer_panel.set_status(layer_id, status)
-        self._refresh_chip(layer, statuses)
-
-    def _refresh_chip(self, layer: EditLayer, statuses: dict[str, LayerStatus]) -> None:
-        """The chip (:mod:`app.gui.correct.chip`); the library position is asked once per
-        image; changes only."""
-        path = self.session.image_path
-        if self._placed[0] != path:
-            self._placed = (path, self.paging.position(path))
-        shown = chip_content(path, statuses, layer, self._placed[1])
-        show_on_chip(self.status_chip, shown, self._chip)
-        self._chip = shown
+        self._chip.show(self.session.image_path, statuses, layer)

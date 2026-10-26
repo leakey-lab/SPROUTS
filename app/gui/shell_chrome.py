@@ -9,9 +9,11 @@ bottom (:class:`StatusLine`, 28 px)::
 Topbar
     Six stages: Library, then Trace GT (hand-traced multi-class ground truth,
     independent of the ML pipeline), then the measurement pipeline: Generate,
-    Correct (the mask and the skeleton of an image on one canvas), Measure,
-    Visualize. Each stage button forwards to its MainWindow handler and shows its
-    per-stage actions on the right (a stack sized to the CURRENT page only).
+    Correct (the mask, the skeleton and the class labels of an image on one canvas;
+    its page holds the GT actions Classes…, Export dataset… and Remove GT…, so the
+    Trace GT page is empty until WG-T11 removes that stage), Measure, Visualize.
+    Each stage button forwards to its MainWindow handler and shows its per-stage
+    actions on the right (a stack sized to the CURRENT page only).
 
     Density is responsive. At or above the measured full width (taken with the
     WIDEST action page, so a stage switch never elides the names) every stage
@@ -351,7 +353,7 @@ class ShellTopbar(QFrame):
             tooltip="Add, rename, recolour or retire GT classes",
             compact=True,
         )
-        mw.gt_classes_button.clicked.connect(mw.gt_tracing_interface.edit_classes)
+        mw.gt_classes_button.clicked.connect(mw.correct_editor.edit_classes)
         mw.gt_export_button = ghost_button(
             "Export dataset…",
             "export",
@@ -359,6 +361,9 @@ class ShellTopbar(QFrame):
             compact=True,
         )
         mw.gt_export_button.clicked.connect(mw.export_gt_dataset)
+        # Remove GT…: the Correct page owns it (on while an image is open and nothing is
+        # unsaved) and asks before it deletes the image's GT files.
+        mw.gt_remove_button = mw.correct_editor.actions.remove_button
 
         # Skeleton-only regeneration never touches masks (RB-01): the wired
         # legacy button, next to the one-pass masks-then-skeletons run.
@@ -370,10 +375,17 @@ class ShellTopbar(QFrame):
 
         pages = {
             "Library": (mw.action_bar_view_seg,),
-            "Trace GT": (mw.gt_classes_button, mw.gt_export_button),
+            "Trace GT": (),  # its GT actions are the Correct page's (WG-T11 removes the stage)
             "Generate": (mw.generate_all_button, mw.generate_button),
-            # "Clear mask" / "Clear skeleton": follows the edited layer, clears it.
-            "Correct": (mw.correct_editor.clear_button,),
+            # "Clear mask" / "Clear skeleton" / "Clear class labels": follows the edited
+            # layer, clears it; then the GT actions (the class editor, the dataset export,
+            # Remove GT…).
+            "Correct": (
+                mw.correct_editor.clear_button,
+                mw.gt_classes_button,
+                mw.gt_export_button,
+                mw.gt_remove_button,
+            ),
             "Measure": (mw.calculate_length_button, mw.calculate_area_button),
             "Visualize": (self.viz_seg,),
         }

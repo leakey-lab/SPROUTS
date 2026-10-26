@@ -170,7 +170,7 @@ The top bar walks through the work in six stages, in this order (`F1` lists ever
 | **Library** | `Alt+1` | Browse and select minirhizotron images from the tree. |
 | **Trace GT** | `Alt+2` | Paint ground-truth classes for a segmentation dataset (see below). |
 | **Generate** | `Alt+3` | Generate masks and skeletons for all loaded images in one pass. |
-| **Correct** | `Alt+4` | Fix the mask (area) and the skeleton (length) of an image on one canvas. |
+| **Correct** | `Alt+4` | Fix the mask (area) and the skeleton (length), and paint class labels (GT for training), on one canvas. |
 | **Measure** | `Alt+5` | Compute root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. |
 | **Visualize** | `Alt+6` | Explore length and area trends across the trial. |
 
@@ -269,9 +269,10 @@ project without GT files is not checked for photo sizes.
 
 ## Correcting masks and skeletons (Correct)
 
-The **Correct** stage fixes both model outputs of an image on one canvas. The mask (root
-area) and the skeleton (root length) are drawn together over the photo and you edit one
-of them at a time, the *active layer*; the other stays visible at half its opacity as a
+The **Correct** stage fixes both model outputs of an image, and paints its class labels
+(ground truth for training), on one canvas. The mask (root area), the skeleton (root
+length) and the class labels are drawn together over the photo and you edit one of them
+at a time, the *active layer*; the others stay visible at half their opacity as a
 reference. The **Layers** panel on the right shows each layer's state (GT, Prediction,
 Unsaved, Not saved …): click a row to edit that layer, click its eye to hide it (or reach
 them with Tab: Space or Enter picks a layer, Space toggles an eye). Opacity and visibility
@@ -294,6 +295,17 @@ are kept across restarts.
   chip icon) puts the prediction back as one undoable step. **Load skeleton file…** in the
   dock opens another file; if it differs from the skeleton shown, it counts as unsaved.
   Measure reads the GT skeleton first where it is valid.
+- **Classes** (purple; the class labels): Brush, Eraser and Fill in the colour of the
+  active class, picked in the class panel that shows under the Layers panel while the
+  class labels are edited (or with `1`–`9`, `0` = Ignore). Each class keeps its own
+  brush size; Fill reads the active class's outlines only; a class with pixels stays
+  *checked*, and the panel's boxes mark the classes looked for on the image (the
+  dataset export filters on them). It opens and saves only `gt/<stem>.png`
+  (`gt/classes.json` is written first when missing) and never reads or writes `mask/`,
+  `skeletons/` or the GT mask and skeleton. Saving an untouched image writes nothing:
+  tick the boxes to record that you looked and found nothing. While `gt/classes.json` is
+  invalid only the class labels are read-only: the row reads *Read-only*, and the first
+  edit you try on an image says why.
 - **Enhance** (the contrast button on the tool rail) changes how the photo is shown, for
   every image while it is on; it never changes a mask, a skeleton or a measurement. For
   `.jpg` / `.jpeg` photos, **Smooth JPEG blocks** (off by default) softens the 8 x 8
@@ -301,13 +313,14 @@ are kept across restarts.
 
 | Key | Action |
 |---|---|
-| `1` / `2` / `X` | Edit the mask / the skeleton / switch between them |
-| `B` (tap) · hold `B` and scroll | Mask brush · brush size (from either layer; it switches to the brush) |
-| `F` | Mask fill |
+| `M` / `L` / `G` · `X` | Edit the mask / the skeleton / the class labels · back to the previous layer |
+| `1`–`9`, `0` | Pick the n-th class; `0` = Ignore (class labels only) |
+| `B` (tap) · hold `B` and scroll | Brush · brush size of the mask or the class labels (from the skeleton: the mask's; it switches to the brush) |
+| `F` | Fill (the mask's from the skeleton) |
 | `V` · `P` · `C` | Skeleton select · polyline · connect |
 | `E` | Eraser of the active layer |
 | `[` / `]` | Smaller / larger brush or eraser |
-| `H` / `Shift+H` | Show or hide both layers (see the photo) / the other layer |
+| `H` / `Shift+H` | Show or hide every layer (see the photo) / the other layers |
 | `S` · `Enter` · `Esc` | Smooth · finish · cancel the polyline |
 | `Delete` / `Backspace` | Delete the picked branch |
 | `Space` (hold), middle-drag | Pan |
@@ -317,12 +330,12 @@ are kept across restarts.
 | `Ctrl+'` | Show or hide the pixel grid (drawn from 800 %; also in Trace GT) |
 | `PgDn` / `PgUp` | Save, then open the next / previous image |
 
-A tool key of the other layer switches layers too (`B`, `F` → mask; `V`, `P`, `C` →
-skeleton).
+A tool key of another layer switches layers too (`V`, `P`, `C` → skeleton; `B`, `F` →
+the mask from the skeleton; on the class labels they stay there).
 
-**Undo** is one timeline for both layers: `Ctrl+Z` undoes the last thing you did, on
-either layer, without switching layers (the other layer's row flashes and a message says
-"Undo · mask" or "Undo · skeleton"). While you place a polyline, `Ctrl+Z` first removes
+**Undo** is one timeline for all layers: `Ctrl+Z` undoes the last thing you did, on
+any layer, without switching layers (the other layer's row flashes and a message says
+"Undo · mask" or "Undo · class labels"). While you place a polyline, `Ctrl+Z` first removes
 its last point.
 
 **Saving**
@@ -333,7 +346,8 @@ its last point.
   a skeleton edited back to the prediction (or **Load prediction** and Save) removes its GT
   file `gt/skeletons/<stem>.png`.
 - `PgDn` / `PgUp` save the unsaved layers without asking, then open the next / previous
-  image. If a save fails, you stay on the image and a message says why. An unfinished
+  image. Class labels opened with classes this project does not know (they became
+  Ignore) are never saved silently: `PgDn` asks first. If a save fails, you stay on the image and a message says why. An unfinished
   polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you
   finish it (Enter) or cancel it (Esc), and bring the skeleton forward if it was hidden.
 - A saved GT mask that *Correct* cannot show (another size than the photo, or a file it
@@ -360,6 +374,14 @@ its last point.
 - Coming back to the same image keeps your zoom and position; the layers reload only when
   their files changed on disk (for example after *Generate*).
 
+**GT actions** (the Correct page of the top bar): **Classes…** adds, renames, recolours or
+retires the project's classes (`gt/classes.json`; the gear of the class panel opens it
+too). **Export dataset…** saves the open image's edits first, then exports the images and
+their class-id masks. **Remove GT…** (on while an image is open and nothing is unsaved)
+asks, then deletes the image's `gt/mask/<stem>.png`, `gt/skeletons/<stem>.png` and
+`gt/<stem>.png` and reopens it from its predictions; the predictions in `mask/` and
+`skeletons/` and `gt/classes.json` are kept. This cannot be undone.
+
 **Zoom:** the photo stays smooth at every zoom (no pixel squares when zoomed in, no
 shimmer when zoomed out), the mask shows its exact saved pixels from 100 % up, and the
 skeleton is drawn as a line at every zoom. The zoom buttons and keys step through round
@@ -372,7 +394,9 @@ at 100 %, whichever is smaller.
 The **Trace GT** stage paints hand-traced, multi-class ground truth for training
 segmentation models (for example, roots vs nodules). It is independent of every
 model in the app: it never starts from the ResNet mask and never reads or writes
-`mask/` or `skeletons/`. It traces classes; it does not measure them.
+`mask/` or `skeletons/`. It traces classes; it does not measure them. Its **Classes…**
+and **Export dataset…** buttons are on the Correct page now: the class labels are a layer
+of *Correct*. The Trace GT stage goes in a later step.
 
 **Files** (next to the images, in the loaded folder):
 

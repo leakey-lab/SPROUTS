@@ -84,10 +84,12 @@ def fill_source(plane: np.ndarray) -> tuple[np.ndarray, int]:
 
 
 class MaskToolHost(Protocol):
-    """What a mask tool may use of its layer (``MaskLayer`` implements it)."""
+    """What a mask tool may use of its layer (``MaskLayer`` and ``ClassesLayer`` implement
+    it); ``noun`` names the layer in the tools' hints ("mask", "class labels")."""
 
     canvas: PaintCanvas
     brush_color: QColor
+    noun: str
 
     def size(self) -> int:
         """The brush size in image pixels (the brush and the eraser share it)."""
@@ -103,7 +105,8 @@ class MaskTool:
     """Base mask tool: ignores every input; subclasses override what they use.
 
     ``spec`` is the tool as the rail shows it; a sized tool (``spec.sized``) shows the
-    brush ring, dashed when the tool ``erase``-s.
+    brush ring, dashed when the tool ``erase``-s. ``hint_text``'s tooltip names the layer
+    through ``{noun}`` (the host's).
     """
 
     tool_id: ClassVar[str] = ""
@@ -135,8 +138,9 @@ class MaskTool:
         """Another tool was chosen: end what this tool left in progress (nothing here)."""
 
     def hint(self) -> tuple[str, str]:
-        """``(short hint, tooltip)`` for the status chip."""
-        return self.hint_text
+        """``(short hint, tooltip)`` for the status chip, the tooltip naming the layer."""
+        short, tip = self.hint_text
+        return short, tip.format(noun=self.host.noun)
 
 
 class BrushTool(MaskTool):
@@ -146,7 +150,7 @@ class BrushTool(MaskTool):
     spec = ToolSpec("brush", "brush", "Brush", "B", "hold B + scroll to resize", True)
     hint_text = (
         "Brush · drag to paint",
-        "Click and drag to paint the mask. Hold B and scroll, or press [ and ], to resize "
+        "Click and drag to paint the {noun}. Hold B and scroll, or press [ and ], to resize "
         "the brush.",
     )
 
@@ -176,7 +180,7 @@ class EraserTool(BrushTool):
     erase = True
     hint_text = (
         "Eraser · drag to erase",
-        "Click and drag to erase the mask. [ and ] change the eraser size.",
+        "Click and drag to erase the {noun}. [ and ] change the eraser size.",
     )
 
 

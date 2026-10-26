@@ -2,12 +2,16 @@
 PgDn / PgUp, all parented to the page (``install_page_shortcuts``).
 
 The registry (:mod:`app.gui.shortcuts`) documents every key; this module only binds them
-to the page's actions. The page binds PgDn / PgUp itself (the Global next / previous rows
-document them) because it saves the unsaved layers before it moves.
+to the page's actions: M / L / G edit the mask, the skeleton or the class labels, X the
+previous layer, 1-9 and 0 pick a class (the page ignores them unless the class labels are
+edited), F takes the fill of the edited raster layer (the mask's from the skeleton). The
+page binds PgDn / PgUp itself (the Global next / previous rows document them) because it
+saves the unsaved layers before it moves.
 """
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt
@@ -15,7 +19,7 @@ from PyQt6.QtGui import QKeySequence, QShortcut
 
 from app.gui import shortcuts
 from app.gui.canvas_view import PIXEL_GRID_OFF, PIXEL_GRID_ON
-from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.layer import CLASSES, MASK, SKELETON
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.gui.correct.editor import CorrectEditor
@@ -38,8 +42,10 @@ def install_page_shortcuts(page: CorrectEditor) -> list[QShortcut]:
             "save": page.save,
             "mask_layer": lambda: page.set_active_layer(MASK),
             "skeleton_layer": lambda: page.set_active_layer(SKELETON),
+            "classes_layer": lambda: page.set_active_layer(CLASSES),
             "swap_layer": page.swap_layer,
-            "fill": lambda: page.request_tool(MASK, "fill"),
+            "select_class": [partial(page.select_class, int(key)) for key in shortcuts.CLASS_KEYS],
+            "fill": lambda: page.request_tool(page.router.raster_id, "fill"),
             "select_tool": lambda: page.request_tool(SKELETON, "select"),
             "polyline": lambda: page.request_tool(SKELETON, "polyline"),
             "connect": lambda: page.request_tool(SKELETON, "connect"),

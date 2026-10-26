@@ -153,10 +153,10 @@ def test_correct_layer_keys_work_after_a_tree_click(window):
     assert same_path(editor.current_image_path, window.project.image(1))
     assert editor.active_layer_id == MASK
 
-    key(tree, Qt.Key.Key_2)
+    key(tree, Qt.Key.Key_L)
     assert editor.active_layer_id == SKELETON
     assert tree.currentItem() is leaf(window, 1)  # no type-ahead jump to a date row
-    key(tree, Qt.Key.Key_1)
+    key(tree, Qt.Key.Key_M)
     assert editor.active_layer_id == MASK
     key(tree, Qt.Key.Key_X)
     assert editor.active_layer_id == SKELETON
@@ -202,9 +202,9 @@ def test_the_search_field_keeps_its_typing_in_correct(window):
     search.setFocus()
     settle()
 
-    for k in (Qt.Key.Key_2, Qt.Key.Key_X, Qt.Key.Key_E):
+    for k in (Qt.Key.Key_L, Qt.Key.Key_X, Qt.Key.Key_E):
         key(search, k)
-    assert search.text() == "2xe"
+    assert search.text() == "lxe"
     assert editor.active_layer_id == MASK and editor.layers[MASK].current_tool != "eraser"
     search.clear()
 
@@ -298,12 +298,12 @@ def test_a_modal_dialog_keeps_the_page_keys_to_itself(window):
     field.setFocus()
     settle()
     try:
-        for k in (Qt.Key.Key_2, Qt.Key.Key_X):
+        for k in (Qt.Key.Key_L, Qt.Key.Key_X):
             QTest.keyClick(field, k)
         QTest.keyClick(field, Qt.Key.Key_1, CTRL)
         settle()
         assert editor.active_layer_id == MASK
-        assert field.text() == "2x"
+        assert field.text() == "lx"
     finally:
         dialog.close()
         dialog.deleteLater()

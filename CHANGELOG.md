@@ -466,6 +466,26 @@ Five passes, not yet released:
     Skeleton: … · Classes / No classes`, replacing *Skeleton corrected* / *Mask ready*), and
     each value's tooltip names the file it was measured from (GT or prediction) and why a GT
     file was not used.
+  - Correct, class labels (WG-T5, O23, O14, O24): the class labels are the third layer of
+    Correct (row "Classes", purple), painted with Brush, Eraser and Fill in the active
+    class's colour; the class panel (the classes, their "checked" boxes and the gear of the
+    class editor) and the layer's three rail tools show while they are edited. Keys:
+    **M** / **L** / **G** edit the mask / the skeleton / the class labels (they were `1` /
+    `2`), **X** goes back to the previous layer, `1`-`9` and `0` pick a class (class labels
+    only); `B` and `F` stay on the class labels (from the skeleton they take the mask's), and
+    `H` / `Shift+H` show or hide every layer / the other layers. A class-label save writes
+    only `gt/<stem>.png` (`gt/classes.json` first when missing) and marks the Library row;
+    an untouched image is not saved (O2: tick the boxes to record "looked, nothing found";
+    Trace GT wrote an empty labels file). `PgDn` saves them without asking unless unknown
+    classes were mapped to Ignore (then it asks). While `gt/classes.json` is invalid only
+    the class labels are read-only, with one danger notice per image (on the first refused
+    edit). The top bar's Correct page holds **Classes…**, **Export dataset…** (it saves
+    Correct's edits first) and the new **Remove GT…**, which, after asking, deletes the
+    image's `gt/mask/<stem>.png`, `gt/skeletons/<stem>.png` and `gt/<stem>.png` (never
+    `mask/`, `skeletons/` or `gt/classes.json`) and reopens the image from its predictions;
+    a file it cannot delete is named. The Trace GT page has no actions until WG-T11 removes
+    that stage. No CSV value or output pixel changes; the class-label goldens replay through
+    the page.
   - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
     pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
     files of a run have more than one size (the photos differ) or the predictions do; the

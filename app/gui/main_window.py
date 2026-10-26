@@ -180,6 +180,11 @@ class MainWindow(QMainWindow):
         correct = self.correct_editor
         correct.mask_saved.connect(self.on_mask_saved)
         correct.mask_cleared.connect(self.on_mask_cleared)
+        # Its class labels, Remove GT… and a skeleton GT removed (equal to the prediction)
+        # reach the Library's GT marks, the row and the metrics the same way (WG-T5).
+        correct.gt_saved.connect(self._on_gt_saved)
+        correct.gt_removed.connect(self._on_gt_removed)
+        correct.skeleton_cleared.connect(self._on_skeleton_cleared)
         correct.b_key_status_changed.connect(self.on_b_key_status_changed)
         correct.set_generated_skeleton_resolver(self._generated_skeleton_for)
         self.gt_tracing_interface.gt_saved.connect(self._on_gt_saved)
@@ -670,6 +675,8 @@ class MainWindow(QMainWindow):
     _editor_canvas = editors.editor_canvas
     _on_editor_notice = editors.on_editor_notice
     _on_gt_saved = editors.on_gt_saved
+    _on_gt_removed = editors.on_gt_removed
+    _on_skeleton_cleared = editors.on_skeleton_cleared
     _sync_window_modified = editors.sync_window_modified
     _on_editor_dirty_changed = editors.on_editor_dirty_changed
     _sync_open_correction = editors.sync_open_correction
@@ -689,9 +696,10 @@ class MainWindow(QMainWindow):
             self.notify("Load an image folder first", "warn")
             return
         folder = layout.root
-        # Pending edits on the open image belong in the export; if they could
-        # not be saved and the user kept editing, do not export without them.
-        if not self.gt_tracing_interface.maybe_save_changes():
+        # Pending edits on the open image belong in the export (the Correct page's class
+        # labels first); if they could not be saved and the user kept editing, or
+        # cancelled, do not export without them.
+        if not all(_released(editor) for editor in self._editors().values()):
             return
         # The folder's own registry: the editor's copy is only in sync once Trace
         # GT has opened an image from this folder (it holds the defaults before).

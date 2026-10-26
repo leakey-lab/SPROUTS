@@ -148,7 +148,7 @@ def test_the_page_keys_still_work_from_a_focused_row(page):
     row = page.layer_panel.rows[MASK]
     row.setFocus(Qt.FocusReason.TabFocusReason)
 
-    QTest.keyClick(row, Qt.Key.Key_2)
+    QTest.keyClick(row, Qt.Key.Key_L)
     assert page.active_layer_id == SKELETON
     QTest.keyClick(row, Qt.Key.Key_H)
     assert not any(layer.is_visible() for layer in page.layers.values())

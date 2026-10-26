@@ -575,6 +575,9 @@ def test_the_editor_signals_are_connected_once_whatever_the_stage_visits(make_wi
         editor.navigate_requested,
         editor.notice,
         editor.dirty_changed,
+        editor.gt_saved,  # WG-T5: the class labels, Remove GT… and a cleared GT skeleton
+        editor.gt_removed,
+        editor.skeleton_cleared,
     ):
         assert editor.receivers(signal) == 1
     assert editor.receivers(editor.skeleton_saved) == 0  # FR-03

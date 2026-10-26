@@ -11,7 +11,8 @@ classes with pixels, whose boxes are locked; a save makes the reviewed set the t
 = the ticks or a class count differ from the saved ones, else a pixel does, or the open
 remapped ids (until saved or discarded; a lossy remap asks until saved). Save always writes
 the file, ``gt/classes.json`` first when missing (its failure keeps the file). An invalid
-registry makes it read-only; a file that cannot be read or has another size opens empty, is
+registry makes it read-only (its status says so; the open sends no notice: the layer's first
+refused edit does, once per image); a file that cannot be read or has another size opens empty, is
 not shown and is kept unless a save replaces it. The owner changes the plane only through
 ``history``, then calls ``count_patch`` and ``touch``.
 """
@@ -147,7 +148,7 @@ class ClassesDocument:
             return LayerStatus("none")
         if self.registry_error:
             tip = f"{REGISTRY_LABEL} is invalid: {self.registry_error}"
-            return LayerStatus("error", "Read-only", tip)
+            return LayerStatus("error", "Read-only", tip, local=True)  # the chip: while edited
         if self._save_error and self._error_revision == self._revision:
             return LayerStatus("error", "Not saved", self._save_error)
         if self.is_dirty():
@@ -311,12 +312,6 @@ class ClassesDocument:
         self._restart()
         self._opened_unsaved = self._remapped
         notices = [Notice(_NOT_SHOWN[read.error], "warn")] if read.error else []
-        if read.registry_error:
-            invalid = f"{REGISTRY_LABEL} is invalid ({read.registry_error})"
-            text = (
-                f"{invalid}: the class labels are read-only. Fix the file, then reopen the image."
-            )
-            notices.insert(0, Notice(text, "danger"))
         name = os.path.basename(labels)
         return notices + [Notice(f"Class labels {name}: {w}", "warn") for w in read.warnings]
 

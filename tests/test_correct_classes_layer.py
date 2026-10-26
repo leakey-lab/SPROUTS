@@ -417,7 +417,7 @@ def test_press_and_clear_are_refused_while_read_only_with_one_notice(
     host = FakeHost()
     layer = ClassesLayer(host, scene)
     notices = layer.open(gt_project_bad_registry.image, (640, 480), gt_project_bad_registry.folder)
-    assert [n.kind for n in notices] == ["danger"] and layer.is_read_only()
+    assert notices == [] and layer.is_read_only()  # the first refusal says it (WG-T5 r1)
 
     layer.press(QPoint(10, 10), NO_MODIFIER)
     layer.release(QPoint(10, 10))
@@ -474,10 +474,10 @@ def test_an_invalid_registry_refuses_the_save(scene, project, bad_json):
 
     layer, _, notices = open_layer(scene, project.image)
 
-    assert [n.kind for n in notices] == ["danger"]
+    assert notices == []  # the status and the first refused edit say it (WG-T5 r1)
     error = layer.document.registry_error
     assert layer.status() == LayerStatus(
-        "error", "Read-only", f"gt/classes.json is invalid: {error}"
+        "error", "Read-only", f"gt/classes.json is invalid: {error}", local=True
     )
     stroke(layer, (10, 10), (30, 10))  # refused: nothing could be saved
     assert not ids(layer).any()

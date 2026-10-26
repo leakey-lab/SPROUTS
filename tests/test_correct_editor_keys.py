@@ -1,10 +1,11 @@
 """The keys of the Correct page (plan P7b, spec section 6, registry scope ``Correct``).
 
-Letters that act on the whole page are ``QShortcut``s installed from the registry (1 / 2 / X,
-F / V / P / C / E, [ / ], H / Shift+H, Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z, Ctrl+S, the canvas zoom
-keys, and PgDn / PgUp documented by the Global rows); the keys that depend on the gesture (B
-held, S, Enter, Esc, Delete) go through the canvas router to the edited layer. No key is
-both. Every test presses real keys on the shown, active page.
+Letters that act on the whole page are ``QShortcut``s installed from the registry (M / L / G
+/ X, the class digits 1-9 and 0, F / V / P / C / E, [ / ], H / Shift+H, Ctrl+Z / Ctrl+Y /
+Ctrl+Shift+Z, Ctrl+S, the canvas zoom keys, and PgDn / PgUp documented by the Global rows);
+the keys that depend on the gesture (B held, S, Enter, Esc, Delete) go through the canvas
+router to the edited layer. No key is both. Every test presses real keys on the shown, active
+page. The class labels' keys (G, the digits) are in ``test_correct_classes_editor.py``.
 """
 
 from __future__ import annotations
@@ -124,8 +125,8 @@ def test_x_h_and_shift_h_do_not_repeat_while_held(make_editor, sequence):
 
 
 # ================================================================================ layers
-def test_1_2_and_x_switch_the_edited_layer(page):
-    for key, active in ((Key.Key_2, SKELETON), (Key.Key_1, MASK), (Key.Key_X, SKELETON)):
+def test_m_l_and_x_switch_the_edited_layer(page):
+    for key, active in ((Key.Key_L, SKELETON), (Key.Key_M, MASK), (Key.Key_X, SKELETON)):
         press(page, key)
         assert page.active_layer_id == active, key
     press(page, Key.Key_X)
@@ -141,19 +142,19 @@ def test_e_takes_the_eraser_of_the_edited_layer(page):
         "eraser",
         "select",
     )
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     press(page, Key.Key_E)
     assert (page.active_layer_id, skeleton.current_tool) == (SKELETON, "eraser")
     assert page.controls.tool_buttons[(SKELETON, "eraser")].isChecked()
 
 
-def test_f_and_a_tap_of_b_take_the_mask_with_that_tool(page):
+def test_f_and_a_tap_of_b_from_the_skeleton_take_the_mask_with_that_tool(page):
     held = record(page.b_key_status_changed)
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
 
     press(page, Key.Key_F)
     assert (page.active_layer_id, page.layers[MASK].current_tool) == (MASK, "fill")
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     press(page, Key.Key_B)  # a tap: pressed and released without a wheel turn
 
     assert (page.active_layer_id, page.layers[MASK].current_tool) == (MASK, "brush")
@@ -178,7 +179,7 @@ def test_p_back_on_the_skeleton_resumes_its_polyline_draft(page):
     press(page, Key.Key_P)
     click(page, (40, 125))
     click(page, (100, 130))
-    press(page, Key.Key_1)
+    press(page, Key.Key_M)
 
     press(page, Key.Key_P)
 
@@ -187,7 +188,7 @@ def test_p_back_on_the_skeleton_resumes_its_polyline_draft(page):
 
 
 def test_the_tool_keys_pick_the_skeleton_tools(page):
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     for key, tool in (
         (Key.Key_E, "eraser"),
         (Key.Key_P, "polyline"),
@@ -207,7 +208,7 @@ def test_the_bracket_keys_resize_the_tool_of_the_edited_layer(page):
     assert mask.size() == 9
     press(page, Key.Key_BracketLeft)
     assert mask.size() == 8
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     press(page, Key.Key_E)
     press(page, Key.Key_BracketRight)
     assert (skeleton.size(), mask.size()) == (22, 8)
@@ -232,7 +233,7 @@ def wheel(view, dy: int) -> None:
 
 
 def test_holding_b_and_scrolling_sizes_the_mask_brush_from_the_skeleton(page):
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     held = record(page.b_key_status_changed)
     zoom = page.graphics_view.zoom_factor
 
@@ -279,7 +280,7 @@ def test_shift_h_hides_and_shows_only_the_other_layer(page):
     assert not page.layers[SKELETON].item.isVisible()
     press(page, Key.Key_H, SHIFT)
     assert visibility(page) == (True, True)
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     press(page, Key.Key_H, SHIFT)
     assert visibility(page) == (False, True) and page.active_layer_id == SKELETON
 
@@ -290,14 +291,14 @@ def test_s_enter_and_delete_act_only_while_the_skeleton_is_edited(page):
     press(page, Key.Key_P)
     click(page, (40, 125))
     click(page, (100, 130))
-    press(page, Key.Key_1)
+    press(page, Key.Key_M)
 
     for key in (Key.Key_S, Key.Key_Return):
         press(page, key)
     assert skeleton.draft_state() == DraftState(True, 2, False)
     assert page.session.journal.undo_entries == ()
 
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     press(page, Key.Key_S)
     assert skeleton.draft_state().smooth and page.controls.smooth_button.isChecked()
     press(page, Key.Key_Return)
@@ -306,17 +307,17 @@ def test_s_enter_and_delete_act_only_while_the_skeleton_is_edited(page):
     press(page, Key.Key_V)
     click(page, (100, 112))  # pick the generated line on row 110
     before = raster(page).copy()
-    press(page, Key.Key_1)
+    press(page, Key.Key_M)
     press(page, Key.Key_Delete)
     assert (raster(page) == before).all()
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
     press(page, Key.Key_Delete)
     assert not raster(page)[110, 30:170].any()
 
 
 def test_the_smooth_key_toggles_only_in_the_polyline_tool(page):
     skeleton = page.layers[SKELETON]
-    press(page, Key.Key_2)
+    press(page, Key.Key_L)
 
     press(page, Key.Key_S)
     assert not skeleton.draft_state().smooth

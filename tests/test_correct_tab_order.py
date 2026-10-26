@@ -5,9 +5,11 @@ build order: canvas, zoom cluster (made with the chrome), rail, dock, the size s
 when a tool first shows it, so after everything else), then the Layers panel. Now Tab goes
 from the canvas to the polyline prompt when it is shown (top centre, about the line being
 drawn), the rail top to bottom (the Enhance popover right after the button that opens it),
-the dock left to right, the zoom cluster (bottom right), then the Layers panel (right edge);
-Shift+Tab walks back. A size slider made later takes its place in the dock. Clicks still
-never take the focus from the canvas (``keep_canvas_focus``), whose keys keep working.
+the dock left to right, the zoom cluster (bottom right), then the side card (right edge):
+the Layers panel's rows and eyes, then, while the class labels are edited, the class panel's
+gear and "checked" boxes (WG-T5; rewritten from ``test_gt_tab_order.py``). Shift+Tab walks
+back. A size slider made later takes its place in the dock. Clicks still never take the
+focus from the canvas (``keep_canvas_focus``), whose keys keep working.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QAbstractButton, QApplication, QWidget  # noqa: E402
 
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.correct.layer import CLASSES, MASK, SKELETON  # noqa: E402
 from app.gui.skeleton_tools import ERASER, POLYLINE  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     activate,
@@ -103,8 +105,14 @@ def zoom(editor) -> list[QWidget]:
 
 
 def layers(editor) -> list[QWidget]:
-    rows = editor.layer_panel.rows
-    return [rows[MASK], rows[MASK].eye_button, rows[SKELETON], rows[SKELETON].eye_button]
+    """Each Layers row, then its eye, top to bottom (mask, skeleton, class labels)."""
+    return [part for row in editor.layer_panel.rows.values() for part in (row, row.eye_button)]
+
+
+def classes(editor, keys=("root", "nodule", "root_tip")) -> list[QWidget]:
+    """The class panel's gear, then each class's "checked" box."""
+    panel = editor.class_panel
+    return [panel._gear, *(panel._rows[key].checkbox for key in keys)]
 
 
 def only_size_slider(editor):
@@ -212,5 +220,37 @@ def test_the_page_keys_work_after_tabbing_back_to_the_canvas(page):
     walk(page)  # all the way round, back on the canvas
     assert page.graphics_view.hasFocus()
 
-    QTest.keyClick(page.graphics_view, Qt.Key.Key_2)
+    QTest.keyClick(page.graphics_view, Qt.Key.Key_L)
     assert page.active_layer_id == SKELETON
+
+
+def test_tab_reaches_the_class_panel_after_the_layers_while_the_class_labels_are_edited(page):
+    page.set_active_layer(CLASSES)
+    settle(page)
+    expected = [
+        *rail(page, (CLASSES, "brush")),
+        *dock(page, only_size_slider(page)),
+        *zoom(page),
+        *layers(page),
+        *classes(page),
+    ]
+
+    assert walk(page) == expected
+    assert walk(page, Qt.Key.Key_Backtab) == expected[::-1]
+
+
+def test_new_classes_keep_their_place_after_the_layers(page):
+    """The class editor's changes rebuild the rows: the new boxes stay after the gear."""
+    page.set_active_layer(CLASSES)
+    layer = page.layers[CLASSES]
+    layer.apply_registry(layer.registry().add(key="hypha", name="Hypha", color="#3fa7ff"))
+    settle(page)  # the new rows show on the next pass
+
+    expected = [
+        *rail(page, (CLASSES, "brush")),
+        *dock(page, only_size_slider(page)),
+        *zoom(page),
+        *layers(page),
+        *classes(page, ("root", "nodule", "root_tip", "hypha")),
+    ]
+    assert walk(page) == expected

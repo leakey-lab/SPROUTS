@@ -181,6 +181,26 @@ def test_generate_page_offers_skeletons_only(mw, app):
     _enter(mw, app, "Library")
 
 
+def test_the_correct_page_offers_clear_and_the_gt_actions(mw, app):
+    """WG-T5: Classes…, Export dataset… and Remove GT… follow the Correct page's Clear (the
+    Trace GT page is empty until WG-T11 removes that stage)."""
+    _enter(mw, app, "Correct")
+    page = mw.action_bar_stack.currentWidget()
+    try:
+        buttons = (
+            mw.correct_editor.clear_button,
+            mw.gt_classes_button,
+            mw.gt_export_button,
+            mw.gt_remove_button,
+        )
+        assert all(button.parentWidget() is page and button.isVisible() for button in buttons)
+        xs = [button.mapTo(page, button.rect().topLeft()).x() for button in buttons]
+        assert xs == sorted(xs)
+        assert mw.gt_remove_button.isEnabled() == bool(mw.correct_editor.current_image_path)
+    finally:
+        _enter(mw, app, "Library")
+
+
 def test_the_correct_page_clear_button_clears_the_edited_layer_and_follows_it(mw, app, tmp_path):
     import numpy as np
 

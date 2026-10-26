@@ -749,7 +749,7 @@ def test_the_panel_lists_the_mask_above_the_skeleton_with_keys_names_and_colours
 
     assert list(rows) == [MASK, SKELETON]
     assert rows[MASK].geometry().y() < rows[SKELETON].geometry().y()
-    assert [rows[i].key_label.text() for i in (MASK, SKELETON)] == ["1", "2"]
+    assert [rows[i].key_label.text() for i in (MASK, SKELETON)] == ["M", "L"]
     assert [rows[i].name_label.text() for i in (MASK, SKELETON)] == ["Mask", "Skeleton"]
     for layer_id, colour in ((MASK, tokens.MASK), (SKELETON, tokens.SKEL)):
         swatch = rows[layer_id].swatch.grab().toImage()
@@ -790,7 +790,7 @@ def test_the_mask_row_stays_on_top_and_keeps_its_key_whatever_the_order_given(st
     rows = standalone([FakeLayer(SKELETON), FakeLayer(MASK)]).rows
 
     assert rows[MASK].geometry().y() < rows[SKELETON].geometry().y()
-    assert [rows[i].key_label.text() for i in (MASK, SKELETON)] == ["1", "2"]
+    assert [rows[i].key_label.text() for i in (MASK, SKELETON)] == ["M", "L"]
 
 
 @pytest.mark.parametrize(
@@ -923,7 +923,7 @@ def test_set_visible_state_changes_only_the_eye_and_emits_nothing(app, make_page
 
     assert hidden_eye != shown_eye and eye_image() == shown_eye
     assert "Hide" in shown_tip and "Show" in hidden_tip and "mask" in hidden_tip
-    assert all("H: both layers" in tip and "Shift+H" in tip for tip in (shown_tip, hidden_tip))
+    assert all("H: every layer" in tip and "Shift+H" in tip for tip in (shown_tip, hidden_tip))
     assert toggles == [] and activations == []
     assert row.is_active() and row.state_label.text() == "Unsaved"
 

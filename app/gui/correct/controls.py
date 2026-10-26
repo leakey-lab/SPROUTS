@@ -5,11 +5,14 @@ opacity, the undo history, the polyline draft) and emits requests; it never chan
 layer. What it puts on the chrome (spec sections 3.2 and 4):
 
 * the rail: one group of checkable tool buttons per layer, built from the layer's ``tools``
-  (the mask's Brush, Eraser, Fill, then the skeleton's Select, Eraser, Polyline, Connect),
-  then Pan and Enhance. One exclusive group spans both, each group checks in its layer's
-  colour, and the group of the layer that is not shown is dimmed yet clickable (a click asks
-  for that tool; the editor switches the layer); a label both layers use names its layer in
-  the tooltip ("Mask eraser", "Skeleton eraser");
+  (the mask's Brush, Eraser, Fill, then the skeleton's Select, Eraser, Polyline, Connect,
+  then the class labels' Brush, Eraser, Fill), then Pan and Enhance. One exclusive group
+  spans them all, each group checks in its layer's colour, and the groups of the layers
+  that are not shown are dimmed yet clickable (a click asks for that tool; the editor
+  switches the layer), except the class labels' group, shown only while they are edited
+  (as the class panel; a rail of ten tools did not fit beside the polyline prompt in a
+  700 x 520 canvas); a label several layers use names its layer in the tooltip ("Mask
+  eraser", "Skeleton eraser", "Fill a closed outline in the class labels");
 * the dock: the size of the current tool (one slider per distinct ``SizeSpec``, made the
   first time a layer shows it, in a slot at the dock's start, so the mask's brush and eraser
   share one and the skeleton's eraser has its own; a disabled placeholder for a tool without
@@ -33,7 +36,8 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QWidget
 
 from app.gui import shortcuts
-from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.chip import title
+from app.gui.correct.layer import CLASSES, MASK, SKELETON
 from app.gui.widgets import DockSlider, IconButton, keep_canvas_focus, tokens
 from app.gui.widgets.buttons import ghost_button, primary_button
 from app.gui.widgets.icons import load_icon
@@ -57,10 +61,16 @@ _PREDICTION_OFF_TIP = "Load prediction (not for the {noun})"
 _NO_SIZE_TIP = "No size for this tool"
 _WIDEST_SIZE = "000 px"  # every size readout is this wide, so a new value moves nothing
 _SMOOTH_TIP = "needs 3+ points"
+# Layers whose rail group shows only while they are edited (the others' stay, dimmed).
+_GROUP_WHILE_EDITED = (CLASSES,)
 # The topbar clear button for the shown layer: (text, tooltip).
 _CLEAR_TEXTS = {
     MASK: ("Clear mask", "Clear the mask. Undo with Ctrl+Z; Save writes an empty GT mask."),
     SKELETON: ("Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
+    CLASSES: (
+        "Clear class labels",
+        "Clear the class labels. Undo with Ctrl+Z; Save writes an empty file.",
+    ),
 }
 # The Smooth toggle shows its word and key beside the icon, as Finish and Cancel show theirs
 # (the prompt reads "... Cancel (Esc) Smooth (S)").
@@ -73,9 +83,11 @@ QToolButton#iconBtn:checked {{ color: {tokens.TEXT}; }}
 def _tool_tooltip(spec: ToolSpec, noun: str = "") -> str:
     """``"Label (Key) · tip"``, as today's rails: a one-word label ("Brush", "Select") gets
     its tip; a label that already says what the tool does ("Fill a closed outline",
-    "Connect endpoints") stands alone. ``noun`` names the layer of a label both layers use
-    ("Mask eraser (E) · ...")."""
-    label = f"{noun[:1].upper()}{noun[1:]} {spec.label.lower()}" if noun else spec.label
+    "Connect endpoints") stands alone. ``noun`` names the layer of a label several layers
+    use ("Mask eraser (E) · ...", "Fill a closed outline in the class labels (F)")."""
+    label = spec.label
+    if noun:
+        label = f"{label} in the {noun}" if " " in label else f"{title(noun)} {label.lower()}"
     head = f"{label} ({spec.key})"
     return f"{head} · {spec.tip}" if spec.tip and " " not in spec.label else head
 
@@ -191,6 +203,7 @@ class CorrectControls(QObject):
         self._tool_group = QButtonGroup(self)  # one exclusive group across both layers
         self._tool_keys: list[tuple[str, str]] = []
         self._groups: dict[str, tuple[IconButton, ...]] = {}
+        self._group_rules: dict[str, QWidget] = {}  # the line after each group
         self._group_colours: dict[str, str] = {}
         labels = [spec.label for layer in self._layers.values() for spec in layer.tools]
         for layer_id, layer in self._layers.items():
@@ -209,6 +222,8 @@ class CorrectControls(QObject):
             self._groups[layer_id] = tuple(group)
             self._group_colours[layer_id] = tokens.TEXT_MUTED  # IconButton's default colour
             rail.add_separator()
+            box = rail.layout()
+            self._group_rules[layer_id] = box.itemAt(box.count() - 1).widget()
         rail.add_widget(chrome.pan_button)
         rail.add_separator()
         rail.add_widget(chrome.enhance_button)
@@ -276,8 +291,9 @@ class CorrectControls(QObject):
     # ---------------------------------------------------------------------- state
     def show_layer(self, layer_id: str) -> None:
         """Show ``layer_id`` as the edited layer: its tool group in full colour and the
-        others dimmed (still clickable), Load enabled for the skeleton only, the clear
-        buttons and the opacity slider named for it, the polyline prompt for the skeleton."""
+        others dimmed (still clickable; the class labels' shown only while edited), Load
+        enabled for the skeleton only, the clear buttons and the opacity slider named for
+        it, the polyline prompt for the skeleton."""
         layer = self._layers[layer_id]
         for group_id, buttons in self._groups.items():
             colour = tokens.TEXT_MUTED if group_id == layer_id else tokens.TEXT_DISABLED
@@ -285,6 +301,9 @@ class CorrectControls(QObject):
                 self._group_colours[group_id] = colour
                 for button in buttons:
                     button.set_colors(color=colour)
+            if group_id in _GROUP_WHILE_EDITED:
+                for widget in (*buttons, self._group_rules[group_id]):
+                    widget.setVisible(group_id == layer_id)
         self.load_button.setEnabled(layer_id == SKELETON)
         _retip(self.load_button, _LOAD_TIP if layer_id == SKELETON else _LOAD_OFF_TIP)
         noun = layer.noun

@@ -8,6 +8,8 @@ Modules (consumers import the submodules; this package imports nothing):
 - ``session``: ``CorrectSession``, the document lifecycle: open / close, the one undo
   timeline, dirty aggregation, save, save reports and the unsaved-changes prompt.
   Qt-free.
+- ``stamps``: ``ImageStamps``, the file stamps the open image's documents were read
+  from (changed on disk? still held?). Qt-free.
 - ``tool_router``: ``ToolRouter``, canvas input to the active layer (B hold / tap,
   gesture keys, a hidden layer shown before it is edited).
 - ``mask_document``: ``MaskDocument``, the mask plane, its history, saved baseline and
@@ -28,6 +30,10 @@ Modules (consumers import the submodules; this package imports nothing):
   skeleton tools.
 - ``controls``: ``CorrectControls``, the rail groups, dock controls and polyline prompt.
 - ``layer_panel``: ``LayerPanel``, the Layers panel.
+- ``side_panels``: ``SidePanels``, the side card: the Layers panel above the class panel
+  (shown while the class labels are edited), and the class panel kept in step with them.
+- ``actions``: ``PageActions``, the page's file actions (Load skeleton file, Load
+  prediction, Classes…, Remove GT…) and its save reports and notices.
 - ``chip``: what the status chip shows (file name, worst layer state, library position,
   hint).
 - ``read_ahead``: ``ReadAhead``, the next images read on a worker thread. Qt-free.

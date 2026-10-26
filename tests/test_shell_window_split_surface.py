@@ -152,7 +152,8 @@ INSTANCE_ATTRIBUTES = (
     "calculate_length_button collapse_all_button correct_editor device_check display_area "
     "display_controller display_page_stack empty_state expand_all_button feedback file_list "
     "generate_all_button generate_button generate_mask_button gt_classes_button "
-    "gt_export_button gt_tracing_interface image_manager jobs left_panel library_index "
+    "gt_export_button gt_remove_button gt_tracing_interface image_manager jobs left_panel "
+    "library_index "
     "library_search library_search_controller library_search_status load_images_button "
     "loading_overlay mask_generation_handler metrics_bar recent_projects ribbon "
     "ribbon_buttons right_panel root_area_viz root_length_viz skeleton_handler stage_status "
@@ -239,6 +240,10 @@ BOUND = {
     "on_b_key_status_changed": editors.on_b_key_status_changed,
     "on_mask_saved": editors.on_mask_saved,
     "on_mask_cleared": editors.on_mask_cleared,
+    # WG-T5: the Correct page's class labels, Remove GT… and a GT skeleton removed.
+    "_on_gt_saved": editors.on_gt_saved,
+    "_on_gt_removed": editors.on_gt_removed,
+    "_on_skeleton_cleared": editors.on_skeleton_cleared,
 }
 
 

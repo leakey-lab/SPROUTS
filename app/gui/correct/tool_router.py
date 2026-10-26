@@ -1,12 +1,14 @@
 """Canvas input of the Correct workspace: ``ToolRouter``, the canvas view's input sink.
 
 Pointer events go to the active layer (a hidden active layer is shown before it is
-edited). B is a hold key: hold B and scroll to resize the mask brush from either layer
-(the scroll asks for the brush, so its slider shows the size), tap B to ask for it. Esc
-cancels the active layer's transient state (the mask commits its stroke); every other key
-goes to the active layer (its tool's gesture keys: S, Enter, Delete, Backspace). Space is never consumed, so the view keeps its
-hold-to-pan. A layer switch first finishes a drag in progress (the mid-gesture rule of
-``app.gui.correct.layer``). Uses Qt only for key and modifier values.
+edited). B is a hold key: hold B and scroll to resize the brush of the edited raster layer
+(the mask or the class labels; from the skeleton, the mask's: :attr:`ToolRouter.raster_id`;
+the scroll asks for the brush, so its slider shows the size), tap B to ask for it. Esc
+cancels the active layer's transient state (a raster layer commits its stroke); every other
+key goes to the active layer (its tool's gesture keys: S, Enter, Delete, Backspace). Space
+is never consumed, so the view keeps its hold-to-pan. A layer switch first finishes a drag
+in progress (the mid-gesture rule of ``app.gui.correct.layer``). Uses Qt only for key and
+modifier values.
 """
 
 from __future__ import annotations
@@ -60,8 +62,16 @@ class ToolRouter:
 
     @property
     def b_held(self) -> bool:
-        """True while B is held (the wheel then sizes the mask brush)."""
+        """True while B is held (the wheel then sizes the brush of :attr:`raster_id`)."""
         return self._b_held
+
+    @property
+    def raster_id(self) -> str:
+        """The layer B and F work on: the edited layer when it paints (it has a brush), else
+        the mask (from the skeleton)."""
+        if any(spec.tool_id == "brush" for spec in self._active.tools):
+            return self._active_id
+        return MASK
 
     def set_active(self, layer_id: str) -> bool:
         """Make ``layer_id`` the edited layer; False when it already is.
@@ -115,17 +125,18 @@ class ToolRouter:
         self._active.double_click(pos)
 
     def canvas_wheel(self, event: QWheelEvent) -> bool:
-        """While B is held the wheel sizes the mask brush (consumed); else the view scrolls.
-        The first notch asks for the mask brush unless the mask's sized tool is edited, so
-        the dock's slider and the ring show the size being set."""
+        """While B is held the wheel sizes the brush of :attr:`raster_id` (consumed); else the
+        view scrolls. The first notch asks for that brush unless the layer's sized tool is
+        edited, so the dock's slider and the ring show the size being set."""
         if not self._b_held:
             return False
         dy = event.angleDelta().y()
         if dy:
-            mask = self._layers[MASK]
-            if not self._b_wheel_used and (self._active is not mask or mask.size_spec() is None):
-                self._on_tool_request(MASK, "brush")
-            mask.step_size(1 if dy > 0 else -1)
+            target = self.raster_id
+            layer = self._layers[target]
+            if not self._b_wheel_used and (self._active is not layer or layer.size_spec() is None):
+                self._on_tool_request(target, "brush")
+            layer.step_size(1 if dy > 0 else -1)
             self._b_wheel_used = True
         return True
 
@@ -148,14 +159,15 @@ class ToolRouter:
         return layer.key(event)
 
     def canvas_key_release(self, event: QKeyEvent) -> bool:
-        """Releasing B ends the hold; without a scroll meanwhile it was a tap (mask brush)."""
+        """Releasing B ends the hold; without a scroll meanwhile it was a tap (the brush of
+        :attr:`raster_id`)."""
         if event.key() != Qt.Key.Key_B:
             return False
         if self._b_held and not event.isAutoRepeat():
             tap = not self._b_wheel_used
             self._b_held = False
             if tap:
-                self._on_tool_request(MASK, "brush")
+                self._on_tool_request(self.raster_id, "brush")
             self._on_b_hold(False)
             return True
         return event.modifiers() in _HOLD_MODIFIERS
