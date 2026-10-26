@@ -171,6 +171,63 @@ def test_paging_with_a_new_two_point_line_still_stays(make_editor, project):
     assert editor.layers[SKELETON].draft_state().points == 2
 
 
+# ------------------------------------------------- a smoothed pick that is dropped (O20)
+SMOOTH_TOAST = ("Smoothed branch not applied · pick it and press Enter to apply", "info")
+
+
+def test_a_tree_click_after_pick_and_smooth_toasts_once_and_asks_nothing(
+    make_editor, project, answers
+):
+    editor = make_editor(project.a, project.folder)
+    pick(editor)
+    editor.layers[SKELETON].set_smooth(True)  # what the S key does
+    notices = record(editor.notice)
+    editor.load_image(project.b, project.folder)  # what MainWindow does on a tree click
+    assert notices.count(SMOOTH_TOAST) == 1 and answers.seen == []
+
+
+def test_paging_after_pick_and_smooth_toasts_once_and_moves_on(make_editor, project, answers):
+    editor = make_editor(project.a, project.folder)
+    pick(editor)
+    editor.layers[SKELETON].set_smooth(True)
+    moved, notices = record(editor.navigate_requested), record(editor.notice)
+    editor.navigate(1)
+    assert moved == [1] and notices == [SMOOTH_TOAST] and answers.seen == []
+    assert not editor.has_unsaved_changes()  # a dropped smoothed pick was never unsaved work
+    editor.load_image(project.b, project.folder)  # the pick is gone: no second toast
+    assert notices.count(SMOOTH_TOAST) == 1
+
+
+def test_a_pick_with_smooth_already_on_says_nothing(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    editor.layers[SKELETON].set_smooth(True)  # sticky, before the pick
+    pick(editor)
+    notices = record(editor.notice)
+    editor.navigate(1)
+    assert notices == []
+
+
+def test_smooth_switched_on_and_off_again_says_nothing(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    pick(editor)
+    skeleton = editor.layers[SKELETON]
+    skeleton.set_smooth(True)
+    skeleton.set_smooth(False)
+    notices = record(editor.notice)
+    editor.navigate(1)
+    assert notices == []
+
+
+def test_escape_after_pick_and_smooth_says_nothing(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    pick(editor)
+    editor.layers[SKELETON].set_smooth(True)
+    notices = record(editor.notice)
+    editor.layers[SKELETON].cancel_transient()  # Esc
+    editor.navigate(1)
+    assert notices == []
+
+
 # ----------------------------------------------------------------- Discard, a draft only
 def test_discard_with_only_a_draft_pending_keeps_the_history(
     make_editor, project, answers, monkeypatch

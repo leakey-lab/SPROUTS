@@ -176,7 +176,7 @@ class SkeletonLayer:
         self.finish_gesture()  # an eraser drag in progress is an edit of the skeleton
         if not self.draft.pending() or self.document.is_dirty():
             return self._reload(self.document.reopen)
-        self._drop_transient()
+        self.drop_transient()
         return []
 
     def load_file(self, path: str) -> list[Notice]:
@@ -184,7 +184,7 @@ class SkeletonLayer:
         self.finish_gesture()
         notices = self.document.load_file(path)
         if self.document.last_load_ok:
-            self._drop_transient()
+            self.drop_transient()
             self.render_skeleton()
         return notices
 
@@ -199,16 +199,16 @@ class SkeletonLayer:
 
     def _reload(self, load: Callable, *args):
         self.finish_gesture()
-        self._drop_transient()
+        self.drop_transient()
         notices = load(*args)
         self.render_skeleton()
         return notices
 
-    def _drop_transient(self) -> None:  # the document is replaced: a lost draft is told
-        dropped = self.draft.holds_work()  # a plain pick loses nothing
+    def drop_transient(self) -> None:  # the document is replaced: a lost draft is told
+        notice = self.draft.drop_notice(self.DRAFT_DISCARDED_NOTICE)  # a plain pick loses nothing
         self.cancel_transient()
-        if dropped:
-            self.notify(self.DRAFT_DISCARDED_NOTICE, "info")
+        if notice:
+            self.notify(notice, "info")
 
     def is_dirty(self) -> bool:
         """The skeleton differs from its file, or a polyline draft is pending (S5)."""

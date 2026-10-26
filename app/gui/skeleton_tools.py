@@ -15,7 +15,7 @@ distances (``*_HIT_PX``) are screen px, turned into image px at the canvas zoom 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QKeyEvent
@@ -107,11 +107,16 @@ class PolylineDraft:
     orig_points: list[QPoint] = field(default_factory=list)
     smooth: bool = False
     edit_original: list[tuple[int, int]] | None = None
+    smooth_on_pick: bool = False  # Smooth was already on when the branch was picked
+    SMOOTH_DROPPED_NOTICE: ClassVar[str] = (
+        "Smoothed branch not applied · pick it and press Enter to apply"
+    )
 
     def reset(self) -> None:
         """Forget the line and any drag (keeps the Smooth setting)."""
         self.points = []
         self.edit_original = None
+        self.smooth_on_pick = False
         self.end_drag()
 
     def end_drag(self) -> None:
@@ -139,6 +144,17 @@ class PolylineDraft:
         """Points that dropping the draft loses (a new line's, or a picked branch's that
         moved): a dropped draft is announced only then."""
         return bool(self.points) and not self.plain_pick()
+
+    def unapplied_smooth(self) -> bool:
+        """A plain pick whose preview was smoothed by a Smooth switched on during the pick."""
+        return self.plain_pick() and self.smooth and not self.smooth_on_pick
+
+    def drop_notice(self, discarded: str) -> str | None:
+        """What dropping the draft tells: ``discarded`` for lost work, the smoothed-pick
+        notice for an unapplied Smooth, else None."""
+        if self.holds_work():
+            return discarded
+        return self.SMOOTH_DROPPED_NOTICE if self.unapplied_smooth() else None
 
     def raster_points(self, bounds: tuple[int, int]) -> list[tuple[int, int]]:
         """Pixels to draw: the straight polyline, or the sampled curve when smooth."""
@@ -214,6 +230,7 @@ class SelectTool(SkeletonTool):
         branch = [(int(x), int(y)) for x, y in topo.polylines[i]]
         host.draft.reset()
         host.draft.edit_original = branch
+        host.draft.smooth_on_pick = host.draft.smooth
         host.draft.points = [QPoint(x, y) for x, y in branch]
         host.switch_tool(POLYLINE, keep_draft=True)
         host.refresh_draft()

@@ -272,7 +272,7 @@ class CorrectEditor(PagingApi, QWidget):
             self.set_layer_visible(SKELETON, True)
             return self.notice.emit(self.FINISH_LINE_FIRST, "warn")
         if draft.plain_pick():
-            self._skeleton.cancel_polyline()
+            self._skeleton.drop_transient()  # a pick smoothed meanwhile says it was dropped
         if self.actions.save_for_paging():  # a failed save, or Cancel, stays
             self.navigate_requested.emit(delta)
 

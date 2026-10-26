@@ -357,6 +357,11 @@ Five passes, not yet released:
 
 ### Added
 - **Owner-decisions build (2026-10-25).**
+  - Correct: leaving an image (PgDn / PgUp, opening another, or Discard) with a branch
+    picked with Select and smoothed in the meantime now says so in a toast, "Smoothed
+    branch not applied · pick it and press Enter to apply" (also when Load file / Load
+    prediction replaces it). A plain pick, Esc, or Smooth already on before the pick stay
+    silent, and the pick is still not an unsaved change (W4-T2, O20).
   - The class editor lists retired classes under "Retired" with a **Restore** button; a
     restored class returns with its id, colour and place, and its pixels export under its
     own id again (WG-T9, O24).
