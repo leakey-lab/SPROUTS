@@ -489,6 +489,14 @@ Five passes, not yet released:
     a file it cannot delete is named. The Trace GT page has no actions until WG-T11 removes
     that stage. No CSV value or output pixel changes; the class-label goldens replay through
     the page.
+  - Stages (WG-T11, O23): the **Trace GT** stage, its page and its shortcut scope are gone;
+    the class labels are a layer of **Correct** (WG-T5). Five stages remain, `Alt+1` …
+    `Alt+5`: Library, Generate, Correct (`Alt+3`, was `Alt+4`), Measure (`Alt+4`),
+    Visualize (`Alt+5`); the F1 sheet has three sections (Global, Library, Correct). A GT
+    skeleton saved in Correct marks the Library row and refreshes the metrics bar at once,
+    and a class-label save shows one toast ("Saved class labels · …"). With one stage
+    fewer the window's minimum width is about 877 px with the app's fonts (was about
+    917 px), under the 900 px target.
   - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
     pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
     files of a run have more than one size (the photos differ) or the predictions do; the
@@ -677,6 +685,15 @@ Five passes, not yet released:
   fallback; the mask model used to fail to load.
 
 ### Removed
+- **Owner-decisions build (2026-10-25).** The Trace GT editor (WG-T11):
+  `GtTracingInterface` (`app/gui/gt_tracing_interface.py`) and its base
+  `RasterEditorBase` (`app/gui/raster_editor_base.py`), `MainWindow.gt_tracing_interface` /
+  `toggle_gt_tracing`, `Panel.GT_TRACING` (the key `"gt_tracing"` and index 3 are
+  rejected, no alias), the shortcut scope `"Trace GT"` (`shortcuts.TRACE_GT`), and their
+  tests (ported to `tests/test_correct_classes_*.py` / `tests/test_correct_tab_order.py`;
+  the teardown guards to `tests/test_correct_editor_teardown.py`). `ClassPanel`, the class
+  editor, the dataset export and `app/gt/` stay. Also retired: `skeleton_corrections/`
+  (WG-T3; corrections are GT in `gt/skeletons/`).
 - The two editors the Correct stage replaced: `MaskTracingInterface`,
   `SkeletonCorrectionInterface`, their graphics views, `MaskDrawingMixin`,
   `CanvasPixmapItem`, `SkeletonOverlayRenderer` (replaced by `SkeletonLayerItem`) and

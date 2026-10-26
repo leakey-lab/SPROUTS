@@ -64,7 +64,7 @@ end of each wave.
 | L3 | | Mask and skeleton are independent and the pages do not say so | O14, W2-T8a, WG-T10 |
 | L5 | Q1 leftover | Two thinning paths; old 341 x 256 corrections | O13, WG-T3 (done, 5fca8c4), WG-T8 (done, 9e173c6) |
 | M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2 (done, 7d5ae3e), W3-T4 (done, 28203c0) |
-| M2 | | One field of view for every image | O3, W2-T4 (done, c609d77), W3-T2 (done, 8ca6e5e: project file; default 18 x 13.5 mm in the next commit) |
+| M2 | | One field of view for every image | O3, W2-T4 (done, c609d77), W3-T2 (done, 8ca6e5e: project file; 6e210d1: default 18 x 13.5 mm) |
 | M4 | | Mask origin by PNG colour type; a cleared mask is regenerated | O9, WG-T2 (done, 93a88d4), WG-T7 (done, 6ce8e8d) |
 | M5 | | Area of editor masks; two thresholds | O10, W2-T6 |
 | R1 | batch-size item of section 7 | Batch size changes GPU outputs | O4, W2-T3 (done, 41f371e: step 1, batch shapes in the run record), W3-T3 (done, 1fbc34c) |
@@ -84,7 +84,7 @@ end of each wave.
 | G2 | | Trace GT v1 limits; retired classes cannot return | O24, WG-T6 (done, 8bce201), WG-T9 |
 | G4 | | Naming: trace, correct, GT, mask | O26, WG-T6 (done, 8bce201), WG-T10 |
 | E8 | | After *Generate* writes a prediction for an image open in *Correct* with unsaved edits, **Load prediction** stays off until the image is opened again (mask and skeleton layers; the page reloads only images without edits) | known, accepted (WG-T3 review) |
-| E9 | | The window's minimum width is about 917 px with real fonts while the Correct page holds four top-bar buttons (target 900); W4-T1 removes the top-bar Clear (about 110 px) | W4-T1 (its acceptance runs the width probe with real fonts) |
+| E9 | | The window's minimum width is about 917 px with real fonts while the Correct page holds four top-bar buttons (target 900); W4-T1 removes the top-bar Clear (about 110 px) | resolved by WG-T11 (9a2f58a): about 877 px with real fonts, one stage fewer; W4-T1 removes the top-bar Clear too |
 | E10 | | At 700 x 520 with the Enhance popover and the polyline prompt open, the side card gets 117 px and the Classes row is cut off; Pan and Enhance move down the rail while the class labels are edited (reserving the space breaks the 700 x 520 overlay rule) | known, accepted (WG-T5 review) |
 | M7 | | The dashboards' export finds `sprouts_project.json` by looking up to five folders above the CSV; with a sub-folder opened as the project inside another project, it can find the outer project's file and compare with that field of view while the metrics bar uses the default (the dashboards do not pass the project root yet) | known, accepted (W3-T2 review) |
 | M6 | | With no inputs record (its write failed, or the CSV was edited by hand), the Measure status line can miss a regenerated prediction under a GT file that was not used; the metrics bar flags it, and the next Measure run writes a fresh record | known, accepted (WG-T8 review) |

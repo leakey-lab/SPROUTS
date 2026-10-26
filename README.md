@@ -163,16 +163,15 @@ off; the status line then reads "Device not detected yet" until the first run.
 
 ## Stages
 
-The top bar walks through the work in six stages, in this order (`F1` lists every key):
+The top bar walks through the work in five stages, in this order (`F1` lists every key):
 
 | Stage | Key | What it does |
 |---|---|---|
 | **Library** | `Alt+1` | Browse and select minirhizotron images from the tree. |
-| **Trace GT** | `Alt+2` | Paint ground-truth classes for a segmentation dataset (see below). |
-| **Generate** | `Alt+3` | Generate masks and skeletons for all loaded images in one pass. |
-| **Correct** | `Alt+4` | Fix the mask (area) and the skeleton (length), and paint class labels (GT for training), on one canvas. |
-| **Measure** | `Alt+5` | Compute root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. |
-| **Visualize** | `Alt+6` | Explore length and area trends across the trial. |
+| **Generate** | `Alt+2` | Generate masks and skeletons for all loaded images in one pass. |
+| **Correct** | `Alt+3` | Fix the model's mask (area) and skeleton (length), and paint class labels (GT for training), on one canvas. |
+| **Measure** | `Alt+4` | Compute root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. |
+| **Visualize** | `Alt+5` | Explore length and area trends across the trial. |
 
 A stage's keys work wherever the keyboard is while the stage is on screen, also right
 after a click in the library tree. In the Library, `Ctrl+0`, `Ctrl+1` and `Ctrl+=` /
@@ -333,7 +332,7 @@ are kept across restarts.
 | `Ctrl+Z` · `Ctrl+Y` / `Ctrl+Shift+Z` | Undo · redo |
 | `Ctrl+S` | Save |
 | `Ctrl+0` · `Ctrl+1` · `Ctrl+=` / `Ctrl+-` · `Ctrl`+wheel | Fit · 100 % · zoom in / out · zoom about the cursor |
-| `Ctrl+'` | Show or hide the pixel grid (drawn from 800 %; also in Trace GT) |
+| `Ctrl+'` | Show or hide the pixel grid (drawn from 800 %) |
 | `PgDn` / `PgUp` | Save, then open the next / previous image |
 
 A tool key of another layer switches layers too (`V`, `P`, `C` → skeleton; `B`, `F` →
@@ -395,14 +394,13 @@ percentages with a short glide, the wheel zooms continuously, and a right-click 
 readout offers presets (Fit, 50 % … 1600 %). Zooming out stops at half the fitted zoom or
 at 100 %, whichever is smaller.
 
-## Ground-truth tracing (Trace GT)
+## Ground-truth class labels
 
-The **Trace GT** stage paints hand-traced, multi-class ground truth for training
-segmentation models (for example, roots vs nodules). It is independent of every
-model in the app: it never starts from the ResNet mask and never reads or writes
-`mask/` or `skeletons/`. It traces classes; it does not measure them. Its **Classes…**
-and **Export dataset…** buttons are on the Correct page now: the class labels are a layer
-of *Correct*. The Trace GT stage goes in a later step.
+The **class labels** are the third layer of *Correct* (key `G`, row "Classes"): hand-traced,
+multi-class ground truth for training segmentation models (for example, roots vs nodules).
+They are independent of every model in the app: they never start from the ResNet mask and
+never read or write `mask/` or `skeletons/`. They trace classes; they do not measure them.
+**Classes…**, **Export dataset…** and **Remove GT…** are on the Correct page.
 
 **Files** (next to the images, in the loaded folder):
 
@@ -416,22 +414,23 @@ of *Correct*. The Trace GT stage goes in a later step.
   the wrong type, the app names the class and field and turns GT saving off until
   it is fixed.
 
-A saved file means the image was annotated, even when nothing is painted
-("checked, nothing present" is a valid negative example).
+A saved file means the image was annotated, even when nothing is painted: tick the classes
+you looked for and save ("checked, nothing present" is a valid negative example).
 
-**Editor:** the same brush / eraser / fill canvas as the mask in Correct, plus a class
-panel on the right. The brush paints the active class and replaces whatever was
+**Painting:** the class labels use Correct's Brush, Eraser and Fill, with the class panel
+under the Layers panel while they are edited. The brush paints the active class and replaces whatever was
 under it (one class per pixel). Each class has a ✓ box: it ticks itself when the
 class has pixels, and you tick it by hand for "looked for it, none present" (with the
 mouse, or reach the boxes with Tab and press Space).
 
 | Key | Action |
 |---|---|
+| `G` | edit the class labels |
 | `1`–`9` (top row or keypad) | select the n-th class |
 | `0` | select Ignore |
 | `PgDn` / `PgUp` | save and open the next / previous image (asks first if the file's classes had to be remapped on load) |
 | `B` `E` `F`, `[` `]`, Space, `Ctrl+S`, `Ctrl+Z`/`Ctrl+Y` | as for the mask in Correct |
-| `H` | show or hide the tracing |
+| `H` / `Shift+H` | show or hide every layer / the other layers |
 
 **Export dataset…** writes a training set to an empty folder:
 
@@ -453,7 +452,7 @@ rest still export. A relative output folder is created next to the images.
 
 If a GT save fails (for example the file is locked by another program), your edits
 are kept: the prompt offers **Keep editing** instead of silently moving on. **Discard**
-puts the tracing back as it was last saved (or opened).
+puts the class labels back as they were last saved (or opened).
 
 ## Building the Windows app
 
