@@ -24,6 +24,7 @@ import functools
 import hashlib
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -49,13 +50,16 @@ __all__ = [
     "append_run_history",
     "build_record",
     "calibration_info",
+    "csv_calibration",
     "file_sha256",
     "git_commit",
     "minimal_record",
     "names_digest",
     "portable_path",
+    "read_sidecar",
     "run_history_path",
     "run_manifest_path",
+    "same_calibration",
     "runtime_info",
     "sidecar_path",
     "write_run_manifest",
@@ -410,6 +414,42 @@ def minimal_record(kind: str, *, outputs: Mapping[str, Any], reason: str) -> dic
 def sidecar_path(output_path: str | os.PathLike[str]) -> str:
     """Where the record for ``output_path`` lives: ``<output_path>.provenance.json``."""
     return os.fspath(output_path) + SIDECAR_SUFFIX
+
+
+def read_sidecar(output_path: str | os.PathLike[str]) -> dict[str, Any] | None:
+    """The record parsed from ``<output_path>.provenance.json``; ``None`` when there is
+    none, it cannot be read, or it is not a JSON object."""
+    try:
+        with open(sidecar_path(output_path), encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError, RecursionError):  # ValueError: bad JSON or bad UTF-8
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def csv_calibration(csv_path: str) -> dict[str, float] | None:
+    """The field of view ``csv_path`` was measured with (``fov_width_mm``, ``fov_height_mm``)
+    from its provenance sidecar; ``None`` without a sidecar, or one whose two values are not
+    both finite numbers above zero (a bool, text, ``NaN`` and ``inf`` are not)."""
+    record = read_sidecar(csv_path)
+    calibration = record.get("calibration") if record is not None else None
+    if not isinstance(calibration, dict):
+        return None
+    found: dict[str, float] = {}
+    for key in ("fov_width_mm", "fov_height_mm"):
+        value = calibration.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not math.isfinite(value) or value <= 0:
+            return None
+        found[key] = float(value)
+    return found
+
+
+def same_calibration(a: Mapping[str, float], b: Mapping[str, float]) -> bool:
+    """True when two fields of view (``fov_width_mm``, ``fov_height_mm``) are equal as
+    numbers: the one rule that decides a CSV's recorded field of view is another one."""
+    return all(math.isclose(a[k], b[k]) for k in ("fov_width_mm", "fov_height_mm"))
 
 
 def _json_default(obj: Any) -> Any:

@@ -172,16 +172,24 @@ def _error_text(exc: BaseException, path: str) -> str:
     return text
 
 
+def _size_text(image: np.ndarray) -> str:
+    """``"WxH"`` of a decoded image: the private ``_size_px`` key of a row."""
+    h, w = image.shape[:2]
+    return f"{w}x{h}"
+
+
 def _metric_row(
     name: str,
     path: str,
-    measure: Callable[[str], float],
+    measure: Callable[[str], tuple[float, str]],
     value_column: str,
     label: str,
 ) -> dict:
-    """One CSV row: ``measure(path)`` rounded to 2 dp, or a 0 row with ``Error``."""
+    """One CSV row: ``measure(path)`` (the value and the decoded size) with the value
+    rounded to 2 dp, or a 0 row with ``Error``. ``_size_px`` is private to the row: the
+    CSV writer writes the headers only, so it is never a column."""
     try:
-        value = measure(path)
+        value, size = measure(path)
         info = parse_image_name(name)
         return {
             "Image": info["original_name"],
@@ -190,6 +198,7 @@ def _metric_row(
             "Date": info["date"],
             "Time": info["time"],
             value_column: round(value, 2),
+            "_size_px": size,
         }
     except Exception as e:  # per-image boundary: one bad file never aborts a run
         logger.error("%s metric failed for %r: %s", label, name, e)
@@ -207,21 +216,23 @@ def _metric_row(
 def length_row(name: str, path: str, *, data: bytes | None = None) -> dict:
     """The ``root_lengths.csv`` row for the skeleton image at ``path`` (``data``: its bytes,
     already read; the row is the same)."""
-    return _metric_row(
-        name,
-        path,
-        lambda p: root_length_mm(preprocess_image(p, data=data)),
-        LENGTH_VALUE_COLUMN,
-        "Length",
-    )
+
+    def measure(p: str) -> tuple[float, str]:
+        skeleton = preprocess_image(p, data=data)
+        return root_length_mm(skeleton), _size_text(skeleton)
+
+    return _metric_row(name, path, measure, LENGTH_VALUE_COLUMN, "Length")
 
 
 def area_row(name: str, path: str, *, data: bytes | None = None) -> dict:
     """The ``root_areas.csv`` row for the mask image at ``path`` (``data``: its bytes,
     already read; the row is the same)."""
-    return _metric_row(
-        name, path, lambda p: root_area_mm2(load_mask(p, data=data)), AREA_VALUE_COLUMN, "Area"
-    )
+
+    def measure(p: str) -> tuple[float, str]:
+        mask = load_mask(p, data=data)
+        return root_area_mm2(mask), _size_text(mask)
+
+    return _metric_row(name, path, measure, AREA_VALUE_COLUMN, "Area")
 
 
 # ----------------------------- CSV -----------------------------------------

@@ -20,8 +20,10 @@ import hashlib
 import logging
 import os
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Any
 
 from app import provenance
 from app.config import (
@@ -39,6 +41,7 @@ from app.inference.measure_inputs import Fingerprint
 from app.inference.measure_sources import GT, PREDICTION, GtReport, MeasureSource, SourceDecision
 from app.inference.metrics import area_row, length_row, run_metric_pool, write_metric_csv
 from app.project_layout import ProjectLayout
+from app.provenance import csv_calibration
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,10 @@ __all__ = [
     "InputSplit",
     "MeasureRun",
     "MetricSpec",
+    "csv_calibration",
+    "mixed_sizes",
     "scan_png_files",
+    "sizes_px",
     "split_by_image",
     "split_inputs",
 ]
@@ -113,6 +119,38 @@ PREDICTION_ONLY: dict[str, dict[str, str]] = {
     LENGTH.kind: {"input": "generated skeletons (*_fake.png)", "source_rule": "prediction"},
     AREA.kind: {"input": "masks (*.png)", "source_rule": "prediction"},
 }
+
+
+#: The private row key holding the decoded size of the file a row was measured from.
+_SIZE_KEY = "_size_px"
+
+
+def sizes_px(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    """``{"640x480": 2880, ...}``: how many of ``rows`` were measured from a file of each
+    decoded size (``"WxH"``), most common first. An ``Error`` row has no size."""
+    return dict(Counter(row[_SIZE_KEY] for row in rows if row.get(_SIZE_KEY)).most_common())
+
+
+def mixed_sizes(rows: Iterable[Mapping[str, Any]]) -> dict[str, int] | None:
+    """The sizes (:func:`sizes_px`) of the first source group of ``rows`` that has more than
+    one, else ``None``.
+
+    The groups are the ``Source`` of each row: the GT files among themselves, the
+    predictions among themselves (a row without ``Source`` is a prediction). GT files are
+    at the photo's size and predictions at the model's; every measured file spans its
+    photo's full frame, so one field of view is right for each and the two groups are never
+    compared with each other. GT files of two sizes mean photos of two sizes (two cameras),
+    which one field of view cannot fit. Predictions of two sizes mean files the model did
+    not write (it always writes 341 x 256 skeletons and 640 x 480 masks). A project without
+    GT files is not checked for photo sizes. GT is looked at first."""
+    groups: dict[str, list[Mapping[str, Any]]] = {GT: [], PREDICTION: []}
+    for row in rows:
+        groups.setdefault(row.get(SOURCE_COLUMN) or PREDICTION, []).append(row)
+    for group in groups.values():
+        sizes = sizes_px(group)
+        if len(sizes) > 1:
+            return sizes
+    return None
 
 
 def scan_png_files(folder: str) -> tuple[dict[str, str], list[tuple[str, str]]]:
@@ -376,6 +414,7 @@ class MeasureRun:
                 "n_duplicate": len(self.duplicates),
                 "without_image": sorted(self.without_image)[:WITHOUT_IMAGE_NAMES_LIMIT],
                 "duplicates": sorted(self.duplicates)[:WITHOUT_IMAGE_NAMES_LIMIT],
+                "sizes_px": sizes_px(rows),
             }
             report = self.gt_report
             if report is not None:

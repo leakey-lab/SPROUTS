@@ -539,6 +539,9 @@ class _NoteIndex:
     def by_content(self) -> dict:
         return {"length": True, "area": True}
 
+    def calibrations(self) -> dict:
+        return {"length": None, "area": None}
+
     def gt_skip_reason(self, _name) -> dict:
         return {"length": "size", "area": "unreadable"}
 
@@ -559,7 +562,9 @@ def test_the_skip_note_shows_only_beside_a_prediction_row():
             has_gt_labels=lambda _n: False,
         ),
         display_controller=SimpleNamespace(current_name="a"),
-        metrics_bar=SimpleNamespace(set_metrics=lambda **k: shown.append(k)),
+        metrics_bar=SimpleNamespace(
+            set_metrics=lambda **k: shown.append(k), set_fov=lambda *a: None
+        ),
     )
     controller = MetricsController(window)
 

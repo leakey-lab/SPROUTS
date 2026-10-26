@@ -51,7 +51,7 @@ from app.inference.measure_inputs import (
 )
 from app.naming import image_stem, stem_key
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
-from app.provenance import sidecar_path
+from app.provenance import csv_calibration, sidecar_path
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,7 @@ class MetricTable:
         self._rows: _Rows = _NO_ROWS
         self._record: InputsRecord | None = None
         self._gt_skipped: dict[str, str] = {}
+        self._calibration: dict[str, float] | None = None
 
     @property
     def path(self) -> str | None:
@@ -213,6 +214,13 @@ class MetricTable:
         none (or one written for another CSV)."""
         return self._record
 
+    @property
+    def calibration(self) -> dict[str, float] | None:
+        """The field of view the loaded CSV was measured with (``fov_width_mm``,
+        ``fov_height_mm``, from its provenance sidecar); ``None`` without a sidecar (or before
+        the CSV is loaded)."""
+        return self._calibration
+
     def gt_skip_reason(self, stem: str) -> str:
         """Why the GT file of ``stem`` was not measured (``size``, ``unedited``,
         ``unreadable``: the CSV's provenance), ``""`` when it was or there is none."""
@@ -223,7 +231,7 @@ class MetricTable:
         with self._lock:
             self._path, self._searched_at, self._searched_full_at = None, None, None
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
-            self._gt_skipped = {}
+            self._gt_skipped, self._calibration = {}, None
 
     def _resolve(self, full: bool) -> tuple[str, _TableSignature] | None:
         """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
@@ -257,7 +265,7 @@ class MetricTable:
         found = self._resolve(full=load)
         if found is None:
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
-            self._gt_skipped = {}
+            self._gt_skipped, self._calibration = {}, None
             return None
         path, sig = found
         if sig != self._loaded_sig:
@@ -267,6 +275,7 @@ class MetricTable:
                 self._rows = _read_metric_csv(path, self.value_column)
             self._record = load_inputs_record(path)
             self._gt_skipped = _read_gt_skipped(path)  # written with the record
+            self._calibration = csv_calibration(path)
             self._loaded_sig = sig
         return self._rows
 
@@ -387,6 +396,12 @@ class MeasurementIndex:
         """Re-locate and re-read both CSVs on the next lookup (after a Measure run)."""
         self._length.invalidate()
         self._area.invalidate()
+
+    def calibrations(self) -> dict[str, dict[str, float] | None]:
+        """``{"length": cal | None, "area": cal | None}``: the field of view each loaded CSV
+        was measured with (``fov_width_mm``, ``fov_height_mm``); ``None`` for a metric without
+        a CSV, or whose CSV has no provenance sidecar. Parsed state only (GUI thread)."""
+        return {"length": self._length.calibration, "area": self._area.calibration}
 
     def sources(self) -> dict[str, str | None]:
         """``{"length": csv path | None, "area": csv path | None}`` currently in use."""

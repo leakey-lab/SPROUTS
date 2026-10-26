@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 import app
+from app import provenance
 from app.visualization import dash_export
 from tests.viz_dash_helpers import build_area_app, build_length_app, call_callback
 
@@ -83,10 +84,38 @@ def test_stacked_export_holds_tube_date_totals_and_provenance(length_app, tmp_pa
     assert header["source_sha256"] == _sha256(tmp_path / "root_lengths.csv")
     assert header["source_csv"] == "root_lengths.csv"
     assert header["view"] == "stacked"
-    assert header["calibration"].startswith("field of view 18.0 x 13.0 mm")
+    assert header["calibration"].startswith("field of view 18.00 x 13.00 mm")
+    assert "no record next to root_lengths.csv" in header["calibration"]
     assert app.__version__ in header["software"]
     generated = datetime.fromisoformat(header["generated_at"].replace("Z", "+00:00"))
     assert generated.tzinfo is not None
+
+
+def test_the_export_takes_the_calibration_from_the_csv_record(length_app, tmp_path):
+    provenance.write_sidecar(
+        tmp_path / "root_lengths.csv",
+        {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}},
+    )
+    line = _header(_export(length_app.app, {"view-selector.value": "stacked"})["content"])[
+        "calibration"
+    ]
+    assert "18.00 x 13.50 mm, as recorded with root_lengths.csv" in line
+    assert "; this app now uses 18.00 x 13.00 mm" in line
+    assert line.count("(mm per pixel = field of view / image resolution)") == 1
+
+
+def test_a_record_equal_to_this_apps_calibration_adds_no_note(length_app, tmp_path):
+    provenance.write_sidecar(
+        tmp_path / "root_lengths.csv",
+        {"calibration": provenance.calibration_info()},
+    )
+    line = _header(_export(length_app.app, {"view-selector.value": "stacked"})["content"])[
+        "calibration"
+    ]
+    assert line == (
+        "field of view 18.00 x 13.00 mm, as recorded with root_lengths.csv "
+        "(mm per pixel = field of view / image resolution)"
+    )
 
 
 def test_time_export_has_the_field_average_and_the_selected_tubes(length_app):

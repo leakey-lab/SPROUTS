@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.gui.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
+from app.gui.metrics_bar import fov_text
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
 from app.inference.measure_run import (
@@ -31,6 +32,7 @@ from app.inference.measure_run import (
     SPECS,
     MeasureRun,
     MetricSpec,
+    mixed_sizes,
     scan_png_files,
     split_inputs,
 )
@@ -58,6 +60,10 @@ _SKIP_WORDS = (
     (UNEDITED, "equal to the prediction"),
     (UNREADABLE, "unreadable"),
 )
+
+
+#: Sizes named in the mixed-size warning; all of them are in the provenance (``inputs.sizes_px``).
+_SIZES_LISTED = 3
 
 
 def job_name(spec: MetricSpec) -> str:
@@ -275,6 +281,22 @@ class SkeletonHandler(HandlerDependencies):
             self.feedback.notify(f"Saved {name} in the {folder} folder", "success")
         self._notify_skipped(thread.job, name)
         self._notify_gt_not_used(thread.job, name)
+        self._notify_mixed_sizes(rows)
+
+    def _notify_mixed_sizes(self, rows: list[dict]) -> None:
+        """Warn, once, when the files of one source group have more than one size (M2): the
+        photos differ, and one field of view was applied to all of them. The sizes are in
+        the provenance (``inputs.sizes_px``)."""
+        sizes = mixed_sizes(rows)
+        if sizes is None:
+            return
+        listed = [f"{size} ×{n:,}" for size, n in list(sizes.items())[:_SIZES_LISTED]]
+        if len(sizes) > _SIZES_LISTED:
+            listed.append("…")
+        self._warn(
+            f"The measured files have {len(sizes)} sizes ({', '.join(listed)}): "
+            f"one {fov_text()} field of view was applied to each."
+        )
 
     def _notify_gt_not_used(self, job: MeasureRun, csv_name: str) -> None:
         """Say how many GT files were not measured, and why (named in the provenance)."""

@@ -466,6 +466,12 @@ Five passes, not yet released:
     Skeleton: … · Classes / No classes`, replacing *Skeleton corrected* / *Mask ready*), and
     each value's tooltip names the file it was measured from (GT or prediction) and why a GT
     file was not used.
+  - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
+    pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
+    files of a run have more than one size (the photos differ) or the predictions do; the
+    dashboards' export, the metrics bar's field-of-view cell and About show the field of
+    view each CSV was measured with, and say when this app now uses another. No CSV value
+    changes.
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

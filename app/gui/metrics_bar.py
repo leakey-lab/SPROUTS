@@ -19,7 +19,9 @@ its message, and a value whose inputs changed after it was measured is shown in 
 colour with a "Measure again" tooltip (plus a line saying so when the comparison was by file time:
 the CSV has no record of its inputs). A value that is not a number (a CSV edited to hold ``nan``
 or ``inf``) shows ``—`` in the failure colour, never "nan mm". The FOV text is derived from
-:data:`app.config.CALIBRATION` (the single source of the field of view). The
+:data:`app.config.CALIBRATION` (the single source of the field of view) until a measured value
+is shown: then :meth:`MetricsBar.set_fov` shows the field of view recorded with that value's
+CSV (M2). The
 value QLabels keep their ``—`` fallback text (and their ``_length_value`` /
 ``_area_value`` / ``_status_value`` names) so existing callers and tests are
 unaffected.
@@ -28,7 +30,7 @@ unaffected.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QPainter, QPalette
@@ -37,6 +39,7 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 from app import config
 from app.gui.library_index import fit_label, stem_forms
 from app.gui.widgets import tokens
+from app.provenance import same_calibration
 
 _DASH = "—"
 _FAILED = "failed"
@@ -48,14 +51,28 @@ _NO_NUMBER_TIP = "This image has no valid number ({}): {}"
 _LENGTH_INPUT = "A skeleton of this image (GT or prediction)"
 #: An outdated value whose CSV has no record of its inputs: compared by file time (R5).
 _BY_TIME_TIP = "Compared by file time: this CSV has no record of its inputs."
+#: The FOV cell's tooltip while no CSV's own field of view is shown.
+_APP_FOV_TIP = "This app's field of view"
 _ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
 _AREA_INPUT = "A mask of this image (GT or prediction)"
 
 
-def fov_text() -> str:
-    """Display text of the calibrated field of view, e.g. ``18×13 mm``."""
+def fov_text(calibration: Mapping[str, float] | None = None) -> str:
+    """Display text of a field of view, e.g. ``18×13 mm``: ``calibration`` (``fov_width_mm``,
+    ``fov_height_mm``, as a CSV's provenance records it), else the running one."""
+    if calibration is None:
+        cal = config.CALIBRATION
+        return f"{cal.fov_width_mm:g}×{cal.fov_height_mm:g} mm"
+    return f"{calibration['fov_width_mm']:g}×{calibration['fov_height_mm']:g} mm"
+
+
+def differs_from_running(calibration: Mapping[str, float]) -> bool:
+    """True when ``calibration`` (a CSV's recorded field of view) is another field of view than
+    the running one, compared as numbers (the one rule of the export, the bar and About)."""
     cal = config.CALIBRATION
-    return f"{cal.fov_width_mm:g}×{cal.fov_height_mm:g} mm"
+    return not same_calibration(
+        calibration, {"fov_width_mm": cal.fov_width_mm, "fov_height_mm": cal.fov_height_mm}
+    )
 
 
 class _ElidedLabel(QLabel):
@@ -160,8 +177,7 @@ class MetricsBar(QWidget):
         self._length_cell, self._length_value = self._add_cell(row, "LENGTH", accent=True)
         self._area_cell, self._area_value = self._add_cell(row, "AREA")
         self._fov_cell, self._fov_value = self._add_cell(row, "FOV")
-        self._fov_value.setText(fov_text())
-        self._fov_cell.setToolTip("Calibrated field of view (app.config.CALIBRATION)")
+        self.set_fov(fov_text(), _APP_FOV_TIP)
         self._status_cell, self._status_value = self._add_cell(row, "STATUS")
         # The Library display's zoom (the editors show theirs in their zoom cluster).
         self._zoom_cell, self._zoom_value = self._add_cell(row, "ZOOM")
@@ -287,6 +303,12 @@ class MetricsBar(QWidget):
         self._name_cell.setVisible(bool(name))
         self._sync_separators()
         self._fit_zoom()
+
+    def set_fov(self, text: str, tooltip: str = "") -> None:
+        """Show ``text`` in the FOV cell (the field of view of the shown measurement, or the
+        app's) with ``tooltip``; read-only like the rest of the bar."""
+        self._fov_value.setText(text)
+        self._fov_cell.setToolTip(tooltip)
 
     def set_zoom(self, factor: float | None) -> None:
         """Show the display's zoom (``1.0`` = 100 %), while an image is named; ``None``

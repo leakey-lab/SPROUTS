@@ -14,6 +14,8 @@ controller directly, so the browse path costs no extra call.
 """
 
 import logging
+import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
@@ -24,6 +26,7 @@ from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 
 from ..image_manager import project_layout_of
 from ..library_index import status_text
+from ..metrics_bar import differs_from_running, fov_text
 from ._common import USER_ROLE
 
 logger = logging.getLogger(__name__)
@@ -86,6 +89,28 @@ def _gt_note(
     if state != SOURCE_GT or source != SOURCE_PREDICTION or why is None or outdated:
         return None
     return GT_NOT_USED.format(noun=noun, folder=_FOLDER[noun], why=why)
+
+
+def _shown_fov(
+    measured: Measurement,
+    calibrations: Mapping[str, Mapping[str, float] | None],
+    csvs: Mapping[str, str | None],
+) -> tuple[str, str]:
+    """``(text, tooltip)`` of the FOV cell: the field of view recorded with the CSV of the
+    shown value (length's, else area's), and when that differs from the running one the
+    line saying so; without such a record, the running one (M2)."""
+    shown = (("length", measured.length_mm), ("area", measured.area_mm2))
+    for metric, value in shown:
+        recorded = calibrations.get(metric)
+        if value is None or recorded is None:
+            continue
+        text = fov_text(recorded)
+        name = os.path.basename(csvs.get(metric) or "") or "its CSV"
+        tip = f"Field of view recorded with {name}"
+        if differs_from_running(recorded):
+            tip += f"\nThis app now uses {fov_text()}"
+        return text, tip
+    return fov_text(), "This app's field of view"
 
 
 class _MeasurementSignals(QObject):
@@ -167,6 +192,7 @@ class MetricsController:
         by_content: dict[str, bool] = {}
         skipped: dict[str, str] = {}
         measured_from: dict = {}
+        calibrations: dict = {}
         index = self.index
         if stored_name and index is not None:
             try:
@@ -182,9 +208,11 @@ class MetricsController:
                 by_content = index.by_content()
                 skipped = index.gt_skip_reason(stored_name)
                 measured_from = index.measured_from(stored_name)
+                calibrations = index.calibrations()
             except Exception:
                 logger.exception("Could not read the measured values of %s", stored_name)
 
+        bar.set_fov(*_shown_fov(measured, calibrations, csvs))
         bar.set_metrics(
             length=measured.length_mm,
             area=measured.area_mm2,

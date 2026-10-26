@@ -260,6 +260,13 @@ sensor's stored axes, so this is also the calibrated orientation.
 If your imaging system has a different FOV, change it in one place:
 `app/config.py`.
 
+Each CSV's `.provenance.json` records the field of view it was measured with
+(`calibration`) and the pixel sizes of the measured files (`inputs.sizes_px`); the
+dashboards' export, the metrics bar and About show that recorded value. Measure warns once
+when the GT files of a run have more than one size (the photos differ, and one field of
+view is applied to each), or when the predictions do (files the model did not write); a
+project without GT files is not checked for photo sizes.
+
 ## Correcting masks and skeletons (Correct)
 
 The **Correct** stage fixes both model outputs of an image on one canvas. The mask (root

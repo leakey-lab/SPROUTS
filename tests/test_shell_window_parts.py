@@ -182,6 +182,9 @@ class Bar:
     def set_metrics(self, **values) -> None:
         self.shown.append(values)
 
+    def set_fov(self, text: str, tooltip: str = "") -> None:
+        pass
+
 
 class Index:
     """A measurement index stand-in: one measured image, counters for what was asked."""
@@ -205,6 +208,9 @@ class Index:
 
     def by_content(self) -> dict:
         return {"length": True, "area": False}
+
+    def calibrations(self) -> dict:
+        return {"length": None, "area": None}
 
     def gt_skip_reason(self, _name) -> dict:
         return {}

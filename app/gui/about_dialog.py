@@ -47,7 +47,14 @@ from app.models import MODELS, ModelStatus
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AboutDialog", "CITATION_PATH", "citation_text", "details_text", "runtime_text"]
+__all__ = [
+    "AboutDialog",
+    "CITATION_PATH",
+    "citation_text",
+    "details_text",
+    "measured_with_text",
+    "runtime_text",
+]
 
 CITATION_PATH = os.path.join(PROJECT_ROOT, "CITATION.cff")
 _CHECKING = "checking…"
@@ -118,10 +125,41 @@ def citation_text(path: str = CITATION_PATH) -> str | None:
     return f"{text} {link}" if link else text
 
 
-def _fov() -> str:
+def _fov(calibration: Mapping[str, float] | None = None) -> str:
+    """The field of view as the metrics bar shows it: ``calibration``'s, else the running one."""
     from app.gui.metrics_bar import fov_text
 
-    return fov_text()
+    return fov_text(calibration)
+
+
+def _differs(calibration: Mapping[str, float]) -> bool:
+    from app.gui.metrics_bar import differs_from_running
+
+    return differs_from_running(calibration)
+
+
+def measured_with_text(window: object | None) -> str | None:
+    """``FOV 18×13.5 mm (root_lengths.csv)``, one line per Measure CSV of the project open in
+    ``window`` that was measured with another field of view than the running one (M2);
+    ``None`` when there is no such CSV, no project or no CSV record. ``window`` is read
+    duck-typed: ``window.metrics.index`` is a ``MeasurementIndex``."""
+    index = getattr(getattr(window, "metrics", None), "index", None)
+    if index is None:
+        return None
+    try:
+        calibrations = index.calibrations()
+        csvs = index.sources()
+    except Exception:  # never let the About box fail on a project probe
+        logger.exception("Measured calibrations unavailable")
+        return None
+    lines = []
+    for metric, calibration in calibrations.items():
+        if calibration is None:
+            continue
+        if _differs(calibration):
+            name = os.path.basename(csvs.get(metric) or "") or f"the {metric} CSV"
+            lines.append(f"FOV {_fov(calibration)} ({name})")
+    return "\n".join(lines) or None
 
 
 def _runtime_summary():
@@ -203,16 +241,20 @@ def details_text(
     statuses: Mapping[str, ModelStatus] | None = None,
     runtime: str | None = None,
     canvas: str | None = None,
+    measured_with: str | None = None,
 ) -> str:
     """Plain-text provenance block for a methods section or lab notebook; ``runtime`` is
     the Runtime line (:func:`runtime_text` without a device guess when None), ``canvas``
-    the Canvas line (the dialog fills it; None means not checked, never probed here)."""
+    the Canvas line (the dialog fills it; None means not checked, never probed here),
+    ``measured_with`` the dialog's "Measured with" text (:func:`measured_with_text`), a line
+    of its own when given."""
     statuses = statuses or {}
     lines = [
         f"{APP_FULL_NAME} v{__version__}",
         f"Commit: {_commit()}",
         f"License: {LICENSE_SPDX} (weights CC-BY-4.0)",
         f"Calibration FOV: {_fov()}",
+        *([f"Measured with: {'; '.join(measured_with.splitlines())}"] if measured_with else []),
         f"Runtime: {runtime_text() if runtime is None else runtime}",
         f"Canvas: {canvas or 'not checked'}",
         f"Python {platform.python_version()} · {platform.system()} {platform.release()}",
@@ -292,6 +334,9 @@ class AboutDialog(QDialog):
         self._add_fact("Commit", _commit())
         self._add_fact("License", f"{LICENSE_SPDX} · weights CC-BY-4.0")
         self._add_fact("Calibration", f"FOV {_fov()}")
+        self._measured_with = measured_with_text(parent)
+        if self._measured_with:
+            self._add_fact("Measured with", self._measured_with)
         self._runtime_label = self._add_fact("Runtime", _CHECKING if ask_driver else runtime_text())
         self._add_fact("Canvas", canvas_gl.canvas_line()[0])
         self._model_labels = {
@@ -374,7 +419,7 @@ class AboutDialog(QDialog):
         if self._runtime_label.text() not in (runtime, _CHECKING):  # not while asking the driver
             self._runtime_label.setText(runtime)
         QGuiApplication.clipboard().setText(
-            details_text(self._statuses, runtime, canvas_gl.canvas_line()[0])
+            details_text(self._statuses, runtime, canvas_gl.canvas_line()[0], self._measured_with)
         )
 
     def copy_citation(self) -> None:

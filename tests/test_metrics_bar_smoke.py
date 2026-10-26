@@ -86,6 +86,21 @@ def test_fov_cell_is_derived_from_calibration(app, monkeypatch):
     assert MetricsBar()._fov_value.text() == "20.5×13 mm"
 
 
+def test_fov_text_formats_a_given_calibration(app):
+    """M2: a CSV's own recorded calibration is shown with the bar's text, not the app's."""
+    from app.gui import metrics_bar
+
+    cal = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
+    assert metrics_bar.fov_text(cal) == "18×13.5 mm"
+    assert metrics_bar.fov_text() == "18×13 mm"
+    bar = MetricsBar()
+    bar.set_fov("18×13.5 mm", "x")
+    assert bar._fov_value.text() == "18×13.5 mm"
+    assert bar._fov_cell.toolTip() == "x"
+    bar.set_fov("18×13 mm")
+    assert bar._fov_cell.toolTip() == ""
+
+
 def test_measured_values_show_source_tooltip(app):
     """UXS-03: a measured value names the CSV it was read from."""
     bar = MetricsBar()
@@ -109,3 +124,33 @@ def test_measurement_error_is_shown_instead_of_a_value(app):
     assert not bar._length_cell.isHidden()
     assert bar._length_value.text() == "failed"
     assert "cannot read image" in bar._length_cell.toolTip()
+
+
+def test_the_bar_shows_the_field_of_view_recorded_with_the_shown_value(app):
+    """M2: the FOV cell follows the CSV of the shown value (length's, else area's)."""
+    from app.data_processing.measurement_index import Measurement
+    from app.gui.window.metrics import _shown_fov
+
+    recorded = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
+    same = {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    csvs = {"length": "D:/p/skeletons/root_lengths.csv", "area": "D:/p/mask/root_areas.csv"}
+    both = Measurement(1.0, 2.0, None)
+
+    assert _shown_fov(both, {"length": recorded, "area": same}, csvs) == (
+        "18×13.5 mm",
+        "Field of view recorded with root_lengths.csv\nThis app now uses 18×13 mm",
+    )
+    # Equal to the running one: the CSV is named, no second line.
+    assert _shown_fov(both, {"length": same, "area": None}, csvs) == (
+        "18×13 mm",
+        "Field of view recorded with root_lengths.csv",
+    )
+    # Only the area is shown: the area's CSV; no value, no CSV or no record: the running one.
+    assert (
+        _shown_fov(Measurement(None, 2.0, None), {"length": same, "area": recorded}, csvs)[0]
+        == "18×13.5 mm"
+    )
+    running = ("18×13 mm", "This app's field of view")
+    assert _shown_fov(Measurement(None, None, None), {"length": recorded}, csvs) == running
+    assert _shown_fov(both, {"length": None, "area": None}, csvs) == running
+    assert _shown_fov(both, {}, {}) == running

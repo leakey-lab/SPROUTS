@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
 
-from app import __version__  # noqa: E402
+from app import __version__, provenance  # noqa: E402
 from app.gui import about_dialog  # noqa: E402
 from app.models import ModelStatus  # noqa: E402
 
@@ -84,6 +85,38 @@ def test_details_text_has_version_commit_fov_and_models():
     assert "Commit:" in text
 
 
+class _Parent(QWidget):
+    """A window with the controller shape the dialog reads (duck-typed)."""
+
+    def __init__(self, calibrations):
+        super().__init__()
+        index = SimpleNamespace(
+            calibrations=lambda: calibrations,
+            sources=lambda: {
+                "length": "D:/p/skeletons/root_lengths.csv",
+                "area": "D:/p/mask/root_areas.csv",
+            },
+        )
+        self.metrics = SimpleNamespace(index=index)
+
+
+def test_about_names_a_differing_measured_calibration(app):
+    differing = {
+        "length": {"fov_width_mm": 18.0, "fov_height_mm": 13.5},
+        "area": None,
+    }
+    parent = _Parent(differing)
+    text = _texts(about_dialog.AboutDialog(parent))
+    assert "Measured with" in text and "FOV 18×13.5 mm (root_lengths.csv)" in text
+
+    same = {"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}, "area": None}
+    parent = _Parent(same)
+    assert "Measured with" not in _texts(about_dialog.AboutDialog(parent))
+    assert "Measured with" not in _texts(about_dialog.AboutDialog())  # no window, no project
+    parent = _Parent({"length": None, "area": None})
+    assert "Measured with" not in _texts(about_dialog.AboutDialog(parent))
+
+
 def test_dialog_and_details_show_the_licence(app):
     dlg = about_dialog.AboutDialog()
     assert "GPL-3.0-or-later" in _texts(dlg)
@@ -142,3 +175,45 @@ def test_no_citation_button_without_cff(app, monkeypatch, tmp_path):
     monkeypatch.setattr(about_dialog, "_verify_models", lambda: {})
     dlg = about_dialog.AboutDialog()
     assert not [b for b in dlg.findChildren(QPushButton) if "Copy citation" in b.text()]
+
+
+def test_copy_details_names_the_differing_measured_calibration(app, monkeypatch):
+    """The 'Copy details' block holds the 'Measured with' line the dialog shows, and only then."""
+    differing = {"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}, "area": None}
+    monkeypatch.setattr(about_dialog, "_verify_models", lambda: {})
+    for calibrations, expected in [
+        (differing, "Measured with: FOV 18×13.5 mm (root_lengths.csv)"),
+        ({"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}, "area": None}, None),
+    ]:
+        parent = _Parent(calibrations)
+        dlg = about_dialog.AboutDialog(parent)
+        dlg.copy_details()
+        copied = QApplication.clipboard().text()
+        assert ("Measured with" in copied) == (expected is not None)
+        if expected:
+            assert expected in copied
+    assert "Measured with" not in about_dialog.details_text()
+    assert "Measured with: FOV 1×2 mm (a.csv); FOV 3×4 mm (b.csv)" in about_dialog.details_text(
+        measured_with="FOV 1×2 mm (a.csv)\nFOV 3×4 mm (b.csv)"
+    )
+
+
+def test_one_rule_decides_that_a_recorded_field_of_view_differs(app, tmp_path):
+    """The export, the metrics bar and About all compare as numbers (math.isclose)."""
+    from app.data_processing.measurement_index import Measurement
+    from app.gui.window.metrics import _shown_fov
+    from app.visualization import dash_export
+
+    csv_path = tmp_path / "root_lengths.csv"
+    for height, differs in [(13.0 + 1e-12, False), (13.5, True)]:
+        cal = {"fov_width_mm": 18.0, "fov_height_mm": height}
+        provenance.write_sidecar(csv_path, {"calibration": cal})
+        export = dash_export.calibration_line(str(csv_path))
+        tip = _shown_fov(Measurement(1.0, None, None), {"length": cal}, {"length": str(csv_path)})[
+            1
+        ]
+        parent = _Parent({"length": cal, "area": None})
+        row = about_dialog.measured_with_text(parent)
+        assert ("this app now uses" in export) is differs
+        assert ("This app now uses" in tip) is differs
+        assert (row is not None) is differs

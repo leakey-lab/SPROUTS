@@ -22,7 +22,14 @@ from typing import Any
 
 import pandas as pd
 
-from app.provenance import app_info, calibration_info, file_sha256, git_commit
+from app.provenance import (
+    app_info,
+    calibration_info,
+    csv_calibration,
+    file_sha256,
+    git_commit,
+    same_calibration,
+)
 
 DATE_FORMAT = "%Y-%m-%d"
 FIELD_AVERAGE_SERIES = "Field average"
@@ -162,6 +169,28 @@ def _one_line(text: Any) -> str:
     return " ".join(str(text).split())
 
 
+_FORMULA = "(mm per pixel = field of view / image resolution)"
+
+
+def _fov_mm(calibration: Mapping[str, float]) -> str:
+    return f"{calibration['fov_width_mm']:.2f} x {calibration['fov_height_mm']:.2f} mm"
+
+
+def calibration_line(source_csv: str) -> str:
+    """The ``calibration`` header line: the field of view ``source_csv`` was measured with
+    (its provenance sidecar), and this app's when that differs; this app's alone, saying so,
+    when the CSV has no record (M2)."""
+    name = os.path.basename(source_csv)
+    ours = calibration_info()
+    recorded = csv_calibration(source_csv)
+    if recorded is None:
+        return f"field of view {_fov_mm(ours)}, this app's: no record next to {name} {_FORMULA}"
+    line = f"field of view {_fov_mm(recorded)}, as recorded with {name} {_FORMULA}"
+    if not same_calibration(recorded, ours):
+        line += f"; this app now uses {_fov_mm(ours)}"
+    return line
+
+
 def provenance_lines(
     table: ExportTable,
     *,
@@ -174,7 +203,6 @@ def provenance_lines(
     when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     info = app_info()
     commit = git_commit()
-    fov = calibration_info()
     fields = [
         ("export", f"{info['full_name']} dashboard data"),
         ("description", table.description),
@@ -188,11 +216,7 @@ def provenance_lines(
             "software",
             f"{info['name']} {info['version']} (git {commit[:12] if commit else 'unknown'})",
         ),
-        (
-            "calibration",
-            f"field of view {fov['fov_width_mm']:.1f} x {fov['fov_height_mm']:.1f} mm "
-            "(mm per pixel = field of view / image resolution)",
-        ),
+        ("calibration", calibration_line(source_csv)),
         ("read_with", 'pandas.read_csv(path, comment="#")'),
     ]
     return [f"# {key}: {_one_line(value)}" for key, value in fields]

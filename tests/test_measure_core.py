@@ -372,3 +372,165 @@ def test_rows_with_equal_sort_keys_come_out_by_image_name():
     for _ in range(3):
         rows = metrics.run_metric_pool(images, worker)
         assert [r["Image"] for r in rows] == sorted(images)
+
+
+# --------------------------------------------------------------------------- M2: sizes
+
+
+def _masks_of_sizes(folder, sizes):
+    """One mask per ``(name, (rows, cols))``: a white block in a black image."""
+    folder.mkdir(parents=True, exist_ok=True)
+    images = {}
+    for name, shape in sizes:
+        img = np.zeros(shape, np.uint8)
+        img[4:20, 4:30] = 255
+        _write_png(folder / f"{name}.png", img)
+        images[name] = str(folder / f"{name}.png")
+    return images
+
+
+def test_the_sidecar_records_the_measured_sizes(tmp_path):
+    images = _masks_of_sizes(
+        tmp_path / "mask", [(_NAMES[0], (64, 80)), (_NAMES[1], (64, 80)), (_NAMES[2], (48, 96))]
+    )
+    run = MeasureRun(AREA, images, str(tmp_path / "mask"), project_root=str(tmp_path))
+    run.compute()
+    assert all("_size_px" in row for row in run.rows)
+    csv_path = run.write()
+
+    record = json.loads(open(provenance.sidecar_path(csv_path), encoding="utf-8").read())
+    assert record["inputs"]["sizes_px"] == {"80x64": 2, "96x48": 1}
+    assert list(record["inputs"]["sizes_px"]) == ["80x64", "96x48"]  # most common first
+
+    # The private key is never a column: the CSV is the one of rows without it.
+    stripped = tmp_path / "stripped.csv"
+    metrics.write_metric_csv(
+        [{k: v for k, v in row.items() if k != "_size_px"} for row in run.rows],
+        str(stripped),
+        list(AREA.headers),
+    )
+    assert open(csv_path, "rb").read() == stripped.read_bytes()
+    assert "_size_px" not in open(csv_path, encoding="utf-8").readline()
+
+
+def test_an_error_row_has_no_size(tmp_path):
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not a png")
+    row = metrics.area_row("bad", str(bad))
+    assert "Error" in row and "_size_px" not in row
+    assert measure_run.sizes_px([row]) == {}
+
+
+def test_sizes_px_counts_the_rows_most_common_first():
+    rows = [{"_size_px": "10x5"}, {"_size_px": "20x5"}, {"_size_px": "20x5"}, {"Error": "x"}]
+    assert measure_run.sizes_px(rows) == {"20x5": 2, "10x5": 1}
+    assert list(measure_run.sizes_px(rows)) == ["20x5", "10x5"]
+
+
+def test_mixed_sizes_are_looked_for_within_a_source_group():
+    """Photo-size GT files beside model-size predictions are not mixed (every file spans its
+    photo's frame); two sizes among the GT files, or among the predictions, are."""
+    gt = lambda size: {"Source": "gt", "_size_px": size}  # noqa: E731
+    pred = lambda size: {"Source": "prediction", "_size_px": size}  # noqa: E731
+    assert measure_run.mixed_sizes([gt("640x480"), gt("640x480"), pred("341x256")]) is None
+    assert measure_run.mixed_sizes([gt("640x480"), gt("320x240"), gt("320x240")]) == {
+        "320x240": 2,
+        "640x480": 1,
+    }
+    assert measure_run.mixed_sizes([pred("341x256"), pred("100x100")]) is not None
+    # A row without a Source is a prediction; GT is looked at first.
+    assert measure_run.mixed_sizes([{"_size_px": "1x1"}, {"_size_px": "2x2"}]) is not None
+    both = [gt("2x2"), gt("3x3"), pred("1x1"), pred("5x5"), pred("5x5")]
+    assert set(measure_run.mixed_sizes(both)) == {"2x2", "3x3"}
+    assert measure_run.mixed_sizes([]) is None
+
+
+def test_read_sidecar_and_csv_calibration(tmp_path):
+    csv_path = tmp_path / "root_lengths.csv"
+    assert provenance.read_sidecar(csv_path) is None
+    assert measure_run.csv_calibration(str(csv_path)) is None
+
+    provenance.write_sidecar(
+        csv_path, {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}}
+    )
+    assert provenance.read_sidecar(csv_path)["calibration"]["fov_height_mm"] == 13.5
+    assert measure_run.csv_calibration(str(csv_path)) == {
+        "fov_width_mm": 18.0,
+        "fov_height_mm": 13.5,
+    }
+
+    sidecar = provenance.sidecar_path(csv_path)
+    for text in (
+        "{broken",
+        "[1, 2]",
+        '{"calibration": "x"}',
+        '{"calibration": {"fov_width_mm": 1}}',
+    ):
+        with open(sidecar, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        assert measure_run.csv_calibration(str(csv_path)) is None
+        if text in ("{broken", "[1, 2]"):  # not a JSON object: no record at all
+            assert provenance.read_sidecar(csv_path) is None
+
+
+def test_the_index_reads_each_csvs_own_calibration(tmp_path):
+    """M2: ``MeasurementIndex.calibrations()`` is what the CSV's sidecar recorded, not the
+    running calibration; a CSV without a sidecar has none."""
+    from app.data_processing.measurement_index import MeasurementIndex
+
+    images = _masks_of_sizes(tmp_path / "mask", [(_NAMES[0], (64, 80))])
+    run = MeasureRun(AREA, images, str(tmp_path / "mask"), project_root=str(tmp_path))
+    run.compute()
+    csv_path = run.write()
+    index = MeasurementIndex(str(tmp_path))
+    index.prewarm()
+    assert index.calibrations() == {
+        "length": None,
+        "area": {"fov_width_mm": 18.0, "fov_height_mm": 13.0},
+    }
+
+    record = provenance.read_sidecar(csv_path)
+    record["calibration"] = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
+    provenance.write_sidecar(csv_path, record)
+    os.utime(csv_path, ns=(1, 2_000_000_000))  # the CSV changed: it is read again
+    index.prewarm()
+    assert index.calibrations()["area"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
+
+    os.remove(provenance.sidecar_path(csv_path))
+    os.utime(csv_path, ns=(1, 3_000_000_000))
+    index.prewarm()
+    assert index.calibrations()["area"] is None
+
+
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (float("nan"), 13.0),
+        (18.0, float("inf")),
+        (float("-inf"), 13.0),
+        (0, 13.0),
+        (18.0, -13.5),
+        (True, 13.0),
+        (18.0, False),
+        ("18", 13.0),
+        (None, 13.0),
+        ([18.0], 13.0),
+    ],
+)
+def test_csv_calibration_refuses_a_field_of_view_that_is_not_a_positive_number(
+    tmp_path, width, height
+):
+    csv_path = tmp_path / "root_areas.csv"
+    provenance.write_sidecar(
+        csv_path, {"calibration": {"fov_width_mm": width, "fov_height_mm": height}}
+    )
+    assert measure_run.csv_calibration(str(csv_path)) is None
+
+
+def test_csv_calibration_takes_integers_as_floats(tmp_path):
+    csv_path = tmp_path / "root_areas.csv"
+    provenance.write_sidecar(csv_path, {"calibration": {"fov_width_mm": 18, "fov_height_mm": 14}})
+    assert measure_run.csv_calibration(str(csv_path)) == {
+        "fov_width_mm": 18.0,
+        "fov_height_mm": 14.0,
+    }
