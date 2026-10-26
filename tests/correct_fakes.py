@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from app.design import tokens
 from app.gui.correct.layer import (
+    CLASSES,
     MASK,
     SKELETON,
     LayerStatus,
@@ -57,10 +58,12 @@ SKELETON_TOOLS = (
 MASK_SIZE = SizeSpec("brush", "Brush size", 1, 100)
 SKELETON_SIZE = SizeSpec("erase", "Eraser diameter", 1, 80)
 
+_NOUNS = {CLASSES: "class labels"}  # the real layers' nouns where they differ from the id
 # layer id -> (tools, size spec, default size, default opacity, colour)
 _KINDS = {
     MASK: (MASK_TOOLS, MASK_SIZE, 8, 0.60, tokens.MASK),
     SKELETON: (SKELETON_TOOLS, SKELETON_SIZE, 20, 0.85, tokens.SKEL),
+    CLASSES: (MASK_TOOLS, MASK_SIZE, 8, 0.60, tokens.ACCENT),  # a raster layer, as the mask
 }
 
 
@@ -70,7 +73,7 @@ class FakeLayer:
     def __init__(self, layer_id: str = MASK, *, host=None, history_limit: int = 25) -> None:
         tools, size_spec, size, opacity, color = _KINDS.get(layer_id, _KINDS[MASK])
         self.layer_id = layer_id
-        self.noun = layer_id
+        self.noun = _NOUNS.get(layer_id, layer_id)
         self.color = color
         self.tools = tools
         self.current_tool = tools[0].tool_id

@@ -32,6 +32,9 @@ QT_FREE = [
     "app.gui.correct.mask_document",
     "app.gui.correct.mask_files",
     "app.gui.correct.skeleton_document",
+    "app.gui.correct.classes_document",
+    "app.gui.correct.classes_paint",
+    "app.gui.correct.classes_files",
 ]
 
 _PROBE = (

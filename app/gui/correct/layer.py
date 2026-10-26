@@ -27,6 +27,7 @@ Rules every layer follows:
   but did not show; the session asks before a save replaces it. ``write_stamps`` and
   ``matches_disk`` tell the session when a file a save would overwrite changed on disk
   since the layer opened or saved it.
+- Optional (``GuardedSaveLayer``): ``save_needs_prompt()`` True makes PgDn ask, not save.
 """
 
 from __future__ import annotations
@@ -42,7 +43,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 MASK = "mask"
 SKELETON = "skeleton"
-LAYER_IDS: tuple[str, ...] = (MASK, SKELETON)  # scene order bottom-to-top, panel order, keys 1 / 2
+CLASSES = "classes"
+LAYER_IDS: tuple[str, ...] = (MASK, SKELETON, CLASSES)  # panel and save order; z is each Z
 REFERENCE_DIM = 0.5  # the inactive layer is drawn at its opacity times this
 
 
@@ -70,7 +72,7 @@ class SaveOutcome:
     layer_id: str
     ok: bool
     path: str | None = None  # the file written; None when nothing was written
-    cleared: bool = False  # the layer's GT file was removed (it equals the prediction)
+    cleared: bool = False  # its GT file was removed (equal to the prediction; never classes)
     message: str = ""  # detail for a toast ("" = nothing beyond the summary)
     kind: str = "success"
     declined: bool = False  # the user declined the write (ok is False); nothing was written
@@ -146,8 +148,8 @@ class EditLayer(Protocol):
     """One editable document drawn on the shared canvas (the mask or the skeleton)."""
 
     layer_id: str
-    noun: str  # "mask" | "skeleton" (prompts and toasts)
-    color: str  # tokens.MASK | tokens.SKEL
+    noun: str  # "mask" | "skeleton" | "class labels" (prompts and toasts)
+    color: str  # tokens.MASK | tokens.SKEL | tokens.ACCENT
     tools: tuple[ToolSpec, ...]
     current_tool: str
 
@@ -320,6 +322,13 @@ class DiskGuardedLayer(Protocol):
         """True when reading the layer's files now would open exactly its saved state (the
         "no false alarm" check of a file rewritten as it was). It reads the files, so the
         session asks it only after a stamp changed."""
+
+
+class GuardedSaveLayer(Protocol):
+    """Optional part of an ``EditLayer``: a save PgDn must not make without asking."""
+
+    def save_needs_prompt(self) -> bool:
+        """True: PgDn must ask (the unsaved-changes prompt) instead of saving silently."""
 
 
 def project_label(path: str, root: str) -> str:

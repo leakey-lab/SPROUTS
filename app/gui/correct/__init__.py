@@ -1,4 +1,5 @@
-"""The Correct workspace: one canvas that edits the mask and the skeleton of an image.
+"""The Correct workspace: one canvas that edits the mask, the skeleton and the class labels
+of an image.
 
 Modules (consumers import the submodules; this package imports nothing):
 
@@ -12,7 +13,15 @@ Modules (consumers import the submodules; this package imports nothing):
 - ``mask_document``: ``MaskDocument``, the mask plane, its history, saved baseline and
   file I/O. Qt-free.
 - ``mask_layer``: ``MaskLayer``, the mask as an edit layer over ``PaintCanvas``.
-- ``mask_tools``: the mask's Brush, Eraser and Fill tools.
+- ``mask_tools``: the mask's Brush, Eraser and Fill tools (the raster layers' tools).
+- ``raster_layer``: ``RasterLayer``, what the mask and class-label layers share: canvas,
+  tools, input, gestures, history replay, ring and view state.
+- ``classes_document``: ``ClassesDocument``, the class-label plane (``gt/<stem>.png``), its
+  ticks, history, saved state and the registry. Qt-free.
+- ``classes_files``: ``read_classes``, the class-label files of one image read and aligned on any
+  thread (``ClassesRead``). Qt-free.
+- ``classes_paint``: the class labels' canvas colours and ids read back from them. Qt-free.
+- ``classes_layer``: ``ClassesLayer``, the class labels as an edit layer.
 - ``skeleton_document``: ``SkeletonDocument``, the skeleton model, which file it came
   from and where it saves. Qt-free.
 - ``skeleton_layer``: ``SkeletonLayer``, the skeleton as an edit layer over the

@@ -49,7 +49,8 @@ def closed_image(
 
 def read_back(layer: object, size: tuple[int, int], stamps: tuple | None) -> object | None:
     """``layer``'s document as its read-ahead payload: its optional ``read_back(stamps)``
-    hook, else :func:`mask_read_back` for a mask layer; None when there is none."""
+    hook wins (the skeleton and the class labels have one), else :func:`mask_read_back` for
+    a mask layer; None when there is none."""
     if stamps is None:
         return None
     hook = getattr(layer, "read_back", None)
