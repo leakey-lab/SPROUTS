@@ -27,6 +27,7 @@ from app.config import AREA_CSV_HEADERS, CALIBRATION, LENGTH_CSV_HEADERS
 from app.inference import measure_inputs, measure_run, metrics
 from app.inference.measure_run import AREA, LENGTH, MeasureRun
 from tests import length_reference
+from tests.real_data import real_data_dir
 
 # --------------------------------------------------------------------------- legacy reference
 # Verbatim logic of the pre-refactor pipeline (metrics.py @ a1599e6): cv2.imread,
@@ -177,10 +178,10 @@ def test_measure_csv_is_byte_identical_to_legacy_pipeline(tmp_path, spec):
         assert b.read() == a.read()
 
 
-REAL = "D:/2024 EF image data"
+REAL = real_data_dir()
 
 
-@pytest.mark.skipif(not os.path.isdir(REAL), reason="real dataset not present")
+@pytest.mark.skipif(REAL is None, reason="real dataset not present")
 @pytest.mark.parametrize("spec", [LENGTH, AREA], ids=["length", "area"])
 def test_real_sample_is_byte_identical_to_legacy_pipeline(tmp_path, spec):
     sub, suffix = ("skeletons", "_fake.png") if spec.kind == "length" else ("mask", ".png")

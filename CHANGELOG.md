@@ -357,6 +357,12 @@ Five passes, not yet released:
 
 ### Added
 - **Owner-decisions build (2026-10-25).**
+  - `docs/examples/`: three real photos (the audit's T001 L044, T001 L050, T012 L047 of
+    2024-07-18) with their mask, skeleton, Measure CSVs and a graph;
+    `tests/test_correct_goldens_real.py` replays the Correct goldens on them in CI.
+    `scripts/make_examples.py` regenerates the CSVs and the graph; a later change of the
+    calibration or the estimator must regenerate them, or `tests/test_examples.py` fails
+    (W5-T4, O35).
   - Correct: leaving an image (PgDn / PgUp, opening another, or Discard) with a branch
     picked with Select and smoothed in the meantime now says so in a toast, "Smoothed
     branch not applied · pick it and press Enter to apply" (also when Load file / Load
@@ -897,7 +903,8 @@ Five passes, not yet released:
   masks (`mask/<stem>.png`, RGBA; a model mask is never rewritten unless you save it) are
   pixel-identical to the editor they replace, and no CSV value changes. This is pinned by pixel goldens captured from the pre-merge editors
   (`tests/data/correct_goldens.json`, replayed per layer and through the Correct editor);
-  four more cases from the real dataset are a pre-merge gate. Interaction changes that
+  three more cases from the real dataset are in the suite (docs/examples,
+  tests/test_correct_goldens_real.py). Interaction changes that
   alter what a gesture paints (a tool, layer or visibility key pressed in the middle of a
   drag; a GT class key in the middle of a stroke) are listed under *Changed*.
 - **Tube / Position** (`app/naming.py`, FR-15) come only from stand-alone `T<n>` /

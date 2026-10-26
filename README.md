@@ -505,7 +505,8 @@ Copyright (c) 2026 the SPROUTS authors. Third-party code and assets keep their l
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
 [`app/assets/THIRD_PARTY.md`](app/assets/THIRD_PARTY.md). The **model weights** are not
 part of the source and are licensed separately under **CC-BY-4.0**
-([`docs/MODELS.md`](docs/MODELS.md)).
+([`docs/MODELS.md`](docs/MODELS.md)). The three example images in `docs/examples/` are
+licensed CC-BY-4.0 too (see their README).
 
 ## Changelog
 

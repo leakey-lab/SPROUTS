@@ -26,6 +26,7 @@ import pytest
 from skimage.morphology import skeletonize
 
 from app.gui.skeleton_graph_model import vectorize_skeleton
+from tests.real_data import real_data_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHILD_TIMEOUT_S = 60
@@ -351,7 +352,8 @@ def test_output_identical_to_reference_when_no_walk_returns_to_its_start(eps):
         assert topo.polylines == polylines, key
 
 
-REAL_SKELETONS = Path("D:/2024 EF image data/skeletons")
+REAL_DATA = real_data_dir()
+REAL_SKELETONS = Path(REAL_DATA) / "skeletons" if REAL_DATA else None
 REAL_SAMPLE = (
     "24EFCAM1_T001_L011_2024.07.18_111618_001_SMM_fake.png",
     "24EFCAM1_T001_L012_2024.07.18_111616_001_SMM_fake.png",
@@ -359,7 +361,10 @@ REAL_SAMPLE = (
 )
 
 
-@pytest.mark.skipif(not REAL_SKELETONS.is_dir(), reason="real 2024 EF dataset not present")
+@pytest.mark.skipif(
+    REAL_SKELETONS is None or not REAL_SKELETONS.is_dir(),
+    reason="real 2024 EF dataset not present",
+)
 def test_real_generated_skeletons_unchanged():
     from app.gui.skeleton_graph_model import SkeletonCorrectionModel
 

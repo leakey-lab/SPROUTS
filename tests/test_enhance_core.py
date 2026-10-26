@@ -20,6 +20,7 @@ from app.enhancement import (
     EnhanceSettings,
     SourceImageCache,
 )
+from tests.real_data import real_data_dir
 
 
 def _reference_stretch(img, lower_percentile=2, upper_percentile=98):
@@ -58,8 +59,8 @@ def test_fast_stretch_is_bit_exact_with_the_float64_reference(name, pair):
 
 
 def test_fast_stretch_matches_on_a_real_image_when_available():
-    folder = "D:/2024 EF image data"
-    if not os.path.isdir(folder):
+    folder = real_data_dir()
+    if folder is None:
         pytest.skip("real data not present")
     path = None
     for root, _dirs, files in os.walk(folder):

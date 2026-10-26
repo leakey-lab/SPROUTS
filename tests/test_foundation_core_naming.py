@@ -16,8 +16,9 @@ import re
 import pytest
 
 from app.naming import ImageName, image_stem, parse_image_name
+from tests.real_data import real_data_dir
 
-REAL_DATA = r"D:/2024 EF image data"
+REAL_DATA = real_data_dir()
 
 
 def _legacy_metrics(name: str) -> dict:
@@ -158,7 +159,7 @@ def test_field_keeps_image_manager_rules():
     assert parse_image_name("single").field == "single"
 
 
-@pytest.mark.skipif(not os.path.isdir(REAL_DATA), reason="real dataset not available")
+@pytest.mark.skipif(REAL_DATA is None, reason="real dataset not available")
 def test_real_dataset_names_parse_like_legacy():
     with os.scandir(REAL_DATA) as entries:
         stems = [

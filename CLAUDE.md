@@ -113,7 +113,12 @@ The metrics bar shows measured values read-only from the Measure CSVs
 (`MeasurementIndex`) — **never fabricate values**. `CHANGELOG.md` has a
 "Scientific output changes" section: record anything that can change a CSV value
 or an output pixel there. Saved mask and skeleton pixels are pinned by golden tests
-(`tests/data/correct_goldens.json`): editor changes must keep them identical.
+(`tests/data/correct_goldens.json`): editor changes must keep them identical. Real-image
+cases: `tests/test_correct_goldens_real.py` over `docs/examples/` (three real photos with
+their outputs; regenerate with `scripts/make_examples.py`; goldens in
+`tests/data/correct_goldens_real.json`, record with `SPROUTS_RECORD_REAL_GOLDENS=1`).
+Real-data tests find the owner's project through `tests/real_data.real_data_dir()`
+(`$SPROUTS_REAL_DATA`, else `D:/2024 EF image data`) and skip without it.
 
 ---
 
