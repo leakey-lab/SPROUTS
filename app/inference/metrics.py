@@ -14,8 +14,9 @@ fixes the calibration science:
   steps cost one pixel pitch, diagonal steps cost the Euclidean diagonal. The
   previous code summed the raw skeleton pixel *count*, which undercounts every
   diagonal step (treating sqrt(2) as 1) and biased reported length low by
-  ~15-20% (F-003). The estimator also uses the per-axis pixel pitch, so the
-  near-isotropic (<4%) x/y difference is handled exactly rather than averaged.
+  ~15-20% (F-003). The estimator also uses the per-axis pixel pitch: the default pixels
+  are square (18 x 13.5 mm at 640 x 480), and a non-square project calibration
+  (``sprouts_project.json``, O3) stays exact rather than averaged.
 """
 
 from __future__ import annotations

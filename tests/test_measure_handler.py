@@ -249,7 +249,7 @@ def test_mixed_sizes_warn_once(tmp_path, qapp):
     warnings = _mixed_warnings(mw)
     assert len(warnings) == 1
     assert warnings[0].startswith("The measured files have 2 sizes (80x64 ×2, 96x48 ×1): ")
-    assert warnings[0].endswith("one 18×13 mm field of view was applied to each.")
+    assert warnings[0].endswith("one 18×13.5 mm field of view was applied to each.")
 
 
 def test_same_size_files_do_not_warn(tmp_path, qapp):
@@ -375,7 +375,9 @@ def test_measure_reads_the_project_file(tmp_path, qapp):
 
     _project(tmp_path, n=2, skeletons=False)
     _write_project_file(
-        tmp_path, '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}}'
+        # Another field of view than the default (18 x 13.5), so the file visibly decides.
+        tmp_path,
+        '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}}',
     )
     handler, mw = _handler(tmp_path, qapp)
     handler.calculate_root_area()
@@ -384,13 +386,13 @@ def test_measure_reads_the_project_file(tmp_path, qapp):
     csv_path = tmp_path / "mask" / "root_areas.csv"
     record = provenance.read_sidecar(csv_path)
     assert record["calibration"]["source"] == "project"
-    assert record["calibration"]["fov_height_mm"] == 13.5
+    assert record["calibration"]["fov_height_mm"] == 13.0
     with open(csv_path, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == 2
     for row in rows:
         mask = metrics.load_mask(str(tmp_path / "mask" / f"{row['Image']}.png"))
-        expected = metrics.root_area_mm2(mask, calibration=Calibration(18.0, 13.5))
+        expected = metrics.root_area_mm2(mask, calibration=Calibration(18.0, 13.0))
         assert float(row[AREA_VALUE_COLUMN]) == round(expected, 2)
     assert not any("sprouts_project.json" in w for w in _warnings(mw))
 
@@ -405,7 +407,7 @@ def test_an_invalid_project_file_warns_once_and_measures_with_the_default(tmp_pa
     project_warnings = [w for w in _warnings(mw) if "sprouts_project.json" in w]
     assert project_warnings == [
         "sprouts_project.json was not used (it is not valid JSON): "
-        "measured with the default field of view 18×13 mm."
+        "measured with the default field of view 18×13.5 mm."
     ]
     record = provenance.read_sidecar(tmp_path / "mask" / "root_areas.csv")
     assert record["calibration"]["source"] == "default"

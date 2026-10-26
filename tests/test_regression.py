@@ -29,7 +29,7 @@ from app.inference.root_length_inference_handler import (
 # --- Calibration (physical field of view). Metrics are now resolution-independent:
 # they map the FOV onto the *actual* image/mask shape. See R5 / metrics.py. ---
 FOV_W_MM = 18.0
-FOV_H_MM = 13.0
+FOV_H_MM = 13.5
 
 
 def _row_skeleton(n_px, h=20, w=120):

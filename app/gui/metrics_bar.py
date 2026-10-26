@@ -1,7 +1,7 @@
 """Read-only metrics strip shown beneath the display canvas.
 
 Was a 56px two-line strip whose four cells, in practice, read
-``— · — · 18×13 mm · <status>`` — root length and area are only produced by
+``— · — · 18×13.5 mm · <status>`` — root length and area are only produced by
 the batch threads and written to CSV (KNOWN_ISSUES #3), so two of the four cells
 are permanently em-dashes and a third is a constant. 56px for one live value.
 
@@ -60,7 +60,7 @@ _AREA_INPUT = "A mask of this image (GT or prediction)"
 
 
 def fov_text(calibration: Mapping[str, float] | None = None) -> str:
-    """Display text of a field of view, e.g. ``18×13 mm``: ``calibration`` (``fov_width_mm``,
+    """Display text of a field of view, e.g. ``18×13.5 mm``: ``calibration`` (``fov_width_mm``,
     ``fov_height_mm``, as a CSV's provenance records it), else the running one."""
     if calibration is None:
         cal = config.CALIBRATION

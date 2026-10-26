@@ -64,7 +64,7 @@ end of each wave.
 | L3 | | Mask and skeleton are independent and the pages do not say so | O14, W2-T8a, WG-T10 |
 | L5 | Q1 leftover | Two thinning paths; old 341 x 256 corrections | O13, WG-T3 (done, 5fca8c4), WG-T8 (done, 9e173c6) |
 | M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2 (done, 7d5ae3e), W3-T4 (done, 28203c0) |
-| M2 | | One field of view for every image | O3, W2-T4, W3-T2 |
+| M2 | | One field of view for every image | O3, W2-T4 (done, c609d77), W3-T2 (done, 8ca6e5e: project file; default 18 x 13.5 mm in the next commit) |
 | M4 | | Mask origin by PNG colour type; a cleared mask is regenerated | O9, WG-T2 (done, 93a88d4), WG-T7 (done, 6ce8e8d) |
 | M5 | | Area of editor masks; two thresholds | O10, W2-T6 |
 | R1 | batch-size item of section 7 | Batch size changes GPU outputs | O4, W2-T3 (done, 41f371e: step 1, batch shapes in the run record), W3-T3 (done, 1fbc34c) |

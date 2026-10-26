@@ -162,7 +162,7 @@ def test_get_skeleton_batch_size_caches_and_refreshes(monkeypatch):
 
 def test_existing_contract_values_unchanged():
     assert config.CALIBRATION.fov_width_mm == 18.0
-    assert config.CALIBRATION.fov_height_mm == 13.0
+    assert config.CALIBRATION.fov_height_mm == 13.5
     assert config.LENGTH_CSV_HEADERS == [
         "Image",
         "Tube",

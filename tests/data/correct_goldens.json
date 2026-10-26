@@ -41,7 +41,7 @@
     ],
     "save_returned": true,
     "saved": {
-     "area_mm2_as_measured": 14.52,
+     "area_mm2_as_measured": 15.08,
      "colour_type": 6,
      "dtype": "uint8",
      "exists": true,
@@ -107,7 +107,7 @@
      "dtype": "uint8",
      "exists": true,
      "file_sha256_informational": "11fbb8e92b7149971cdbeae126eea5f8ba68f532ed09a5fb19249196d23ef5a8",
-     "length_mm_if_measured_informational": 28.86,
+     "length_mm_if_measured_informational": 29.44,
      "on_count": 939,
      "pixels_sha256": "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99",
      "shape": [
@@ -190,7 +190,7 @@
     ],
     "save_returned": true,
     "saved": {
-     "area_mm2_as_measured": 38.09,
+     "area_mm2_as_measured": 39.55,
      "colour_type": 6,
      "dtype": "uint8",
      "exists": true,
@@ -268,7 +268,7 @@
      "dtype": "uint8",
      "exists": true,
      "file_sha256_informational": "42cddc201e1ff2a9c919b95a1095d38cc2d9efd7ec7ad371dbab2205d5a80c5c",
-     "length_mm_if_measured_informational": 60.83,
+     "length_mm_if_measured_informational": 61.84,
      "on_count": 1797,
      "pixels_sha256": "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
      "shape": [

@@ -137,19 +137,20 @@ measured = df[df["Error"].isna()]      # pandas reads an empty Error as NaN
 
 ### How values are computed (`app/inference/metrics.py`)
 
-Calibration: the camera field of view is 18 mm x 13 mm (`app/config.py::Calibration`),
-mapped onto the actual resolution of the file being measured: `mm_per_px_x = 18 / width`,
-`mm_per_px_y = 13 / height`.
+Calibration: the camera field of view is 18 mm x 13.5 mm by default
+(`app/config.py::Calibration`; a project's `sprouts_project.json` can set another), mapped
+onto the actual resolution of the file being measured: `mm_per_px_x = 18 / width`,
+`mm_per_px_y = 13.5 / height`.
 
 - **Length.** The skeleton PNG is read as grayscale, binarised with Otsu's threshold
   (inverted if the foreground covers more than half the image) and thinned with
   `skimage.morphology.skeletonize`. Length is the arc length of the 1-pixel skeleton over
   its 8-connected neighbour pairs: horizontal steps cost `mm_per_px_x`, vertical steps
   `mm_per_px_y`, diagonal steps the diagonal `sqrt(mm_per_px_x² + mm_per_px_y²)`.
-  Model skeletons are 341 x 256, i.e. 0.0528 x 0.0508 mm per pixel. GT skeletons are at the
-  photo's resolution (640 x 480: 0.0281 x 0.0271 mm per pixel).
+  Model skeletons are 341 x 256, i.e. 0.0528 x 0.0527 mm per pixel. GT skeletons are at the
+  photo's resolution (640 x 480: 0.0281 mm per pixel, square).
 - **Area.** The mask PNG is read as grayscale; pixels above 127 are root. Area is the
-  root-pixel count times `mm_per_px_x * mm_per_px_y`; a full 640 x 480 mask is 234 mm².
+  root-pixel count times `mm_per_px_x * mm_per_px_y`; a full 640 x 480 mask is 243 mm².
 - Values are rounded to 2 decimal places.
 
 Skeletons are predicted from the original images, not from the masks: correcting a mask
@@ -333,7 +334,7 @@ warns once when measured files have another width / height ratio, by more than 1
 optional `calibration.source` (text: how the field of view was measured). Unknown keys are
 ignored. Missing: the default field of view. Invalid: the default, and Measure says why
 (`sprouts_project.json was not used (<reason>): measured with the default field of view
-18×13 mm.`). A CSV whose provenance records another field of view (or, for length, another
+18×13.5 mm.`). A CSV whose provenance records another field of view (or, for length, another
 `parameters.estimator`) is marked outdated in the metrics bar and on the Measure status line
 until measured again; a CSV without a provenance `calibration` is never marked. The
 dashboards' export finds the file of the CSV's project by looking up to five folders above

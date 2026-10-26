@@ -43,10 +43,15 @@ class Calibration:
     NOT from any hardcoded pixel dimension — this is what makes the metrics
     resolution-independent (fixes F-002, where a non-640x480 mask silently
     reported an area wrong by the square of the resolution ratio).
+
+    The default is the frame of the Bartz BTC-100X minirhizotron camera with its I-CAP
+    capture software, 18 mm x 13.5 mm at 640 x 480 px (Rajurkar et al. 2022, Plant Methods
+    18:39): square pixels, 0.028125 mm. A project can state its own field of view in
+    ``sprouts_project.json`` (:mod:`app.calibration`, O3).
     """
 
     fov_width_mm: float = 18.0
-    fov_height_mm: float = 13.0
+    fov_height_mm: float = 13.5
 
     def mm_per_px(self, width_px: int, height_px: int) -> tuple[float, float]:
         """Return (x, y) mm-per-pixel for an image of the given resolution."""
@@ -58,8 +63,8 @@ class Calibration:
         return mx * my
 
     def mean_mm_per_px(self, width_px: int, height_px: int) -> float:
-        """Mean isotropic mm-per-pixel (the imaging system is near-isotropic:
-        18/640 vs 13/480 differ by < 4%)."""
+        """Mean mm-per-pixel. The default pixels are square (0.028125 mm at 640 x 480); a
+        project file may set another field of view."""
         mx, my = self.mm_per_px(width_px, height_px)
         return (mx + my) / 2.0
 

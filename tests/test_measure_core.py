@@ -308,7 +308,7 @@ def test_write_adds_provenance_sidecar_without_touching_csv(tmp_path):
     assert record["kind"] == "root_length"
     assert record["calibration"] == {
         "fov_width_mm": 18.0,
-        "fov_height_mm": 13.0,
+        "fov_height_mm": 13.5,
         "source": "default",
     }
     assert record["inputs"]["folder"] == "skeletons"
@@ -490,15 +490,15 @@ def test_the_index_reads_each_csvs_own_calibration(tmp_path):
     index.prewarm()
     assert index.calibrations() == {
         "length": None,
-        "area": {"fov_width_mm": 18.0, "fov_height_mm": 13.0},
+        "area": {"fov_width_mm": 18.0, "fov_height_mm": 13.5},
     }
 
     record = provenance.read_sidecar(csv_path)
-    record["calibration"] = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
+    record["calibration"] = {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
     provenance.write_sidecar(csv_path, record)
     os.utime(csv_path, ns=(1, 2_000_000_000))  # the CSV changed: it is read again
     index.prewarm()
-    assert index.calibrations()["area"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
+    assert index.calibrations()["area"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
 
     os.remove(provenance.sidecar_path(csv_path))
     os.utime(csv_path, ns=(1, 3_000_000_000))

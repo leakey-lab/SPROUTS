@@ -101,9 +101,11 @@ enhanced generator with batch normalisation and aspect ratio 3/4.
 ## Known limits
 
 - **Fixed geometry.** Masks are always 640 x 480 and skeletons 341 x 256. Length and
-  area are calibrated from the camera field of view (18 x 13 mm, `app/config.py`)
+  area are calibrated from the camera field of view (18 x 13.5 mm by default,
+  `app/config.py`; a project can set its own in `sprouts_project.json`)
   mapped onto the actual output resolution, so they are valid for images of that field
-  of view; a camera with a different field of view needs `Calibration` changed.
+  of view; a camera with a different field of view needs a project file (or the default
+  changed).
 - **Domain.** Behaviour on other cameras, soils, crops or lighting is untested.
 - **GPU reproducibility.** cuDNN autotuning is off by default, so repeated GPU runs at the
   same batch size reproduce; a different batch size can flip a few pixels (the batch

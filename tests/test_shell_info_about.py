@@ -80,7 +80,7 @@ def test_details_text_has_version_commit_fov_and_models():
     statuses = {"mask": ModelStatus("ok", "C:/m.pth", "ca1f92d21609" + "0" * 52)}
     text = about_dialog.details_text(statuses)
     assert f"v{__version__}" in text
-    assert "18×13 mm" in text
+    assert "18×13.5 mm" in text
     assert "ca1f92d21609" in text
     assert "Commit:" in text
 
@@ -102,14 +102,14 @@ class _Parent(QWidget):
 
 def test_about_names_a_differing_measured_calibration(app):
     differing = {
-        "length": {"fov_width_mm": 18.0, "fov_height_mm": 13.5},
+        "length": {"fov_width_mm": 18.0, "fov_height_mm": 13.0},
         "area": None,
     }
     parent = _Parent(differing)
     text = _texts(about_dialog.AboutDialog(parent))
-    assert "Measured with" in text and "FOV 18×13.5 mm (root_lengths.csv)" in text
+    assert "Measured with" in text and "FOV 18×13 mm (root_lengths.csv)" in text
 
-    same = {"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}, "area": None}
+    same = {"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}, "area": None}
     parent = _Parent(same)
     assert "Measured with" not in _texts(about_dialog.AboutDialog(parent))
     assert "Measured with" not in _texts(about_dialog.AboutDialog())  # no window, no project
@@ -179,11 +179,11 @@ def test_no_citation_button_without_cff(app, monkeypatch, tmp_path):
 
 def test_copy_details_names_the_differing_measured_calibration(app, monkeypatch):
     """The 'Copy details' block holds the 'Measured with' line the dialog shows, and only then."""
-    differing = {"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}, "area": None}
+    differing = {"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}, "area": None}
     monkeypatch.setattr(about_dialog, "_verify_models", lambda: {})
     for calibrations, expected in [
-        (differing, "Measured with: FOV 18×13.5 mm (root_lengths.csv)"),
-        ({"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}, "area": None}, None),
+        (differing, "Measured with: FOV 18×13 mm (root_lengths.csv)"),
+        ({"length": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}, "area": None}, None),
     ]:
         parent = _Parent(calibrations)
         dlg = about_dialog.AboutDialog(parent)
@@ -205,7 +205,7 @@ def test_one_rule_decides_that_a_recorded_field_of_view_differs(app, tmp_path):
     from app.visualization import dash_export
 
     csv_path = tmp_path / "root_lengths.csv"
-    for height, differs in [(13.0 + 1e-12, False), (13.5, True)]:
+    for height, differs in [(13.5 + 1e-12, False), (13.0, True)]:
         cal = {"fov_width_mm": 18.0, "fov_height_mm": height}
         provenance.write_sidecar(csv_path, {"calibration": cal})
         export = dash_export.calibration_line(str(csv_path))

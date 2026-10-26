@@ -141,7 +141,7 @@ def test_the_file_is_read_again_when_it_changes(tmp_path):
 def test_the_record_names_its_source(tmp_path):
     assert calibration_record(default_calibration()) == {
         "fov_width_mm": 18.0,
-        "fov_height_mm": 13.0,
+        "fov_height_mm": 13.5,
         "source": "default",
     }
     _write_project(tmp_path, PROJECT)
@@ -163,8 +163,8 @@ def test_metric_functions_keep_their_signatures():
         assert params[1].kind is inspect.Parameter.KEYWORD_ONLY
         assert params[1].default is None
     full = np.full((480, 640), 255, np.uint8)
-    assert metrics.root_area_mm2(full) == pytest.approx(18.0 * 13.0)
-    assert metrics.root_area_mm2(full, calibration=Calibration(18.0, 13.5)) == pytest.approx(243.0)
+    assert metrics.root_area_mm2(full) == pytest.approx(18.0 * 13.5)
+    assert metrics.root_area_mm2(full, calibration=Calibration(18.0, 13.0)) == pytest.approx(234.0)
 
 
 def _masks(folder, n=2) -> dict[str, str]:
@@ -182,7 +182,8 @@ def _masks(folder, n=2) -> dict[str, str]:
 
 def test_measure_uses_and_records_the_project_calibration(tmp_path):
     root = str(tmp_path)
-    _write_project(root, PROJECT)
+    # 13.0 differs from the default (18 x 13.5), so the values prove the project's FOV is used.
+    _write_project(root, _with(fov_height_mm=13.0))
     pc = load_project_calibration(root)
     images = _masks(os.path.join(root, "mask"))
     run = MeasureRun(AREA, images, os.path.join(root, "mask"), project_root=root, calibration=pc)
@@ -193,12 +194,12 @@ def test_measure_uses_and_records_the_project_calibration(tmp_path):
         values = {row["Image"]: float(row[AREA_VALUE_COLUMN]) for row in csv.DictReader(fh)}
     for name, path in images.items():
         n_px = int(np.count_nonzero(cv2.imread(path, cv2.IMREAD_GRAYSCALE) > 127))
-        assert values[name] == round(n_px * 18.0 / 80 * 13.5 / 64, 2)
+        assert values[name] == round(n_px * 18.0 / 80 * 13.0 / 64, 2)
     assert provenance.read_sidecar(csv_path)["calibration"] == calibration_record(pc)
 
 
 _FOV_SENTENCE = (
-    "Measured with field of view 18×13 mm; this project uses 18×13.5 mm. "
+    "Measured with field of view 18×13.5 mm; this project uses 18×13 mm. "
     "Measure again before comparing with new values."
 )
 _METHOD_SENTENCE = (
@@ -207,17 +208,17 @@ _METHOD_SENTENCE = (
 
 
 def test_method_note_texts(tmp_path):
-    _write_project(tmp_path, PROJECT)
+    _write_project(tmp_path, _with(fov_height_mm=13.0))
     project = load_project_calibration(tmp_path)
     default = default_calibration()
-    old = {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    at_default = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
     current_method = {"estimator": LENGTH_METHOD}
 
-    sidecar = {"calibration": old, "parameters": current_method}
+    sidecar = {"calibration": at_default, "parameters": current_method}
     assert method_note(sidecar, kind="length", current=project) == _FOV_SENTENCE
     assert method_note(sidecar, kind="area", current=project) == _FOV_SENTENCE
 
-    earlier = {"calibration": old, "parameters": {"estimator": "old"}}
+    earlier = {"calibration": at_default, "parameters": {"estimator": "old"}}
     assert method_note(earlier, kind="length", current=default) == _METHOD_SENTENCE
     assert method_note(earlier, kind="length", current=project) == (
         _FOV_SENTENCE + " " + _METHOD_SENTENCE
@@ -225,21 +226,21 @@ def test_method_note_texts(tmp_path):
     assert method_note(earlier, kind="area", current=default) == ""  # area has no estimator
     assert method_note(sidecar, kind="length", current=default) == ""
     # The app's default (no or an invalid project file) is "this app now uses" (I1).
-    newer = {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}}
+    at_13 = {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}}
     app_note = (
-        "Measured with field of view 18×13.5 mm; this app now uses 18×13 mm. "
+        "Measured with field of view 18×13 mm; this app now uses 18×13.5 mm. "
         "Measure again before comparing with new values."
     )
-    assert method_note(newer, kind="area", current=default) == app_note
+    assert method_note(at_13, kind="area", current=default) == app_note
     (tmp_path / "bad").mkdir()
     _write_project(tmp_path / "bad", "{")
     invalid = load_project_calibration(tmp_path / "bad")
     assert invalid.problem and invalid.source == "default"
-    assert method_note(newer, kind="length", current=invalid) == app_note
+    assert method_note(at_13, kind="length", current=invalid) == app_note
     assert method_note(None, kind="length", current=project) == ""
     assert method_note({"parameters": {"estimator": "old"}}, kind="length", current=project) == ""
-    assert fov_label(Calibration(18.0, 13.0)) == "18×13 mm"
-    assert fov_label({"fov_width_mm": 18.0, "fov_height_mm": 13.5}) == "18×13.5 mm"
+    assert fov_label(Calibration(18.0, 13.5)) == "18×13.5 mm"
+    assert fov_label({"fov_width_mm": 18.0, "fov_height_mm": 13.0}) == "18×13 mm"
 
 
 def test_aspect_mismatches():
@@ -292,7 +293,7 @@ def test_the_sidecar_is_read_once_per_csv_load(tmp_path, monkeypatch):
     index = MeasurementIndex(root)
     index.prewarm()
     assert reads == [os.path.join(root, "mask", "root_areas.csv")]
-    assert index.calibrations()["area"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    assert index.calibrations()["area"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
     index.prewarm()  # unchanged CSV: not read again
     assert len(reads) == 1
 
@@ -327,7 +328,7 @@ def test_the_measure_status_line_carries_the_method_note(tmp_path, qapp):
         return status.text("Measure", manager)
 
     assert measure_line() == "no skeletons to measure · 2 masks: measured, current"
-    _write_project(root, _with(fov_height_mm=13.5))
+    _write_project(root, _with(fov_height_mm=13.0))
     assert measure_line() == (
         "no skeletons to measure · "
         "2 masks: measured with another field of view or length method: measure again"
@@ -359,13 +360,13 @@ def test_a_csv_measured_with_another_field_of_view_is_flagged(tmp_path):
     run = MeasureRun(AREA, images, os.path.join(root, "mask"), project_root=root)
     run.compute()
     run.write()
-    _write_project(root, _with(fov_height_mm=13.5))
+    _write_project(root, _with(fov_height_mm=13.0))
 
     index = MeasurementIndex(root)
     index.prewarm()
     notes = index.method_notes(load_project_calibration(root))
     assert notes["area"].startswith(
-        "Measured with field of view 18×13 mm; this project uses 18×13.5 mm."
+        "Measured with field of view 18×13.5 mm; this project uses 18×13 mm."
     )
     assert notes["length"] == ""
     # Measured with the project's own field of view: nothing to say.
@@ -381,25 +382,25 @@ def test_the_bar_and_about_compare_with_the_projects_calibration(tmp_path):
     from app.gui import about_dialog
     from app.gui.window.metrics import MetricsController, _shown_fov
 
-    _write_project(tmp_path, _with(fov_height_mm=13.5))
+    _write_project(tmp_path, _with(fov_height_mm=13.0))
     controller = MetricsController(SimpleNamespace())
     assert controller.current_calibration() == default_calibration()  # no project open
     controller.index = MeasurementIndex(str(tmp_path))
     current = controller.current_calibration()
-    assert current.calibration == Calibration(18.0, 13.5) and current.source == "project"
+    assert current.calibration == Calibration(18.0, 13.0) and current.source == "project"
 
-    at_13_5 = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
-    at_13 = {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    at_project = {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    at_default = {"fov_width_mm": 18.0, "fov_height_mm": 13.5}
     csvs = {"length": "D:/p/skeletons/root_lengths.csv"}
     shown = Measurement(1.0, None, None)
-    assert _shown_fov(shown, {"length": at_13_5}, csvs, current) == (
-        "18×13.5 mm",
+    assert _shown_fov(shown, {"length": at_project}, csvs, current) == (
+        "18×13 mm",
         "Field of view recorded with root_lengths.csv",
     )
-    assert _shown_fov(shown, {"length": at_13}, csvs, current)[1].endswith(
-        "This project uses 18×13.5 mm"
+    assert _shown_fov(shown, {"length": at_default}, csvs, current)[1].endswith(
+        "This project uses 18×13 mm"
     )
-    assert _shown_fov(Measurement(None, None, None), {}, {}, current)[0] == "18×13.5 mm"
+    assert _shown_fov(Measurement(None, None, None), {}, {}, current)[0] == "18×13 mm"
 
     def window(calibrations):
         index = SimpleNamespace(calibrations=lambda: calibrations, sources=lambda: csvs)
@@ -407,14 +408,13 @@ def test_the_bar_and_about_compare_with_the_projects_calibration(tmp_path):
             metrics=SimpleNamespace(index=index, current_calibration=lambda: current)
         )
 
-    assert about_dialog.measured_with_text(window({"length": at_13_5})) is None
-    assert about_dialog.measured_with_text(window({"length": at_13})) == (
-        "FOV 18×13 mm (root_lengths.csv)"
+    assert about_dialog.measured_with_text(window({"length": at_project})) is None
+    assert about_dialog.measured_with_text(window({"length": at_default})) == (
+        "FOV 18×13.5 mm (root_lengths.csv)"
     )
-    assert about_dialog.project_calibration(window({}))["fov_height_mm"] == 13.5
-    assert (
-        "Calibration FOV: 18×13.5 mm (this project's field of view)"
-        in about_dialog.details_text(calibration=about_dialog.project_calibration(window({})))
+    assert about_dialog.project_calibration(window({}))["fov_height_mm"] == 13.0
+    assert "Calibration FOV: 18×13 mm (this project's field of view)" in about_dialog.details_text(
+        calibration=about_dialog.project_calibration(window({}))
     )
 
 
@@ -429,7 +429,7 @@ def test_the_texts_say_project_or_app(tmp_path):
 
     project_root = tmp_path / "project"
     (project_root / "skeletons").mkdir(parents=True)
-    _write_project(project_root, _with(fov_height_mm=13.5))
+    _write_project(project_root, _with(fov_height_mm=13.0))
     project = load_project_calibration(project_root)
     invalid_root = tmp_path / "invalid"
     (invalid_root / "skeletons").mkdir(parents=True)
@@ -447,18 +447,18 @@ def test_the_texts_say_project_or_app(tmp_path):
     csvs = {"length": "root_lengths.csv"}
     shown = Measurement(1.0, None, None)
     assert _shown_fov(shown, {"length": other}, csvs, project)[1].endswith(
-        "\nThis project uses 18×13.5 mm"
+        "\nThis project uses 18×13 mm"
     )
     assert _shown_fov(shown, {"length": other}, csvs, invalid)[1].endswith(
-        "\nThis app now uses 18×13 mm"
+        "\nThis app now uses 18×13.5 mm"
     )
-    assert _shown_fov(shown, {}, {}, project) == ("18×13.5 mm", "This project's field of view")
-    assert _shown_fov(shown, {}, {}, invalid) == ("18×13 mm", "This app's field of view")
+    assert _shown_fov(shown, {}, {}, project) == ("18×13 mm", "This project's field of view")
+    assert _shown_fov(shown, {}, {}, invalid) == ("18×13.5 mm", "This app's field of view")
 
     # The export: a differing record, and no record.
     for root, uses, owner in [
-        (project_root, "; this project uses 18.00 x 13.50 mm", "this project's: no record"),
-        (invalid_root, "; this app now uses 18.00 x 13.00 mm", "this app's: no record"),
+        (project_root, "; this project uses 18.00 x 13.00 mm", "this project's: no record"),
+        (invalid_root, "; this app now uses 18.00 x 13.50 mm", "this app's: no record"),
     ]:
         source = root / "skeletons" / "root_lengths.csv"
         source.write_text("Image\n", encoding="utf-8")
@@ -468,9 +468,21 @@ def test_the_texts_say_project_or_app(tmp_path):
 
     # About's Calibration row.
     assert about_dialog.calibration_text(calibration_record(project)) == (
-        "18×13.5 mm (this project's field of view)"
+        "18×13 mm (this project's field of view)"
     )
     assert about_dialog.calibration_text(calibration_record(invalid)) == (
-        "18×13 mm (this app's field of view)"
+        "18×13.5 mm (this app's field of view)"
     )
-    assert about_dialog.calibration_text() == "18×13 mm (this app's field of view)"
+    assert about_dialog.calibration_text() == "18×13.5 mm (this app's field of view)"
+
+
+def test_the_default_field_of_view_is_18_by_13_5():
+    """O3 (W3-T2 commit 2): the Bartz BTC-100X / I-CAP frame, square pixels at 640 x 480."""
+    # config.Calibration, not the imported name: a test reloads app.config (a new class).
+    assert config.CALIBRATION == config.Calibration(18.0, 13.5)
+    assert config.CALIBRATION.mm_per_px(640, 480) == (0.028125, 0.028125)
+    assert provenance.calibration_info() == {
+        "fov_width_mm": 18.0,
+        "fov_height_mm": 13.5,
+        "source": "default",
+    }

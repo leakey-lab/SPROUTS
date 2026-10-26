@@ -137,9 +137,9 @@ def _fov(calibration: Mapping[str, float] | None = None) -> str:
 
 
 def calibration_text(calibration: Mapping[str, Any] | None = None) -> str:
-    """The Calibration row: ``18×13.5 mm (this project's field of view)`` for the open
+    """The Calibration row: ``20×15 mm (this project's field of view)`` for the open
     project's (:func:`project_calibration`, from its project file), else
-    ``18×13 mm (this app's field of view)``: the words of
+    ``18×13.5 mm (this app's field of view)``: the words of
     :func:`app.calibration.calibration_words`, shared with the metrics bar and the export."""
     return f"{_fov(calibration)} ({calibration_words(calibration).owner} field of view)"
 
@@ -166,7 +166,7 @@ def project_calibration(window: object | None) -> dict[str, Any] | None:
 
 
 def measured_with_text(window: object | None) -> str | None:
-    """``FOV 18×13.5 mm (root_lengths.csv)``, one line per Measure CSV of the project open in
+    """``FOV 18×13 mm (root_lengths.csv)``, one line per Measure CSV of the project open in
     ``window`` that was measured with another field of view than the project's (its
     :func:`project_calibration`, else the running one; M2, O3); ``None`` when there is no such
     CSV, no project or no CSV record. ``window`` is read duck-typed: ``window.metrics.index``

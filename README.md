@@ -239,18 +239,18 @@ is used whenever it can be read.
 ## Calibration & measurement notes
 
 Metrics are derived from the camera's physical field of view (default
-**18 mm × 13 mm**, see `app/config.py::Calibration`) mapped onto the **actual**
+**18 mm × 13.5 mm**, the Bartz BTC-100X / I-CAP frame at 640 × 480 px (Rajurkar et al.
+2022, Plant Methods 18:39), see `app/config.py::Calibration`) mapped onto the **actual**
 image/mask resolution, so they are resolution-independent:
 
 - **Area** = root pixels × (FOV_w/width) × (FOV_h/height). A fully-root mask
-  measures the whole FOV (234 mm²) at any resolution.
+  measures the whole FOV (243 mm²) at any resolution.
 - **Length** uses a true arc-length estimator: orthogonal pixel steps cost one
   pixel pitch, diagonal steps cost the Euclidean diagonal (per-axis pitch).
 
 Every image is taken to cover the whole field of view, whatever its size, aspect or crop:
 a quarter-covered mask of a 640 × 480 frame, of a 320 × 240 crop and of a 1920 × 1080
-frame all measure the same area. The pixel is not square (0.028125 × 0.027083 mm for
-640 × 480).
+frame all measure the same area. The pixel is square (0.028125 mm for 640 × 480).
 
 **Orientation.** Every stage uses the image's stored pixel grid; EXIF orientation is never
 applied. A photo with an orientation tag is shown as stored (not as a photo viewer shows

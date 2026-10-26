@@ -696,6 +696,20 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Field of view 18 × 13 mm → 18 × 13.5 mm (2026-10-25, W3-T2, O3).** The default is the
+  Bartz BTC-100X / I-CAP frame at 640 × 480 px (Rajurkar et al. 2022, Plant Methods
+  18:39); pixels are now square (0.028125 mm at 640 × 480). Exact effect per image: every
+  root area × 1.038462 (+3.85 %); root lengths +0 to +3.85 % by step direction (vertical
+  +3.85 %, diagonal +1.87 %, horizontal 0). 3,000 real skeletons, unrounded: +2.02 % in
+  total; for the 571 longer than 1 mm, median +2.01 %, 5th…95th percentile +0.43…+3.59 %,
+  max +3.80 %. In the 2-dp CSVs, 616 of 3,000 length rows and 1,294 of 3,000 area rows
+  change, and no value changes between zero and non-zero; a small value can move by one
+  0.01 rounding step more or less than its exact ratio. Synthetic set (6 + 6 images):
+  lengths +1.39 % in total (+0.90…+1.95 % per image), areas +3.85 %. The goldens'
+  measured values follow (areas 14.52 → 15.08 and 38.09 → 39.55 mm²; GT lengths 28.86 →
+  29.44 and 60.83 → 61.84 mm; no pixel changes). A project with another camera states its
+  field of view in `sprouts_project.json`. CSVs measured before are marked outdated until
+  measured again.
 - **Measure reads GT first; `Source` column (2026-10-25, WG-T8, O1).** Root length measures
   an image's GT skeleton (`gt/skeletons/<stem>.png`, saved in *Correct*) where it is valid,
   else the prediction `skeletons/<stem>_fake.png`; root area measures its GT mask

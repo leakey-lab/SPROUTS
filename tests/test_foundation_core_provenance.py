@@ -57,7 +57,7 @@ def test_build_record_shape():
     assert (
         record["calibration"]
         == calibration_info()
-        == {"fov_width_mm": 18.0, "fov_height_mm": 13.0, "source": "default"}
+        == {"fov_width_mm": 18.0, "fov_height_mm": 13.5, "source": "default"}
     )
     assert record["runtime"]["python"]
     assert record["inputs"] == {"folder": "skeletons", "n_images": 3}
