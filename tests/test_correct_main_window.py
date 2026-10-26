@@ -34,7 +34,7 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 from PyQt6.QtCore import QPoint, QRect, QSettings, Qt, QThreadPool  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
@@ -348,8 +348,8 @@ def test_entering_correct_opens_the_selected_image_with_both_layers(make_window,
     assert raster(editor)[110, 20 : W - 20].all()  # the generated skeleton
     assert editor.layers[SKELETON].document.source == "prediction"
     page = window.action_bar_stack.currentWidget()
-    assert editor.clear_button.parentWidget() is page and editor.clear_button.isVisible()
-    assert editor.clear_button.text() == "Clear mask"
+    assert not hasattr(editor, "clear_button")
+    assert not [b for b in page.findChildren(QPushButton) if "Clear" in b.text()]
 
     enter(window, "Correct")  # clicking the open stage again never leaves it
     assert window.right_panel.currentWidget() is editor

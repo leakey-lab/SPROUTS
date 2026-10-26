@@ -592,7 +592,9 @@ def test_the_controls_on_the_classes_layer(page):
     assert not controls.load_button.isEnabled()
     assert not controls.prediction_button.isEnabled()
     assert controls.prediction_button.toolTip() == "Load prediction (not for the class labels)"
-    assert controls.clear_button.text() == "Clear class labels"
+    assert controls.clear_icon_button.toolTip() == (
+        "Clear class labels (undoable) · Save then writes an empty file"
+    )
     assert controls.tool_buttons[(CLASSES, "fill")].toolTip() == (
         "Fill a closed outline in the class labels (F)"
     )
@@ -1099,7 +1101,7 @@ def test_the_correct_page_holds_the_gt_actions(window_with_project):
     page = window.action_bar_stack.widget(topbar._pages["Correct"])
 
     assert [b.text() for b in page.findChildren(QPushButton)] == [
-        "Clear mask",
+        # O18: no Clear here, the page's one Clear is in the dock
         "Classes…",
         "Export dataset…",
         "Remove GT…",

@@ -95,7 +95,7 @@ def dock(editor, size_slider=None) -> list[QWidget]:
         controls.redo_button,
     )
     parts += [button for button in buttons if button.isEnabled()]
-    return parts + [controls.clear_icon_button, controls.save_button]
+    return parts + [b for b in (controls.clear_icon_button, controls.save_button) if b.isEnabled()]
 
 
 def zoom(editor) -> list[QWidget]:

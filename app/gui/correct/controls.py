@@ -18,11 +18,11 @@ layer. What it puts on the chrome (spec sections 3.2 and 4):
   share one and the skeleton's eraser has its own; a disabled placeholder for a tool without
   a size), the opacity of the shown layer, Load skeleton file (enabled for the skeleton
   only), Load prediction (enabled while the shown layer has a prediction to load), Undo,
-  Redo, Clear and Save. Nothing is hidden, so the dock keeps its width and place across
-  tools and layers;
+  Redo, Clear (the page's one Clear, named for the shown layer) and Save. Save and Clear
+  are disabled with no image; Save only while something is unsaved (O18). Nothing is
+  hidden, so the dock keeps its width and place across tools, layers and save states;
 * the polyline prompt (top centre): Finish line, Cancel and Smooth, shown while the
-  skeleton is the shown layer and its Polyline draft has points;
-* the topbar's ghost button "Clear mask" / "Clear skeleton" (the shell places it).
+  skeleton is the shown layer and its Polyline draft has points.
 
 A click on any of them leaves the keyboard focus on the canvas.
 """
@@ -63,14 +63,14 @@ _WIDEST_SIZE = "000 px"  # every size readout is this wide, so a new value moves
 _SMOOTH_TIP = "needs 3+ points"
 # Layers whose rail group shows only while they are edited (the others' stay, dimmed).
 _GROUP_WHILE_EDITED = (CLASSES,)
-# The topbar clear button for the shown layer: (text, tooltip).
-_CLEAR_TEXTS = {
-    MASK: ("Clear mask", "Clear the mask. Undo with Ctrl+Z; Save writes an empty GT mask."),
-    SKELETON: ("Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
-    CLASSES: (
-        "Clear class labels",
-        "Clear the class labels. Undo with Ctrl+Z; Save writes an empty file.",
+_SAVE_TIP = shortcuts.tooltip("Save the unsaved layers", "save", shortcuts.CORRECT)
+# What a Save writes after Clear (O9; the skeleton's rule is SkeletonDocument.save).
+_CLEAR_THEN_SAVE = {
+    MASK: "Save then writes an empty GT mask; with an empty prediction it removes the GT file",
+    SKELETON: (
+        "Save then writes an empty GT skeleton; with an empty prediction it removes the GT file"
     ),
+    CLASSES: "Save then writes an empty file",
 }
 # The Smooth toggle shows its word and key beside the icon, as Finish and Cancel show theirs
 # (the prompt reads "... Cancel (Esc) Smooth (S)").
@@ -166,7 +166,7 @@ class CorrectControls(QObject):
     prediction_requested = pyqtSignal()  # "Load prediction" (the shown layer's)
     undo_requested = pyqtSignal()
     redo_requested = pyqtSignal()
-    clear_requested = pyqtSignal()  # the dock Clear or the topbar clear button
+    clear_requested = pyqtSignal()  # the dock Clear (the shown layer)
     save_requested = pyqtSignal()
     finish_line_requested = pyqtSignal()  # prompt "Finish line (Enter)"
     cancel_line_requested = pyqtSignal()  # prompt "Cancel (Esc)"
@@ -186,15 +186,12 @@ class CorrectControls(QObject):
         self._build_dock(chrome.dock)
         self.prompt = self._build_prompt(parent)
         chrome.register(prompt=self.prompt)
-        # Text variant of Clear for the topbar (shell_chrome reparents it); show_layer names it.
-        self.clear_button = ghost_button("", "trash", compact=True)
-        keep_canvas_focus(self.clear_button)
-        self.clear_button.clicked.connect(self.clear_requested)
 
         first = next(iter(self._layers))
         self.show_layer(first)
         self.sync(self._layers[first])
         self.set_history(False, False)
+        self.set_image_actions(False, False)
 
     # ------------------------------------------------------------------ building
     def _build_rail(self, chrome: EditorChrome) -> None:
@@ -253,10 +250,7 @@ class CorrectControls(QObject):
         self.redo_button = IconButton("redo", f"Redo ({redo_keys})" if redo_keys else "Redo")
         self.clear_icon_button = IconButton("trash")  # show_layer names the layer it clears
         self.save_button: QPushButton = primary_button(
-            "Save",
-            "save",
-            tooltip=shortcuts.tooltip("Save the unsaved layers", "save", scope),
-            compact=True,
+            "Save", "save", tooltip=_SAVE_TIP, compact=True
         )
         actions = (
             (self.load_button, self.load_requested),
@@ -292,8 +286,8 @@ class CorrectControls(QObject):
     def show_layer(self, layer_id: str) -> None:
         """Show ``layer_id`` as the edited layer: its tool group in full colour and the
         others dimmed (still clickable; the class labels' shown only while edited), Load
-        enabled for the skeleton only, the clear buttons and the opacity slider named for
-        it, the polyline prompt for the skeleton."""
+        enabled for the skeleton only, Clear and the opacity slider named for it, the
+        polyline prompt for the skeleton."""
         layer = self._layers[layer_id]
         for group_id, buttons in self._groups.items():
             colour = tokens.TEXT_MUTED if group_id == layer_id else tokens.TEXT_DISABLED
@@ -307,13 +301,8 @@ class CorrectControls(QObject):
         self.load_button.setEnabled(layer_id == SKELETON)
         _retip(self.load_button, _LOAD_TIP if layer_id == SKELETON else _LOAD_OFF_TIP)
         noun = layer.noun
-        text, tip = _CLEAR_TEXTS.get(
-            layer_id, (f"Clear {noun}", f"Clear the {noun} (Ctrl+Z undoes)")
-        )
-        if self.clear_button.text() != text:
-            self.clear_button.setText(text)
-        _retip(self.clear_button, tip)
-        _retip(self.clear_icon_button, f"Clear {noun} (undoable)")
+        then = _CLEAR_THEN_SAVE.get(layer_id)
+        _retip(self.clear_icon_button, f"Clear {noun} (undoable)" + (f" · {then}" if then else ""))
         _retip(self.opacity_slider, f"{noun[:1].upper()}{noun[1:]} opacity")
         self._shown = layer_id
         self._show_prompt()
@@ -349,6 +338,22 @@ class CorrectControls(QObject):
         """Enable Undo and Redo as the undo timeline allows."""
         self.undo_button.setEnabled(bool(can_undo))
         self.redo_button.setEnabled(bool(can_redo))
+
+    def set_image_actions(self, has_image: bool, unsaved: bool) -> None:
+        """Enable Clear while an image is open and Save while something of it is unsaved (a
+        Save with nothing unsaved writes nothing, O2); the tooltip says why Save is off."""
+        save = bool(has_image and unsaved)
+        if self.save_button.isEnabled() != save:
+            self.save_button.setEnabled(save)
+        if save:
+            tip = _SAVE_TIP
+        elif has_image:
+            tip = f"{_SAVE_TIP} · Nothing unsaved"
+        else:
+            tip = f"{_SAVE_TIP} · Open an image first"
+        _retip(self.save_button, tip)
+        if self.clear_icon_button.isEnabled() != bool(has_image):
+            self.clear_icon_button.setEnabled(bool(has_image))
 
     def set_draft(self, state: DraftState | None) -> None:
         """Show the polyline draft: the prompt appears for a Polyline draft with points

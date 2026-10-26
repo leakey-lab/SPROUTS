@@ -151,7 +151,7 @@ def _correct_rows() -> list[tuple]:
     meaning)."""
     return [
         *_history_rows(),
-        ("save", ("Ctrl+S",), "Save the unsaved layers (nothing unsaved: the active layer)"),
+        ("save", ("Ctrl+S",), "Save the unsaved layers (nothing unsaved: nothing is written)"),
         ("mask_layer", ("M",), "Edit the mask (root area)"),
         ("skeleton_layer", ("L",), "Edit the skeleton (root length)"),
         ("classes_layer", ("G",), "Edit the class labels (GT for training)"),

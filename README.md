@@ -345,8 +345,10 @@ its last point.
 
 **Saving**
 
-- `Ctrl+S` (or **Save**) saves every layer with unsaved changes, the mask first. With
-  nothing unsaved it writes nothing and says *Nothing unsaved*. A
+- `Ctrl+S` (or **Save**) saves every layer with unsaved changes, the mask first. **Save**
+  is available only while something is unsaved; with nothing unsaved `Ctrl+S` writes nothing
+  and says *Nothing unsaved*. **Clear** (dock, bin icon) empties the active layer as one
+  undoable step; it is the page's only Clear. A
   skeleton is saved only when it differs from the prediction: saving is not acceptance, and
   a skeleton edited back to the prediction (or **Load prediction** and Save) removes its GT
   file `gt/skeletons/<stem>.png`.

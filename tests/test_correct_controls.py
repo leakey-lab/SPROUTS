@@ -392,21 +392,14 @@ def test_load_is_offered_only_while_the_skeleton_is_shown(make_page):
     assert not controls.load_button.isEnabled()
 
 
-@pytest.mark.parametrize(
-    "layer_id, text, tip",
-    [
-        (MASK, "Clear mask", "Clear the mask. Undo with Ctrl+Z; Save writes an empty GT mask."),
-        (SKELETON, "Clear skeleton", "Remove every skeleton line from this image (Ctrl+Z undoes)"),
-    ],
-)
-def test_the_clear_buttons_name_the_shown_layer(make_page, layer_id, text, tip):
+@pytest.mark.parametrize("layer_id", [MASK, SKELETON])
+def test_the_clear_buttons_name_the_shown_layer(make_page, layer_id):
     controls = make_page(show=False).controls
     other = SKELETON if layer_id == MASK else MASK
 
     controls.show_layer(other)
     controls.show_layer(layer_id)
 
-    assert (controls.clear_button.text(), controls.clear_button.toolTip()) == (text, tip)
     assert layer_id in controls.clear_icon_button.toolTip()
     assert other not in controls.clear_icon_button.toolTip()
     assert layer_id in controls.opacity_slider.toolTip().lower()
@@ -614,7 +607,6 @@ BUTTON_REQUESTS = [
     ("undo_button", "undo_requested"),
     ("redo_button", "redo_requested"),
     ("clear_icon_button", "clear_requested"),
-    ("clear_button", "clear_requested"),
     ("save_button", "save_requested"),
     ("finish_button", "finish_line_requested"),
     ("cancel_button", "cancel_line_requested"),
@@ -628,6 +620,7 @@ def test_each_button_requests_its_action_and_touches_no_layer(make_page, button,
     controls.show_layer(SKELETON)
     controls.set_history(True, True)
     controls.set_draft(DraftState(True, 2, False))
+    controls.set_image_actions(True, True)
     requests = record_requests(controls)
 
     getattr(controls, button).click()
@@ -662,7 +655,6 @@ def test_a_new_page_shows_the_first_layer_with_nothing_to_undo(make_page):
     assert visible_size_slider(controls, dock) is brush
     assert drawn_in(controls.tool_buttons[(SKELETON, "select")], tokens.TEXT_DISABLED)
     assert controls.load_button.isVisibleTo(dock) and not controls.load_button.isEnabled()
-    assert controls.clear_button.text() == "Clear mask"
     assert not controls.undo_button.isEnabled() and not controls.redo_button.isEnabled()
     assert not controls.prompt.isVisibleTo(page)
     assert panel.rows[MASK].is_active() and not panel.rows[SKELETON].is_active()
@@ -969,6 +961,7 @@ def test_clicking_any_control_leaves_the_keys_on_the_canvas(app, make_page):
     controls.sync(skeleton)
     controls.set_history(True, True)
     controls.set_draft(DraftState(True, 3, False))
+    controls.set_image_actions(True, True)  # Clear and Save enabled: real clicks
     show_active(app, page)
     page.view.setFocus()
     settle(app, page)
@@ -994,7 +987,6 @@ def test_clicking_any_control_leaves_the_keys_on_the_canvas(app, make_page):
         assert widget.isVisible(), widget
         QTest.mouseClick(widget, Qt.MouseButton.LeftButton)
         assert QApplication.focusWidget() is page.view, widget
-    assert controls.clear_button.focusPolicy() in (Qt.FocusPolicy.TabFocus, Qt.FocusPolicy.NoFocus)
 
 
 def test_a_click_never_gives_the_panel_the_focus_but_tab_reaches_rows_and_eyes(make_page):
@@ -1033,3 +1025,44 @@ def test_the_overlays_never_overlap(app, make_page, size, shown):
         assert page.rect().contains(a.geometry()), (a, a.geometry())
         for b in overlays[i + 1 :]:
             assert not a.geometry().intersects(b.geometry()), (a, b, a.geometry(), b.geometry())
+
+
+def test_save_and_clear_follow_the_image_and_the_unsaved_state(make_page):
+    controls = make_page(show=False).controls
+    assert not controls.save_button.isEnabled() and not controls.clear_icon_button.isEnabled()
+    controls.set_image_actions(True, False)  # an image, nothing unsaved
+    assert controls.clear_icon_button.isEnabled() and not controls.save_button.isEnabled()
+    assert "Nothing unsaved" in controls.save_button.toolTip()
+    controls.set_image_actions(True, True)
+    assert controls.save_button.isEnabled() and "Ctrl+S" in controls.save_button.toolTip()
+    assert "Nothing unsaved" not in controls.save_button.toolTip()
+    controls.set_image_actions(False, True)  # no image wins over a stale dirty flag
+    assert not controls.save_button.isEnabled() and not controls.clear_icon_button.isEnabled()
+    assert controls.save_button.text() == "Save"  # the label never changes
+
+
+def test_there_is_one_clear_and_it_is_in_the_dock(make_page):
+    controls = make_page(show=False).controls
+    assert not hasattr(controls, "clear_button")  # the top-bar twin is gone
+    assert controls.clear_icon_button.toolTip().startswith("Clear ")
+
+
+@pytest.mark.parametrize(
+    "layer_id, tip",
+    [
+        (
+            MASK,
+            "Clear mask (undoable) · Save then writes an empty GT mask; with an empty "
+            "prediction it removes the GT file",
+        ),
+        (
+            SKELETON,
+            "Clear skeleton (undoable) · Save then writes an empty GT skeleton; "
+            "with an empty prediction it removes the GT file",
+        ),
+    ],
+)
+def test_the_dock_clear_says_what_a_save_then_writes(make_page, layer_id, tip):
+    controls = make_page(show=False).controls
+    controls.show_layer(layer_id)
+    assert controls.clear_icon_button.toolTip() == tip

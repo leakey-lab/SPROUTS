@@ -294,7 +294,8 @@ Owner questions (science or product scope; nothing here blocks use):
 - **Save placement in Correct (W16).** Correct's only top-bar action is the destructive
   *Clear*, which the dock also has, while *Save* sits only in the dock; the accent-filled
   *Save* (and Trace GT's *Save GT*) stays highlighted when there is nothing to save. Left as
-  a design question.
+  a design question. (Resolved 2026-10-25 by W4-T1, O18: *Save* is accented only while
+  something is unsaved and disabled otherwise; one *Clear*, in the dock, for the active layer.)
 - **Save with nothing unsaved (V1, spec D7).** `Ctrl+S` or *Save* with nothing unsaved
   saves the active layer (D7, kept: it is how a generated skeleton is accepted or a model
   mask marked hand-checked). On the mask layer that rewrites the mask, and only AREA is
@@ -309,7 +310,9 @@ Owner questions (science or product scope; nothing here blocks use):
   Library shows the image as corrected only after another image is selected or the
   project is reopened, and the owner's project holds one such unedited correction. On the
   mask layer the same Save removes a mask file that Correct did not load: M1 in
-  section 8. L2 in section 8.)
+  section 8. L2 in section 8.) (Resolved 2026-10-25, O2: W1-T3 and WG-T2 / WG-T3 save a
+  layer only when it differs from what it would otherwise read; with nothing unsaved,
+  *Save* writes nothing and says *Nothing unsaved*, and W4-T1 disables it.)
 - **Build the editor pages after the first paint?** The hidden Correct and Trace GT pages
   cost about 140 ms of the `MainWindow()` build (214.7 -> 74.1 ms with empty stand-ins,
   n = 12): their constructors take about 50 ms, the rest is reparenting and style work.

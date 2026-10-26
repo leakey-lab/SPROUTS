@@ -466,7 +466,6 @@ def test_the_page_names_the_parts_mainwindow_and_the_shell_use(make_editor):
     assert editor.enhance_popover is chrome.popover
     assert isinstance(editor.zoom_cluster, ZoomCluster) and editor.zoom_cluster is chrome.zoom
     assert editor.status_chip is chrome.chip
-    assert editor.clear_button is controls.clear_button
     for name in ("save_button", "undo_button", "redo_button"):
         assert getattr(editor, name) is getattr(controls, name)
     assert isinstance(editor.layers[MASK], MaskLayer)
@@ -1997,13 +1996,13 @@ def test_clear_empties_the_skeleton_and_undo_restores_it(make_editor, project):
     assert raster(editor)[110, 20:180].all()
 
 
-def test_the_topbar_clear_button_follows_and_clears_the_edited_layer(make_editor, project):
+def test_the_dock_clear_button_follows_and_clears_the_edited_layer(make_editor, project):
     editor = make_editor(project.a, project.folder)
-    button = editor.clear_button
+    button = editor.controls.clear_icon_button
 
-    assert button.text() == "Clear mask"
+    assert "mask" in button.toolTip()
     editor.set_active_layer(SKELETON)
-    assert button.text() == "Clear skeleton"
+    assert "skeleton" in button.toolTip()
     button.click()
 
     assert not raster(editor).any() and np.array_equal(plane(editor), box_plane())
@@ -2034,6 +2033,66 @@ def test_drawing_the_skeleton_changes_no_skeleton_pixel(make_editor, project):
     centred_grab(editor, 8.0, (100, 110))
 
     assert np.array_equal(raster(editor), before)
+
+
+def test_save_is_enabled_only_while_something_is_unsaved(make_editor, project):
+    editor = make_editor()  # no image
+    assert not editor.save_button.isEnabled() and not editor.controls.clear_icon_button.isEnabled()
+    editor.load_image(project.a, project.folder)
+    assert not editor.save_button.isEnabled() and editor.controls.clear_icon_button.isEnabled()
+    paint(editor, (20, 100), (80, 110))
+    assert editor.save_button.isEnabled()
+    editor.undo()  # back to the saved state
+    assert not editor.save_button.isEnabled()
+    paint(editor, (20, 100), (80, 110))
+    assert editor.save() is True
+    assert not editor.save_button.isEnabled()
+    assert editor.reset() is True  # a new folder
+    assert not editor.save_button.isEnabled() and not editor.controls.clear_icon_button.isEnabled()
+
+
+def test_a_polyline_of_two_points_enables_save_and_a_cancel_disables_it(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    editor.controls.tool_buttons[(SKELETON, "polyline")].click()
+    click(editor, (40, 60))
+    assert not editor.save_button.isEnabled()  # one point is not a line yet
+    click(editor, (150, 70))
+    assert editor.save_button.isEnabled()
+    editor.layers[SKELETON].cancel_polyline()
+    assert not editor.save_button.isEnabled()
+
+
+def test_clearing_the_mask_makes_save_available(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    editor.clear_active_layer()
+    assert editor.save_button.isEnabled()  # an empty mask is a change (O9)
+
+
+def test_the_dock_keeps_its_width_and_place_in_every_save_state(make_editor, project):
+    editor = make_editor(size=(1280, 800))
+    save, places = editor.controls.save_button, []
+
+    def place():
+        settle(editor)
+        return (editor.dock.geometry().getRect(), save.mapTo(editor, QPoint(0, 0)).x())
+
+    places.append(place())  # no image
+    editor.load_image(project.a, project.folder)
+    places.append(place())  # clean
+    paint(editor, (20, 100), (80, 110))
+    places.append(place())  # unsaved
+    assert len(set(places)) == 1, places
+
+
+def test_ctrl_s_with_nothing_unsaved_writes_no_file(make_editor, project):
+    editor = make_editor(project.a, project.folder)
+    before = os.stat(project.mask()).st_mtime_ns
+
+    editor.save()
+
+    assert not os.path.exists(project.correction())
+    assert not os.path.exists(project.gt_mask())
+    assert os.stat(project.mask()).st_mtime_ns == before
 
 
 # ============================================================ the old mask editor tests

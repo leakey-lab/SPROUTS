@@ -372,11 +372,9 @@ class ShellTopbar(QFrame):
         pages = {
             "Library": (mw.action_bar_view_seg,),
             "Generate": (mw.generate_all_button, mw.generate_button),
-            # "Clear mask" / "Clear skeleton" / "Clear class labels": follows the edited
-            # layer, clears it; then the GT actions (the class editor, the dataset export,
-            # Remove GT…).
+            # The GT actions (the class editor, the dataset export, Remove GT…); image
+            # actions live in the dock (Save, the one Clear, O18).
             "Correct": (
-                mw.correct_editor.clear_button,
                 mw.gt_classes_button,
                 mw.gt_export_button,
                 mw.gt_remove_button,

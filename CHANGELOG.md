@@ -500,6 +500,11 @@ Five passes, not yet released:
     and a class-label save shows one toast ("Saved class labels · …"). With one stage
     fewer the window's minimum width is about 877 px with the app's fonts (was about
     917 px), under the 900 px target.
+  - Correct's **Save** is enabled (purple) only while something is unsaved and disabled
+    otherwise; its tooltip says "Nothing unsaved" or "Open an image first". The page has one
+    **Clear**, in the dock, named for the active layer, whose tooltip says what Save then
+    writes; the top bar's Clear button is gone, which narrows the window's minimum width from
+    877 to 759 px (W4-T1, O18, E1).
   - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
     pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
     files of a run have more than one size (the photos differ) or the predictions do; the

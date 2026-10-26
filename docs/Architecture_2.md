@@ -249,7 +249,7 @@ flowchart TB
   and revert, their own undo stack, gestures, tools, visibility and opacity. The session
   and the router see only this contract, so another layer or raster tool is one more class.
 - **The session** (`CorrectSession`) opens both layers, aggregates the unsaved state,
-  saves (the unsaved layers, mask first; with nothing unsaved, the active layer), asks the
+  saves (the unsaved layers, mask first; with nothing unsaved, nothing is written), asks the
   one Save / Discard / Cancel question and keeps one undo timeline: `EditJournal` records
   which layer acted, each layer keeps its own stack.
 - **Paging** (2026-09-30): after each open, `paging.Neighbours` asks the library for the

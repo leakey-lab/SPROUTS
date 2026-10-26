@@ -11,10 +11,9 @@ save reports into the page's signals; the overlays are the ``EditorChrome``, the
 panel); the keys are the registry's Correct rows (``keys``). ``paging`` knows the library
 position and reads the next images ahead; ``LayerPrefs`` keeps the layers' opacity and
 visibility. The editor is the layers' ``LayerHost``, by delegation.
-Every transition (tool, layer, visibility, save, paging, open, Load, Clear, leaving) first
-ends a drag in progress as its release would (the mid-gesture rule of
-:mod:`app.gui.correct.layer`); opening, a layer switch, paging and leaving also make the
-canvas forget it.
+Every transition (tool, layer, visibility, save, paging, open, Load, Clear, leaving) first ends a
+drag in progress as its release would (the mid-gesture rule of :mod:`app.gui.correct.layer`);
+opening, a layer switch, paging and leaving also make the canvas forget it.
 """
 
 from __future__ import annotations
@@ -149,7 +148,7 @@ class CorrectEditor(PagingApi, QWidget):
         self.tool_rail, self.dock, self.enhance_popover = chrome.rail, chrome.dock, chrome.popover
         self.status_chip, self.zoom_cluster = chrome.chip, chrome.zoom
         self.pan_button, self.enhance_button = chrome.pan_button, chrome.enhance_button
-        self.save_button, self.clear_button = controls.save_button, controls.clear_button
+        self.save_button = controls.save_button
         self.undo_button, self.redo_button = controls.undo_button, controls.redo_button
 
     def _connect(self) -> None:
@@ -428,11 +427,12 @@ class CorrectEditor(PagingApi, QWidget):
 
     def _refresh(self) -> None:
         """Show the layers' state: the edited layer's controls, Undo / Redo, the polyline
-        prompt, Remove GT…, the rows and the chip. Once per change, never per drag frame."""
+        prompt, Save, Remove GT…, the rows and the chip. Once per change, never per drag frame."""
         layer, controls = self._active(), self.controls
         controls.sync(layer)
         controls.set_history(self.session.can_undo(), self.session.can_redo())
         controls.set_draft(self._skeleton.draft_state())
+        controls.set_image_actions(bool(self.session.image_path), self.session.is_dirty())
         self.actions.sync()
         statuses = {layer_id: each.status() for layer_id, each in self.layers.items()}
         for layer_id, status in statuses.items():

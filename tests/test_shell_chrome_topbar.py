@@ -16,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QRect, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import QIcon  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from tests.qt_teardown import flush_deleted  # noqa: E402
 
@@ -180,56 +180,21 @@ def test_generate_page_offers_skeletons_only(mw, app):
     _enter(mw, app, "Library")
 
 
-def test_the_correct_page_offers_clear_and_the_gt_actions(mw, app):
-    """WG-T5: Classes…, Export dataset… and Remove GT… follow the Correct page's Clear (the
-    Trace GT stage and its page are gone, WG-T11)."""
+def test_the_correct_page_has_no_clear_button(mw, app):
+    """WG-T5: the Correct page holds Classes…, Export dataset… and Remove GT… (the Trace GT
+    stage and its page are gone, WG-T11). O18: its Clear is the dock's, not the top bar's."""
     _enter(mw, app, "Correct")
-    page = mw.action_bar_stack.currentWidget()
+    window, editor = mw, mw.correct_editor
     try:
-        buttons = (
-            mw.correct_editor.clear_button,
-            mw.gt_classes_button,
-            mw.gt_export_button,
-            mw.gt_remove_button,
-        )
+        page = window.action_bar_stack.currentWidget()
+        assert not hasattr(editor, "clear_button")
+        assert not [b for b in page.findChildren(QPushButton) if "Clear" in b.text()]
+        buttons = (mw.gt_classes_button, mw.gt_export_button, mw.gt_remove_button)
         assert all(button.parentWidget() is page and button.isVisible() for button in buttons)
         xs = [button.mapTo(page, button.rect().topLeft()).x() for button in buttons]
         assert xs == sorted(xs)
         assert mw.gt_remove_button.isEnabled() == bool(mw.correct_editor.current_image_path)
     finally:
-        _enter(mw, app, "Library")
-
-
-def test_the_correct_page_clear_button_clears_the_edited_layer_and_follows_it(mw, app, tmp_path):
-    import numpy as np
-
-    from tests.test_correct_editor import W, new_project
-
-    project = new_project(tmp_path)  # a.png: a model mask and a generated skeleton
-    _enter(mw, app, "Correct")
-    editor = mw.correct_editor
-    editor.load_image(project.a, project.folder)
-    _settle(app)
-    button = editor.clear_button
-    page = mw.action_bar_stack.currentWidget()
-    try:
-        assert button.parentWidget() is page and button.isVisible()
-        assert button.text() == "Clear mask"
-        mask = editor.layers["mask"].document.history
-        skeleton = editor.layers["skeleton"].document.model
-        assert mask.plane.any() and skeleton.mask[110, 20 : W - 20].all()
-
-        button.click()
-        assert not mask.plane.any() and skeleton.mask.any()  # the edited layer only
-
-        editor.set_active_layer("skeleton")
-        assert button.text() == "Clear skeleton"
-        button.click()
-        assert not np.any(skeleton.mask)
-    finally:
-        for layer in editor.layers.values():
-            layer.revert()  # back to the files, so leaving asks nothing
-        editor.reset()
         _enter(mw, app, "Library")
 
 
