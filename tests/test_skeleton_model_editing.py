@@ -618,31 +618,29 @@ def test_prewarm_loads_scikit_image_once_from_a_worker_thread():
 
 
 # ----------------------------------------------- opening a small generated file
-def _arc_px(mask: np.ndarray) -> float:
-    from app.inference.metrics import skeleton_arc_length_px
-
-    ox, oy, diag = skeleton_arc_length_px(mask > 0)
-    return ox + oy + diag * float(np.sqrt(2.0))
-
-
 def test_a_small_file_opens_upscaled_smoothly_as_one_line():
-    """The generated skeleton is small (SKELETON_OUTPUT_SIZE) with ~2 px lines. Opening it
-    at image size upscales the grey file bilinearly before thresholding, so the line keeps
-    its length (a nearest-neighbour staircase measured about 3 % long) and its connectivity.
+    """The generated skeleton is small (SKELETON_OUTPUT_SIZE, 341 x 256) with ~2 px lines.
+    Opening it at image size (640 x 480) upscales the grey file bilinearly before
+    thresholding, so the line keeps its connectivity and its measured length: within 1 %
+    (bilinear +0.23 %; a nearest-neighbour staircase measures +2.19 %). The lengths are
+    ``root_length_mm`` values, each file with its own per-axis pixel pitch (W3-T8 review I1).
     """
-    small = np.zeros((128, 170), np.uint8)
-    cv2.line(small, (10, 10), (160, 118), 255, 2)
-    cv2.ellipse(small, (85, 64), (50, 35), 15, 0, 270, 255, 2)
+    from app.config import SKELETON_OUTPUT_SIZE
+    from app.inference.metrics import root_length_mm
+
+    w, h = SKELETON_OUTPUT_SIZE
+    small = np.zeros((h, w), np.uint8)
+    cv2.line(small, (20, 20), (320, 236), 255, 2)
+    cv2.ellipse(small, (170, 128), (100, 70), 15, 0, 270, 255, 2)
     model = SkeletonCorrectionModel()
-    model.load_from_raster(small, target_size=(320, 240))
+    model.load_from_raster(small, target_size=(640, 480))
     mask = model.mask
-    assert mask.shape == (240, 320)
-    n_src, _ = cv2.connectedComponents(_skeletonize_uint8(small), connectivity=8)
+    assert mask.shape == (480, 640)
+    source = _skeletonize_uint8(small)
+    n_src, _ = cv2.connectedComponents(source, connectivity=8)
     n_new, _ = cv2.connectedComponents((mask > 0).astype(np.uint8), connectivity=8)
     assert n_new == n_src
-    scale = (320 / 170 + 240 / 128) / 2
-    expected = _arc_px(_skeletonize_uint8(small)) * scale
-    assert abs(_arc_px(mask) / expected - 1.0) < 0.015
+    assert abs(root_length_mm(mask) / root_length_mm(source) - 1.0) < 0.01
 
 
 def test_a_file_at_image_size_opens_unchanged():

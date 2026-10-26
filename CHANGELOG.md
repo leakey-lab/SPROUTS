@@ -515,6 +515,10 @@ Five passes, not yet released:
     method) asks first, also when values come from GT files (R8, O17, W2-T8a). The Generate
     stage says masks give area and skeletons length, independently (O14). Correct with no
     image open says "Select an image in the Library" (X9).
+  - `metrics.skeleton_arc_length_px` returns `SkeletonSteps(horizontal, vertical, diagonal,
+    corners)` with m-adjacent diagonals (it returned a 3-tuple of all-pairs counts); code
+    that unpacks three values must change (W3-T8). `root_length_mm` / `area_row` keep their
+    signatures.
   - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
     pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
     files of a run have more than one size (the photos differ) or the predictions do; the
@@ -731,6 +735,22 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Length estimator (2026-10-25, W3-T8, O12).** Root length now uses the corner-count
+  estimator of Vossepoel & Smeulders (1982), 0.980 n_e + 1.406 n_o − 0.091 n_c, on the
+  m-adjacent skeleton (a junction's diagonal is no longer counted on top of its two
+  orthogonal steps), with the per-axis pixel pitch. The former Freeman weights (1, √2) read
+  +5.3 % long on synthetic roots (0 to +8.3 % by direction); the new estimator −0.1 % on
+  average (−2.0 to +1.0 % by direction); a perfectly horizontal or vertical line reads
+  2.0 % short. Every non-zero length decreases: on 3,000 real skeletons −5.24 % in total;
+  for the 574 longer than 1 mm, median −5.1 %, 90 % of files between −7.3 % and −2.9 %,
+  extremes −11.5 % and −1.9 % (unrounded). In the 2-dp CSVs, 654 of 3,000 length rows
+  change and no value changes between zero and non-zero; areas are byte-identical.
+  Synthetic set (6 images): lengths −6.94 % in total (−8.3 … −5.8 % per image). The
+  goldens' GT lengths follow (29.44 → 27.97 and 61.84 → 58.87 mm; no pixel changes).
+  Together with the field-of-view change (W3-T2): −3.33 % in total on the same sample. A
+  length CSV with a provenance sidecar (Measure since 2026-09-28) is marked outdated
+  (earlier length method; one note when the field of view differs too); an older CSV has
+  no sidecar and is not marked.
 - **GT export manifest columns (2026-10-25, WG-T9, O24).** The GT dataset export's
   `manifest.csv` gains `exif_orientation` (the source image's EXIF tag 0x0112 as an integer
   1-8, blank when absent or unreadable; recorded only, the orientation is never applied)

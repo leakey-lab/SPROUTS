@@ -192,7 +192,7 @@ def seed_golden_correction(root: str, case: str) -> ProjectLayout:
 
 
 @pytest.mark.parametrize(
-    "case, length", [("synth_blank_png", 29.44), ("synth_model_mask_and_skeleton", 61.84)]
+    "case, length", [("synth_blank_png", 27.97), ("synth_model_mask_and_skeleton", 58.87)]
 )
 def test_the_synthetic_goldens_corrections_measure_their_recorded_lengths(
     tmp_path, qapp, case, length

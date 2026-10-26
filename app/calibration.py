@@ -51,7 +51,10 @@ __all__ = [
 PROJECT_FILENAME = "sprouts_project.json"
 PROJECT_SCHEMA = 1
 #: How Measure turns a skeleton into a length (recorded as ``parameters.estimator``).
-LENGTH_METHOD = "8-connected arc length with per-axis pixel pitch"
+LENGTH_METHOD = (
+    "corner-count length (Vossepoel & Smeulders 1982): 0.980 n_e + 1.406 n_o - 0.091 n_c"
+    " on the m-adjacent 8-connected skeleton, per-axis pixel pitch"
+)
 
 _SOURCE_PROJECT = "project"
 _SOURCE_DEFAULT = "default"
@@ -63,6 +66,11 @@ _FOV_NOTE = (
 )
 _METHOD_NOTE = (
     "Measured with an earlier length method. Measure again before comparing with new values."
+)
+#: Both differ (a length CSV): one sentence, not the two above.
+_FOV_AND_METHOD_NOTE = (
+    "Measured with field of view {recorded} and an earlier length method; {uses} {current}. "
+    "Measure again before comparing with new values."
 )
 _CACHE_LIMIT = 64
 #: The largest ``reference_size_px`` value accepted (keeps its ratio a finite float).
@@ -320,30 +328,29 @@ def method_note(
 
     The field-of-view sentence when its width or height differs from ``current``'s
     (:func:`same_fov`; "this project uses" for a project file's calibration, else "this app
-    now uses": :func:`calibration_words`); for ``kind == "length"`` also the method sentence
-    when its ``parameters.estimator`` is another than :data:`LENGTH_METHOD`. Both: one space
-    apart."""
+    now uses": :func:`calibration_words`); for ``kind == "length"`` the method sentence
+    when its ``parameters.estimator`` is another than :data:`LENGTH_METHOD`. Both: one
+    sentence naming both."""
     if not isinstance(sidecar, Mapping):
         return ""
     recorded = fov_of(sidecar.get("calibration"))
     if recorded is None:
         return ""
-    notes = []
     now = dict(zip(_FOV_KEYS, _fov_pair(current.calibration), strict=True))
-    if not same_fov(recorded, now):
-        notes.append(
-            _FOV_NOTE.format(
-                recorded=fov_label(recorded),
-                uses=calibration_words(current).uses,
-                current=fov_label(current.calibration),
-            )
-        )
+    fov_differs = not same_fov(recorded, now)
+    method_differs = False
     if kind == "length":
         parameters = sidecar.get("parameters")
         estimator = parameters.get("estimator") if isinstance(parameters, Mapping) else None
-        if estimator is not None and estimator != LENGTH_METHOD:
-            notes.append(_METHOD_NOTE)
-    return " ".join(notes)
+        method_differs = estimator is not None and estimator != LENGTH_METHOD
+    if not fov_differs:
+        return _METHOD_NOTE if method_differs else ""
+    template = _FOV_AND_METHOD_NOTE if method_differs else _FOV_NOTE
+    return template.format(
+        recorded=fov_label(recorded),
+        uses=calibration_words(current).uses,
+        current=fov_label(current.calibration),
+    )
 
 
 def aspect_mismatches(

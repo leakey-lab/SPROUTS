@@ -89,7 +89,9 @@ in `app/models.py` records it for each checkpoint.
 | Parameters | 12,909,443 (`norm="batch"`, `use_dropout=True`, `n_blocks=9`: the checkpoint loads with every key matched). |
 | Input | The original image (not the mask) as RGB, resized to 256 x 256 (bicubic), normalised to [-1, 1] (mean 0.5, std 0.5 per channel). |
 | Output | A 3 x 256 x 256 image in [-1, 1], mapped to 0-255 and resized (bicubic) to 341 x 256 (width x height, aspect ratio 3/4 as in the validated pipeline). Saved as `skeletons/<stem>_fake.png` (RGB). |
-| Measurement | Not part of the model: `app/inference/metrics.py` reads the PNG as grayscale, applies an Otsu threshold (inverted if the foreground is the majority) and `skimage.morphology.skeletonize`, then measures the 1-pixel skeleton's arc length. |
+| Measurement | Not part of the model: `app/inference/metrics.py` reads the PNG as grayscale, applies an Otsu threshold (inverted if the foreground is the majority) and `skimage.morphology.skeletonize`, then measures the 1-pixel skeleton's length with the corner-count estimator of Vossepoel &
+  Smeulders (1982) (0.980 per orthogonal step, 1.406 per diagonal step, −0.091 per change of
+  direction, m-adjacent steps, per-axis pixel pitch). |
 | Precision | fp32, no autocast (mixed precision visibly changes the generator's output). Same CUDA runtime caveats as the mask model. |
 | Training data | TODO(owner): not documented in the repository. |
 

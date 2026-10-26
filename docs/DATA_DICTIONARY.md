@@ -144,9 +144,16 @@ onto the actual resolution of the file being measured: `mm_per_px_x = 18 / width
 
 - **Length.** The skeleton PNG is read as grayscale, binarised with Otsu's threshold
   (inverted if the foreground covers more than half the image) and thinned with
-  `skimage.morphology.skeletonize`. Length is the arc length of the 1-pixel skeleton over
-  its 8-connected neighbour pairs: horizontal steps cost `mm_per_px_x`, vertical steps
-  `mm_per_px_y`, diagonal steps the diagonal `sqrt(mm_per_px_x² + mm_per_px_y²)`.
+  `skimage.morphology.skeletonize`. Length is the corner-count estimate of Vossepoel &
+  Smeulders (1982) on the 1-pixel skeleton's m-adjacent 8-connected steps:
+  `0.980 · (n_h · mm_per_px_x + n_v · mm_per_px_y) + 1.406/√2 · n_o · sqrt(mm_per_px_x² + mm_per_px_y²) − 0.091 · n_c · sqrt(mm_per_px_x · mm_per_px_y)`,
+  where n_h / n_v are horizontal / vertical neighbour pairs, n_o diagonal pairs that share
+  no 4-neighbour in the skeleton (a junction's diagonal is not counted twice), and n_c the
+  pixels where the step direction changes (`parameters.estimator` in the provenance names
+  it). It is unbiased on average over all directions (−2.0 % to +1.0 % by direction; a
+  perfectly horizontal or vertical line reads 2.0 % short). For non-square pixels the step
+  weights are applied per axis, an extension of the square-grid estimator: by direction
+  −2.0 to +1.3 % at 18 × 13 mm, −2.9 to +3.3 % at a 20 % difference.
   Model skeletons are 341 x 256, i.e. 0.0528 x 0.0527 mm per pixel. GT skeletons are at the
   photo's resolution (640 x 480: 0.0281 mm per pixel, square).
 - **Area.** The mask PNG is read as grayscale; pixels above 127 are root. Area is the

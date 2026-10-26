@@ -62,7 +62,7 @@ end of each wave.
 | L1 | FR-03 | Corrected skeletons are not measured | O1, WG-T8 (done, 9e173c6) |
 | L2 | V1 | Save with nothing unsaved writes a correction | O2, W1-T3 (done, 4850564) |
 | L3 | | Mask and skeleton are independent and the pages do not say so | O14, W2-T8a, WG-T10 |
-| L5 | Q1 leftover | Two thinning paths; old 341 x 256 corrections | O13, WG-T3 (done, 5fca8c4), WG-T8 (done, 9e173c6) |
+| L5 | Q1 leftover | Two thinning paths; old 341 x 256 corrections. The editor's thinning path reads +1.46 % against the prediction's with the corner-count estimator (median +1.35 %, 5th…95th −1.45 … +6.39 %; Freeman +1.14 %), which is why WG-T8 does not use an unedited GT copy (`unedited`) | O13, WG-T3 (done, 5fca8c4), WG-T8 (done, 9e173c6) |
 | M1 | | A model mask on a photo that is not 640 x 480 | O8, W1-T2 (done, 7d5ae3e), W3-T4 (done, 28203c0) |
 | M2 | | One field of view for every image | O3, W2-T4 (done, c609d77), W3-T2 (done, 8ca6e5e: project file; 6e210d1: default 18 x 13.5 mm) |
 | M4 | | Mask origin by PNG colour type; a cleared mask is regenerated | O9, WG-T2 (done, 93a88d4), WG-T7 (done, 6ce8e8d) |
@@ -101,7 +101,7 @@ end of each wave.
 | F5 | CQ-10 | Compat shims; stamp helpers | W5-T5 |
 | F6 | | Script teardown note | W5-T7 (note moves to `CLAUDE.md`) |
 | F7 | | Documents consistent; this file | W0-T1 (done, b69d422), W0-T2 (done, 705377d..dc67e12), W5-T7, O36 |
-| X1 | | The length estimator reads about 4.4 % long | O12, W3-T8 |
+| X1 | | The length estimator reads about 4.4 % long | O12, W3-T8 (done: corner-count estimator) |
 | X2 | | Measure measures masks whose image is gone | O37, W2-T11 (done, 280ff95) |
 | X3 | | `Error` cells hold absolute paths | O38, W3-T7 (done, 3ca1576) |
 | X5 | | pytest writes into the user's log | W5-T6 (done, aacef21) |

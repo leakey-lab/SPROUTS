@@ -10,13 +10,18 @@ fixes the calibration science:
   the physical field of view, so a mask that is not 640x480 no longer reports an
   area wrong by the square of the resolution ratio (F-002).
 
-* Length (``root_length_mm``) uses a true arc-length estimator: orthogonal pixel
-  steps cost one pixel pitch, diagonal steps cost the Euclidean diagonal. The
-  previous code summed the raw skeleton pixel *count*, which undercounts every
-  diagonal step (treating sqrt(2) as 1) and biased reported length low by
-  ~15-20% (F-003). The estimator also uses the per-axis pixel pitch: the default pixels
-  are square (18 x 13.5 mm at 640 x 480), and a non-square project calibration
-  (``sprouts_project.json``, O3) stays exact rather than averaged.
+* Length (``root_length_mm``) uses the corner-count estimator of Vossepoel &
+  Smeulders (1982): 0.980 per orthogonal step, 1.406 per diagonal step and -0.091 per
+  change of direction, on the m-adjacent 8-connected skeleton (a junction's diagonal is
+  not counted on top of its two orthogonal steps), with the per-axis pixel pitch (O12,
+  audit X1). It is unbiased on average over all directions (-2.0 % to +1.0 % by direction;
+  a perfectly horizontal or vertical line reads 2.0 % short). It replaces the Freeman
+  weights (1, sqrt(2)), which read about 5 % long; before those, the raw pixel *count* read
+  15-20 % short (F-003). The default pixels are square (18 x 13.5 mm at 640 x 480); a
+  non-square project calibration (``sprouts_project.json``, O3) uses each axis's own pitch.
+  For non-square pixels the step weights are applied per axis, an extension of the
+  square-grid estimator: by direction -2.0 to +1.3 % at 18 x 13 mm, -2.9 to +3.3 % at a
+  20 % difference.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ import math
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -114,29 +120,74 @@ def load_mask(image_path: str, *, data: bytes | None = None) -> np.ndarray:
 # ----------------------------- metrics -------------------------------------
 
 
-def skeleton_arc_length_px(skeleton: np.ndarray) -> tuple[float, float, float]:
-    """Return (orthogonal_x_steps, orthogonal_y_steps, diagonal_steps) counted as
-    edges in the 8-connected pixel graph of the skeleton."""
-    s = skeleton > 0
-    orth_x = int(np.count_nonzero(s[:, :-1] & s[:, 1:]))  # horizontal neighbors
-    orth_y = int(np.count_nonzero(s[:-1, :] & s[1:, :]))  # vertical neighbors
-    diag = int(np.count_nonzero(s[:-1, :-1] & s[1:, 1:])) + int(
-        np.count_nonzero(s[:-1, 1:] & s[1:, :-1])
-    )
-    return orth_x, orth_y, diag
+# Vossepoel & Smeulders (1982), CGIP 20:347-364, the "corner count estimator" recommended by
+# Dorst & Smeulders (1987), CVGIP 40:311-333, eq. 24: L = 0.980 n_e + 1.406 n_o - 0.091 n_c.
+VS_ORTHOGONAL = 0.980
+VS_DIAGONAL = 1.406
+VS_CORNER = 0.091
+
+# code(p) = sum of 2**k over the set 8-neighbours of p: k = 0 E, 1 NE, 2 N, 3 NW, 4 W, 5 SW, 6 S, 7 SE
+_NEIGHBOUR_CODE = np.array([[8, 4, 2], [16, 0, 1], [32, 64, 128]], np.float32)
+
+
+def _corner_lut() -> np.ndarray:
+    """1 for a neighbour code whose pixel is a corner: exactly two m-adjacent neighbours,
+    not on opposite sides (the chain code changes value there)."""
+    lut = np.zeros(256, np.uint8)
+    for code in range(256):
+        bits = [(code >> k) & 1 for k in range(8)]
+        # a diagonal neighbour that shares a 4-neighbour in the skeleton is not m-adjacent
+        for k in (1, 3, 5, 7):
+            if bits[k] and (bits[k - 1] or bits[(k + 1) % 8]):
+                bits[k] = 0
+        steps = [k for k in range(8) if bits[k]]
+        lut[code] = len(steps) == 2 and steps[1] - steps[0] != 4
+    return lut
+
+
+_CORNER_LUT = _corner_lut()
+
+
+class SkeletonSteps(NamedTuple):
+    horizontal: int  # 4-adjacent pairs along x
+    vertical: int  # 4-adjacent pairs along y
+    diagonal: int  # m-adjacent diagonal pairs (no shared 4-neighbour in the skeleton)
+    corners: int  # pixels where the 8-connected step changes direction
+
+
+def skeleton_arc_length_px(skeleton: np.ndarray) -> SkeletonSteps:
+    """Steps and corners of a 1-px, 8-connected skeleton under m-adjacency."""
+    s8 = (skeleton > 0).astype(np.uint8)
+    x, y, w, h = cv2.boundingRect(s8)
+    if w == 0:
+        return SkeletonSteps(0, 0, 0, 0)
+    s8 = cv2.copyMakeBorder(s8[y : y + h, x : x + w], 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    s = s8.astype(bool)
+    horizontal = int(np.count_nonzero(s[:, :-1] & s[:, 1:]))
+    vertical = int(np.count_nonzero(s[:-1, :] & s[1:, :]))
+    tl, tr, bl, br = s[:-1, :-1], s[:-1, 1:], s[1:, :-1], s[1:, 1:]
+    down_right = int(np.count_nonzero(tl & br & ~tr & ~bl))
+    down_left = int(np.count_nonzero(tr & bl & ~tl & ~br))
+    # exact in uint8: a code is at most 255
+    code = cv2.filter2D(s8, -1, _NEIGHBOUR_CODE, borderType=cv2.BORDER_CONSTANT)
+    corners = int(_CORNER_LUT[code[s]].sum())
+    return SkeletonSteps(horizontal, vertical, down_right + down_left, corners)
 
 
 def root_length_mm(skeleton: np.ndarray, *, calibration: Calibration | None = None) -> float:
-    """Root length in mm from a skeleton, using arc-length + per-axis calibration.
+    """Root length in mm: the corner-count estimator with the per-axis pixel pitch.
 
     ``calibration``: the field of view (a project's, O3); ``None`` is
     :data:`app.config.CALIBRATION`, read at call time."""
     h, w = skeleton.shape[:2]
     cal = config.CALIBRATION if calibration is None else calibration
     mx, my = cal.mm_per_px(w, h)
-    orth_x, orth_y, diag = skeleton_arc_length_px(skeleton)
-    diag_mm = math.hypot(mx, my)
-    return orth_x * mx + orth_y * my + diag * diag_mm
+    st = skeleton_arc_length_px(skeleton)
+    return (
+        VS_ORTHOGONAL * (st.horizontal * mx + st.vertical * my)
+        + VS_DIAGONAL / math.sqrt(2.0) * st.diagonal * math.hypot(mx, my)
+        - VS_CORNER * st.corners * math.sqrt(mx * my)
+    )
 
 
 def root_area_mm2(mask: np.ndarray, *, calibration: Calibration | None = None) -> float:

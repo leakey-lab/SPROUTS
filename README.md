@@ -244,8 +244,11 @@ image/mask resolution, so they are resolution-independent:
 
 - **Area** = root pixels × (FOV_w/width) × (FOV_h/height). A fully-root mask
   measures the whole FOV (243 mm²) at any resolution.
-- **Length** uses a true arc-length estimator: orthogonal pixel steps cost one
-  pixel pitch, diagonal steps cost the Euclidean diagonal (per-axis pitch).
+- **Length** uses the corner-count estimator of Vossepoel & Smeulders (1982): 0.980 per
+  orthogonal step, 1.406 per diagonal step and −0.091 per change of direction, on the
+  8-connected skeleton with a junction's diagonal not counted twice; per-axis pixel pitch.
+  It is unbiased on average over all directions (−2.0 % to +1.0 % by direction; a perfectly
+  horizontal or vertical line reads 2.0 % short).
 
 Every image is taken to cover the whole field of view, whatever its size, aspect or crop:
 a quarter-covered mask of a 640 × 480 frame, of a 320 × 240 crop and of a 1920 × 1080

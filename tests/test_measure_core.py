@@ -4,13 +4,17 @@ Pins the hard contract that the Measure CSVs are byte-identical to the
 pre-refactor pipeline (legacy reference implementation inlined below), plus
 RB-03/FR-06 (atomic CSV), RB-06 (non-ASCII paths), FR-15 (token-anchored
 names) and FR-02 (provenance sidecars).
+
+The one intended difference is the length estimator (O12, W3-T8): the legacy Freeman
+weights (1, sqrt(2)) became the corner-count estimator of Vossepoel & Smeulders (1982).
+The reference computes it with ``tests/length_reference.py``, a pure-Python version that
+shares no code with ``app/inference/metrics.py``; everything else is the legacy pipeline.
 """
 
 from __future__ import annotations
 
 import csv
 import json
-import math
 import os
 import re
 
@@ -22,6 +26,7 @@ from app import provenance
 from app.config import AREA_CSV_HEADERS, CALIBRATION, LENGTH_CSV_HEADERS
 from app.inference import measure_inputs, measure_run, metrics
 from app.inference.measure_run import AREA, LENGTH, MeasureRun
+from tests import length_reference
 
 # --------------------------------------------------------------------------- legacy reference
 # Verbatim logic of the pre-refactor pipeline (metrics.py @ a1599e6): cv2.imread,
@@ -60,15 +65,8 @@ def _legacy_row(name, path, kind):
                 b = 255 - b
             s = skeletonize(b / 255) > 0
             mx, my = CALIBRATION.mm_per_px(w, h)
-            value = (
-                np.count_nonzero(s[:, :-1] & s[:, 1:]) * mx
-                + np.count_nonzero(s[:-1, :] & s[1:, :]) * my
-                + (
-                    np.count_nonzero(s[:-1, :-1] & s[1:, 1:])
-                    + np.count_nonzero(s[:-1, 1:] & s[1:, :-1])
-                )
-                * math.hypot(mx, my)
-            )
+            # O12 (W3-T8): the corner-count estimator, from the independent reference
+            value = length_reference.vs_length_mm(s, mx, my)
         else:
             _, b = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
             value = int(np.count_nonzero(b == 255)) * CALIBRATION.area_per_px_mm2(w, h)

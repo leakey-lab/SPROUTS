@@ -220,8 +220,10 @@ def test_method_note_texts(tmp_path):
 
     earlier = {"calibration": at_default, "parameters": {"estimator": "old"}}
     assert method_note(earlier, kind="length", current=default) == _METHOD_SENTENCE
+    # Both differ: one sentence naming both (W3-T8 review M8).
     assert method_note(earlier, kind="length", current=project) == (
-        _FOV_SENTENCE + " " + _METHOD_SENTENCE
+        "Measured with field of view 18×13.5 mm and an earlier length method; this project "
+        "uses 18×13 mm. Measure again before comparing with new values."
     )
     assert method_note(earlier, kind="area", current=default) == ""  # area has no estimator
     assert method_note(sidecar, kind="length", current=default) == ""
@@ -237,10 +239,28 @@ def test_method_note_texts(tmp_path):
     invalid = load_project_calibration(tmp_path / "bad")
     assert invalid.problem and invalid.source == "default"
     assert method_note(at_13, kind="length", current=invalid) == app_note
+    at_13_earlier = {**at_13, "parameters": {"estimator": "old"}}
+    assert method_note(at_13_earlier, kind="length", current=default) == (
+        "Measured with field of view 18×13 mm and an earlier length method; this app now uses "
+        "18×13.5 mm. Measure again before comparing with new values."
+    )
+    assert method_note(at_13_earlier, kind="area", current=default) == app_note
     assert method_note(None, kind="length", current=project) == ""
     assert method_note({"parameters": {"estimator": "old"}}, kind="length", current=project) == ""
     assert fov_label(Calibration(18.0, 13.5)) == "18×13.5 mm"
     assert fov_label({"fov_width_mm": 18.0, "fov_height_mm": 13.0}) == "18×13 mm"
+
+
+def test_a_length_csv_measured_with_the_old_estimator_is_flagged():
+    """O12 (W3-T8): a length CSV measured before the corner-count estimator, with today's
+    field of view, is outdated by its method alone."""
+    sidecar = {
+        "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5},
+        "parameters": {"estimator": "8-connected arc length with per-axis pixel pitch"},
+    }
+    assert method_note(sidecar, kind="length", current=default_calibration()) == (
+        "Measured with an earlier length method. Measure again before comparing with new values."
+    )
 
 
 def test_aspect_mismatches():
