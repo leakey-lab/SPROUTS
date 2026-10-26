@@ -69,7 +69,7 @@ class ClassDef:
 class Registry:
     """Immutable, validated list of GT classes (the content of ``gt/classes.json``).
 
-    Mutators (``add``/``update``/``retire``) return a new registry and re-check
+    Mutators (``add``/``update``/``retire``/``restore``) return a new registry and re-check
     every invariant; an invalid result raises ``RegistryError``.
     """
 
@@ -133,6 +133,23 @@ class Registry:
         if target.is_ignore:
             raise RegistryError("The Ignore class cannot be retired")
         updated = replace(target, retired=True)
+        classes = tuple(updated if c.key == key else c for c in self.classes)
+        return self._with_classes(classes)
+
+    def restore(self, key: str) -> Registry:
+        """Return a new registry with the retired class ``key`` active again.
+
+        The class keeps its position, id and colour (``retire`` kept them reserved), so
+        its pixels are its own class again. Raises ``RegistryError`` when ``key`` is
+        unknown or not retired.
+        """
+        try:
+            target = self.by_key(key)
+        except KeyError:
+            raise RegistryError(f"No class with key {key!r}") from None
+        if not target.retired:
+            raise RegistryError(f"The class {key!r} is not retired")
+        updated = replace(target, retired=False)
         classes = tuple(updated if c.key == key else c for c in self.classes)
         return self._with_classes(classes)
 

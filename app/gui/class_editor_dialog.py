@@ -3,10 +3,12 @@
 Modal dialog over a :class:`~app.gt.registry.Registry`: add (name, key
 auto-slugged from the name and editable, colour picker), rename, recolour and
 retire (confirmed) a class. Id and key are read-only for existing classes;
-Ignore has no retire button. Every edit is validated by rebuilding a
-candidate ``Registry`` via ``add``/``update``/``retire``; a ``RegistryError``
-is shown inline. While a field still holds invalid input (a class name that
-failed to apply, or an Add that failed) OK is disabled; the error clears as
+Ignore has no retire button. Retired classes are listed below the rows, each with a
+Restore button that brings the class back with its id, colour and place. Every edit
+is validated by rebuilding a candidate ``Registry`` via
+``add``/``update``/``retire``/``restore``; a ``RegistryError`` is shown inline.
+While a field still holds invalid input (a class name that failed to apply, or an
+Add that failed) OK is disabled; the error clears as
 soon as that input is fixed, reverted or abandoned. The class rows scroll
 once there are many of them. :meth:`ClassEditorDialog.result_registry`
 returns the accepted registry, or ``None`` if the dialog was cancelled or the
@@ -60,10 +62,12 @@ _SWATCH_PX = 20
 _ADD_SWATCH_PX = 22
 # Error sources for a refused one-off action: nothing stays pending, so they
 # never block OK and are cleared by the next successful edit.
-_TRANSIENT_SOURCES = ("color", "retire")
+_TRANSIENT_SOURCES = ("color", "retire", "restore")
 # Said for a blank name instead of the registry's "Invalid class name: ''".
 _NAME_NEEDED = "A class needs a name."
 _ENTER_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+_RETIRED_HEADING = "Retired"
+_RESTORE_TIP = "Bring this class back; its pixels get their own id again in the export."
 
 
 def _swatch_qss(hex_color: str) -> str:
@@ -128,6 +132,46 @@ class _EditorRow(QWidget):
         self.swatch_button.setStyleSheet(_swatch_qss(hex_color))
 
 
+class _RetiredRow(QWidget):
+    """One retired class: read-only id, key, colour chip and name, and a Restore button."""
+
+    def __init__(self, class_def: ClassDef, parent=None):
+        super().__init__(parent)
+        self.key = class_def.key
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 4, 6, 4)
+        row.setSpacing(8)
+
+        id_label = QLabel(str(class_def.id))
+        id_label.setFixedWidth(28)
+        key_label = QLabel(class_def.key)
+        key_label.setFixedWidth(90)
+        for label in (id_label, key_label):
+            label.setStyleSheet(
+                f"color: {tokens.TEXT_FAINT}; font-family: {tokens.MONO}; "
+                "font-size: 11px; background: transparent;"
+            )
+            row.addWidget(label)
+
+        chip = QFrame()
+        chip.setFixedSize(_SWATCH_PX, _SWATCH_PX)
+        chip.setStyleSheet(
+            f"background-color: {class_def.color}; "
+            f"border: 1px solid {tokens.BORDER_STRONG}; border-radius: 4px;"
+        )
+        row.addWidget(chip)
+
+        name_label = QLabel(class_def.name)
+        name_label.setStyleSheet(f"color: {tokens.TEXT_MUTED}; background: transparent;")
+        row.addWidget(name_label, 1)
+
+        self.restore_button = QPushButton("Restore")
+        self.restore_button.setToolTip(_RESTORE_TIP)
+        self.restore_button.setAccessibleName(f"Restore class {class_def.key}")
+        row.addWidget(self.restore_button)
+
+
 class ClassEditorDialog(QDialog):
     """Modal editor over a class ``Registry``."""
 
@@ -140,11 +184,13 @@ class ClassEditorDialog(QDialog):
         self._original = registry
         self._candidate = registry
         self._accepted_registry: Registry | None = None
-        # Validation errors by source ("name:<key>", "add", "color", "retire");
+        # Validation errors by source ("name:<key>", "add", "color", "retire", "restore");
         # ``_error`` is the newest one that blocks OK (None = OK enabled).
         self._errors: dict[str, str] = {}
         self._error: str | None = None
         self._rows: dict[str, _EditorRow] = {}
+        # One Restore button per retired class (rebuilt with the rows).
+        self.restore_buttons: dict[str, QPushButton] = {}
         self._key_auto = True
         self._add_color_auto = True  # False once the user picks a colour
         self._add_color = self._free_add_color()
@@ -327,6 +373,7 @@ class ClassEditorDialog(QDialog):
                 w.hide()
                 w.deleteLater()
         self._rows.clear()
+        self.restore_buttons.clear()
 
         for class_def in self._candidate.active():
             row = _EditorRow(class_def)
@@ -342,6 +389,27 @@ class ClassEditorDialog(QDialog):
                 )
             self._rows_layout.insertWidget(self._rows_layout.count() - 1, row)
             self._rows[class_def.key] = row
+
+        self._add_retired_rows()
+
+    def _add_retired_rows(self) -> None:
+        """The "Retired" group below the rows: a heading and a Restore row per retired class."""
+        retired = [c for c in self._candidate.classes if c.retired]
+        if not retired:
+            return
+        heading = QLabel(_RETIRED_HEADING)
+        heading.setStyleSheet(
+            f"color: {tokens.TEXT_MUTED}; font-size: 12px; font-weight: 600; "
+            "background: transparent; padding: 8px 6px 0 6px;"
+        )
+        self._rows_layout.insertWidget(self._rows_layout.count() - 1, heading)
+        for class_def in retired:
+            row = _RetiredRow(class_def)
+            row.restore_button.clicked.connect(
+                lambda _checked=False, k=class_def.key: self._on_restore_clicked(k)
+            )
+            self._rows_layout.insertWidget(self._rows_layout.count() - 1, row)
+            self.restore_buttons[class_def.key] = row.restore_button
 
     def _on_name_committed(self, key: str) -> None:
         row = self._rows.get(key)
@@ -400,6 +468,14 @@ class ClassEditorDialog(QDialog):
             new_registry = self._candidate.retire(key)
         except RegistryError as exc:
             self._set_error("retire", str(exc))
+            return
+        self._apply_candidate(new_registry)
+
+    def _on_restore_clicked(self, key: str) -> None:
+        try:
+            new_registry = self._candidate.restore(key)
+        except RegistryError as exc:
+            self._set_error("restore", str(exc))
             return
         self._apply_candidate(new_registry)
 

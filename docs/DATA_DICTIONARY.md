@@ -265,6 +265,8 @@ off until it is fixed).
 | `split` | `train` or `val` |
 | `tube`, `position`, `date` | parsed from the file name as above (`date` is `YYYY.MM.DD`); empty if absent |
 | `classes_present` | `;`-separated keys of the active classes with at least one pixel |
+| `exif_orientation` | the source image's EXIF Orientation tag (0x0112) as an integer 1-8; empty when the image has none or its EXIF cannot be read. Recorded only: no stage applies it, the image and the mask are the stored pixel grid |
+| `px_background`, `px_<key>`, `px_ignore` | pixels of the exported mask with that exported id: background (0), each exported class in `classes.json` order, and Ignore (255: Ignore, retired and unknown classes). They add up to width x height. The set of `px_<key>` columns follows the `classes.json` of that export (a retired class has none) |
 
 By default only images on which every active class was checked are exported. The split
 is reproducible: stems are grouped by tube (so one tube never spans train and val), the

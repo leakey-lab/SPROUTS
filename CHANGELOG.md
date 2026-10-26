@@ -357,6 +357,9 @@ Five passes, not yet released:
 
 ### Added
 - **Owner-decisions build (2026-10-25).**
+  - The class editor lists retired classes under "Retired" with a **Restore** button; a
+    restored class returns with its id, colour and place, and its pixels export under its
+    own id again (WG-T9, O24).
   - Per-project field of view in `sprouts_project.json`, recorded with every measurement;
     CSVs measured with another field of view or length method are marked outdated (O3
     mechanism, memo Q3, W3-T2). The default stays 18 x 13 mm in this step.
@@ -713,6 +716,13 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **GT export manifest columns (2026-10-25, WG-T9, O24).** The GT dataset export's
+  `manifest.csv` gains `exif_orientation` (the source image's EXIF tag 0x0112 as an integer
+  1-8, blank when absent or unreadable; recorded only, the orientation is never applied)
+  after `classes_present`, then `px_background`, `px_<key>` for each exported class in
+  registry order, and `px_ignore` (pixel counts of the exported mask ids; a retired class
+  counts under `px_ignore`). Exported masks, images and `classes.json` are unchanged; no
+  measured value changes.
 - **Field of view 18 × 13 mm → 18 × 13.5 mm (2026-10-25, W3-T2, O3).** The default is the
   Bartz BTC-100X / I-CAP frame at 640 × 480 px (Rajurkar et al. 2022, Plant Methods
   18:39); pixels are now square (0.028125 mm at 640 × 480). Exact effect per image: every

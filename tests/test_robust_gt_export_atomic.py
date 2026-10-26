@@ -66,7 +66,7 @@ def _pre_r1_write_files(ref_dir, out_dir, result, registry):
     with open(os.path.join(out_dir, "manifest.csv"), encoding="utf-8", newline="") as fh:
         rows = list(csv.DictReader(fh))
     with open(os.path.join(ref_dir, "manifest.csv"), "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=gt_export._MANIFEST_FIELDS)
+        writer = csv.DictWriter(fh, fieldnames=gt_export._manifest_fields(registry))
         writer.writeheader()
         for row in rows:
             writer.writerow(row)

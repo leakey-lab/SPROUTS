@@ -410,9 +410,10 @@ never read or write `mask/` or `skeletons/`. They trace classes; they do not mea
   classes were checked on that image.
 - `gt/classes.json` — the project's classes (id, key, name, colour). Defaults:
   Root, Nodule, Root tip, Ignore. Edit them with **Classes…**; a deleted class is
-  retired (its id is never reused). If the file is edited by hand and a field has
-  the wrong type, the app names the class and field and turns GT saving off until
-  it is fixed.
+  retired (its id is never reused); a retired class is listed under "Retired" in the
+  class editor, and Restore brings it back with its id, colour and place. If the file
+  is edited by hand and a field has the wrong type, the app names the class and field
+  and turns GT saving off until it is fixed.
 
 A saved file means the image was annotated, even when nothing is painted: tick the classes
 you looked for and save ("checked, nothing present" is a valid negative example).
@@ -439,7 +440,7 @@ images/<stem>.<ext>            copied originals
 masks/<stem>.png               class-id PNG: background 0, classes 1..N, Ignore 255
 classes.json                   id → name/colour, ignore_index 255
 splits/train.txt, splits/val.txt
-manifest.csv                   stem, source image, split, tube, position, date, classes present
+manifest.csv                   stem, source image, split, tube, position, date, classes present, EXIF orientation, pixels per class
 manifest.csv.provenance.json   how it was made: options (split seed), counts, class registry, app version
 ```
 

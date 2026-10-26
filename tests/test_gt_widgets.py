@@ -485,3 +485,14 @@ def test_retire_by_clicking_its_own_button(app, monkeypatch):
     QApplication.processEvents()
     assert "nodule" not in dialog._rows
     assert dialog._candidate.by_key("nodule").retired is True
+
+
+def test_restore_a_retired_class_in_the_editor(app):
+    dialog = _dialog(default_registry().retire("nodule"))
+    assert "nodule" not in dialog._rows and list(dialog.restore_buttons) == ["nodule"]
+
+    dialog.restore_buttons["nodule"].click()
+    assert "nodule" in dialog._rows and dialog.restore_buttons == {}
+
+    dialog._on_accept()
+    assert dialog.result_registry() == default_registry()

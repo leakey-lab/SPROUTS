@@ -359,3 +359,16 @@ def test_save_registry_failure_leaves_no_tmp_file(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         save_registry(str(tmp_path), default_registry())
     assert os.listdir(tmp_path / "gt") == []
+
+
+def test_restore_makes_a_retired_class_active_again_in_place():
+    retired = default_registry().retire("nodule")
+    assert "nodule" not in [c.key for c in retired.active()]
+    assert retired.restore("nodule") == default_registry()
+
+
+def test_restore_raises_for_an_unknown_or_an_active_class():
+    with pytest.raises(RegistryError, match="not retired"):
+        default_registry().restore("root")
+    with pytest.raises(RegistryError, match="No class"):
+        default_registry().restore("nothing")

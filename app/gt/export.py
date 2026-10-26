@@ -45,7 +45,20 @@ from app.provenance import build_record, portable_path, write_sidecar
 logger = logging.getLogger(__name__)
 
 _MANIFEST_FILENAME = "manifest.csv"
-_MANIFEST_FIELDS = ["stem", "source_image", "split", "tube", "position", "date", "classes_present"]
+# The columns every manifest has, in order; ``px_background``, ``px_<key>`` for each labelled
+# class in registry order and ``px_ignore`` follow (``_manifest_fields``).
+_MANIFEST_FIELDS = [
+    "stem",
+    "source_image",
+    "split",
+    "tube",
+    "position",
+    "date",
+    "classes_present",
+    "exif_orientation",
+]
+# The EXIF tag that says how a viewer should rotate the stored pixels (never applied here).
+_EXIF_ORIENTATION_TAG = 0x0112
 _ERRORS_FILENAME = "errors.txt"
 _PROVENANCE_KIND = "gt_export"
 # Project folders the export must never write into (the ML pipeline's outputs
@@ -136,6 +149,43 @@ def assign_splits(
             val_keys.append(key)
             count += len(groups[key])
     return {s: ("val" if key in val_keys else "train") for key in order for s in groups[key]}
+
+
+def _manifest_fields(registry: Registry) -> list[str]:
+    """The manifest header: the fixed columns, then one pixel count per exported id."""
+    return [
+        *_MANIFEST_FIELDS,
+        "px_background",
+        *(f"px_{c.key}" for c in registry.labelled()),
+        "px_ignore",
+    ]
+
+
+def _pixel_counts(remapped: np.ndarray, registry: Registry) -> dict[str, int]:
+    """Pixels per exported id (``remap_ids`` output): background, each labelled class
+    in registry order, Ignore (retired and unknown classes included)."""
+    counts = np.bincount(remapped.ravel(), minlength=GT_IGNORE_ID + 1)
+    row = {"px_background": int(counts[GT_BACKGROUND_ID])}
+    for new_id, c in enumerate(registry.labelled(), start=1):
+        row[f"px_{c.key}"] = int(counts[new_id])
+    row["px_ignore"] = int(counts[GT_IGNORE_ID])
+    return row
+
+
+def _exif_orientation(image_path: str) -> int | str:
+    """The image's EXIF orientation tag (1-8), or ``""`` when it has none or it is unreadable.
+
+    Only recorded: the pixels are always the stored grid (W2-T10, ``tests/test_exif_policy.py``).
+    """
+    try:
+        with Image.open(image_path) as image:
+            value = image.getexif().get(_EXIF_ORIENTATION_TAG)
+    except Exception as exc:  # a metadata column must never fail an export
+        logger.debug("No EXIF orientation for %s: %s", image_path, exc)
+        return ""
+    if isinstance(value, int) and 1 <= value <= 8:
+        return value
+    return ""
 
 
 def _classes_json(registry: Registry) -> dict:
@@ -309,6 +359,8 @@ def export_dataset(
                             "position": _or_blank(parsed.position),
                             "date": _or_blank(parsed.date),
                             "classes_present": classes_present,
+                            "exif_orientation": _exif_orientation(image_path),
+                            **_pixel_counts(remapped, registry),
                         }
                         exported_stems.append(stem)
                 except (OSError, ValueError, _TOO_LARGE) as exc:
@@ -345,7 +397,7 @@ def export_dataset(
 
     manifest_path = os.path.join(out_dir, _MANIFEST_FILENAME)
     with atomic_open(manifest_path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=_MANIFEST_FIELDS)
+        writer = csv.DictWriter(fh, fieldnames=_manifest_fields(registry))
         writer.writeheader()
         for stem in exported_stems:
             row = dict(manifest_rows[stem])

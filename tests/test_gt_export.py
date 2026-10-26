@@ -223,6 +223,12 @@ def test_export_output_layout(tmp_path):
         "position",
         "date",
         "classes_present",
+        "exif_orientation",
+        "px_background",
+        "px_root",
+        "px_nodule",
+        "px_root_tip",
+        "px_ignore",
     ]
     assert {row["stem"] for row in rows} == exported_stems
     for row in rows:
