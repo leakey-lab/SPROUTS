@@ -225,9 +225,8 @@ def create_left_panel(main_window) -> QWidget:
         "Generate Mask + Skeleton",
         "Generate Mask + Skeleton\n\nRun the ResNet segmentation model over all "
         "loaded images (masks -> root area), then predict skeletons from the same "
-        "original images (Pix2Pix -> root length). One click runs both. They are "
-        "independent: correcting a mask changes root area only, correcting a skeleton "
-        "root length only.",
+        "original images (Pix2Pix -> root length). One click runs both. "
+        "Mask -> area, skeleton -> length: the layers are independent.",
     )
     main_window.generate_all_button.setStyleSheet(text_button_style)
     main_window.generate_all_button.clicked.connect(main_window.generate_all)

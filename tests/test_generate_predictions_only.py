@@ -135,7 +135,7 @@ def test_the_prompt_says_keep_or_replace_predictions(qapp):  # noqa: F811
     assert shown["text"] == "3 of 10 images already have a predicted mask."
     assert shown["info"] == (
         "Keep them and predict only the missing ones, or replace every prediction with a new "
-        "one. Hand-corrected masks live in gt/ and are never touched."
+        "one. Masks you saved in Correct are GT: they live in gt/ and are never touched."
     )
     # The box lays the buttons out by role and platform, so the texts are pinned with roles.
     roles = dict(zip(shown["buttons"], shown["roles"], strict=True))

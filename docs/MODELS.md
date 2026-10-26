@@ -43,7 +43,7 @@ shasum -a 256 checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skelet
   `checkpoints/skeletonizer/latest_net_G.pth` (the digest above) and a stale
   `checkpoints/experiment_name/test_opt.txt`.
 - **Mask model:** not distributed in git. Without it, *Generate* cannot produce masks and
-  root area cannot be measured from model masks (corrected masks still work).
+  root area cannot be measured from model masks (GT masks saved in *Correct* still work).
 
 ### Zenodo deposit checklist (owner)
 
@@ -116,4 +116,4 @@ enhanced generator with batch normalisation and aspect ratio 3/4.
   audit of 12 images: 18 of 24 output files differed between two identical runs and one
   image's CSV values moved (length 60.75 vs 60.77 mm, area 126.62 vs 126.63 mm²).
 - **Two independent predictions.** Skeletons are not derived from masks, so the two can
-  disagree for the same image; hand corrections apply to one output only.
+  disagree for the same image; a correction saved in *Correct* (GT) applies to one output only.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 from app import project_layout
 from app.gui import shell_chrome
@@ -82,3 +83,64 @@ def test_no_text_quotes_the_old_button_names():
 def test_the_generate_stage_says_masks_and_skeletons_are_independent():
     tips = dict((k, tip) for k, _, _, tip in shell_chrome.STAGES)
     assert "neither follows the other" in tips["Generate"]
+
+
+ROOT = APP.parent
+README = ROOT / "README.md"
+DATA_DICTIONARY = ROOT / "docs" / "DATA_DICTIONARY.md"
+
+
+def files_with(pattern: str) -> list[pathlib.Path]:
+    """The app modules with a string constant (not a docstring) matching ``pattern``."""
+    regex = re.compile(pattern)
+    return sorted(
+        {
+            path
+            for path in APP.rglob("*.py")
+            for _, value in _string_constants(path)
+            if regex.search(value)
+        }
+    )
+
+
+def hits(pattern: str) -> list[str]:
+    regex = re.compile(pattern)
+    return [
+        f"{path.relative_to(APP)}:{line}"
+        for path in sorted(APP.rglob("*.py"))
+        for line, value in _string_constants(path)
+        if regex.search(value)
+    ]
+
+
+def test_no_hand_traced_under_app():
+    assert hits(r"(?i)hand-(traced|corrected)") == []
+
+
+def test_no_trace_gt_stage_name_under_app():
+    assert hits(r"\bTrace GT\b") == []
+
+
+def test_skeleton_corrections_is_named_only_by_the_dead_constant_and_the_export_guard():
+    # both go with W5-T5
+    assert {p.name for p in files_with(r"skeleton_corrections")} == {"config.py", "export.py"}
+
+
+def test_the_readme_has_the_which_layer_table():
+    text = README.read_text(encoding="utf-8")
+    assert "| Fix the model's mask of an image | Mask layer (area) |" in text
+    assert "gt/mask/<stem>.png" in text
+    assert "skeleton_corrections" not in text
+
+
+def test_the_data_dictionary_documents_the_gt_folders():
+    text = DATA_DICTIONARY.read_text(encoding="utf-8")
+    assert all(s in text for s in ("`gt/mask/<stem>.png`", "`gt/skeletons/<stem>.png`", "`Source`"))
+
+
+def test_the_four_strings_use_the_prediction_and_gt_vocabulary():
+    assert hits(r"Mask -> area, skeleton -> length: the layers are independent\.")
+    assert hits(r"Export the labelled images and their class-id label images as a training")
+    assert hits(r"Copies the labelled images and their class-id label images \(masks/\)")
+    assert hits(r" class labels\.$")
+    assert hits(r"GT tracing") == []

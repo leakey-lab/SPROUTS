@@ -9,7 +9,7 @@ skipped / errors, with the first failed images and why; the full list is in
 "Export dataset…" action bar button (Track E / Task 4); the constructor
 signature is frozen so that caller can rely on it.
 
-It says up front how many images have a GT tracing (none: why Export stays off).
+It says up front how many images have class labels (none: why Export stays off).
 Enter starts the export (Export is the default button; Browse… and Cancel never
 are, so Enter in the folder field no longer opens the folder picker).
 """
@@ -75,11 +75,11 @@ def count_traced(images: dict[str, str]) -> int:
 
 
 def traced_sentence(traced: int, total: int) -> str:
-    """``"1 of 40 images has a GT tracing."``: the noun agrees with ``total``, the verb
+    """``"1 of 40 images has class labels."``: the noun agrees with ``total``, the verb
     with ``traced`` ("2 of 40 images have", "1 of 1 image has")."""
     noun = "image" if total == 1 else "images"
     verb = "has" if traced == 1 else "have"
-    return f"{traced} of {total} {noun} {verb} a GT tracing."
+    return f"{traced} of {total} {noun} {verb} class labels."
 
 
 def _gt_names(folder: str) -> set[str]:
@@ -166,7 +166,8 @@ class ExportDatasetDialog(QDialog):
         layout.addWidget(heading)
 
         subtitle = QLabel(
-            "Copies GT-traced images and remapped class masks into a training-ready layout."
+            "Copies the labelled images and their class-id label images (masks/) into a "
+            "training-ready layout."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 9pt; border: none;")

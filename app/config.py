@@ -224,8 +224,8 @@ AREA_CSV_HEADERS = [
     SOURCE_COLUMN,
 ]
 
-# --- Ground-truth (GT) tracing ---------------------------------------------
-# Hand-traced multi-class ground truth, independent of every ML model in the
+# --- Class labels (GT for training) -----------------------------------------
+# Multi-class class labels (ground truth), independent of every ML model in the
 # app (see docs/superpowers/specs/2026-09-22-multiclass-labels-design.md).
 GT_DIRNAME = "gt"
 GT_CLASSES_FILENAME = "classes.json"

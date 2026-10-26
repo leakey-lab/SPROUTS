@@ -529,6 +529,12 @@ Five passes, not yet released:
     corners)` with m-adjacent diagonals (it returned a 3-tuple of all-pairs counts); code
     that unpacks three values must change (W3-T8). `root_length_mm` / `area_row` keep their
     signatures.
+  - Wording (WG-T10, O14, O26): model output is a "prediction", a human-saved result is "GT",
+    and Correct is one editor with three layers (Mask M, Skeleton L, Classes G). The
+    Generate tooltip and prompt, the Export dataset tooltip and dialog say "class labels"
+    and "class-id label images". README gains the "Which layer?" table; README, the data
+    dictionary, the model card and CLAUDE.md describe the `gt/mask/`, `gt/skeletons/` and
+    `gt/<stem>.png` folders. No measured value or output pixel changes.
   - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
     pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
     files of a run have more than one size (the photos differ) or the predictions do; the

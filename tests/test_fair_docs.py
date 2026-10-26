@@ -44,3 +44,15 @@ def test_data_dictionary_documents_every_metric_csv_column():
 
 def test_model_card_states_the_weights_licence():
     assert "CC-BY-4.0" in (ROOT / "docs" / "MODELS.md").read_text(encoding="utf-8")
+
+
+def test_readme_documents_the_layers_and_the_gt_paths():
+    text = _read("README.md")
+    for row in (
+        "| Fix the model's mask of an image | Mask layer (area) |",
+        "| Fix the model's skeleton of an image | Skeleton layer (length) |",
+        "| Make labels to train a model | Classes layer |",
+    ):
+        assert row in text
+    for path in ("gt/mask/<stem>.png", "gt/skeletons/<stem>.png", "gt/<stem>.png"):
+        assert path in text

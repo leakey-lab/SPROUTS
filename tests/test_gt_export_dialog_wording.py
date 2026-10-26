@@ -1,6 +1,6 @@
 """The Export dataset dialog's count sentence agrees with its number (V11, 2026-09-30).
 
-It read "1 of 40 images have a GT tracing": the verb followed the folder's image count.
+It read "1 of 40 images have a GT tracing" (now "have class labels"): the verb followed the folder's image count.
 The noun follows the image count ("1 of 1 image", "1 of 40 images") and the verb the
 traced count ("1 ... has", "2 ... have").
 """
@@ -49,11 +49,11 @@ def _project(tmp_path, n_images: int, n_traced: int) -> dict[str, str]:
 @pytest.mark.parametrize(
     "n_images, n_traced, sentence",
     [
-        (40, 1, "1 of 40 images has a GT tracing."),
-        (40, 2, "2 of 40 images have a GT tracing."),
-        (40, 40, "40 of 40 images have a GT tracing."),
-        (1, 1, "1 of 1 image has a GT tracing."),
-        (2, 1, "1 of 2 images has a GT tracing."),
+        (40, 1, "1 of 40 images has class labels."),
+        (40, 2, "2 of 40 images have class labels."),
+        (40, 40, "40 of 40 images have class labels."),
+        (1, 1, "1 of 1 image has class labels."),
+        (2, 1, "1 of 2 images has class labels."),
     ],
 )
 def test_the_count_sentence_agrees_with_its_number(made, tmp_path, n_images, n_traced, sentence):

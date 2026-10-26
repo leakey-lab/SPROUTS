@@ -358,7 +358,9 @@ class ShellTopbar(QFrame):
         mw.gt_export_button = ghost_button(
             "Export dataset…",
             "export",
-            tooltip="Export images + class-id masks as a dataset",
+            tooltip=(
+                "Export the labelled images and their class-id label images as a training dataset"
+            ),
             compact=True,
         )
         mw.gt_export_button.clicked.connect(mw.export_gt_dataset)

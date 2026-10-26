@@ -3,7 +3,7 @@
 Desktop application (PyQt6 + PyTorch) for **plant-root phenotyping** from
 minirhizotron images: model-predicted root masks and skeletons, editors to correct
 them, calibrated root area (mm²) and root length (mm) exported as CSV, interactive
-Dash/Plotly dashboards, and multi-class ground-truth tracing for training datasets.
+Dash/Plotly dashboards, and multi-class labels (ground truth) for training datasets.
 
 ## Pipeline
 
@@ -185,6 +185,27 @@ labels (purple). A ring means none, a filled circle a model prediction, a filled
 your GT (`gt/mask/`, `gt/skeletons/`, `gt/<stem>.png`); the class-label mark is a ring or
 a diamond. Hover a row for the words, e.g. `Mask: GT · Skeleton: prediction · No classes`.
 
+### Words used in the app
+
+A **prediction** is what a model wrote (`mask/`, `skeletons/`). **GT** is a result a human
+saved (`gt/`). **Correct** is one editor with three layers: **Mask** (green, key `M`),
+**Skeleton** (orange, `L`) and **Classes** (purple, `G`). Every save goes to `gt/`;
+predictions are never overwritten. The mask gives area and the skeleton gives length, and
+the two are independent.
+
+### Which layer?
+
+| I want to | Use | It saves to |
+|---|---|---|
+| Fix the model's mask of an image | Mask layer (area) | `gt/mask/<stem>.png` |
+| Fix the model's skeleton of an image | Skeleton layer (length) | `gt/skeletons/<stem>.png` |
+| Make labels to train a model | Classes layer | `gt/<stem>.png` (with `gt/classes.json`) |
+| Get the prediction back | **Load prediction** in the layer, or **Remove GT…** for the whole image | removes or replaces the GT file; `mask/` and `skeletons/` never change |
+
+Measure reads GT first and falls back to the prediction (last CSV column `Source`). The
+Classes layer is independent of the other two: it never starts from a prediction and is
+never measured.
+
 ## Outputs
 
 | File | Content |
@@ -203,7 +224,7 @@ a diamond. Hover a row for the words, e.g. `Mask: GT · Skeleton: prediction · 
 
 Generating masks into a folder that already has predicted masks asks first: keep the
 predictions and predict only the missing ones (the default), or replace every prediction.
-Hand-corrected masks live in `gt/` and are never read or touched by Generate. On a GPU, outputs
+Masks you save in *Correct* are GT: they live in `gt/` and Generate never reads or touches them. On a GPU, outputs
 are reproducible run to run (cuDNN autotuning is off, deterministic algorithms on, batches
 at one fixed size, see below). They are numerically
 equivalent to earlier versions, not bit-identical: root length is unchanged and area moves
@@ -386,14 +407,6 @@ its last point.
 - Coming back to the same image keeps your zoom and position; the layers reload only when
   their files changed on disk (for example after *Generate*).
 
-**GT actions** (the Correct page of the top bar): **Classes…** adds, renames, recolours or
-retires the project's classes (`gt/classes.json`; the gear of the class panel opens it
-too). **Export dataset…** saves the open image's edits first, then exports the images and
-their class-id masks. **Remove GT…** (on while an image is open and nothing is unsaved)
-asks, then deletes the image's `gt/mask/<stem>.png`, `gt/skeletons/<stem>.png` and
-`gt/<stem>.png` and reopens it from its predictions; the predictions in `mask/` and
-`skeletons/` and `gt/classes.json` are kept. This cannot be undone.
-
 **Zoom:** the photo stays smooth at every zoom (no pixel squares when zoomed in, no
 shimmer when zoomed out), the mask shows its exact saved pixels from 100 % up, and the
 skeleton is drawn as a line at every zoom. The zoom buttons and keys step through round
@@ -401,17 +414,25 @@ percentages with a short glide, the wheel zooms continuously, and a right-click 
 readout offers presets (Fit, 50 % … 1600 %). Zooming out stops at half the fitted zoom or
 at 100 %, whichever is smaller.
 
-## Ground-truth class labels
+**GT actions** (the Correct page of the top bar): **Classes…** adds, renames, recolours or
+retires the project's classes (`gt/classes.json`; the gear of the class panel opens it
+too). **Export dataset…** saves the open image's edits first, then exports the images and
+their class-id label images (`masks/`). **Remove GT…** (on while an image is open and nothing is unsaved)
+asks, then deletes the image's `gt/mask/<stem>.png`, `gt/skeletons/<stem>.png` and
+`gt/<stem>.png` and reopens it from its predictions; the predictions in `mask/` and
+`skeletons/` and `gt/classes.json` are kept. This cannot be undone.
 
-The **class labels** are the third layer of *Correct* (key `G`, row "Classes"): hand-traced,
-multi-class ground truth for training segmentation models (for example, roots vs nodules).
+### Class labels (GT for training)
+
+The **class labels** are the third layer of *Correct* (key `G`, row "Classes"): multi-class
+ground truth that you paint for training segmentation models (for example, roots vs nodules).
 They are independent of every model in the app: they never start from the ResNet mask and
-never read or write `mask/` or `skeletons/`. They trace classes; they do not measure them.
+never read or write `mask/` or `skeletons/`. They label classes; they do not measure them.
 **Classes…**, **Export dataset…** and **Remove GT…** are on the Correct page.
 
 **Files** (next to the images, in the loaded folder):
 
-- `gt/<stem>.png` — the tracing: an 8-bit palette PNG where each pixel is one
+- `gt/<stem>.png` — the class labels of an image: an 8-bit palette PNG where each pixel is one
   class id (`0` background, `1`–`254` classes, `255` Ignore). Any image viewer
   shows it in the class colours. A text chunk records the class list and which
   classes were checked on that image.
@@ -444,7 +465,7 @@ mouse, or reach the boxes with Tab and press Space).
 
 ```
 images/<stem>.<ext>            copied originals
-masks/<stem>.png               class-id PNG: background 0, classes 1..N, Ignore 255
+masks/<stem>.png               class-id label image (PNG): background 0, classes 1..N, Ignore 255
 classes.json                   id → name/colour, ignore_index 255
 splits/train.txt, splits/val.txt
 manifest.csv                   stem, source image, split, tube, position, date, classes present, EXIF orientation, pixels per class
@@ -454,7 +475,7 @@ manifest.csv.provenance.json   how it was made: options (split seed), counts, cl
 By default only images where every class is checked are exported, and all images
 of one tube stay in the same split (so the same root on different dates cannot
 leak between train and validation). The split is reproducible from the seed recorded
-in `manifest.csv.provenance.json`. Images that fail to export (for example a tracing
+in `manifest.csv.provenance.json`. Images that fail to export (for example a label file
 whose size no longer matches its image) are listed in the dialog and in `errors.txt`; the
 rest still export. A relative output folder is created next to the images.
 
@@ -521,11 +542,11 @@ See [`CHANGELOG.md`](CHANGELOG.md). Changes that alter measured values are liste
 app/
   __init__.py          # version and product name (single source)
   config.py            # single source of calibration, ports, paths, batch sizes
-  gt/                  # ground-truth tracing core: class registry, GT PNG store, export
+  gt/                  # class labels and GT files: class registry, GT PNG store, export
   inference/           # metrics (length/area), skeleton & mask inference
   handlers/            # batch orchestration (QThread)
   gui/                 # PyQt6 widgets, editors, graphics views
-    correct/           # the Correct stage: mask and skeleton layers, session, input routing
+    correct/           # the Correct stage: mask, skeleton and class layers, session, input routing
   visualization/       # Dash/Plotly apps + data processing
   mask_model/          # ResNet segmentation model
 docs/                  # model card, data dictionary, architecture, known issues

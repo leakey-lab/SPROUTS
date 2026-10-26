@@ -16,7 +16,7 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
   mask/root_areas.csv                     root area per image (its GT mask first, else the prediction)
   skeletons/<stem>_fake.png               model-predicted skeletons
   skeletons/root_lengths.csv              root length per image (its GT skeleton first, else the prediction)
-  gt/<stem>.png, gt/classes.json          multi-class ground truth (Trace GT)
+  gt/<stem>.png, gt/classes.json          class labels: multi-class GT for training (Classes layer)
   gt/mask/<stem>.png                      GT root mask: a mask saved after a human edit
   gt/skeletons/<stem>.png                 GT skeleton: a skeleton saved after a human edit
 ```
@@ -191,8 +191,8 @@ above 127 (`app.masks.MASK_THRESHOLD`) is root; the alpha channel is ignored, th
 decides (since 2026-10-25; Correct used grey above 200 before).
 
 When predicted masks already exist, *Generate* asks first: **Keep predictions (predict
-missing only)** (the default), **Replace all predictions**, or **Cancel**. Hand-corrected
-masks live in `gt/mask/` and are never read or touched by Generate; `mask/` holds the
+missing only)** (the default), **Replace all predictions**, or **Cancel**. Masks saved in *Correct*
+(GT) live in `gt/mask/` and are never read or touched by Generate; `mask/` holds the
 model's output only, so a file there is a prediction whatever its PNG type. An image that
 cannot be decoded gets no mask file; it is listed in `mask/_sprouts_run.json`
 (`"failed"`) and in the warning shown at the end of the run.
@@ -214,8 +214,9 @@ Everything a person saves lives under `gt/`; the model's predictions in `mask/` 
 `skeletons/` are never written by the editor. `gt/mask/<stem>.png` and
 `gt/skeletons/<stem>.png` hold a root mask and a skeleton saved after a human edit (the
 GT that Measure reads first, before the prediction); the
-class labels below are hand-traced, multi-class ground truth for training segmentation
-models.
+class labels below are multi-class ground truth for training segmentation models, painted
+on the Classes layer of *Correct*. A **prediction** is what a model wrote; **GT** is what
+a human saved.
 
 ### `gt/<stem>.png`
 
@@ -281,8 +282,8 @@ groups are shuffled with the recorded `seed`, and whole groups go to val until i
 at least `val_fraction` of the images; the last group always stays in train.
 
 An image fails, and nothing is written for it, when its GT file cannot be read, its source
-image is missing or unreadable, or the tracing is not the size of the image (the image was
-resized or replaced after tracing; `errors.txt` then says, for example, `GT is 20x20 but
+image is missing or unreadable, or the class-label file is not the size of the image (the
+image was resized or replaced after labelling; `errors.txt` then says, for example, `GT is 20x20 but
 the image is 40x30`). Before 2026-09-30 such a pair was exported misaligned. The rest of the
 dataset still exports, and the failures are counted in `outputs.errors` of the provenance
 record. The text files (`splits/*.txt`, `classes.json`, `manifest.csv`, `errors.txt`) are

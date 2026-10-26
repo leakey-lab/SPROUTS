@@ -687,7 +687,7 @@ class MainWindow(QMainWindow):
     on_mask_cleared = editors.on_mask_cleared
 
     def export_gt_dataset(self) -> None:
-        """Open the dataset-export dialog for the loaded folder's GT tracings."""
+        """Open the dataset-export dialog for the loaded folder's class labels."""
         layout = project_layout_of(self.image_manager)
         if layout is None:
             self.notify("Load an image folder first", "warn")

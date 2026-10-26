@@ -144,7 +144,7 @@ def ask_overwrite_policy(
     box.setText(f"{existing_count:,} of {total:,} images already have a predicted mask.")
     box.setInformativeText(
         "Keep them and predict only the missing ones, or replace every prediction with a new "
-        "one. Hand-corrected masks live in gt/ and are never touched."
+        "one. Masks you saved in Correct are GT: they live in gt/ and are never touched."
     )
     keep = box.addButton(
         "Keep predictions (predict missing only)", QMessageBox.ButtonRole.AcceptRole
