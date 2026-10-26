@@ -732,6 +732,11 @@ Five passes, not yet released:
   the teardown guards to `tests/test_correct_editor_teardown.py`). `ClassPanel`, the class
   editor, the dataset export and `app/gt/` stay. Also retired: `skeleton_corrections/`
   (WG-T3; corrections are GT in `gt/skeletons/`).
+- **Documents (2026-10-25, W5-T7, O36).** `docs/Architecture_2 useful.md` and its PDF, and
+  `docs/BUILD_EXECUTABLE.md` (the README section "Building the Windows app" is the one
+  text). `docs/Architecture_2.md` is trimmed to what is true of the code (the Correct
+  editor's composition, the file tree, a short data flow); `tests/test_doc_paths.py`
+  checks that every repository path the README, `CLAUDE.md` and `docs/*.md` name exists.
 - The two editors the Correct stage replaced: `MaskTracingInterface`,
   `SkeletonCorrectionInterface`, their graphics views, `MaskDrawingMixin`,
   `CanvasPixmapItem`, `SkeletonOverlayRenderer` (replaced by `SkeletonLayerItem`) and

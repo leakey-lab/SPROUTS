@@ -50,6 +50,11 @@ $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
 ./venv/Scripts/python.exe -m ruff format .
 ```
 
+- Scripts that build a window or an editor page must delete it before the `QApplication`
+  goes, or the process can end in an access violation (about 1 run in 30):
+  `from tests.qt_teardown import delete_widgets`, then `delete_widgets([page])` as the last
+  step. `main.main` and the test suite already do this.
+
 - Test suite pins the scientific calibration (length/area), skeleton
   vectorization, the CSV schema, and an import-smoke of every app module.
 - CI: `.github/workflows/ci.yml` runs that suite on pushes to `main`, `v3`, `refactor/**`,
@@ -100,10 +105,9 @@ skeleton orange `#f0a868`, purple primary `#c39af6`, selection `#b794f6`.
 ## Docs
 
 - `docs/KNOWN_ISSUES.md` — **read first** for current open items.
-- `docs/Architecture_2.md` — deeper architecture / data-flow write-up.
+- `docs/Architecture_2.md` — the Correct editor's composition, the file structure and a short data-flow section.
 - `docs/MODELS.md` — model card: checkpoints, SHA-256, inputs and outputs.
 - `docs/DATA_DICTIONARY.md` — project folder, file formats, CSV columns, provenance.
-- `docs/BUILD_EXECUTABLE.md` — PyInstaller packaging (CUDA build notes).
 - `docs/SPROUTS_DASH_THEME.md` — Dash theme + design-token reference.
 - `docs/superpowers/{plans,specs}/` — implementation plans + specs (viz redesign,
   ribbon/metrics, SPROUTS shell, multi-class GT, unified Correct editor, and the
