@@ -33,8 +33,9 @@ shasum -a 256 checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skelet
 - **Both checkpoints** are released as one Zenodo record under CC-BY-4.0. The record does
   not exist yet (`url` and `doi` are `None` in `app/models.py`); the checklist below is the
   owner's to complete. Until then ask the maintainers.
-- **Download and check:** `./venv/Scripts/python.exe scripts/fetch_models.py` fetches what
-  is missing and verifies each file against the digests above; it discards a download
+- **Download and check:** `python scripts/fetch_models.py` (in the activated venv:
+  `./venv/Scripts/python.exe` on Windows, `./venv/bin/python` on Linux and macOS) fetches
+  what is missing and verifies each file against the digests above; it discards a download
   whose digest differs, and leaves a file you already have (for example retrained
   weights) alone unless you pass `--replace`.
 - **Skeleton model from git history:** `checkpoints.zip` (47,935,331 bytes, SHA-256

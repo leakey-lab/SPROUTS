@@ -224,7 +224,8 @@ def test_a_cpu_only_build_is_the_cpu_even_with_a_gpu_present():
 
 
 def test_no_driver_is_the_cpu():
-    guess = guess_device(DriverInfo(found=False), CUDA_BUILD, environ={})
+    # Off macOS; the macOS wording has its own test below.
+    guess = guess_device(DriverInfo(found=False), CUDA_BUILD, environ={}, platform="linux")
     assert (guess.device, guess.text) == ("CPU", "CPU")
     assert "No NVIDIA driver" in guess.note
 

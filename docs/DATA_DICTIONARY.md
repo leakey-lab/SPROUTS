@@ -78,8 +78,9 @@ and the CSV is then written to `skeletons/` or `mask/` (created when missing). A
 used whatever its pixels (an emptied one measures 0). A GT skeleton is not used, and the
 prediction is measured instead, when it or its photo's size cannot be read (`unreadable`),
 when it is not the photo's size (`size`), or when it equals the prediction as *Correct*
-opens it (`unedited`: the editor's path measures a median 0.8 % longer than the
-prediction's on the same lines, so an unedited copy would change a value nobody edited); an
+opens it (`unedited`: the editor's path measures a median 1.35 % longer than the
+prediction's on the same lines, +1.46 % in total, so an unedited copy would change a value
+nobody edited); an
 emptied GT skeleton is used (0 mm). A GT file that is not used and has no prediction gets no
 row. The column `Source` says which file each row was measured from; the provenance names
 each GT file not used and why (`inputs.gt.skipped`), and the end of the run says how many.

@@ -96,7 +96,8 @@ sudo apt install libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 
      libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
      libdbus-1-3 libnss3 libfontconfig1
 #    Minimal / server images also need these for the embedded browser (QtWebEngine):
-#    sudo apt install libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libasound2
+#    sudo apt install libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libasound2t64
+#    (Ubuntu 22.04 and Debian 12 name the last one libasound2)
 
 python main.py
 ```
@@ -117,8 +118,8 @@ checkpoints/skeletonizer/latest_net_G.pth         (skeleton model)
 The weights are not stored in this repository. They are published as a Zenodo record
 (licence CC-BY-4.0); the link and DOI are in [`docs/MODELS.md`](docs/MODELS.md) once the
 record exists, and until then you can get them from the maintainers. With the record's
-address registered, `./venv/Scripts/python.exe scripts/fetch_models.py` downloads both files
-into `checkpoints/` and checks their SHA-256 (the app also warns in its log when a
+address registered, `python scripts/fetch_models.py` (in the activated venv) downloads both
+files into `checkpoints/` and checks their SHA-256 (the app also warns in its log when a
 checkpoint does not match). The skeleton model of earlier versions is still in the git
 history: `git restore --source=2075568 -- checkpoints.zip`.
 
@@ -130,13 +131,18 @@ that holds `mask_weights/` and `skeletonizer/`:
 $env:SPROUTS_CHECKPOINTS_DIR = 'D:\models\sprouts-checkpoints'
 ```
 
+```bash
+export SPROUTS_CHECKPOINTS_DIR=~/models/sprouts-checkpoints   # Linux / macOS
+```
+
 ## Running
 
 ```powershell
 python main.py
 ```
 
-It works from any folder (`python D:\path\to\main.py`). To get a `sprouts` command,
+It works from any folder (`python D:\path\to\main.py`, or `python ~/path/to/main.py` on
+Linux and macOS). To get a `sprouts` command,
 install the checkout in editable mode, which keeps using this folder's `checkpoints/`:
 
 ```powershell

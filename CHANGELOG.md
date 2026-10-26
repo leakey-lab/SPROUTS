@@ -541,11 +541,6 @@ Five passes, not yet released:
     dashboards' export, the metrics bar's field-of-view cell and About show the field of
     view each CSV was measured with, and say when this app now uses another. No CSV value
     changes.
-  - One mask threshold (W2-T6, M5, O10): Correct reads a mask at Measure's threshold (grey
-    > 127, was > 200), so the editor and Measure see the same root pixels. Only masks with
-    grey levels (legacy JPEG masks, files from other programs) open differently; saving one
-    in Correct then writes those pixels as root. Measure records `outputs.n_non_binary` and
-    warns when masks have grey levels. No CSV value changes.
   - One `file_stamp` and one `same_file` in `app/io_utils.py` (W5-T5, X8), used by the
     read-aheads, the Correct documents, the save guards, the recent projects, the GT
     export's folder check and the window. `file_stamp` treats anything but a regular file as
@@ -789,6 +784,13 @@ Five passes, not yet released:
   length CSV with a provenance sidecar (Measure since 2026-09-28) is marked outdated
   (earlier length method; one note when the field of view differs too); an older CSV has
   no sidecar and is not marked.
+- **One mask threshold (2026-10-25, W2-T6, M5, O10).** Correct reads a mask at Measure's
+  threshold (grey > 127, was > 200), so the editor and Measure see the same root pixels.
+  Saved GT pixels can change: a mask with grey levels 128 to 200 (legacy JPEG masks, files
+  from other programs; Generate writes only 0 and 255) opens with those pixels as root, and
+  a save after any edit writes them into `gt/mask/<stem>.png`. Measure already used 127 and
+  now records `outputs.n_non_binary`, with a warning when masks have grey levels. No CSV
+  value changes.
 - **GT export manifest columns (2026-10-25, WG-T9, O24).** The GT dataset export's
   `manifest.csv` gains `exif_orientation` (the source image's EXIF tag 0x0112 as an integer
   1-8, blank when absent or unreadable; recorded only, the orientation is never applied)

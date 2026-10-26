@@ -1,7 +1,7 @@
-"""The six stages: going to one, which one is highlighted, what a change of stage does, the
+"""The five stages: going to one, which one is highlighted, what a change of stage does, the
 status line's summary of a stage, and the Visualize stage's entry.
 
-A change of stage (any path: a stage button, Alt+1…6, an editor handing over) refreshes
+A change of stage (any path: a stage button, Alt+1…5, an editor handing over) refreshes
 Measure's freshness counts and the status line's idle text (W12), asks for the stage's
 warm-up once the user has stayed in it for a second, and tells the dashboards. Visualize
 opens the highlighted dashboard, or, before there is anything to chart, a page that names

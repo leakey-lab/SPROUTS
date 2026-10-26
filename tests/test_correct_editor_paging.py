@@ -19,6 +19,7 @@ from PyQt6.QtTest import QTest  # noqa: E402
 import app.enhancement as enhancement  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
 from app.gui.correct.paging import Neighbours  # noqa: E402
+from app.io_utils import path_key  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     bump,
     editor_factory,
@@ -77,7 +78,8 @@ def read_ahead_done(editor, timeout: float = 5.0) -> list[str]:
 
 
 def key(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
+    """The read-ahead's key of ``path`` (``io_utils.path_key``: it folds case on macOS too)."""
+    return path_key(path)
 
 
 class GuiDecodes:
