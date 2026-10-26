@@ -1,9 +1,12 @@
 # SPROUTS — known issues and open decisions
 
-Status of 2026-10-25 at HEAD `b3a0807` on `feat/unified-correct-editor`. Every owner
+Status of 2026-10-26 at HEAD `3905d6e` on `feat/unified-correct-editor`. Every owner
 decision of the 2026-10-12 audit is built except O28 (the optional W6-T3); table 1 names
 the task and commit that built each (plan:
-`docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`). Table 2 lists the
+`docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`). A final whole-branch
+review (2026-10-26: correctness, science, data safety, cross-platform) found one critical,
+three important and nine minor items; all are fixed (rows FR1 to FR7 of "Resolved
+history") except E11, accepted. Table 2 lists the
 engineering items still open: accepted limits and work not built now. Built items are in
 "Resolved history" with their commits; table 3 lists what was closed as accepted. The
 text below the tables is the record: the entries keep their original wording and their
@@ -60,6 +63,7 @@ present state.
 |---|---|---|---|
 | E8 | | After *Generate* writes a prediction for an image open in *Correct* with unsaved edits, **Load prediction** stays off until the image is opened again (mask and skeleton layers; the page reloads only images without edits) | known, accepted (WG-T3 review) |
 | E10 | | At 700 x 520 with the Enhance popover and the polyline prompt open, the side card gets 117 px and the Classes row is cut off; Pan and Enhance move down the rail while the class labels are edited (reserving the space breaks the 700 x 520 overlay rule) | known, accepted (WG-T5 review) |
+| E11 | final review R2-1 | On a case-sensitive disk, a GT file that another program creates for the image open in *Correct*, under a name that differs only in case from the one *Correct* found when it opened the image, is not seen by the save's "changed on disk" question: the save writes next to it. Nothing is overwritten or deleted; the mask layer behaves the same | known, accepted (FR-A review) |
 | M7 | | The dashboards' export finds `sprouts_project.json` by looking up to five folders above the CSV; with a sub-folder opened as the project inside another project, it can find the outer project's file and compare with that field of view while the metrics bar uses the default (the dashboards do not pass the project root yet) | known, accepted (W3-T2 review) |
 | M6 | | With no inputs record (its write failed, or the CSV was edited by hand), the Measure status line can miss a regenerated prediction under a GT file that was not used; the metrics bar flags it, and the next Measure run writes a fresh record | known, accepted (WG-T8 review) |
 | P2 | | First image read on the GUI thread | not built now (only for images larger than 640 x 480): W6-T1 |
@@ -138,6 +142,13 @@ stay below under "Details and history", with their original wording.
 | X8 | | Stamp helpers defined six times | W5-T5 (done, b3a0807: one `file_stamp` / `same_file` in `app/io_utils.py`) |
 | X9 | | Correct with no image shows a tool hint | W2-T8a (done, 688ab18) |
 | XP1 | | Linux and macOS support (new) | O21, WX-T1 (done, 6bd8a31: start-up flags), WX-T2 (done, 0849735: dependencies), WX-T3 (done, 0c00749: pinch zoom), WX-T4 (done, 08b1605: path identity), WX-T5 (done, 69091cb: font chains), WX-T6 (done, 8e2d09a: CI on macOS), WX-T7 (done, 05ed7dc: platform key text), WX-T8 (done, 607a7f9: macOS raster default), WX-T9 (done, 1e6683c: tie order), WX-T10 (done, 7e1a077: backslash stems) |
+| FR1 | final review D1 (critical) | A stem that ends in an image extension (`X.png.jpg`, stem `X.png`) was stripped a second time: the skeleton layer, **Remove GT…** and the metrics-bar lookups acted on image `X.png`'s GT | Each call site passes the image path; `ProjectLayout` has stem-taking `*_for_stem` methods: FR-A, 3905d6e |
+| FR2 | final review C1, D2 | An unreadable GT skeleton was replaced or removed by a save without the Keep / Replace question | *Skeleton not shown*, the save question, `PgDn` stays, as for the mask: FR-A, 3905d6e |
+| FR3 | final review C2, D3 | GT files whose stem differs only in case were ignored by the skeleton layer, the Library mark of the open image and the dataset export (O7) | Found without case everywhere; a save writes onto the existing file: FR-A, 3905d6e |
+| FR4 | final review D5 | The export's protected-folder check followed the platform's case rule, not the disk's | Compared without case on every platform: FR-A, 3905d6e |
+| FR5 | final review S1 | A GT mask of another size than its photo was measured as GT, although *Correct* refuses it | Not used, reason `size`, the prediction is measured (science entry in `CHANGELOG.md`): FR-B, a7adee8 |
+| FR6 | final review D4 | A project's `gt/` folder opened as a project let Generate's *Replace all predictions* overwrite the GT masks | Refused unless the folder shows a project's markers: FR-B, a7adee8 |
+| FR7 | final review C3, S2, S4, X1-X4 | A six-stage docstring, the 127 threshold filed outside the science section, a stale 0.8 % figure, two tests that failed on macOS, Windows-only install commands | 8c59fce (the docstring figure in a7adee8) |
 
 ## By design (scope limits)
 
