@@ -86,7 +86,11 @@ class _Row(NamedTuple):
 
 
 def _key(name: str) -> str:
-    return image_stem(str(name).strip())
+    """The stem ``name`` names: an image path's file stem; anything else is a stem, taken as it
+    is. The Library's stem of ``X.png.jpg`` is ``X.png``: stripped again it would be ``X``,
+    another image's (final review D1), so a bare name is never stripped."""
+    text = str(name).strip()
+    return image_stem(text) if "/" in text or "\\" in text else text
 
 
 class _Rows:
@@ -169,7 +173,7 @@ def _read_metric_csv(path: str, value_column: str) -> _Rows:
                     value = None if err else float(rec[i_val])
                 except ValueError:
                     value = None
-                rows[_key(rec[i_img])] = _Row(value, err, src or None)
+                rows[rec[i_img].strip()] = _Row(value, err, src or None)  # Measure's stems
     except (OSError, UnicodeDecodeError, csv.Error, ValueError) as exc:
         logger.warning("Cannot read measurements from %s: %s", path, exc)
         return _NO_ROWS
@@ -354,7 +358,7 @@ class MeasurementIndex:
 
     def lookup(self, stem: str, *, load: bool = True) -> Measurement:
         """``(length_mm, area_mm2, error, length_source, area_source)`` for ``stem`` (a
-        stem, file name or path).
+        stem as the Library lists it, or an image path; a bare name is a stem, ``_key``).
 
         ``load=False`` answers only from already-parsed CSVs (GUI thread); pair
         it with :meth:`needs_load` + :meth:`prewarm` in a worker.
@@ -390,6 +394,14 @@ class MeasurementIndex:
             "area": {stem_key(stem): path for stem, path in layout.scan_gt_masks().items()},
         }
 
+    def _gt_path(self, metric: str, stem: str) -> str:
+        """``gt/skeletons/<stem>.png`` (length) or ``gt/mask/<stem>.png`` (area): the name
+        *Correct* saves under, ``stem`` taken as it is (never stripped again, D1)."""
+        layout = self.layout
+        if metric == "length":
+            return layout.gt_skeleton_path_for_stem(stem)
+        return layout.gt_mask_path_for_stem(stem)
+
     def _gt_file(self, metric: str, stem: str) -> str | None:
         """The GT file of ``stem`` for ``metric``, with a few stats and never a folder
         listing (GUI thread). The file named exactly like the image
@@ -399,8 +411,7 @@ class MeasurementIndex:
         both ``o.png`` and ``O.png``). Otherwise the listed file, while it is still there:
         its name as on disk, so its record key matches (a case-insensitive disk finds
         ``O.png`` for ``o`` under either name). Else the exact name (a GT file saved since)."""
-        layout = self.layout
-        path = (layout.gt_skeleton_path if metric == "length" else layout.gt_mask_path)(stem)
+        path = self._gt_path(metric, stem)
         listed = self._gt_listing[metric].get(stem_key(stem))
         if listed is not None and os.path.isfile(listed):
             try:
@@ -460,8 +471,8 @@ class MeasurementIndex:
         (:meth:`_gt_file`)."""
         stem = _key(stem)
         layout = self.layout
-        length = self._measured("length", stem, SKELETON_SUFFIX, layout.gt_skeleton_path)
-        area = self._measured("area", stem, ".png", layout.gt_mask_path)
+        length = self._measured("length", stem, SKELETON_SUFFIX)
+        area = self._measured("area", stem, ".png")
         return {
             metric: None if found is None else (input_key(found[0], layout.root), found[1])
             for metric, found in (("length", length), ("area", area))
@@ -470,9 +481,7 @@ class MeasurementIndex:
     def _table(self, metric: str) -> MetricTable:
         return self._length if metric == "length" else self._area
 
-    def _measured(
-        self, metric: str, stem: str, suffix: str, gt_path: Callable[[str], str]
-    ) -> tuple[str, str] | None:
+    def _measured(self, metric: str, stem: str, suffix: str) -> tuple[str, str] | None:
         """``(path, source)`` of the file ``stem``'s row of ``metric`` was measured from."""
         table = self._table(metric)
         csv_path = table.path
@@ -480,7 +489,7 @@ class MeasurementIndex:
         if row is None:
             return None
         if row.source == SOURCE_GT:
-            return self._gt_file(metric, stem) or gt_path(stem), SOURCE_GT
+            return self._gt_file(metric, stem) or self._gt_path(metric, stem), SOURCE_GT
         return os.path.join(os.path.dirname(csv_path), stem + suffix), SOURCE_PREDICTION
 
     def outdated(self, stem: str) -> dict[str, bool]:

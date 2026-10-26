@@ -268,7 +268,11 @@ class GtStems:
 class ProjectLayout:
     """Paths of one project folder (``root`` holds the images).
 
-    Methods that take a ``stem`` also accept an image path or file name.
+    Methods that take a ``stem`` also accept an image path or file name: they strip an image
+    extension from what they are given (:meth:`stem`). Hand them the image path or file name
+    when there is one. A stem the Library lists may itself end in an image extension (``X.png``
+    is the stem of ``X.png.jpg``): stripped again it names another image (``X``), so such a
+    stem goes to the ``*_for_stem`` methods, which take it as it is (final review D1).
     """
 
     root: str
@@ -448,16 +452,25 @@ class ProjectLayout:
 
     def gt_mask_path(self, stem: str) -> str:
         """GT mask ``gt/mask/<stem>.png`` (what a saved mask edit writes)."""
-        return self._path(GT_DIRNAME, MASK_DIRNAME, self.stem(stem) + ".png")
+        return self.gt_mask_path_for_stem(self.stem(stem))
 
     def gt_skeleton_path(self, stem: str) -> str:
         """GT skeleton ``gt/skeletons/<stem>.png`` (what a saved skeleton edit writes)."""
-        return self._path(GT_DIRNAME, SKELETONS_DIRNAME, self.stem(stem) + ".png")
+        return self.gt_skeleton_path_for_stem(self.stem(stem))
 
-    def _find_gt_png(self, directory: str, stem: str) -> str | None:
+    def gt_mask_path_for_stem(self, stem: str) -> str:
+        """:meth:`gt_mask_path` of ``stem`` as it is: never stripped (``X.png`` stays)."""
+        return self._path(GT_DIRNAME, MASK_DIRNAME, stem + ".png")
+
+    def gt_skeleton_path_for_stem(self, stem: str) -> str:
+        """:meth:`gt_skeleton_path` of ``stem`` as it is: never stripped (``X.png`` stays)."""
+        return self._path(GT_DIRNAME, SKELETONS_DIRNAME, stem + ".png")
+
+    @staticmethod
+    def _find_gt_png(directory: str, stem: str) -> str | None:
         """``<directory>/<stem>.png`` when it exists, else a ``.png`` file (any case of the
-        extension) whose stem differs only in case: what :func:`_scan_ranked` lists."""
-        stem = self.stem(stem)
+        extension) whose stem differs only in case: what :func:`_scan_ranked` lists.
+        ``stem`` is taken as it is."""
         path = os.path.join(directory, stem + ".png")
         if os.path.isfile(path):
             return path
@@ -465,16 +478,20 @@ class ProjectLayout:
 
     def find_gt_mask(self, stem: str) -> str | None:
         """Existing ``gt/mask/<stem>.png``, found as :meth:`scan_gt_masks` lists it (O7)."""
-        return self._find_gt_png(self.gt_mask_dir, stem)
+        return self._find_gt_png(self.gt_mask_dir, self.stem(stem))
 
     def find_gt_skeleton(self, stem: str) -> str | None:
         """Existing ``gt/skeletons/<stem>.png``, found as :meth:`scan_gt_skeletons` lists
         it (O7)."""
+        return self.find_gt_skeleton_for_stem(self.stem(stem))
+
+    def find_gt_skeleton_for_stem(self, stem: str) -> str | None:
+        """:meth:`find_gt_skeleton` of ``stem`` as it is: never stripped (``X.png`` stays)."""
         return self._find_gt_png(self.gt_skeletons_dir, stem)
 
     def find_gt_labels(self, stem: str) -> str | None:
         """Existing ``gt/<stem>.png``, found as :meth:`scan_gt_labels` lists it (O7)."""
-        return self._find_gt_png(self.gt_dir, stem)
+        return self._find_gt_png(self.gt_dir, self.stem(stem))
 
     def scan_gt_masks(self) -> dict[str, str]:
         """``stem -> path`` of ``gt/mask/*.png``: one file per stem without case."""

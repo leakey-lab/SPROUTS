@@ -18,7 +18,7 @@ import os
 from typing import TYPE_CHECKING
 
 from app.gt.files import gt_files
-from app.naming import image_stem
+from app.naming import image_stem, stem_key
 from app.project_layout import SKELETON_SUFFIX
 
 from ..image_manager import project_layout_of
@@ -74,7 +74,7 @@ def on_gt_removed(window: "MainWindow", image_path: str) -> None:
     metrics (Measure reads GT first, O1). The page's own toast says what went."""
     manager, stem = window.image_manager, image_stem(image_path)
     layout = project_layout_of(manager)
-    found = None if layout is None else gt_files(layout, stem)
+    found = None if layout is None else gt_files(layout, image_path)
     for kind in ("mask", "skeleton", "labels"):
         manager.set_gt(stem, kind, found is not None and getattr(found, kind) is not None)
     window.library_index.refresh_status(stem)
@@ -83,8 +83,13 @@ def on_gt_removed(window: "MainWindow", image_path: str) -> None:
 
 def on_skeleton_saved(window: "MainWindow", path: str) -> None:
     """Correct wrote a GT skeleton (``gt/skeletons/<stem>.png``, measured first, O1): the
-    Library's skeleton mark, the row and the metrics bar learn of it at once."""
+    Library's skeleton mark, the row and the metrics bar learn of it at once. The file is the
+    open image's GT, so its stem is that image's Library stem: a GT file whose name differs
+    in case (``gt/skeletons/img.png`` of ``IMG.png``, O7) reports ``IMG``, not ``img``."""
     stem = image_stem(path)
+    image = getattr(getattr(window, "correct_editor", None), "current_image_path", "")
+    if image and stem_key(image_stem(image)) == stem_key(stem):
+        stem = image_stem(image)
     window.image_manager.set_gt(stem, "skeleton", True)
     window.library_index.refresh_status(stem)
     window.metrics.refresh_if_current(stem)
@@ -117,7 +122,10 @@ def sync_open_correction(window: "MainWindow") -> None:
 
     A save reports itself (:func:`on_skeleton_saved`, :func:`on_skeleton_cleared`); this
     catches the rest. It runs when the editor's unsaved state changes and whenever another
-    image is selected: one ``os.path.isfile`` of that image's ``gt/skeletons/<stem>.png``.
+    image is selected: one ``os.path.isfile`` of that image's ``gt/skeletons/<stem>.png``;
+    while the Library marks a GT skeleton the exact name lacks, its stem compared without
+    case too (O7), as the scan and the skeleton layer find it (on a case-sensitive disk that
+    lists the folder, so only then).
     """
     manager = window.image_manager
     path = getattr(window.correct_editor, "current_image_path", "")
@@ -128,7 +136,10 @@ def sync_open_correction(window: "MainWindow") -> None:
     layout = project_layout_of(manager)
     if layout is None or manager.get_image_path(stem) is None:
         return
-    present = os.path.isfile(layout.gt_skeleton_path(stem))
+    # The path, not the stem: a stem is never stripped twice (D1).
+    present = os.path.isfile(layout.gt_skeleton_path(path)) or (
+        manager.has_gt_skeleton(stem) and layout.find_gt_skeleton(path) is not None
+    )
     if present != manager.has_gt_skeleton(stem):
         set_gt(stem, "skeleton", present)
         window.library_index.refresh_status(stem)

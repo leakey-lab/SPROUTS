@@ -58,11 +58,17 @@ def test_values_are_read_verbatim_from_both_csvs(tmp_path):
     assert (length_source, area_source) == (None, None)  # no Source column
 
 
-def test_lookup_accepts_image_path_or_file_name(tmp_path):
-    _write_lengths(tmp_path, [_row(STEM, LENGTH_CSV_HEADERS[5], 3.5)])
+def test_lookup_accepts_an_image_path_or_a_stem_as_it_is(tmp_path):
+    # A bare name is a stem, never stripped again: the stem of "X.png.jpg" is "X.png", whose
+    # row is not image X's (final review D1).
+    rows = [_row(STEM, LENGTH_CSV_HEADERS[5], 3.5), _row(STEM + ".png", LENGTH_CSV_HEADERS[5], 1.5)]
+    _write_lengths(tmp_path, rows)
     index = MeasurementIndex(str(tmp_path))
     assert index.lookup(os.path.join(str(tmp_path), STEM + ".jpg")).length_mm == 3.5
-    assert index.lookup(STEM + ".png").length_mm == 3.5
+    assert index.lookup(STEM).length_mm == 3.5
+    assert index.lookup(STEM + ".png").length_mm == 1.5
+    assert index.lookup(os.path.join(str(tmp_path), STEM + ".png.jpg")).length_mm == 1.5
+    assert index.lookup(OTHER + ".png").length_mm is None  # no row of that stem
 
 
 def test_missing_csvs_give_all_none(tmp_path):

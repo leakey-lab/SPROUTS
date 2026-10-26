@@ -148,7 +148,7 @@ class PageActions(QObject):
             return  # the button is off then
         layout, stem = ProjectLayout.for_image(path), ProjectLayout.stem(path)
         name = os.path.basename(path)
-        found = gt_files(layout, stem)
+        found = gt_files(layout, path)  # the path: a stem is never stripped twice (D1)
         if not any((found.mask, found.skeleton, found.labels)):
             editor.notify(f"No GT to remove for {name}", "info")
             return
@@ -156,7 +156,7 @@ class PageActions(QObject):
             return
         failed: dict[str, OSError] = {}
         try:
-            removed = remove_gt(layout, stem)
+            removed = remove_gt(layout, path)
         except GtRemoveError as exc:
             removed, failed = exc.removed, exc.failed
         editor.paging.forget(path)  # what was read of it holds the GT

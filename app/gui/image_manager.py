@@ -395,9 +395,15 @@ class ImageManager:
         self._fake_misses.clear()
         self._find_processed_base_path()
 
+    def _stem_of(self, name) -> str:
+        """The Library stem ``name`` names: a stem the Library lists, as it is (``X.png``, the
+        stem of ``X.png.jpg``, is never stripped again: final review D1), else the stem of an
+        image path or file name."""
+        return name if name in self.images else image_stem(name)
+
     def set_mask(self, name, path=None):
         """Record that ``name`` (stem or image path) has a mask at ``path`` (None: none)."""
-        stem = image_stem(name)
+        stem = self._stem_of(name)
         if path:
             self.masks[stem] = path
         else:
@@ -428,7 +434,7 @@ class ImageManager:
         }.get(kind)
         if stems is None:
             raise ValueError(f"Unknown GT kind {kind!r}: use 'mask', 'skeleton' or 'labels'")
-        stem = image_stem(name)
+        stem = self._stem_of(name)
         if present:
             stems.add(stem)
         else:
@@ -450,11 +456,11 @@ class ImageManager:
     def gt_skeleton_path_for(self, name) -> str | None:
         """``gt/skeletons/<stem>.png`` of ``name`` when the image has a GT skeleton (its stem
         compared without case, O7; the save path while the file is not there yet)."""
-        stem = image_stem(name)
+        stem = self._stem_of(name)
         if stem not in self.gt_skeleton_stems or not self.original_folder:
             return None
         layout = self._layout()
-        return layout.find_gt_skeleton(stem) or layout.gt_skeleton_path(stem)
+        return layout.find_gt_skeleton_for_stem(stem) or layout.gt_skeleton_path_for_stem(stem)
 
     # ------------------------------------------------------------ view / lookup
     def get_fake_image_path(self, name):

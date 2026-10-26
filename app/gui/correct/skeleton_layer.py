@@ -73,9 +73,9 @@ class SkeletonLayer:
         self.model = doc.model  # ToolHost; one object for the document's whole life
         self.model.on_action = lambda: host.layer_edited(SKELETON)
         # Calls the document, the model or the host answer as they are (EditLayer, ToolHost).
-        self.is_open, self.notify = doc.is_open, host.notify
+        self.is_open, self.notify, self.set_resolver = doc.is_open, host.notify, doc.set_resolver
         self.can_undo, self.can_redo = (lambda: doc.model.can_undo), (lambda: doc.model.can_redo)
-        self.file_stamps, self.set_resolver = doc.file_stamps, doc.set_resolver
+        self.file_stamps, self.unloaded_label = doc.file_stamps, doc.unloaded_label
         self.write_stamps, self.matches_disk = doc.write_stamps, doc.matches_disk
         # ReadAheadLayer: a worker reader of a document; the document handed back (paging).
         self.read_ahead, self.read_back = doc.plan_read, doc.read_back

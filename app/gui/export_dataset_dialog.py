@@ -54,7 +54,8 @@ def count_traced(images: dict[str, str]) -> int:
 
     One listing of each ``gt/`` folder, not one file check per image, and per image only
     string slicing: four ``os.path`` calls per image took 0.65 s at 46k images, on the GUI
-    thread while the dialog opened. The count is the one ``gt_path`` names give.
+    thread while the dialog opened. The count is the one the export finds: ``gt/<stem>.png``,
+    its stem compared without case on every platform (O7).
     """
     sep, alt = os.sep, os.altsep or os.sep
     listed: dict[str, set[str]] = {}
@@ -68,8 +69,8 @@ def count_traced(images: dict[str, str]) -> int:
         names = listed.get(folder_key)
         if names is None:
             names = listed[folder_key] = _gt_names(os.path.dirname(path))
-        # gt_path's name: the image's stem + ".png" (case-insensitive where paths are).
-        if names and os.path.normcase(os.path.splitext(name)[0] + ".png") in names:
+        # gt_path's name: the image's stem + ".png", compared without case (O7).
+        if names and (os.path.splitext(name)[0] + ".png").lower() in names:
             traced += 1
     return traced
 
@@ -83,9 +84,9 @@ def traced_sentence(traced: int, total: int) -> str:
 
 
 def _gt_names(folder: str) -> set[str]:
-    """The case-normalised names in ``folder``'s ``gt/`` (none when it cannot be listed)."""
+    """The names in ``folder``'s ``gt/`` in lower case (none when it cannot be listed)."""
     try:
-        return {os.path.normcase(name) for name in os.listdir(gt_dir(folder))}
+        return {name.lower() for name in os.listdir(gt_dir(folder))}
     except OSError:
         return set()
 

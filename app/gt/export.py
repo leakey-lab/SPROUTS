@@ -39,7 +39,8 @@ from app.gt.store import (
     read_tracing,
 )
 from app.io_utils import atomic_open, atomic_write_text, path_key
-from app.naming import parse_image_name
+from app.naming import parse_image_name, stem_key
+from app.project_layout import ProjectLayout
 from app.provenance import build_record, portable_path, write_sidecar
 
 logger = logging.getLogger(__name__)
@@ -196,10 +197,17 @@ def _classes_json(registry: Registry) -> dict:
 
 
 def _check_out_dir(project_dir: str, out_dir: str) -> None:
-    """Refuse an ``out_dir`` inside (or equal to) one of the project's data folders."""
-    out = path_key(os.path.realpath(out_dir))
+    """Refuse an ``out_dir`` inside (or equal to) one of the project's data folders.
+
+    The paths are compared without case on every platform (``path_key``'s darwin key: NFC,
+    case-folded): Linux on a case-insensitive volume (exFAT, NTFS, CIFS, ext4 casefold) keeps
+    a path's spelling, so ``<project>/MASK/export`` is inside ``mask/`` there (final review
+    D5). A folder named like a protected one in another case is refused on any disk.
+    """
+    out = path_key(os.path.realpath(out_dir), platform="darwin")
     for name in _PROTECTED_DIRS:
-        protected = path_key(os.path.realpath(os.path.join(project_dir, name)))
+        protected = os.path.realpath(os.path.join(project_dir, name))
+        protected = path_key(protected, platform="darwin")
         try:
             inside = os.path.commonpath([out, protected]) == protected
         except ValueError:  # different drives (Windows): cannot be inside
@@ -208,6 +216,23 @@ def _check_out_dir(project_dir: str, out_dir: str) -> None:
             raise ExportError(
                 f"Output folder must not be inside the project's {name}/ folder: {out_dir}"
             )
+
+
+def _labels_file(image_path: str, listed: dict[str, dict[str, str]]) -> str:
+    """The class labels of ``image_path``: ``gt/<stem>.png``, else a ``.png`` of ``gt/`` whose
+    stem differs only in case (O7), as Correct and the Library find it; else that exact name
+    (absent). ``listed`` keeps one listing of ``gt/`` per image folder, made on the folder's
+    first image without the exact file."""
+    exact = gt_path(image_path)
+    if os.path.exists(exact):
+        return exact
+    folder = os.path.dirname(image_path)
+    found = listed.get(folder)
+    if found is None:
+        labels = ProjectLayout(folder).scan_gt_labels()
+        found = listed[folder] = {stem_key(stem): path for stem, path in labels.items()}
+    stem = os.path.splitext(os.path.basename(image_path))[0]  # gt_path's stem
+    return found.get(stem_key(stem), exact)
 
 
 def _check_image_size(image_path: str, shape: tuple[int, ...]) -> None:
@@ -314,12 +339,13 @@ def export_dataset(
     skipped_incomplete = 0
     exported_stems: list[str] = []
     manifest_rows: dict[str, dict] = {}
+    listed: dict[str, dict[str, str]] = {}  # image folder -> its gt/ labels by stem key
 
     stems = sorted(images)
     n = len(stems)
     for i, stem in enumerate(stems):
         image_path = images[stem]
-        gt_file = gt_path(image_path)
+        gt_file = _labels_file(image_path, listed)
         if os.path.exists(gt_file):
             try:
                 tracing = read_tracing(gt_file)

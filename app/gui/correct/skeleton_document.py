@@ -20,13 +20,18 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 from app.editing.thinning import is_generated_as_opened, thin_raster
 from app.gui.correct.layer import SKELETON, LayerStatus, Notice, SaveOutcome, project_label
+from app.gui.correct.skeleton_records import (
+    NOT_SHOWN,
+    SkeletonRead,
+    SkeletonSaveResult,
+    stamps_of,
+)
 from app.gui.skeleton_document import GT, PREDICTION, GeneratedResolver, SkeletonFiles
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel, skeleton_tips
 from app.io_utils import file_stamp, imread_unicode, imwrite_unicode, same_file
@@ -47,49 +52,6 @@ LOADED = "loaded"  # source of a file opened with Load that is neither of the tw
 SHOWN_ALREADY = "Nothing to load: the skeleton is the prediction already"
 
 
-@dataclass(frozen=True)
-class SkeletonSaveResult:
-    """What :meth:`SkeletonDocument.save` did.
-
-    ``path`` is the GT file written (None when nothing was written) and ``error`` the
-    reason of a failure. ``unchanged``: nothing to write (the skeleton is as saved, or is
-    the prediction with no GT file on disk); ``removed``: the skeleton is the prediction
-    again, so its GT file was removed.
-    """
-
-    ok: bool
-    path: str | None = None
-    error: str = ""
-    unchanged: bool = False
-    removed: bool = False
-
-
-@dataclass(frozen=True)
-class SkeletonRead:
-    """The start file of one image's skeleton, read and thinned ahead on a worker thread.
-
-    ``stamps`` are the ``file_stamps()`` when the read was planned; ``path`` / ``kind`` the
-    start file (None: nothing to read); ``mask`` the thinned skeleton at ``size`` and ``tips``
-    its endpoints (``skeleton_tips``); ``mask`` None with a ``path``: unreadable, the open
-    reads it again (and says so).
-    """
-
-    image_path: str
-    size: tuple[int, int]
-    stamps: tuple
-    path: str | None
-    kind: str | None
-    save_size: tuple[int, int] | None = None
-    mask: np.ndarray | None = None
-    tips: np.ndarray | None = None
-
-    @property
-    def nbytes(self) -> int:
-        """Bytes held (the read-ahead cache counts them)."""
-        held = (self.mask, self.tips)
-        return sum(int(array.nbytes) for array in held if array is not None)
-
-
 class SkeletonDocument:
     """The skeleton of one image: model + which file it came from + where it saves.
 
@@ -99,6 +61,8 @@ class SkeletonDocument:
     ``save_size`` is the ``(w, h)`` of the raster read, or of the GT file last written
     (informational; saves are at image resolution). ``save_error`` and ``error_revision``
     describe the last failed save, which :meth:`status` reports until the next edit.
+    A GT start file that could not be read is not shown and is kept: :meth:`unloaded_label`
+    names it while it exists, so the session asks before a save replaces or removes it.
     """
 
     def __init__(self, resolver: GeneratedResolver | None = None) -> None:
@@ -113,6 +77,8 @@ class SkeletonDocument:
         self._resolver = resolver
         self._size = (0, 0)  # (w, h) of the image: the model's size
         self._prediction: str | None = None  # the prediction file found at open (or None)
+        self._not_loaded = False  # the GT start file could not be read (until a save over it)
+        self._gt_file: str | None = None  # the GT path, looked up once per open
 
     def set_resolver(self, resolver: GeneratedResolver | None) -> None:
         """Inject ``image_path -> generated skeleton path | None`` (asked before
@@ -120,9 +86,10 @@ class SkeletonDocument:
         self._resolver = resolver
 
     def files(self) -> SkeletonFiles:
-        """The skeleton files of the open image (asks nothing yet: lookups are lazy)."""
+        """The skeleton files of the open image: the GT path as :meth:`open` looked it up (as
+        the mask looks its path up once per open), the other lookups lazy."""
         root = self.images_base_folder or os.path.dirname(self.image_path)
-        return SkeletonFiles(self.image_path, root, self._resolver)
+        return SkeletonFiles(self.image_path, root, self._resolver, self._gt_file)
 
     # ------------------------------------------------------------------ lifecycle
     def plan_read(
@@ -134,9 +101,9 @@ class SkeletonDocument:
         the reader only reads, thins and finds the tips, touching no document.
         """
         root = images_base_folder or os.path.dirname(image_path)
-        files = SkeletonFiles(image_path, root, self._resolver)
+        files = SkeletonFiles(image_path, root, self._resolver).resolved()
         path, kind = files.start_file()
-        stamps = _stamps_of(files)
+        stamps = stamps_of(files)
 
         def reader(size: tuple[int, int]) -> SkeletonRead:
             size = (max(1, int(size[0])), max(1, int(size[1])))
@@ -167,12 +134,14 @@ class SkeletonDocument:
         """
         self.image_path = image_path
         self.images_base_folder = images_base_folder or os.path.dirname(image_path)
+        self._gt_file = None
+        self._gt_file = self.files().gt_path  # once per open: a case-sensitive miss lists
         w, h = size
         self._size = (max(1, int(w)), max(1, int(h)))
         if read is None or not self._current(read):
             return self.reopen()
         self._prediction = self.files().generated_path()
-        self.save_error = ""
+        self.save_error, self._not_loaded = "", False
         if read.mask is None:  # nothing to read: an empty skeleton
             self.model.set_empty(self._size)
             self.save_size, self.source = None, None
@@ -209,7 +178,7 @@ class SkeletonDocument:
         if (read.image_path, tuple(read.size)) != (self.image_path, self._size):
             return False
         files = self.files()
-        if read.stamps != _stamps_of(files) or (read.path, read.kind) != files.start_file():
+        if read.stamps != stamps_of(files) or (read.path, read.kind) != files.start_file():
             return False
         return read.path is None or read.mask is not None  # unreadable: read it again
 
@@ -227,6 +196,7 @@ class SkeletonDocument:
         path, kind = files.start_file()
         if path and self._read(path, notices):
             self.source = kind
+        self._not_loaded = kind == GT and self.source is None  # kept unless saved over (C1)
         return notices
 
     def load_file(self, path: str) -> list[Notice]:
@@ -298,7 +268,7 @@ class SkeletonDocument:
         self.save_error = ""
         self.error_revision = -1
         self._size = (0, 0)
-        self._prediction = None
+        self._prediction, self._not_loaded, self._gt_file = None, False, None
         self.model.mask = None
         self.model.clear_history()
         self.model.mark_saved()
@@ -342,7 +312,7 @@ class SkeletonDocument:
         except (OSError, ValueError) as exc:
             return self._failed(out_path, exc)
         self.model.mark_saved()
-        self.source = GT
+        self.source, self._not_loaded = GT, False
         self.save_size = (w, h)  # the start file is now the GT file just written
         self.save_error = ""
         return SkeletonSaveResult(True, out_path)
@@ -359,7 +329,7 @@ class SkeletonDocument:
         generated = self.files().generated_path()  # PREDICTION only if it reads, as reopen()
         readable = generated and imread_unicode(generated, cv2.IMREAD_GRAYSCALE) is not None
         self.source = PREDICTION if readable else None
-        self.save_size = None
+        self.save_size, self._not_loaded = None, False
         self.save_error = ""
         return SkeletonSaveResult(True, removed=existed, unchanged=not existed)
 
@@ -402,6 +372,8 @@ class SkeletonDocument:
             return LayerStatus("error", "Not saved", self.save_error)
         if pending_edit or self.is_dirty():
             return LayerStatus("dirty")
+        if self._not_loaded:
+            return LayerStatus("error", "Skeleton not shown", NOT_SHOWN)
         if self.source == GT:
             return LayerStatus("clean", "GT", self.files().gt_path)
         if self.source == PREDICTION:
@@ -423,7 +395,17 @@ class SkeletonDocument:
         """
         if not self.image_path:
             return ()
-        return _stamps_of(self.files())
+        return stamps_of(self.files())
+
+    def unloaded_label(self) -> str:
+        """``DiskGuardedLayer``: ``"gt/skeletons/<stem>.png"`` while that GT file exists and
+        could not be read at open (a save would replace or remove it unseen); else ``""``."""
+        if not self._not_loaded or not self.image_path:
+            return ""
+        path = self.files().gt_path
+        if not os.path.isfile(path):  # gone since the open: nothing left to replace
+            return ""
+        return project_label(path, self.images_base_folder or "")
 
     def write_stamps(self) -> tuple:
         """The file :meth:`save` writes or removes, the GT file, stamped afresh (``()`` when
@@ -438,10 +420,3 @@ class SkeletonDocument:
             return False
         path, _kind = self.files().start_file()
         return is_generated_as_opened(saved, path, self._size)  # any file, as opened
-
-
-def _stamps_of(files: SkeletonFiles) -> tuple:
-    """``(GT, prediction)`` stamps; the prediction path is the resolver's file when it finds
-    one, else ``skeletons/<stem>_fake.png``."""
-    generated = files.generated_path() or files.layout.skeleton_path(files.stem)
-    return (file_stamp(files.gt_path), file_stamp(generated))

@@ -43,12 +43,17 @@ class GtFiles:
     labels: str | None
 
 
-def gt_files(layout: ProjectLayout, stem: str) -> GtFiles:
-    """The GT files ``stem`` has (``stem`` compared without case, O7)."""
+def gt_files(layout: ProjectLayout, image: str) -> GtFiles:
+    """The GT files of ``image``, its path or file name (its stem compared without case, O7).
+
+    Pass the path, not a stem: the image extension is stripped here, so the stem ``X.png`` of
+    ``X.png.jpg`` would become ``X``, another image's (final review D1). A bare stem works
+    only when it does not end in an image extension.
+    """
     return GtFiles(
-        mask=layout.find_gt_mask(stem),
-        skeleton=layout.find_gt_skeleton(stem),
-        labels=layout.find_gt_labels(stem),
+        mask=layout.find_gt_mask(image),
+        skeleton=layout.find_gt_skeleton(image),
+        labels=layout.find_gt_labels(image),
     )
 
 
@@ -63,15 +68,16 @@ class GtRemoveError(OSError):
         super().__init__(f"Could not remove {names}")
 
 
-def remove_gt(layout: ProjectLayout, stem: str) -> tuple[str, ...]:
-    """Delete the GT files of ``stem`` and return the paths removed (0 to 3).
+def remove_gt(layout: ProjectLayout, image: str) -> tuple[str, ...]:
+    """Delete the GT files of ``image`` (as :func:`gt_files`: its path or file name) and
+    return the paths removed (0 to 3).
 
     Only that image's mask, skeleton and labels: never ``classes.json``, another image's
     GT, the ``gt/`` folders or anything in ``mask/`` and ``skeletons/``. A file that is
     already gone is skipped. Every file is tried; when any could not be deleted, one
     :class:`GtRemoveError` is raised after the rest, carrying what went and what stayed.
     """
-    found = gt_files(layout, stem)
+    found = gt_files(layout, image)
     removed: list[str] = []
     failed: dict[str, OSError] = {}
     for path in (found.mask, found.skeleton, found.labels):

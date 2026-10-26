@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.project_layout import ProjectLayout
 
@@ -26,24 +26,35 @@ GeneratedResolver = Callable[[str], "str | None"]
 
 @dataclass(frozen=True)
 class SkeletonFiles:
-    """Skeleton file locations for one image of a project."""
+    """Skeleton file locations for one image of a project.
+
+    ``gt_file``: the GT path as :meth:`resolved` looked it up once (None: looked up on each
+    access of :attr:`gt_path`; on a case-sensitive disk a miss lists ``gt/skeletons/``).
+    """
 
     image_path: str
     project_root: str
     generated_resolver: GeneratedResolver | None = None
+    gt_file: str | None = None
 
     @property
     def layout(self) -> ProjectLayout:
         return ProjectLayout(self.project_root)
 
     @property
-    def stem(self) -> str:
-        return ProjectLayout.stem(self.image_path)
-
-    @property
     def gt_path(self) -> str:
-        """``gt/skeletons/<stem>.png``: where a saved skeleton edit goes."""
-        return self.layout.gt_skeleton_path(self.stem)
+        """``gt/skeletons/<stem>.png``: the image's GT skeleton, its stem compared without
+        case (O7), as the mask's ``gt_mask_of``; while there is none, where a saved skeleton
+        edit goes. Looked up from the image path: the stem is never stripped twice
+        (``X.png.jpg`` -> ``X.png``, final review D1). ``gt_file`` when it is set."""
+        if self.gt_file is not None:
+            return self.gt_file
+        layout = self.layout
+        return layout.find_gt_skeleton(self.image_path) or layout.gt_skeleton_path(self.image_path)
+
+    def resolved(self) -> SkeletonFiles:
+        """These files with :attr:`gt_path` looked up now, once (``gt_file``)."""
+        return replace(self, gt_file=self.gt_path)
 
     def generated_path(self) -> str | None:
         """The generated skeleton if it exists (injected resolver first, then skeletons/)."""
@@ -51,12 +62,13 @@ class SkeletonFiles:
             path = self.generated_resolver(self.image_path)
             if path and os.path.isfile(path):
                 return path
-        return self.layout.find_skeleton(self.stem)
+        return self.layout.find_skeleton(self.image_path)
 
     def start_file(self) -> tuple[str | None, str | None]:
         """``(path, GT | PREDICTION)`` to open, or ``(None, None)`` if neither exists."""
-        if os.path.isfile(self.gt_path):
-            return self.gt_path, GT
+        gt_path = self.gt_path
+        if os.path.isfile(gt_path):
+            return gt_path, GT
         generated = self.generated_path()
         if generated:
             return generated, PREDICTION

@@ -21,8 +21,10 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
   gt/skeletons/<stem>.png                 GT skeleton: a skeleton saved after a human edit
 ```
 
-`<stem>` is the image file name without its extension. Images are read in their stored
-orientation (EXIF orientation ignored). Older projects may have skeletons
+`<stem>` is the image file name without its last extension: `X.png.jpg` has the stem
+`X.png`, so its GT files are `gt/mask/X.png.png`, `gt/skeletons/X.png.png` and
+`gt/X.png.png`, and its prediction is `skeletons/X.png_fake.png`. Images are read in their
+stored orientation (EXIF orientation ignored). Older projects may have skeletons
 in `output/skeletonizer/test_latest/images/` or masks in `output/mask/`; Measure still
 finds them there.
 
@@ -30,7 +32,8 @@ Stems compare without case, on every platform: `A.png`, `a.jpg` and `a.png` are 
 image. When several files share a stem, SPROUTS uses one of them everywhere: the one the
 Library shows. It is ranked by extension (`.png`, then `.jpg`, then `.jpeg`), and with
 equal extensions the file name that sorts first wins (`A.png` before `a.png`). The
-others get no mask, skeleton or CSV row. SPROUTS reads PNG and JPEG images only
+others get no mask, skeleton or CSV row. GT files are found with their stem compared without
+case too: `gt/skeletons/img.png` is the GT skeleton of `IMG.png`, and a save writes onto it. SPROUTS reads PNG and JPEG images only
 (`.png`, `.jpg`, `.jpeg`, in any letter case). `.bmp`, `.tif`, `.tiff` and `.ppm` files
 are not read; opening a folder names the files it does not list, both the hidden
 duplicates and the unsupported formats (since 2026-10-25; before, stems differing only

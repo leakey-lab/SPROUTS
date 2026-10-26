@@ -38,6 +38,23 @@ Five passes, not yet released:
   a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- **GT files of an image found, saved and removed as its own (2026-10-26, final review D1,
+  C1, C2, D5).**
+  - An image whose name ends in two extensions (`X.png.jpg`, stem `X.png`): *Correct* opens
+    and saves `gt/skeletons/X.png.png`, **Remove GT…** deletes `gt/mask/X.png.png`,
+    `gt/skeletons/X.png.png` and `gt/X.png.png`, and the Library marks and the metrics bar
+    look under `X.png`. Before, the stem was stripped a second time to `X`: the skeleton
+    layer opened and overwrote image `X.png`'s GT skeleton, and Remove GT… deleted `X.png`'s
+    three GT files. Files already saved under the wrong name are not moved.
+  - A GT skeleton that cannot be read is no longer replaced or removed by a save without a
+    question: the skeleton layer shows *Skeleton not shown*, `Ctrl+S` asks Replace / Keep
+    it, and `PgDn` stays on the image, as the mask layer does.
+  - GT files whose name differs from the image's only in case (O7) are found by the skeleton
+    layer, the open image's Library mark, the dataset export and its count, on
+    case-sensitive disks too; a skeleton save writes onto that file and never creates a
+    second one.
+  - The dataset export refuses an output folder inside `mask/`, `skeletons/` or `gt/`
+    spelled in any case, on every platform (Linux on a case-insensitive volume included).
 - **One image per stem, PNG and JPEG only (2026-10-25, W1-T5, R4, R3, O6, O7).** Stems
   compare without case on every platform (`app.naming.stem_key`). `A.png` and `a.jpg` were
   two Library images racing for one `mask/A.png`: a run reported 3 written for 2 files,
@@ -768,6 +785,20 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **GT files of an image found as its own (2026-10-26, final review D1, C2).** Root length
+  / area of an image whose stem ends in an image extension (`X.png.jpg`): a skeleton
+  corrected in *Correct* is saved as that image's GT (`gt/skeletons/X.png.png`) and measured
+  for it (`Source` = `gt`). Before, the correction was saved under `X.png`'s name: in a
+  project that also holds `X.png` it replaced `X.png`'s GT skeleton (so `X.png`'s length
+  came from the other image's correction), and alone it was skipped as "image gone" and
+  the prediction was measured. On a case-sensitive disk, a skeleton correction of an image
+  whose GT skeleton differs in case (`IMG.png`, `gt/skeletons/img.png`) is saved onto that
+  file; before, *Correct* showed the prediction and saved a second file `IMG.png`, which
+  Measure then measured (Measure's rule is unchanged). The dataset export includes images
+  whose class labels differ in case from the image (`gt/img.png` for `IMG.png`) on
+  case-sensitive disks; before they were skipped silently. CSV values change only for such
+  images, and only after a new save: the byte-identity tests of `tests/test_measure_core.py`
+  and the saved-pixel goldens are unchanged.
 - **A GT mask of another size than its photo is not used (2026-10-26, final review S1,
   O1).** Measure area checks `gt/mask/<stem>.png` against its photo as Measure length
   checks `gt/skeletons/<stem>.png`: a mask whose size differs from the photo's is not used,
