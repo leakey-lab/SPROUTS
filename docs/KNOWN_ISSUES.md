@@ -138,7 +138,7 @@ stay below under "Details and history", with their original wording.
 | M4 | | Mask origin by PNG colour type; a cleared mask was regenerated | `mask/` holds predictions only, a cleared mask is an empty GT mask, Generate never touches `gt/`: WG-T2, 93a88d4; WG-T7, 6ce8e8d |
 | G1 | | Two tracing interfaces | Trace GT is a layer of Correct: WG-T4, 26ee9ab; WG-T5, 1e69787; the stage is gone: WG-T11, 9a2f58a |
 | G2 | | Trace GT v1 limits; retired classes could not return | Restore, Remove GT, GT marks in the Library, per-class pixel counts: WG-T6, 8bce201; WG-T5, 1e69787; WG-T9, 3cf2535 + 5ae98b5 |
-| G4 | | Naming: trace, correct, GT, mask | "Prediction" for model output, "GT" for a human-saved result, one editor with three layers; wording guards in `tests/test_wording_guards.py`: WG-T6, 8bce201; WG-T10 (the documents' commit) |
+| G4 | | Naming: trace, correct, GT, mask | "Prediction" for model output, "GT" for a human-saved result, one editor with three layers; wording guards in `tests/test_wording_guards.py`: WG-T6, 8bce201; WG-T10 (76950dc) |
 
 ## By design (scope limits)
 
