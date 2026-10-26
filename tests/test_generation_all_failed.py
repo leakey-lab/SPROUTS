@@ -21,7 +21,7 @@ from PIL import Image
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from app import config
-from app.gui.feedback import RecordingFeedback
+from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
 from app.handlers import mask_generation_handler as mgh
 from app.handlers.generation_base import show_failure_report

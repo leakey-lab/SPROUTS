@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QStatusBar  # noqa: E402
 
-from app.gui.feedback import UiFeedback  # noqa: E402
+from app.feedback import UiFeedback  # noqa: E402
 from app.gui.task_progress import TaskProgressWidget  # noqa: E402
 from app.gui.ui_feedback import QtUiFeedback  # noqa: E402
 

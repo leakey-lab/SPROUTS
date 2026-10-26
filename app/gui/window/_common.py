@@ -1,18 +1,16 @@
 """Helpers the parts of the main window share."""
 
-import os
-
 from PyQt6.QtCore import Qt
+
+from app.io_utils import same_file
 
 #: The library tree's item data role that holds an image's stored name.
 USER_ROLE = Qt.ItemDataRole.UserRole
 
 
 def same_path(a: str | None, b: str | None) -> bool:
-    """True when both are set and name the same file (case/separator-insensitive on Windows)."""
-    if not a or not b:
-        return False
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+    """True when both are set and name the same file (:func:`app.io_utils.same_file`)."""
+    return same_file(a or "", b or "")
 
 
 def released(editor) -> bool:

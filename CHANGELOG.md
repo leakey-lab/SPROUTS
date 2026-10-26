@@ -546,6 +546,13 @@ Five passes, not yet released:
     grey levels (legacy JPEG masks, files from other programs) open differently; saving one
     in Correct then writes those pixels as root. Measure records `outputs.n_non_binary` and
     warns when masks have grey levels. No CSV value changes.
+  - One `file_stamp` and one `same_file` in `app/io_utils.py` (W5-T5, X8), used by the
+    read-aheads, the Correct documents, the save guards, the recent projects, the GT
+    export's folder check and the window. `file_stamp` treats anything but a regular file as
+    unreadable everywhere; `same_file` is False for an empty name and compares by
+    `path_key` (case folding on Windows and macOS).
+  - The pre-Generate scan only lists `mask/` and opens no file (W5-T5): the PNG-header
+    mask-origin classifier had no reader left after WG-T7.
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so
@@ -737,6 +744,16 @@ Five passes, not yet released:
   text). `docs/Architecture_2.md` is trimmed to what is true of the code (the Correct
   editor's composition, the file tree, a short data flow); `tests/test_doc_paths.py`
   checks that every repository path the README, `CLAUDE.md` and `docs/*.md` name exists.
+- **Compatibility re-exports and dead code (2026-10-25, W5-T5, F5).** The modules
+  `app/handlers/worker_base.py`, `app/gui/feedback.py` and `app/handlers/window_feedback.py`
+  and `shell_chrome.build_ribbon`: import `GuardedThread`, `JobCancelled` and
+  `describe_error` from `app.workers` and the `UiFeedback` port from `app.feedback` (the
+  worker logger is still named `app.handlers.worker_base`). Left by the GT unification:
+  `config.SKELETON_CORRECTIONS_DIRNAME` (and its entry in the dataset export's protected
+  folders; `mask/`, `skeletons/` and `gt/` stay protected), `ImageManager.mask_path_for`,
+  and the PNG-header mask-origin classifier of `app/inference/mask_origin.py`
+  (`MaskOrigin`, `classify_mask`, `png_colour_type`, `ExistingMasks.manual` / `model` /
+  `unknown`).
 - The two editors the Correct stage replaced: `MaskTracingInterface`,
   `SkeletonCorrectionInterface`, their graphics views, `MaskDrawingMixin`,
   `CanvasPixmapItem`, `SkeletonOverlayRenderer` (replaced by `SkeletonLayerItem`) and

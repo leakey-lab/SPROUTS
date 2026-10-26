@@ -27,10 +27,9 @@ import numpy as np
 
 from app.editing.thinning import is_generated_as_opened, thin_raster
 from app.gui.correct.layer import SKELETON, LayerStatus, Notice, SaveOutcome, project_label
-from app.gui.correct.read_ahead import file_stamp as _stamp
 from app.gui.skeleton_document import GT, PREDICTION, GeneratedResolver, SkeletonFiles
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel, skeleton_tips
-from app.io_utils import imread_unicode, imwrite_unicode, same_file
+from app.io_utils import file_stamp, imread_unicode, imwrite_unicode, same_file
 
 __all__ = [
     "GT",
@@ -429,7 +428,7 @@ class SkeletonDocument:
     def write_stamps(self) -> tuple:
         """The file :meth:`save` writes or removes, the GT file, stamped afresh (``()`` when
         closed): a Generate run, which rewrites only the prediction, is no change."""
-        return (_stamp(self.files().gt_path),) if self.image_path else ()
+        return (file_stamp(self.files().gt_path),) if self.image_path else ()
 
     def matches_disk(self) -> bool:
         """True when :meth:`reopen` would now open exactly the saved skeleton: the start file
@@ -445,4 +444,4 @@ def _stamps_of(files: SkeletonFiles) -> tuple:
     """``(GT, prediction)`` stamps; the prediction path is the resolver's file when it finds
     one, else ``skeletons/<stem>_fake.png``."""
     generated = files.generated_path() or files.layout.skeleton_path(files.stem)
-    return (_stamp(files.gt_path), _stamp(generated))
+    return (file_stamp(files.gt_path), file_stamp(generated))

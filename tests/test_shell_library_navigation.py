@@ -32,8 +32,9 @@ QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui import display_controller as display_module  # noqa: E402
 from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
-from app.gui.display_read_ahead import DisplayReadAhead, file_stamp  # noqa: E402
+from app.gui.display_read_ahead import DisplayReadAhead  # noqa: E402
 from app.gui.library_index import LibraryIndex, index_names  # noqa: E402
+from app.io_utils import file_stamp  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in range(11, 17)]

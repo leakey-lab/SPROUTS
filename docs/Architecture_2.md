@@ -109,7 +109,7 @@ flowchart TB
 ## Data flow
 
 1. The GUI process starts a job: `app/handlers/*` build a `GuardedThread` (error boundary
-   and cancel, `worker_base.py`) and `JobRegistry` runs one batch job at a time.
+   and cancel, `app/workers.py`) and `JobRegistry` runs one batch job at a time.
 2. `app/inference/batch_engine.py` runs the batches for both models: decode on a thread
    pool, the GPU forward on the job's thread, PNG writes on an async writer. Fixed batch
    shapes keep outputs identical from run to run; `runtime.py` picks device and precision.

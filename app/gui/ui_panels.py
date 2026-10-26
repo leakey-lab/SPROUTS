@@ -196,8 +196,8 @@ def create_left_panel(main_window) -> QWidget:
     # ====================================================================== #
     # FIX4: The stage action buttons are constructed here (so their mw.<attr>
     # names and .clicked.connect() targets stay intact) but are NOT added to
-    # the left layout. build_action_bar() reparents the real button objects
-    # into the stage-aware action bar. Construction-only here.
+    # the left layout. The topbar (ShellTopbar) reparents the real button
+    # objects into its stage action pages. Construction-only here.
     # ====================================================================== #
 
     # Generate ML Masks button (kept wired + reparented; the Generate stage now
@@ -276,7 +276,7 @@ def create_left_panel(main_window) -> QWidget:
     # ========== VIEW MODE COMBO (hidden live driver) ==========
     # The combo stays the single source of truth for the display mode (indices
     # 0/1/2 -> display_controller.update_display_mode). It is hidden; a cosmetic
-    # SegmentedControl in the action bar forwards into it (see build_action_bar).
+    # SegmentedControl in the topbar (ShellTopbar) forwards into it.
     main_window.view_mode_combo = QComboBox()
     main_window.view_mode_combo.addItems(["Single Image", "Overlay", "Side by Side"])
     main_window.view_mode_combo.currentIndexChanged.connect(

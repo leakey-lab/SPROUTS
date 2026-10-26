@@ -26,7 +26,7 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXAMPLES = os.path.join(REPO_ROOT, "docs", "examples")
 
-from app.gui.feedback import RecordingFeedback  # noqa: E402
+from app.feedback import RecordingFeedback  # noqa: E402
 from app.handlers.job_registry import JobRegistry  # noqa: E402
 from app.handlers.skeleton_handler import SkeletonHandler  # noqa: E402
 from app.io_utils import imread_unicode, imwrite_unicode  # noqa: E402

@@ -52,7 +52,7 @@ try:
     )
     from app.gui.main_window import MainWindow
     from app.gui.widgets import tokens
-    from app.handlers.worker_base import describe_error
+    from app.workers import describe_error
     from resources.resource_utils import resource_path  # re-exported: the ui-harness uses it
 except Exception:
     # Otherwise the traceback reaches only stderr, which pythonw.exe and windowed

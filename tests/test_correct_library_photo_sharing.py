@@ -29,8 +29,9 @@ from PyQt6.QtWidgets import QApplication, QComboBox, QStatusBar, QWidget  # noqa
 import app.enhancement as enhancement  # noqa: E402
 import app.gui.display_controller as display_module  # noqa: E402
 from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.display_read_ahead import DisplayReadAhead, file_stamp  # noqa: E402
+from app.gui.display_read_ahead import DisplayReadAhead  # noqa: E402
 from app.gui.image_manager import ImageManager  # noqa: E402
+from app.io_utils import file_stamp  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     bump,
     editor_factory,

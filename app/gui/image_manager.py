@@ -395,16 +395,6 @@ class ImageManager:
         self._fake_misses.clear()
         self._find_processed_base_path()
 
-    def mask_path_for(self, name) -> str | None:
-        """Where the mask editor saves the mask of ``name`` (stem or image path).
-
-        ``<image folder>/mask/<stem>.png`` (the editor's rule); None for an unknown stem.
-        """
-        image_path = self.get_image_path(image_stem(name))
-        if image_path is None and os.path.isabs(os.fspath(name)):
-            image_path = os.fspath(name)
-        return ProjectLayout.for_image(image_path).mask_path(image_path) if image_path else None
-
     def set_mask(self, name, path=None):
         """Record that ``name`` (stem or image path) has a mask at ``path`` (None: none)."""
         stem = image_stem(name)

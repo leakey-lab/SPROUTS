@@ -1,4 +1,4 @@
-"""Qt implementation of the ``UiFeedback`` port (``app.gui.feedback``).
+"""Qt implementation of the ``UiFeedback`` port (``app.feedback``).
 
 Handlers report long-running work through ``main_window.feedback`` instead of
 reaching into window widgets. :class:`QtUiFeedback` maps the protocol onto the
@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 from PyQt6.QtWidgets import QStatusBar
 
-from app.gui.feedback import NoticeKind, progress_percent
+from app.feedback import NoticeKind, progress_percent
 from app.gui.task_progress import TaskProgressWidget
 
 Notifier = Callable[[str, str], None]

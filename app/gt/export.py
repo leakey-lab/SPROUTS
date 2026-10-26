@@ -38,7 +38,7 @@ from app.gt.store import (
     present_keys,
     read_tracing,
 )
-from app.io_utils import atomic_open, atomic_write_text
+from app.io_utils import atomic_open, atomic_write_text, path_key
 from app.naming import parse_image_name
 from app.provenance import build_record, portable_path, write_sidecar
 
@@ -64,7 +64,7 @@ _PROVENANCE_KIND = "gt_export"
 # Project folders the export must never write into (the ML pipeline's outputs
 # and the GT tracings themselves). Only their names are used here: nothing in
 # them is read.
-_PROTECTED_DIRS = ("mask", "skeletons", "skeleton_corrections", GT_DIRNAME)
+_PROTECTED_DIRS = ("mask", "skeletons", GT_DIRNAME)
 # Pillow refuses to open an image over twice ``Image.MAX_IMAGE_PIXELS`` (about 179 Mpx)
 # with this error, which is neither OSError nor ValueError: one such image or tracing is
 # that stem's export error, like any unreadable file, and never ends the whole export.
@@ -197,9 +197,9 @@ def _classes_json(registry: Registry) -> dict:
 
 def _check_out_dir(project_dir: str, out_dir: str) -> None:
     """Refuse an ``out_dir`` inside (or equal to) one of the project's data folders."""
-    out = os.path.normcase(os.path.realpath(out_dir))
+    out = path_key(os.path.realpath(out_dir))
     for name in _PROTECTED_DIRS:
-        protected = os.path.normcase(os.path.realpath(os.path.join(project_dir, name)))
+        protected = path_key(os.path.realpath(os.path.join(project_dir, name)))
         try:
             inside = os.path.commonpath([out, protected]) == protected
         except ValueError:  # different drives (Windows): cannot be inside
@@ -291,8 +291,8 @@ def export_dataset(
     are written atomically (``app.io_utils``): complete or absent, and a file
     held open by another program raises ``FileLockedError`` (R1). ``mask/``,
     ``skeletons/`` and the GT files themselves are never modified: an
-    ``out_dir`` inside ``mask/``, ``skeletons/``, ``skeleton_corrections/`` or
-    ``gt/`` raises ``ExportError``. The folder is resolved to an absolute path once, at
+    ``out_dir`` inside ``mask/``, ``skeletons/`` or ``gt/`` raises ``ExportError``.
+    The folder is resolved to an absolute path once, at
     the start (``D:out`` is the current folder of drive D then), and every file, check,
     message and the result use it.
     """

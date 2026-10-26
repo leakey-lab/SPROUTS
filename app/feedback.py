@@ -15,7 +15,7 @@ Progress semantics: ``task_started(label, total=N)`` makes later
 ``progress_percent`` (re-exported from ``app.inference.batch_pipeline``).
 
 Layering: this port sits below both ``app.gui`` and ``app.handlers`` so handlers
-never depend on the GUI package; ``app.gui.feedback`` is a compatibility re-export.
+never depend on the GUI package.
 """
 
 from __future__ import annotations

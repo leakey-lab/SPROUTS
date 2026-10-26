@@ -333,7 +333,7 @@ def test_export_non_empty_out_dir_raises(tmp_path):
         os.path.join("gt", "export"),
         os.path.join("mask", "export"),
         os.path.join("skeletons", "export"),
-        os.path.join("skeleton_corrections", "deep", "export"),
+        os.path.join("gt", "skeletons", "deep", "export"),
     ],
 )
 def test_export_refuses_out_dir_inside_project_data_folders(tmp_path, sub):

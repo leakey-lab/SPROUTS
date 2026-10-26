@@ -52,13 +52,13 @@ from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QVBoxL
 from app.enhancement import DECODE_FLAGS
 from app.gui.key_text import platform_keys
 from app.gui.widgets import tokens
-from app.io_utils import imread_unicode
+from app.io_utils import file_stamp, imread_unicode
 
 from .canvas_background import configure_canvas_background
 from .canvas_layers.photo import PhotoLayerItem
 from .canvas_layers.skeleton import SkeletonLayerItem
 from .canvas_view import CanvasViewMixin
-from .display_read_ahead import DisplayReadAhead, file_stamp
+from .display_read_ahead import DisplayReadAhead
 
 logger = logging.getLogger(__name__)
 

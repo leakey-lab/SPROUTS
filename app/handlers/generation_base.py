@@ -20,11 +20,11 @@ from typing import TYPE_CHECKING, Any
 from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
-from app.gui.feedback import UiFeedback
+from app.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
 from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
-from app.handlers.worker_base import GuardedThread
+from app.workers import GuardedThread
 
 if TYPE_CHECKING:
     from app.inference.batch_engine import BatchReport

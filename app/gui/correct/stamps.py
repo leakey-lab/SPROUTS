@@ -11,23 +11,15 @@ the hand-back to the read-ahead). The save guard keeps its own write stamps
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
+
+from app.io_utils import file_stamp
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.gui.correct.layer import EditLayer
 
-__all__ = ["ImageStamps", "file_stamp"]
-
-
-def file_stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a readable file, ``(path, None)`` otherwise."""
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return (path, None)
-    return (path, stat.st_mtime_ns, stat.st_size)
+__all__ = ["ImageStamps"]
 
 
 class ImageStamps:

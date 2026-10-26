@@ -17,7 +17,7 @@ Exactly one of those outcomes happens per run.
 
 Layering: this module is layer-neutral (it imports only PyQt6 and, lazily,
 ``app.io_utils``) so ``app.inference`` threads and ``app.handlers`` workers can
-both build on it; ``app.handlers.worker_base`` is a compatibility re-export.
+both build on it.
 """
 
 from __future__ import annotations

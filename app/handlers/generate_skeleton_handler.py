@@ -20,7 +20,7 @@ from typing import Any
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
-from app.gui.feedback import UiFeedback
+from app.feedback import UiFeedback
 from app.handlers.deps import SAVED_PATH_STATUS_MS, folder_label
 from app.handlers.generation_base import (
     GenerationHandlerBase,
@@ -28,8 +28,8 @@ from app.handlers.generation_base import (
     show_failure_report,
 )
 from app.handlers.job_registry import JobRegistry
-from app.handlers.worker_base import GuardedThread, JobCancelled
 from app.inference.batch_pipeline import progress_percent
+from app.workers import GuardedThread, JobCancelled
 
 logger = logging.getLogger(__name__)
 

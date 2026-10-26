@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
-from app.io_utils import path_key
+from app.io_utils import same_file
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,6 @@ class RecentProject:
         return {"name": d["name"], "path": d["path"], "count": d["count"], "ts": d["ts"]}
 
 
-def _same_path(a: str, b: str) -> bool:
-    return path_key(os.path.normpath(a)) == path_key(os.path.normpath(b))
-
-
 class RecentProjectsStore:
     """Load / add / remove / clear the recent-projects list."""
 
@@ -92,7 +88,7 @@ class RecentProjectsStore:
             if not isinstance(item, dict) or not item.get("path"):
                 continue
             path = str(item["path"])
-            if any(_same_path(path, seen.path) for seen in out):
+            if any(same_file(path, seen.path) for seen in out):
                 continue  # the newer entry of that folder is already listed
             count = item.get("count")
             # JSON may hold NaN / Infinity, which int() refuses: such a count is dropped.
@@ -119,13 +115,13 @@ class RecentProjectsStore:
             count=int(count),
             ts=(now or datetime.now()).isoformat(),
         )
-        rest = [e for e in self.entries() if not _same_path(e.path, path)]
+        rest = [e for e in self.entries() if not same_file(e.path, path)]
         self._save([entry, *rest])
         return entry
 
     def remove(self, path: str) -> None:
         """Drop ``path`` from the list (no-op when absent)."""
-        self._save([e for e in self.entries() if not _same_path(e.path, path)])
+        self._save([e for e in self.entries() if not same_file(e.path, path)])
 
     def clear(self) -> None:
         """Forget every recent project."""

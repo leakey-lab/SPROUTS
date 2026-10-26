@@ -28,7 +28,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
-from app.gui.feedback import UiFeedback
+from app.feedback import UiFeedback
 from app.handlers.deps import SAVED_PATH_STATUS_MS, folder_label
 from app.handlers.generation_base import (
     GenerationHandlerBase,
@@ -36,11 +36,11 @@ from app.handlers.generation_base import (
     show_failure_report,
 )
 from app.handlers.job_registry import JobRegistry
-from app.handlers.worker_base import GuardedThread, JobCancelled
 from app.inference import runtime
 from app.inference.batch_pipeline import progress_percent
 from app.inference.mask_origin import OverwritePolicy, scan_existing_masks
 from app.project_layout import ProjectLayout
+from app.workers import GuardedThread, JobCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ class MaskGenerationHandler(GenerationHandlerBase):
 
         layout = ProjectLayout(input_dir)
         try:
-            with _wait_cursor():  # one header read per existing mask (R6)
+            with _wait_cursor():  # lists mask/ once (tens of thousands of names)
                 stems = set(layout.scan_images())
                 existing = scan_existing_masks(layout, stems)
         except OSError as exc:

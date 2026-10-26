@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 from PyQt6.QtWidgets import QApplication
 
-from app.gui.feedback import RecordingFeedback
+from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
 from app.handlers import mask_generation_handler as mgh
 from app.handlers.deps import folder_label

@@ -28,6 +28,7 @@ from PyQt6.QtCore import QByteArray, QDir, QRectF, Qt
 from PyQt6.QtGui import QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
+from app.io_utils import path_key
 from resources.resource_utils import resource_path
 
 from . import tokens
@@ -47,8 +48,8 @@ def register_theme_search_path() -> None:
     Must run before the first styled widget is polished: Qt resolves QSS images once per
     rule and caches a miss. Importing this module does it.
     """
-    known = {os.path.normcase(os.path.normpath(p)) for p in QDir.searchPaths(THEME_SEARCH_PREFIX)}
-    if os.path.normcase(_THEME_IMAGE_DIR) not in known:
+    known = {path_key(p) for p in QDir.searchPaths(THEME_SEARCH_PREFIX)}
+    if path_key(_THEME_IMAGE_DIR) not in known:
         QDir.addSearchPath(THEME_SEARCH_PREFIX, _THEME_IMAGE_DIR)
 
 

@@ -29,9 +29,10 @@ from app.handlers import generate_skeleton_handler as gsh  # noqa: E402
 from app.handlers import mask_generation_handler as mgh  # noqa: E402
 from app.handlers.mask_generation_handler import ask_overwrite_policy  # noqa: E402
 from app.inference import runtime  # noqa: E402
-from app.inference.mask_origin import OverwritePolicy, png_colour_type  # noqa: E402
+from app.inference.mask_origin import OverwritePolicy  # noqa: E402
 from app.masks import write_mask_file  # noqa: E402
 from app.project_layout import ProjectLayout  # noqa: E402
+from tests.correct_goldens_support import png_colour_type  # noqa: E402
 from tests.test_correct_editor import plane, write_image, write_mask  # noqa: E402
 from tests.test_correct_main_window import (  # noqa: E402
     STEMS,

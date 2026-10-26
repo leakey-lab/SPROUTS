@@ -2,7 +2,7 @@
 
 Each measurement runs as one named batch job (``main_window.jobs``) on a
 :class:`~app.inference.metric_thread.MetricCalculatorThread`, reports through a
-:class:`~app.gui.feedback.UiFeedback`, can be cancelled, and never crashes the
+:class:`~app.feedback.UiFeedback`, can be cancelled, and never crashes the
 app: a CSV held open by Excel ends in a Retry prompt that re-saves the rows
 already measured.
 
@@ -28,7 +28,7 @@ from app.calibration import (
     fov_label,
     load_project_calibration,
 )
-from app.gui.feedback import UiFeedback
+from app.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry

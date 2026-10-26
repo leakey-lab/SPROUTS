@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
 from app.gui.image_manager import project_layout_of
+from app.io_utils import path_key
 from app.project_layout import ProjectLayout, find_test_latest_dir
 
 logger = logging.getLogger(__name__)
@@ -210,7 +211,7 @@ def _source_signature(path: str | None) -> tuple | None:
         stat = os.stat(path)
     except OSError:
         return None
-    return os.path.normcase(os.path.abspath(path)), stat.st_size, stat.st_mtime_ns
+    return path_key(path), stat.st_size, stat.st_mtime_ns
 
 
 def _opengl_viewports_in_use(window) -> bool:

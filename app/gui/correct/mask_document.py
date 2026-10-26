@@ -43,12 +43,12 @@ from app.gui.correct.mask_files import (
     SOURCE_GT,
     SOURCE_PREDICTION,
     MaskRead,
-    file_stamp,
     gt_mask_of,
     mask_stamps,
     read_mask,
 )
 from app.gui.patch_history import PatchHistory
+from app.io_utils import file_stamp
 from app.masks import write_mask_file
 from app.project_layout import ProjectLayout
 

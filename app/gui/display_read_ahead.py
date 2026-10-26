@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import functools
 import logging
-import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
@@ -38,29 +37,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from app.io_utils import path_key
+from app.io_utils import file_stamp, path_key
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DisplayReadAhead", "file_stamp"]
+__all__ = ["DisplayReadAhead"]
 
 MAX_IMAGES = 3  # the photo shown, the next and the previous one
 MAX_BYTES = 192 * 2**20  # about 20 photos of 2048 x 1536, two of 6000 x 4000
 
 Decode = Callable[[str], "np.ndarray | None"]
-
-
-def file_stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a readable file, ``(path, None)`` otherwise."""
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return (path, None)
-    return (path, stat.st_mtime_ns, stat.st_size)
-
-
-def _key(path: str) -> str:
-    return path_key(path)
 
 
 def _readable(stamp: tuple) -> bool:
@@ -138,7 +124,7 @@ class DisplayReadAhead:
     def get(self, path: str) -> np.ndarray | None:
         """The photo of ``path`` if it was decoded ahead (or kept) and its file is
         unchanged; None otherwise (the caller decodes it). It stays kept, as the newest."""
-        key = _key(path)
+        key = path_key(path)
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
@@ -170,7 +156,7 @@ class DisplayReadAhead:
         it now); None when there is none, its file changed or its decode has not finished
         (never waits: that decode is forgotten too)."""
         with self._lock:
-            entry = self._entries.pop(_key(path), None)
+            entry = self._entries.pop(path_key(path), None)
         if entry is None:
             return None
         future = entry.future
@@ -188,12 +174,12 @@ class DisplayReadAhead:
     def holds(self, path: str) -> bool:
         """True when ``path``'s photo is kept or being decoded (never waits)."""
         with self._lock:
-            return _key(path) in self._entries
+            return path_key(path) in self._entries
 
     def is_ready(self, path: str) -> bool:
         """True when a decode of ``path`` has finished (a test hook; never waits)."""
         with self._lock:
-            entry = self._entries.get(_key(path))
+            entry = self._entries.get(path_key(path))
         if entry is None:
             return False
         return entry.future is None or entry.future.done()
@@ -204,7 +190,7 @@ class DisplayReadAhead:
         if self._closed or image is None or not _readable(stamp):
             return
         image.flags.writeable = False
-        key = _key(path)
+        key = path_key(path)
         with self._lock:
             self._drop(key)
             self._entries[key] = _Entry(stamp=stamp, image=image)
@@ -217,7 +203,7 @@ class DisplayReadAhead:
             if self._closed:
                 return
             for path in paths:
-                key = _key(path)
+                key = path_key(path)
                 if key in self._entries:
                     self._entries.move_to_end(key)
                     continue
@@ -230,7 +216,7 @@ class DisplayReadAhead:
 
     def retain(self, paths: Iterable[str]) -> None:
         """Forget every photo but those of ``paths`` (a queued decode is cancelled)."""
-        keep = {_key(path) for path in paths}
+        keep = {path_key(path) for path in paths}
         with self._lock:
             for key in [key for key in self._entries if key not in keep]:
                 self._drop(key)

@@ -1,5 +1,5 @@
 """
-Tests for the worker error boundary (``app/handlers/worker_base.py``) and the
+Tests for the worker error boundary (``app/workers.py``) and the
 app-wide batch-job registry (``app/handlers/job_registry.py``).
 
 Offscreen Qt. Threads are real ``QThread`` s; tests that act while a job runs
@@ -24,7 +24,7 @@ from PyQt6.QtCore import QCoreApplication, QEventLoop, QThread, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from app.handlers.job_registry import JobRegistry
-from app.handlers.worker_base import GuardedThread, JobCancelled, describe_error
+from app.workers import GuardedThread, JobCancelled, describe_error
 
 
 @pytest.fixture(scope="module")

@@ -14,14 +14,12 @@ prediction of another size: it is stretched to the photo with nearest neighbour 
 from __future__ import annotations
 
 import logging
-import os
-import stat
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
-from app.io_utils import imread_unicode
+from app.io_utils import file_stamp, imread_unicode
 from app.masks import MASK_THRESHOLD, MaskFileError, MaskStore
 from app.project_layout import ProjectLayout
 
@@ -31,7 +29,6 @@ __all__ = [
     "SOURCE_GT",
     "SOURCE_PREDICTION",
     "MaskRead",
-    "file_stamp",
     "gt_mask_of",
     "mask_stamps",
     "read_mask",
@@ -114,20 +111,9 @@ def gt_mask_of(layout: ProjectLayout, image_path: str) -> str:
 
 def mask_stamps(layout: ProjectLayout, gt_path: str, image_path: str) -> tuple:
     """The GT mask's stamp, then those of every name the prediction may have, in lookup
-    order (:func:`file_stamp` each)."""
+    order (:func:`~app.io_utils.file_stamp` each)."""
     candidates = layout.mask_candidates(image_path)
     return (file_stamp(gt_path), *(file_stamp(path) for path in candidates))
-
-
-def file_stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a regular file, else ``(path, None)``."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return (path, None)
-    if not stat.S_ISREG(st.st_mode):
-        return (path, None)
-    return (path, st.st_mtime_ns, st.st_size)
 
 
 def zero_one_plane(on: np.ndarray) -> np.ndarray:

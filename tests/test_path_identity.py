@@ -85,7 +85,12 @@ def test_recents_keep_case_variants_apart_on_linux(monkeypatch):
 
 
 def test_the_display_read_ahead_key_is_the_path_key(monkeypatch):
-    from app.gui import display_read_ahead
+    import numpy as np
+
+    from app.gui.display_read_ahead import DisplayReadAhead
 
     monkeypatch.setattr(io_utils, "_current_platform", lambda: "darwin")
-    assert display_read_ahead._key("/Data/T1.png") == display_read_ahead._key("/data/t1.png")
+    ahead = DisplayReadAhead(lambda path: None)
+    ahead.keep("/Data/T1.png", ("/Data/T1.png", 1, 1), np.zeros((2, 2), np.uint8))
+    assert ahead.holds("/data/t1.png")
+    ahead.close()

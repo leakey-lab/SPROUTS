@@ -18,7 +18,8 @@ from concurrent.futures import Executor, Future
 
 import numpy as np
 
-from app.gui.correct.read_ahead import AheadImage, ReadAhead, file_stamp
+from app.gui.correct.read_ahead import AheadImage, ReadAhead
+from app.io_utils import file_stamp
 from tests.test_correct_read_ahead import InlineExecutor, Payload, photo
 
 

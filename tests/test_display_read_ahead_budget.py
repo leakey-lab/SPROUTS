@@ -15,7 +15,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
 
-from app.gui.display_read_ahead import DisplayReadAhead, file_stamp
+from app.gui.display_read_ahead import DisplayReadAhead
+from app.io_utils import file_stamp
 
 SHAPE = (30, 40, 3)
 ONE = int(np.prod(SHAPE))  # bytes of one decoded photo

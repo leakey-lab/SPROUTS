@@ -197,7 +197,7 @@ def test_existing_contract_values_unchanged():
 def test_project_layout_constants():
     assert config.MASK_DIRNAME == "mask"
     assert config.SKELETONS_DIRNAME == "skeletons"
-    assert config.SKELETON_CORRECTIONS_DIRNAME == "skeleton_corrections"
+    assert not hasattr(config, "SKELETON_CORRECTIONS_DIRNAME")  # retired (WG-T3, W5-T5)
     assert config.IMAGE_EXTENSIONS == (".png", ".jpg", ".jpeg")
     assert config.DASH_HOST == "127.0.0.1"
 

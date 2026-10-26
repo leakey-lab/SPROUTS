@@ -31,7 +31,7 @@ from collections.abc import Callable
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QToolButton, QWidget
 
-from app.gui.feedback import progress_percent
+from app.feedback import progress_percent
 from app.gui.widgets import tokens
 
 Clock = Callable[[], float]

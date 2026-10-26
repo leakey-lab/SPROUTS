@@ -25,7 +25,6 @@ left out: that layer then opens by itself. Nothing here touches Qt, and a job mu
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
@@ -35,32 +34,20 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app import enhancement
+from app.io_utils import file_stamp, path_key
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AheadImage", "Photo", "ReadAhead", "Reader", "file_stamp", "read_image"]
+__all__ = ["AheadImage", "Photo", "ReadAhead", "Reader", "read_image"]
 
 #: A layer's reader: ``reader((w, h))`` -> its payload for that image (runs on the worker).
 Reader = Callable[[tuple[int, int]], object]
-#: A decoded photo: ``(stamp, array)``, the stamp (:func:`file_stamp`) taken before the
-#: decode and the array read-only.
+#: A decoded photo: ``(stamp, array)``, the stamp (:func:`~app.io_utils.file_stamp`) taken
+#: before the decode and the array read-only.
 Photo = tuple[tuple, np.ndarray]
 
 MAX_IMAGES = 3  # the next image, the previous one and one more
 MAX_BYTES = 256 * 2**20  # about 16 results of 2048 x 1536, one of 8000 x 6000
-
-
-def file_stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a readable file, ``(path, None)`` otherwise."""
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return (path, None)
-    return (path, stat.st_mtime_ns, stat.st_size)
-
-
-def _key(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
 
 
 def _nbytes(payload: object) -> int:
@@ -74,7 +61,7 @@ class AheadImage:
     """What :func:`read_image` read for one image.
 
     ``photo`` is the decoded BGR photo (read-only, as the editor's source cache keeps
-    it), ``stamp`` the photo file's :func:`file_stamp` taken *before* it was read, and
+    it), ``stamp`` the photo file's :func:`~app.io_utils.file_stamp` taken *before* it was read, and
     ``layers`` each layer's payload by layer id (a layer without one opens by itself).
     """
 
@@ -161,7 +148,7 @@ class ReadAhead:
     def request(self, image_path: str, job: Callable[[], AheadImage | None]) -> bool:
         """Run ``job`` for ``image_path`` on the worker, unless a current result or a job
         for it is already there; True when it was queued (the newest entry either way)."""
-        key = _key(image_path)
+        key = path_key(image_path)
         with self._lock:
             if self._closed:
                 return False
@@ -178,7 +165,7 @@ class ReadAhead:
     def take(self, image_path: str) -> AheadImage | None:
         """The finished, current read of ``image_path``, handed over once; None when there
         is none, it is stale or its job still runs (never waits: the caller reads itself)."""
-        key = _key(image_path)
+        key = path_key(image_path)
         with self._lock:
             future = self._jobs.get(key)
             if future is None or not future.done():
@@ -191,7 +178,7 @@ class ReadAhead:
         """The finished, current read of ``image_path``, kept (not handed over): its photo
         is read-only and may be shared; None otherwise. Never waits."""
         with self._lock:
-            future = self._jobs.get(_key(image_path))
+            future = self._jobs.get(path_key(image_path))
         if future is None or not future.done():
             return None
         result = _result(future)
@@ -202,7 +189,7 @@ class ReadAhead:
         the image just left (handed back). The last plan is over (LRU until the next)."""
         future: Future = Future()
         future.set_result(image)
-        key = _key(image.image_path)
+        key = path_key(image.image_path)
         with self._lock:
             if self._closed:
                 return
@@ -219,7 +206,7 @@ class ReadAhead:
     def keep_only(self, image_paths: Iterable[str]) -> None:
         """Forget every entry but those of ``image_paths`` (a queued job is cancelled). Their
         order is the plan, most wanted first: under the byte budget the last goes first."""
-        plan = list(dict.fromkeys(_key(path) for path in image_paths))
+        plan = list(dict.fromkeys(path_key(path) for path in image_paths))
         keep = set(plan)
         with self._lock:
             self._plan = plan
@@ -229,7 +216,7 @@ class ReadAhead:
     def invalidate(self, image_path: str) -> None:
         """Forget ``image_path``'s entry (its files changed: a save, a new run)."""
         with self._lock:
-            future = self._jobs.pop(_key(image_path), None)
+            future = self._jobs.pop(path_key(image_path), None)
         if future is not None:
             future.cancel()
 

@@ -30,10 +30,11 @@ import numpy as np
 from app import gt
 from app.config import GT_BACKGROUND_ID, GT_CLASSES_FILENAME, GT_DIRNAME
 from app.gt import Registry, Tracing
-from app.gui.correct.classes_files import ClassesRead, file_stamp, labels_files, read_classes
+from app.gui.correct.classes_files import ClassesRead, labels_files, read_classes
 from app.gui.correct.classes_paint import N_IDS, canvas_ids, class_lut, histogram
 from app.gui.correct.layer import LayerStatus, Notice, project_label
 from app.gui.patch_history import Patch, PatchHistory, Rect
+from app.io_utils import file_stamp
 
 logger = logging.getLogger(__name__)
 

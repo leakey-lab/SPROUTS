@@ -15,7 +15,8 @@ import cv2
 import numpy as np
 import pytest
 
-from app.gui.correct.read_ahead import AheadImage, ReadAhead, file_stamp, read_image
+from app.gui.correct.read_ahead import AheadImage, ReadAhead, read_image
+from app.io_utils import file_stamp
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -42,8 +42,8 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMessageBox
 
-from app.handlers.worker_base import describe_error
 from app.logging_config import current_log_file
+from app.workers import describe_error
 
 logger = logging.getLogger(__name__)
 

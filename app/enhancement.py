@@ -33,7 +33,7 @@ from typing import Any, ClassVar
 import cv2
 import numpy as np
 
-from app.io_utils import atomic_write_text, imread_unicode, sweep_stale_temp_files
+from app.io_utils import atomic_write_text, imread_unicode, path_key, sweep_stale_temp_files
 
 logger = logging.getLogger(__name__)
 
@@ -366,7 +366,7 @@ def _sweep_settings_dir_once(folder: str) -> threading.Thread | None:
     or None when this process already swept ``folder`` or no thread could start (then
     a later call tries again). Never raises.
     """
-    key = os.path.normcase(os.path.abspath(folder))
+    key = path_key(folder)
     with _sweep_lock:
         if key in _swept_settings_dirs:
             return None

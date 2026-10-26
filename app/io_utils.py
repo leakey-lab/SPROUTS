@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import stat
 import sys
 import time
 import unicodedata
@@ -47,6 +48,7 @@ __all__ = [
     "atomic_open",
     "atomic_write_bytes",
     "atomic_write_text",
+    "file_stamp",
     "imread_unicode",
     "imwrite_unicode",
     "path_key",
@@ -121,8 +123,25 @@ def path_key(path: str | os.PathLike[str], platform: str | None = None) -> str:
 
 
 def same_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) -> bool:
-    """True when ``a`` and ``b`` name one path on this platform (:func:`path_key`)."""
-    return path_key(a) == path_key(b)
+    """True when ``a`` and ``b`` are both given and name one path on this platform
+    (:func:`path_key`). An empty name (no file open) is the same as nothing."""
+    return bool(os.fspath(a)) and bool(os.fspath(b)) and path_key(a) == path_key(b)
+
+
+def file_stamp(path: str) -> tuple:
+    """``(path, mtime_ns, size)`` of a regular file, ``(path, None)`` for anything else.
+
+    A missing path, a folder named like a file and an unreadable entry all read as
+    ``(path, None)``. Two stamps of one path are equal while the file was not rewritten:
+    the read-aheads, the open documents and the save guards compare them.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (path, None)
+    if not stat.S_ISREG(st.st_mode):
+        return (path, None)
+    return (path, st.st_mtime_ns, st.st_size)
 
 
 def _temp_path(target: str, platform: str | None = None) -> str:

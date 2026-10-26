@@ -100,7 +100,7 @@ def test_a_manual_mask_survives_keep_existing_whatever_its_case(
     before = Path(hand_mask).read_bytes()
 
     existing = scan_existing_masks(layout, layout.scan_images())
-    assert existing.manual == frozenset({"A"})
+    assert existing.stems == frozenset({"A"})
 
     report = mi.generate_masks(
         src,

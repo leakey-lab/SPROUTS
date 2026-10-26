@@ -21,7 +21,7 @@ from PyQt6 import sip  # noqa: E402
 from PyQt6.QtCore import QCoreApplication, QEvent, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
 
-from app.gui.feedback import RecordingFeedback  # noqa: E402
+from app.feedback import RecordingFeedback  # noqa: E402
 from app.handlers import mask_generation_handler as mgh  # noqa: E402
 from app.handlers.job_registry import JobRegistry  # noqa: E402
 from app.handlers.skeleton_handler import SkeletonHandler  # noqa: E402

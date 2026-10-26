@@ -121,9 +121,9 @@ def test_no_trace_gt_stage_name_under_app():
     assert hits(r"\bTrace GT\b") == []
 
 
-def test_skeleton_corrections_is_named_only_by_the_dead_constant_and_the_export_guard():
-    # both go with W5-T5
-    assert {p.name for p in files_with(r"skeleton_corrections")} == {"config.py", "export.py"}
+def test_skeleton_corrections_is_named_nowhere_under_app():
+    # the folder is retired (WG-T3): its constant and the export guard went with W5-T5
+    assert files_with(r"skeleton_corrections") == []
 
 
 def test_the_readme_has_the_which_layer_table():

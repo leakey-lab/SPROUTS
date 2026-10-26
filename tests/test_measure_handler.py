@@ -18,10 +18,10 @@ from PyQt6 import sip
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app import provenance
-from app.gui.feedback import RecordingFeedback
+from app.feedback import RecordingFeedback
+from app.gui.ui_feedback import QtUiFeedback
 from app.handlers.job_registry import JobRegistry
 from app.handlers.skeleton_handler import SkeletonHandler
-from app.handlers.window_feedback import WindowFeedback
 from app.inference import measure_run
 from app.io_utils import FileLockedError
 
@@ -177,7 +177,7 @@ def test_cancel_stops_the_run_without_writing(tmp_path, qapp):
     assert not os.path.exists(tmp_path / "skeletons" / "root_lengths.csv")
 
 
-def test_window_feedback_drives_task_progress_and_status():
+def test_qt_ui_feedback_drives_task_progress_status_and_toasts():
     calls = []
     tp = SimpleNamespace(
         start=lambda label, cancelable=False, on_cancel=None: calls.append(("start", label)),
@@ -187,17 +187,18 @@ def test_window_feedback_drives_task_progress_and_status():
         fail=lambda msg: calls.append(("fail", msg)),
     )
     bar = SimpleNamespace(showMessage=lambda msg, ms=0: calls.append(("status", msg)))
-    mw = SimpleNamespace(task_progress=tp, status_bar=bar)
-    fb = WindowFeedback(mw)
-    fb.task_started("Measuring root length")
-    fb.task_progress(42)
-    fb.task_progress(3, 12)
+    fb = QtUiFeedback(tp, status_bar=bar, notifier=lambda msg, kind: calls.append((kind, msg)))
+    fb.task_started("Measuring root length", total=12)
+    fb.task_progress(3)  # the total is the one given at the start
     fb.task_finished("done")
-    fb.notify("saved")  # no notify() on the window -> status bar
+    fb.task_started("Measuring root area")  # no total: a percent
+    fb.task_progress(42)
+    fb.status("saved")
+    fb.notify("saved")
     assert ("start", "Measuring root length") in calls
-    assert ("pct", 42) in calls and ("counts", 3, 12) in calls
+    assert ("counts", 3, 12) in calls and ("pct", 42) in calls
     assert ("finish", "done") in calls and ("status", "saved") in calls
-    assert any(c[0] == "status" and "42%" in c[1] for c in calls)
+    assert ("success", "saved") in calls
 
 
 def test_retry_prompt_buttons_drive_retry(tmp_path, qapp, monkeypatch):

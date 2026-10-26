@@ -26,8 +26,8 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from app import config
 from app.gui.main_window import MainWindow  # before any QApplication (QtWebEngine)
 from app.handlers.job_registry import JobRegistry
-from app.handlers.worker_base import GuardedThread
 from app.inference import runtime
+from app.workers import GuardedThread
 
 
 @pytest.fixture(scope="module")
@@ -204,7 +204,7 @@ def test_close_hides_the_window_and_keeps_waiting_for_a_slow_job(qapp, monkeypat
 
 # --------------------------------------------------------------------------- CQ-04
 def test_handlers_share_one_dependencies_mixin():
-    from app.gui.feedback import NullFeedback
+    from app.feedback import NullFeedback
     from app.handlers.deps import HandlerDependencies
     from app.handlers.generation_base import GenerationHandlerBase
     from app.handlers.skeleton_handler import SkeletonHandler

@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 from PyQt6.QtCore import QCoreApplication, Qt
 
-from app.handlers.worker_base import GuardedThread
 from app.inference import measure_run
 from app.inference.measure_run import LENGTH
 from app.inference.metric_thread import MetricCalculatorThread
 from app.inference.root_area_inference_handler import RootAreaCalculatorThread
 from app.inference.root_length_inference_handler import RootLengthCalculatorThread
 from app.io_utils import FileLockedError
+from app.workers import GuardedThread
 
 
 @pytest.fixture(scope="module")

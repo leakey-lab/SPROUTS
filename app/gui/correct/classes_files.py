@@ -4,24 +4,23 @@ An image's class labels are ``gt/<stem>.png`` (found with its stem compared with
 else where a save writes it) with the project's registry ``gt/classes.json``, through
 :mod:`app.gt` only. :func:`read_classes` reads both on any thread and aligns the file's ids to
 the registry, as :class:`~app.gui.correct.classes_document.ClassesDocument` opens them;
-:func:`file_stamp` pins the files it read. It is to the class labels what
+:func:`~app.io_utils.file_stamp` pins the files it read. It is to the class labels what
 :mod:`app.gui.correct.mask_files` is to the mask.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import stat
 from dataclasses import dataclass
 
 from app import gt
 from app.gt import Registry, Tracing
+from app.io_utils import file_stamp
 from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ClassesRead", "file_stamp", "labels_files", "read_classes"]
+__all__ = ["ClassesRead", "labels_files", "read_classes"]
 
 
 @dataclass(frozen=True)
@@ -45,15 +44,6 @@ class ClassesRead:
     def nbytes(self) -> int:
         """Bytes held (the read-ahead cache counts them)."""
         return 0 if self.tracing is None else int(self.tracing.ids.nbytes)
-
-
-def file_stamp(path: str) -> tuple:
-    """``(path, mtime_ns, size)`` of a regular file, else ``(path, None)``."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return (path, None)
-    return (path, st.st_mtime_ns, st.st_size) if stat.S_ISREG(st.st_mode) else (path, None)
 
 
 def labels_files(image_path: str) -> tuple[ProjectLayout, str, str]:

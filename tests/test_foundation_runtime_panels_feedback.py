@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.gui.feedback import (
+from app.feedback import (
     FeedbackCall,
     NullFeedback,
     RecordingFeedback,

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from app.gui.feedback import NullFeedback, UiFeedback
+from app.feedback import NullFeedback, UiFeedback
 from app.handlers.job_registry import JobRegistry
 
 #: How long the status line keeps "Saved <full path>" after a toast named only the

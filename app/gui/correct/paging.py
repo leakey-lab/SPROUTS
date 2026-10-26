@@ -31,15 +31,15 @@ One decode per photo:
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, QTimer
 
-from app.gui.correct.read_ahead import AheadImage, Photo, ReadAhead, Reader, file_stamp, read_image
+from app.gui.correct.read_ahead import AheadImage, Photo, ReadAhead, Reader, read_image
 from app.gui.correct.read_back import closed_image
+from app.io_utils import file_stamp, same_file
 
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
@@ -54,10 +54,6 @@ NeighbourProvider = Callable[[str], Sequence[str]]
 PositionProvider = Callable[[str], "tuple[int, int] | None"]
 #: ``source(path)``: a decoded photo of ``path`` with its stamp, or None (never decodes).
 PhotoSource = Callable[[str], "Photo | None"]
-
-
-def _same_file(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 class Neighbours(QObject):
@@ -149,7 +145,7 @@ class Neighbours(QObject):
         opened, self._open = self._open, None
         if self._ahead is None or opened is None:
             return
-        if session.image_path and _same_file(session.image_path, opened.image_path):
+        if session.image_path and same_file(session.image_path, opened.image_path):
             image = closed_image(opened, self._layers, session.saved_stamps())
             if image is not None:
                 self._ahead.put(image)
@@ -170,7 +166,7 @@ class Neighbours(QObject):
         finished read's, kept), for the Library display to share (read-only); None
         otherwise. Never waits, never decodes."""
         image = self._open
-        if image is None or not _same_file(path, image.image_path):
+        if image is None or not same_file(path, image.image_path):
             image = None if self._ahead is None else self._ahead.peek(path)
         return None if image is None else (image.stamp, image.photo)
 
@@ -203,7 +199,7 @@ class Neighbours(QObject):
         except Exception:  # noqa: BLE001 - paging still works, it just reads by itself
             logger.exception("The neighbours of %s are unknown", current)
             return
-        paths = [path for path in paths if not _same_file(path, current)][: self.COUNT]
+        paths = [path for path in paths if not same_file(path, current)][: self.COUNT]
         shown = self._shown()  # while the Library is on screen its photos stay there
         if shown:
             self._shared(current)  # the Library's copy of the open photo goes

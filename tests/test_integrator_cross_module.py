@@ -131,8 +131,8 @@ def test_stage_tooltips_name_their_alt_key(app):
 
 # --------------------------------------------------------------------------- workers
 def test_file_locked_error_is_logged_without_a_traceback(app, caplog, tmp_path):
-    from app.handlers.worker_base import GuardedThread, describe_error, is_user_condition
     from app.io_utils import FileLockedError
+    from app.workers import GuardedThread, describe_error, is_user_condition
 
     exc = FileLockedError(tmp_path / "root_lengths.csv")
 
@@ -153,7 +153,7 @@ def test_file_locked_error_is_logged_without_a_traceback(app, caplog, tmp_path):
 
 
 def test_unexpected_worker_errors_keep_their_traceback(app, caplog):
-    from app.handlers.worker_base import GuardedThread
+    from app.workers import GuardedThread
 
     class Broken(GuardedThread):
         def work(self):

@@ -914,11 +914,3 @@ def install_status_surface(mw) -> None:
     Call once ``mw.status_bar`` and ``mw.task_progress`` exist.
     """
     mw.statusline.adopt(mw.status_bar, mw.task_progress)
-
-
-# --------------------------------------------------------------------------- #
-# Back-compat shim: build_titlebar / build_ribbon / build_action_bar collapsed
-# into build_topbar; _build_shell calls build_topbar directly.
-# --------------------------------------------------------------------------- #
-def build_ribbon(mw) -> ShellTopbar:  # pragma: no cover - compat
-    return build_topbar(mw)
