@@ -258,11 +258,12 @@ on `Error` before analysis. The CSVs are UTF-8: in Excel use *Data > From Text/C
 UTF-8, otherwise `mm²` shows as `mmÂ²`. Details: [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 Measure skips a mask or skeleton whose image is no longer in the project (an image the
 Library lists: PNG or JPEG) and says how many in the end notice and in the CSV's provenance
-file; the files stay on disk. Measure reads an image's GT file first. A GT skeleton of another
-size than the photo, one equal to the prediction as *Correct* opens it, or one that cannot be
-read (nor its photo's size) is not used: the prediction is measured, the end notice says how
-many, the CSV's provenance file names them, and the metrics bar's tooltip says why. A GT mask
-is used whenever it can be read.
+file; the files stay on disk. Measure reads an image's GT file first. A GT skeleton or GT
+mask of another size than the photo, or one that cannot be read (nor its photo's size), is
+not used, and neither is a GT skeleton that equals the prediction as *Correct* opens it:
+the prediction is measured, the end notice says how many, the CSV's provenance file names
+them, and the metrics bar's tooltip says why. A GT mask of the photo's size is used
+whatever its pixels.
 
 ## Calibration & measurement notes
 
@@ -390,7 +391,8 @@ its last point.
   polyline is never saved by `PgDn` / `PgUp`: with two or more points they stay until you
   finish it (Enter) or cancel it (Esc), and bring the skeleton forward if it was hidden.
 - A saved GT mask that *Correct* cannot show (another size than the photo, or a file it
-  cannot read) shows *Mask not shown* and is kept: `Ctrl+S` with nothing painted writes
+  cannot read) shows *Mask not shown*, is not measured (Measure reads the prediction) and is
+  kept: `Ctrl+S` with nothing painted writes
   nothing, painting over it asks before replacing it, and `PgDn` stays on the image. A
   prediction that cannot be shown is never replaced: a save writes `gt/mask/`. A
   prediction of another size than the photo (Generate keeps the model's 640 x 480) opens

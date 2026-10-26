@@ -20,9 +20,19 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog
 
 from app import APP_NAME
-from app.config import IMAGE_EXTENSIONS
+from app.calibration import PROJECT_FILENAME
+from app.config import (
+    GT_CLASSES_FILENAME,
+    GT_DIRNAME,
+    IMAGE_EXTENSIONS,
+    MASK_DIRNAME,
+    ROOT_AREAS_CSV,
+    ROOT_LENGTHS_CSV,
+    SKELETONS_DIRNAME,
+)
 from app.data_processing.measurement_index import MeasurementIndex
-from app.project_layout import ImageScan
+from app.project_layout import SKELETON_SUFFIX, ImageScan
+from app.provenance import RUN_MANIFEST_FILENAME
 
 from .. import visualization_manager
 from ..image_manager import project_layout_of
@@ -45,6 +55,69 @@ _HIDDEN_NAMED = 3
 #: Opening a folder while a batch job runs is refused (R7, O15): the job's outputs
 #: belong to the project it started in, and the progress row keeps its name and Cancel.
 JOB_RUNNING_OPEN = "{name} is running. Cancel it or wait before opening another folder."
+
+
+#: Opening a project's ``gt/`` folder is refused: as a project its ``mask/`` is the real
+#: ``gt/mask``, and Generate's "Replace all predictions" would overwrite the human GT masks.
+GT_FOLDER_OPEN = (
+    "{name} is a project's GT folder, not a project. Open its parent folder, {parent}, instead."
+)
+
+
+def _has_prediction(folder: str) -> bool:
+    """True when ``folder`` (a ``skeletons/``) holds a ``*_fake.png``; stops at the first."""
+    try:
+        with os.scandir(folder) as entries:
+            return any(e.name.endswith(SKELETON_SUFFIX) for e in entries)
+    except OSError:
+        return False
+
+
+def _is_project(path: str) -> bool:
+    """True when the folder ``path`` shows signs of a project: its settings file, a Generate
+    run record or Measure CSV, a ``*_fake.png`` prediction or a ``gt/`` of its own. Generate
+    creates ``mask/`` and ``skeletons/`` in a project and never writes into a ``gt/``."""
+    masks, skeletons = os.path.join(path, MASK_DIRNAME), os.path.join(path, SKELETONS_DIRNAME)
+    marks = (
+        os.path.join(path, PROJECT_FILENAME),
+        os.path.join(masks, RUN_MANIFEST_FILENAME),
+        os.path.join(skeletons, RUN_MANIFEST_FILENAME),
+        os.path.join(masks, ROOT_AREAS_CSV),
+        os.path.join(skeletons, ROOT_LENGTHS_CSV),
+    )
+    return (
+        any(os.path.isfile(mark) for mark in marks)
+        or os.path.isdir(os.path.join(path, GT_DIRNAME))
+        or _has_prediction(skeletons)
+    )
+
+
+def gt_folder_parent(dir_name: str) -> str | None:
+    """The folder that holds ``dir_name`` when ``dir_name`` is a project's GT folder, else
+    ``None``. It is named ``gt`` (without case) and either holds ``classes.json``, or holds a
+    ``mask/`` or ``skeletons/`` sub-folder and shows no sign of being a project itself
+    (:func:`_is_project`: a project that is named ``gt`` gets those sub-folders from
+    Generate). A project that merely has a ``gt/`` inside and a plain folder of photos named
+    ``gt`` are not GT folders."""
+    path = os.path.normpath(dir_name)
+    if os.path.basename(path).casefold() != GT_DIRNAME:
+        return None
+    if os.path.isfile(os.path.join(path, GT_CLASSES_FILENAME)):
+        return os.path.dirname(path)
+    has_layers = any(
+        os.path.isdir(os.path.join(path, sub)) for sub in (MASK_DIRNAME, SKELETONS_DIRNAME)
+    )
+    return os.path.dirname(path) if has_layers and not _is_project(path) else None
+
+
+def _refuse_gt_folder(window: "MainWindow", dir_name: str) -> bool:
+    """True (and a warning toast naming the folder to open) for a project's GT folder."""
+    parent = gt_folder_parent(dir_name)
+    if parent is None:
+        return False
+    name = os.path.basename(os.path.normpath(dir_name))
+    window.notify(GT_FOLDER_OPEN.format(name=name, parent=parent), "warn")
+    return True
 
 
 def _refuse_while_job_runs(window: "MainWindow") -> bool:
@@ -75,7 +148,9 @@ def open_path(window: "MainWindow", dir_name):
     recent-projects rows. A missing folder is reported and changes nothing,
     and so does an editor that keeps unsaved edits, and so does a running batch
     job (R7, O15: refused before the edits prompt and the loading card, so the
-    progress row keeps the job's name and Cancel). Otherwise drops what the
+    progress row keeps the job's name and Cancel), and so does a project's own
+    ``gt/`` folder (:func:`gt_folder_parent`: a warning names the folder to open).
+    Otherwise drops what the
     status line and the toasts say about the project being left, flips to the
     working shell, shows the loading overlay, and kicks off
     ``image_manager.load_images``; the current library stays until the scan
@@ -88,6 +163,8 @@ def open_path(window: "MainWindow", dir_name):
     if not os.path.isdir(dir_name):
         window.notify(f"Folder not found: {dir_name}", "danger", key=_LOAD_TOAST)
         window._refresh_recents()
+        return
+    if _refuse_gt_folder(window, dir_name):
         return
     # Pending edits: save or discard first; an editor the user keeps editing
     # (cancel, or a failed save) cancels the open. Asked before the overlay.

@@ -281,9 +281,66 @@ def test_the_records_list_gt_files_skips_and_counts(gt_project, qapp):
 
     _run(layout, qapp, "area")
     rec = _sidecar(_csv_path(layout, "area"))
-    assert rec["parameters"]["input"] == "gt/mask/<stem>.png where readable, else mask/<stem>.png"
+    assert rec["parameters"]["input"] == (
+        "gt/mask/<stem>.png where readable and the photo's size, else mask/<stem>.png"
+    )
     assert rec["inputs"]["gt"]["skipped"] == [{"stem": "x", "reason": "unreadable"}]
     assert (rec["outputs"]["n_gt"], rec["outputs"]["n_prediction"]) == (2, 5)
+
+
+def test_a_gt_mask_of_another_size_is_measured_from_its_prediction_with_a_reason(gt_project, qapp):
+    # Correct refuses such a mask ("Mask not shown"), so the CSV does not report it as GT (S1).
+    layout, _ = gt_project
+    small = np.ones((240, 320), bool)  # 320 x 240; the photos are 640 x 480
+    write_gt_mask(layout, "g", small)  # has a prediction
+    write_gt_mask(layout, "o", small)  # GT only
+    write_gt_mask(layout, "p", np.zeros(PHOTO_SIZE[::-1], bool))  # photo-sized, emptied
+    with open(layout.gt_mask_path("g"), "rb") as fh:
+        wrong = fh.read()
+
+    mw = _run(layout, qapp, "area")
+
+    rows = _rows(_csv_path(layout, "area"))
+    assert rows["g"]["Source"] == "prediction"
+    assert float(rows["g"][AREA_COL]) == metrics.area_row("g", layout.mask_path("g"))[AREA_COL]
+    assert "o" not in rows  # no prediction to fall back to: no row
+    assert rows["p"]["Source"] == "gt" and float(rows["p"][AREA_COL]) == 0
+    assert rows["m"]["Source"] == "gt"  # a photo-sized GT mask is still used
+    rec = _sidecar(_csv_path(layout, "area"))
+    assert rec["inputs"]["gt"]["skipped"] == [
+        {"stem": "g", "reason": "size"},
+        {"stem": "o", "reason": "size"},
+        {"stem": "x", "reason": "unreadable"},
+    ]
+    assert set(rec["inputs"]["gt"]["files"]) == {"m", "p"}
+    recorded = load_inputs_record(_csv_path(layout, "area")).inputs
+    assert input_key(layout.gt_mask_path("g"), layout.root) in recorded  # read, not used
+    assert (
+        "3 GT masks not used: 2 not the photo's size, 1 unreadable "
+        "(named in root_areas.csv.provenance.json)",
+        "warn",
+    ) in _notices(mw)
+    with open(layout.gt_mask_path("g"), "rb") as fh:
+        assert fh.read() == wrong  # the file is never touched
+
+
+@pytest.mark.parametrize("spec", [measure_run.LENGTH, measure_run.AREA], ids=["length", "area"])
+def test_a_gt_first_run_without_photos_measures_every_gt_file_as_unreadable(gt_project, spec):
+    # The size check needs the photos; without them no GT file can be validated, so the
+    # prediction is measured and each skip is recorded (the app always passes the photos).
+    layout, _ = gt_project
+    if spec.kind == "length":
+        predictions, gt_files = layout.scan_skeletons(), layout.scan_gt_skeletons()
+    else:
+        predictions, gt_files = layout.scan_masks(extensions=(".png",)), layout.scan_gt_masks()
+    run = measure_run.MeasureRun(spec, predictions, layout.root, gt_files=gt_files)
+
+    run.compute()
+
+    assert {source for source in run.sources.values()} == {"prediction"}
+    skipped = dict(run.gt_report.skipped)
+    assert skipped == {stem: "unreadable" for stem in gt_files}
+    assert "o" not in run.sources  # GT only, nothing to fall back to: no row
 
 
 def test_gt_files_are_decided_on_the_worker_and_read_once(gt_project, qapp, monkeypatch):
@@ -508,7 +565,7 @@ def test_the_metrics_bar_names_the_source_and_the_skip_reason(measured_window):
         "read. Measure read the prediction."
     )
     assert shown["area_note"] == (
-        "A GT mask exists (gt/mask/) but was not used: it could not be read. "
+        "A GT mask exists (gt/mask/) but was not used: it or its photo could not be read. "
         "Measure read the prediction."
     )
     assert shown["area_note"] in bar._area_cell.toolTip()
@@ -583,7 +640,40 @@ def test_the_skip_note_shows_only_beside_a_prediction_row():
         noun="skeleton", folder="skeletons", why="it is not the photo's size"
     )
     assert shown[-1]["area_note"] == GT_NOT_USED.format(
-        noun="mask", folder="mask", why="it could not be read"
+        noun="mask", folder="mask", why="it or its photo could not be read"
+    )
+
+
+def test_the_skip_note_for_a_gt_mask_of_another_size_says_so():
+    from types import SimpleNamespace
+
+    from app.gui.window.metrics import GT_NOT_USED, MetricsController
+
+    class _SizeIndex(_NoteIndex):
+        def gt_skip_reason(self, _name) -> dict:
+            return {"area": "size"}
+
+    shown: list[dict] = []
+    window = SimpleNamespace(
+        image_manager=SimpleNamespace(
+            mask_state=lambda _n: "gt",
+            skeleton_state=lambda _n: "gt",
+            has_gt_labels=lambda _n: False,
+        ),
+        display_controller=SimpleNamespace(current_name="a"),
+        metrics_bar=SimpleNamespace(
+            set_metrics=lambda **k: shown.append(k), set_fov=lambda *a: None
+        ),
+    )
+    controller = MetricsController(window)
+    controller.index = _SizeIndex("prediction")
+    controller.refresh("a")
+    assert shown[-1]["area_note"] == GT_NOT_USED.format(
+        noun="mask", folder="mask", why="it is not the photo's size"
+    )
+    assert shown[-1]["area_note"] == (
+        "A GT mask exists (gt/mask/) but was not used: it is not the photo's size. "
+        "Measure read the prediction."
     )
 
 

@@ -70,7 +70,7 @@ def _run(root, kind: str, *, fov=None) -> MeasureRun:
         folder,
         project_root=str(root),
         gt_files=gt,
-        photos=layout.scan_images() if kind == "length" else None,
+        photos=layout.scan_images(),
         **kwargs,
     )
 
@@ -89,8 +89,7 @@ def kind(request):
 
 @pytest.fixture
 def gt_project(tmp_path, kind):
-    """Image 0 has a valid GT file (used), image 1 a GT file of the wrong size (skipped for
-    length; for area any readable mask is used, so it is a second used one)."""
+    """Image 0 has a valid GT file (used)."""
     _project(tmp_path, kind)
     _write(_gt_path(tmp_path, kind, 0), _line(0, offset=5))
     return tmp_path
@@ -102,12 +101,12 @@ def test_a_used_gt_file_and_its_shadowed_prediction_are_unchanged(gt_project, ki
     assert _run(gt_project, kind).unchanged() is True
 
 
-def test_a_skipped_gt_file_is_unchanged(tmp_path):
-    _project(tmp_path, "length")
-    _write(_gt_path(tmp_path, "length", 0), np.zeros((10, 12), np.uint8))  # wrong size
-    run = _measured(tmp_path, "length")
+def test_a_skipped_gt_file_is_unchanged(tmp_path, kind):
+    _project(tmp_path, kind)
+    _write(_gt_path(tmp_path, kind, 0), np.zeros((10, 12), np.uint8))  # wrong size
+    run = _measured(tmp_path, kind)
     assert run.sources[_stem(0)] == "prediction"
-    assert _run(tmp_path, "length").unchanged() is True
+    assert _run(tmp_path, kind).unchanged() is True
 
 
 def test_a_project_without_gt_is_unchanged(tmp_path, kind):

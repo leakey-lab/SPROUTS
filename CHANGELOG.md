@@ -768,6 +768,21 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **A GT mask of another size than its photo is not used (2026-10-26, final review S1,
+  O1).** Measure area checks `gt/mask/<stem>.png` against its photo as Measure length
+  checks `gt/skeletons/<stem>.png`: a mask whose size differs from the photo's is not used,
+  the prediction `mask/<stem>.png` is measured (`Source` = `prediction`), the reason is
+  `size` (`inputs.gt.skipped`, the end notice, the metrics bar), and an image with no
+  prediction gets no row. A GT mask that cannot be read, or whose photo's size cannot be
+  read, is `unreadable` the same way. *Correct* already refused such a mask ("Mask not
+  shown"); the CSV no longer reports a file the editor does not show. Only GT masks of
+  another size change, and the app never writes them (*Correct* saves at the photo's size),
+  so no CSV value changes in a project saved by the app: the synthetic set (byte-identity
+  tests of `tests/test_measure_core.py`) and `docs/examples` (regenerated with
+  `scripts/make_examples.py`) are byte-identical. The provenance parameter `input` of an
+  area CSV reads `gt/mask/<stem>.png where readable and the photo's size, else
+  mask/<stem>.png`. An area CSV measured before this change keeps its values until Measure
+  runs again: freshness compares the files, not the rule.
 - **Length estimator (2026-10-25, W3-T8, O12).** Root length now uses the corner-count
   estimator of Vossepoel & Smeulders (1982), 0.980 n_e + 1.406 n_o − 0.091 n_c, on the
   m-adjacent skeleton (a junction's diagonal is no longer counted on top of its two

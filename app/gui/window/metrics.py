@@ -47,15 +47,18 @@ GT_STATUS_TIP = (
     "Overlay and Side by side draw the GT skeleton (gt/skeletons/) when one exists, "
     "else the prediction (skeletons/)."
 )
-#: Why a GT file was not used, in :data:`GT_NOT_USED`'s words. Only a GT skeleton is checked
-#: against its photo, so only its note names the photo.
+#: Why a GT file was not used, in :data:`GT_NOT_USED`'s words. A GT skeleton and a GT mask
+#: are both checked against their photo, so both notes name the photo.
 _WHY = {
     "skeleton": {
         SIZE: "it is not the photo's size",
         UNEDITED: "it equals the prediction",
         UNREADABLE: "it or its photo could not be read",
     },
-    "mask": {UNREADABLE: "it could not be read"},
+    "mask": {
+        SIZE: "it is not the photo's size",
+        UNREADABLE: "it or its photo could not be read",
+    },
 }
 _FOLDER = {"skeleton": "skeletons", "mask": "mask"}
 

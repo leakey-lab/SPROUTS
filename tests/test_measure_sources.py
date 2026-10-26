@@ -4,7 +4,8 @@
 for length, ``gt/mask/<stem>.png`` for area) when it is valid, else the prediction
 (``skeletons/<stem>_fake.png``, ``mask/<stem>.png``). A GT skeleton is not used when it does
 not decode, is not the photo's size, or equals the prediction as Correct opens it; a GT mask
-is used whatever its pixels when it decodes. ``MeasurementIndex`` reads the ``Source`` column
+is not used when it does not decode or is not the photo's size, and is used whatever its
+pixels otherwise. ``MeasurementIndex`` reads the ``Source`` column
 when a CSV has it. Nothing is wired in this commit.
 """
 
@@ -36,7 +37,7 @@ from app.inference.measure_sources import (
     resolve_area_sources,
     resolve_length_sources,
 )
-from app.inference.metrics import length_row, write_metric_csv
+from app.inference.metrics import area_row, length_row, write_metric_csv
 from app.masks.store import write_mask_file
 from app.project_layout import ProjectLayout
 from app.provenance import file_sha256
@@ -147,9 +148,9 @@ def _length(layout: ProjectLayout, images: dict[str, str]):
     )
 
 
-def _area(layout: ProjectLayout):
+def _area(layout: ProjectLayout, images: dict[str, str]):
     return resolve_area_sources(
-        layout, layout.scan_masks(extensions=(".png",)), layout.scan_gt_masks()
+        layout, images, layout.scan_masks(extensions=(".png",)), layout.scan_gt_masks()
     )
 
 
@@ -229,7 +230,7 @@ def test_the_photo_is_the_exact_stem_else_the_first_image_of_its_key(tmp_path):
 def test_an_unsplit_scan_with_two_files_of_one_image_is_refused(tmp_path):
     layout = ProjectLayout(str(tmp_path))
     with pytest.raises(ValueError, match="split_inputs"):
-        resolve_area_sources(layout, {"a": "mask/a.png", "A": "mask/A.png"}, {})
+        resolve_area_sources(layout, {}, {"a": "mask/a.png", "A": "mask/A.png"}, {})
     with pytest.raises(ValueError, match="split_inputs"):
         resolve_length_sources(layout, {}, {}, {"b": "gt/b.png", "B": "gt/B.png"})
 
@@ -255,7 +256,7 @@ def test_one_image_is_decided_from_the_gt_bytes_read_once(gt_project, monkeypatc
     gt = layout.gt_skeleton_path("g")
     decision = decide_length_source("g", layout.skeleton_path("g"), gt, images["g"])
     mask_gt = layout.gt_mask_path("m")
-    mask_decision = decide_area_source("m", layout.mask_path("m"), mask_gt)
+    mask_decision = decide_area_source("m", layout.mask_path("m"), mask_gt, images["m"])
     assert opened == [os.path.normcase(gt), os.path.normcase(mask_gt)]  # once each
 
     for d, path in ((decision, gt), (mask_decision, mask_gt)):
@@ -276,7 +277,7 @@ def test_one_image_is_decided_from_the_gt_bytes_read_once(gt_project, monkeypatc
     # not used: no bytes handed on, but its fingerprint (Measure records every GT file read)
     assert (rejected.reason, rejected.data) == (SIZE, None)
     assert rejected.fingerprint == (st.st_size, st.st_mtime_ns, hashlib.sha256(data).hexdigest())
-    gone = decide_area_source("q", None, os.path.join(layout.gt_mask_dir, "q.png"))
+    gone = decide_area_source("q", None, os.path.join(layout.gt_mask_dir, "q.png"), images["m"])
     assert (gone.source, gone.reason, gone.fingerprint) == (None, UNREADABLE, None)
 
 
@@ -298,8 +299,8 @@ def test_every_image_is_decided_through_the_given_map(gt_project):
     assert fn is decide_length_source and columns[0] == ["g", "m", "o", "p", "s", "u", "x"]
     assert len(calls) == 1 and len(columns) == 4
 
-    area_args = (layout, layout.scan_masks(extensions=(".png",)), layout.scan_gt_masks())
-    assert resolve_area_sources(*area_args, mapper=recording_map) == _area(layout)
+    area_args = (layout, images, layout.scan_masks(extensions=(".png",)), layout.scan_gt_masks())
+    assert resolve_area_sources(*area_args, mapper=recording_map) == _area(layout, images)
     fn, columns = calls[1]
     assert fn is decide_area_source and columns[0] == ["g", "m", "o", "p", "s", "u", "x"]
 
@@ -310,15 +311,15 @@ def test_an_invalid_gt_file_without_a_prediction_gets_no_row_and_is_recorded(gt_
     _write(layout.gt_mask_path("o"), NOT_A_PNG)
     sources, report = _length(layout, images)
     assert "o" not in sources and ("o", UNREADABLE) in report.skipped
-    area_sources, area_report = _area(layout)
+    area_sources, area_report = _area(layout, images)
     assert "o" not in area_sources and ("o", UNREADABLE) in area_report.skipped
 
 
 # ------------------------------------------------------------------ area
 def test_a_gt_mask_is_used_whatever_its_pixels_and_an_unreadable_one_is_not(gt_project):
-    layout, _ = gt_project
+    layout, images = gt_project
     write_gt_mask(layout, "p", np.zeros(PHOTO_SIZE[::-1], bool))  # cleared: area 0 (O9)
-    sources, report = _area(layout)
+    sources, report = _area(layout, images)
     assert sources["m"].source == GT and sources["m"].reason == ""
     assert sources["x"].reason == UNREADABLE
     assert (sources["x"].source, sources["x"].path) == (PREDICTION, layout.mask_path("x"))
@@ -326,6 +327,46 @@ def test_a_gt_mask_is_used_whatever_its_pixels_and_an_unreadable_one_is_not(gt_p
     assert sources["g"] == MeasureSource("g", layout.mask_path("g"), PREDICTION)
     assert report.folder == "gt/mask" and set(report.files) == {"m", "o", "p"}
     assert report.skipped == (("x", UNREADABLE),)
+
+
+def test_a_gt_mask_of_another_size_than_its_photo_is_not_used(gt_project):
+    # Correct refuses such a mask ("Mask not shown"); the CSV must not report it as GT.
+    layout, images = gt_project
+    small = np.ones((240, 320), bool)  # 320 x 240; the photo is 640 x 480
+    write_gt_mask(layout, "g", small)  # has a prediction: falls back to it
+    write_gt_mask(layout, "o", small)  # GT only: no row
+    sources, report = _area(layout, images)
+    assert (sources["g"].source, sources["g"].reason, sources["g"].path) == (
+        PREDICTION,
+        SIZE,
+        layout.mask_path("g"),
+    )
+    assert sources["g"].gt_path == layout.gt_mask_path("g")  # the note names it
+    assert "o" not in sources
+    assert ("g", SIZE) in report.skipped and ("o", SIZE) in report.skipped
+    assert "g" not in report.files and "o" not in report.files
+    lone = decide_area_source("o", None, layout.gt_mask_path("o"), images["o"])
+    assert (lone.source, lone.reason, lone.data) == (None, SIZE, None)
+    assert lone.fingerprint is not None  # the GT file read is still recorded
+
+
+def test_a_photo_sized_gt_mask_is_used_and_an_emptied_one_measures_zero(gt_project):
+    layout, images = gt_project
+    write_gt_mask(layout, "p", np.zeros(PHOTO_SIZE[::-1], bool))  # emptied: an edit (O9)
+    sources, report = _area(layout, images)
+    assert (sources["p"].source, sources["p"].reason) == (GT, "")
+    assert sources["o"].source == GT and sources["m"].source == GT
+    assert ("p", SIZE) not in report.skipped and "p" in report.files
+    assert area_row("p", layout.gt_mask_path("p"))[AREA_CSV_HEADERS[5]] == 0
+
+
+def test_a_gt_mask_whose_photo_cannot_be_read_is_unreadable(gt_project):
+    layout, images = gt_project
+    _write(images["m"], NOT_A_PNG)  # the photo of m is damaged
+    del images["o"]  # the photo of o is gone
+    sources, report = _area(layout, images)
+    assert (sources["m"].source, sources["m"].reason) == (PREDICTION, UNREADABLE)
+    assert "o" not in sources and ("o", UNREADABLE) in report.skipped
 
 
 # ------------------------------------------------------------------ names
@@ -344,7 +385,7 @@ def test_stems_compare_without_case(tmp_path):
     assert list(sources) == ["g"] and sources["g"].source == GT
     assert os.path.normcase(sources["g"].path) == os.path.normcase(gt_path)
     assert list(report.files) == ["g"]
-    area_sources, _ = _area(layout)
+    area_sources, _ = _area(layout, images)
     assert list(area_sources) == ["g"] and area_sources["g"].source == GT
 
 

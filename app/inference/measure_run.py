@@ -113,7 +113,7 @@ AREA = MetricSpec(
     value_column=AREA_VALUE_COLUMN,
     row=area_row,
     parameters={
-        "input": "gt/mask/<stem>.png where readable, else mask/<stem>.png",
+        "input": "gt/mask/<stem>.png where readable and the photo's size, else mask/<stem>.png",
         "source_rule": "gt-first",
         "binarization": f"gray > {MASK_THRESHOLD}",
     },
@@ -208,7 +208,9 @@ class MeasureRun:
             file where it is valid, else from its prediction, deciding which on the worker
             (O1); :attr:`images`, :attr:`sources` and :attr:`gt_report` then follow.
             ``None``: every image is measured from ``images``.
-        photos: image name -> photo, for the size check of GT skeletons (length only).
+        photos: image name -> photo, for the size check of GT skeletons and masks. A
+            GT-first run (``gt_files`` given) without them measures every GT file as
+            ``unreadable``: each image is measured from its prediction and the skip is recorded.
         sources: name -> ``Source`` of each row when there are no ``gt_files`` (tests; a
             name not in it, or no mapping, is ``prediction``).
         gt_report: the GT report written to the provenance when there are no ``gt_files``.
@@ -329,7 +331,7 @@ class MeasureRun:
             )
         else:
             resolved = measure_sources.resolve_area_sources(
-                layout, self.predictions, self.gt_files, mapper=measuring_map
+                layout, self.photos, self.predictions, self.gt_files, mapper=measuring_map
             )
         return rows, resolved
 

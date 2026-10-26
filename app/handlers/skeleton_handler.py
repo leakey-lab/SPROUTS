@@ -147,7 +147,7 @@ class SkeletonHandler(HandlerDependencies):
 
     def calculate_root_area(self):
         """Measure the root area of every image with a mask: its GT mask
-        (``gt/mask/<stem>.png``) where readable, else its ``*.png`` in the project's mask
+        (``gt/mask/<stem>.png``) where readable and the photo's size, else its ``*.png`` in the project's mask
         folder (O1)."""
         layout = self._layout()
         if layout is None:
@@ -240,7 +240,7 @@ class SkeletonHandler(HandlerDependencies):
                 without_image=without_image,
                 duplicates=duplicates,
                 gt_files=gt_split.kept,
-                photos=image_stems if spec.kind == LENGTH.kind else None,
+                photos=image_stems,
                 calibration=calibration,
                 ask_if_unchanged=True,
             )

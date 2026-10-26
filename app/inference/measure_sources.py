@@ -2,21 +2,23 @@
 
 Owner decision O1: both metrics read GT first. Length reads ``gt/skeletons/<stem>.png`` when
 it is valid, else the prediction ``skeletons/<stem>_fake.png``; area reads
-``gt/mask/<stem>.png`` when it decodes, else ``mask/<stem>.png``. An image that has only a
+``gt/mask/<stem>.png`` when it is valid, else ``mask/<stem>.png``. An image that has only a
 valid GT file gets a row too. The CSV column ``Source`` says which (:data:`GT` /
 :data:`PREDICTION`).
 
 Validity is generic; the reason a GT file was not used is one of :data:`SIZE`,
 :data:`UNEDITED`, :data:`UNREADABLE`:
 
-- A GT mask is used when it decodes (grayscale), whatever its pixels: a mask equal to its
-  prediction measures the same pixels, and an emptied mask is an edit (area 0, O9), so
-  ``Source`` stays stable across a Generate run.
-- A GT skeleton is used when it decodes, is the photo's size (Correct saves at the photo's
-  resolution; a photo whose size cannot be read makes it :data:`UNREADABLE`) and, when the
+- A GT mask is used when it decodes (grayscale) and is the photo's size (Correct saves at
+  the photo's resolution and refuses a mask of another size, "Mask not shown", so the CSV
+  must not report it; a photo whose size cannot be read makes it :data:`UNREADABLE`). Its
+  pixels do not matter: a mask equal to its prediction measures the same pixels, and an
+  emptied mask is an edit (area 0, O9), so ``Source`` stays stable across a Generate run.
+- A GT skeleton is used when it decodes, is the photo's size (as for the mask) and, when the
   image has a prediction, is not that prediction as Correct opens it
-  (:func:`app.editing.thinning.is_generated_as_opened`): the editor's path measures a median
-  0.8 % longer than the prediction's on the same lines (L1), so an unedited copy would
+  (:func:`app.editing.thinning.is_generated_as_opened`): the editor's path measures longer
+  than the prediction's on the same lines (L5: +1.46 % in total, median +1.35 %, 5th to 95th
+  percentile -1.45 to +6.39 % with the corner-count estimator), so an unedited copy would
   change a value nobody edited. An emptied skeleton is an edit (length 0, O9), whether or
   not the image has a prediction.
 - An invalid GT file with no prediction to fall back to gets no row; it is recorded in the
@@ -152,14 +154,17 @@ class GtReport:
 
 
 # ------------------------------------------------------------------ one image
-def decide_area_source(stem: str, prediction: str | None, gt: str | None) -> SourceDecision:
+def decide_area_source(
+    stem: str, prediction: str | None, gt: str | None, photo: str | None
+) -> SourceDecision:
     """The mask the area of image ``stem`` is measured from: the GT mask at ``gt`` when it
-    decodes, else the prediction at ``prediction`` (either may be ``None``)."""
+    decodes and is the size of the photo at ``photo``, else the prediction at ``prediction``
+    (any may be ``None``)."""
     if gt is None:
         return _without_gt(stem, prediction)
     read = _read(gt)
-    reason = "" if read is not None and _decode_gray(read[0]) is not None else UNREADABLE
-    return _decided(stem, prediction, gt, reason, read)
+    gray = None if read is None else _decode_gray(read[0])
+    return _decided(stem, prediction, gt, _size_reason(gray, photo), read)
 
 
 def decide_length_source(
@@ -175,19 +180,28 @@ def decide_length_source(
     return _decided(stem, prediction, gt, _skeleton_reason(gray, prediction, photo), read)
 
 
-def _skeleton_reason(gray: np.ndarray | None, prediction: str | None, photo: str | None) -> str:
-    """Why the GT skeleton ``gray`` (``None``: it does not decode) is not measured, ``""``
-    when it is."""
+def _size_reason(gray: np.ndarray | None, photo: str | None) -> str:
+    """Why the decoded GT file ``gray`` (``None``: it does not decode) is not on its photo's
+    pixel grid, ``""`` when it is. A photo whose size cannot be read makes it unreadable."""
     if gray is None:
         return UNREADABLE
     photo_size = image_size(photo) if photo is not None else None
     if photo_size is None:
         return UNREADABLE
-    if (gray.shape[1], gray.shape[0]) != photo_size:
-        return SIZE
+    return "" if (gray.shape[1], gray.shape[0]) == photo_size else SIZE
+
+
+def _skeleton_reason(gray: np.ndarray | None, prediction: str | None, photo: str | None) -> str:
+    """Why the GT skeleton ``gray`` (``None``: it does not decode) is not measured, ``""``
+    when it is."""
+    reason = _size_reason(gray, photo)
+    if reason:
+        return reason
     # With no prediction there is no value an unedited copy could change: an emptied GT
     # skeleton then says "no roots" (O9), as an emptied GT mask does.
-    if prediction is not None and is_generated_as_opened(gray, prediction, photo_size):
+    if prediction is not None and is_generated_as_opened(
+        gray, prediction, (gray.shape[1], gray.shape[0])
+    ):
         return UNEDITED
     return ""
 
@@ -251,16 +265,23 @@ class _Image(NamedTuple):
 
 def resolve_area_sources(
     layout: ProjectLayout,
+    images: Mapping[str, str],
     predictions: Mapping[str, str],
     gt_files: Mapping[str, str],
     *,
     mapper: Mapper = map,
 ) -> tuple[dict[str, MeasureSource], GtReport]:
     """:func:`decide_area_source` for every image of ``predictions`` (``mask/``) and
-    ``gt_files`` (``gt/mask/``), both ``stem -> path``, through ``mapper``; returns
-    ``(stem -> source, report)``."""
+    ``gt_files`` (``gt/mask/``), both ``stem -> path``, through ``mapper``; ``images``
+    (stem -> photo) serves the size check. Returns ``(stem -> source, report)``."""
+    photo_of = _photo_finder(images)
     found = _pair(predictions, gt_files)
-    columns = ([i.stem for i in found], [i.prediction for i in found], [i.gt for i in found])
+    columns = (
+        [i.stem for i in found],
+        [i.prediction for i in found],
+        [i.gt for i in found],
+        [photo_of(i.gt_stem) for i in found],
+    )
     decided = mapper(decide_area_source, *columns) if found else ()
     return _collect(layout, layout.gt_mask_dir, found, decided)
 

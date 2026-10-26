@@ -119,7 +119,7 @@ def measure(dest: str) -> None:
             without_image=[*split.without_image, *(gt_prefix + n for n in gt_split.without_image)],
             duplicates=[*split.duplicates, *(gt_prefix + n for n in gt_split.duplicates)],
             gt_files=gt_split.kept,
-            photos=image_stems if spec is LENGTH else None,
+            photos=image_stems,
             calibration=calibration,
         )
         run.compute()
