@@ -281,8 +281,10 @@ def test_the_module_still_defines_its_names():
     for name in MODULE_CALLABLES:
         assert callable(getattr(main_window, name)), name
     assert main_window.USER_ROLE == main_window.Qt.ItemDataRole.UserRole
-    assert main_window.CORRECTION_NOT_MEASURED.startswith("A corrected skeleton exists")
-    assert main_window.CORRECTED_STATUS_TIP.startswith("Overlay and Side by side draw")
+    # WG-T8 (O1): GT is measured first; these two replace CORRECTION_NOT_MEASURED and
+    # CORRECTED_STATUS_TIP (a corrected skeleton was not measured, FR-03).
+    assert main_window.GT_NOT_USED.startswith("A GT {noun} exists")
+    assert main_window.GT_STATUS_TIP.startswith("Overlay and Side by side draw the GT skeleton")
 
 
 # ------------------------------------------------------------------ no extra call

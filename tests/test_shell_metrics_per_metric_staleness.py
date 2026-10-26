@@ -3,8 +3,9 @@
 LENGTH was measured from the generated skeleton (``skeletons/<stem>_fake.png``), AREA
 from the mask (``mask/<stem>.png``). A saved mask (Ctrl+S with nothing unsaved rewrites
 it, by design: spec D7) makes AREA outdated, never LENGTH; a regenerated skeleton makes
-LENGTH outdated, never AREA. Each value's tooltip names the CSV it was read from, and a
-corrected skeleton, which Measure does not read (FR-03), is named in the LENGTH tooltip.
+LENGTH outdated, never AREA. Each value's tooltip names the CSV it was read from. Measure
+reads a GT file first (O1, WG-T8): a GT skeleton saved after the CSV outdates LENGTH, and
+a GT file the run did not use is named in that value's tooltip.
 """
 
 from __future__ import annotations
@@ -145,15 +146,18 @@ def test_each_value_has_its_own_flag_and_source(app):
     bar.deleteLater()
 
 
-def test_the_length_tooltip_names_a_correction_that_is_not_measured(app):
+def test_each_tooltip_names_a_gt_file_that_was_not_used(app):
     from app.gui.metrics_bar import MetricsBar
 
     bar = MetricsBar()
-    bar.set_metrics(length=18.77, area=16.41, length_note="A corrected skeleton exists")
-    assert "A corrected skeleton exists" in bar._length_cell.toolTip()
-    assert "corrected" not in bar._area_cell.toolTip()
+    bar.set_metrics(length=18.77, area=16.41, length_note="A GT skeleton exists")
+    assert "A GT skeleton exists" in bar._length_cell.toolTip()
+    assert "GT" not in bar._area_cell.toolTip()
+    bar.set_metrics(length=18.77, area=16.41, area_note="A GT mask exists")
+    assert "A GT mask exists" in bar._area_cell.toolTip()
+    assert "GT" not in bar._length_cell.toolTip()
     bar.set_metrics(length=18.77, area=16.41)
-    assert "corrected" not in bar._length_cell.toolTip()
+    assert "GT" not in bar._length_cell.toolTip() + bar._area_cell.toolTip()
     bar.deleteLater()
 
 
@@ -225,7 +229,9 @@ def test_a_saved_mask_flags_area_not_length_in_the_window(window, tmp_path):
     assert "root_areas.csv" in bar._area_cell.toolTip()
 
 
-def test_a_correction_is_named_in_the_length_tooltip(window, tmp_path):
+def test_a_gt_skeleton_saved_after_the_measurement_outdates_the_length(window, tmp_path):
+    """O1: Measure reads the GT skeleton first, so one saved after the CSV makes LENGTH
+    outdated (measure again), never AREA."""
     folder = tmp_path / "proj"
     folder.mkdir()
     _measured_project(folder)
@@ -235,7 +241,9 @@ def test_a_correction_is_named_in_the_length_tooltip(window, tmp_path):
     (gt_skeletons / f"{STEM}.png").write_bytes(b"c")
 
     _open(window, folder)
-    tip = window.metrics_bar._length_cell.toolTip()
+    bar = window.metrics_bar
+    tip = bar._length_cell.toolTip()
 
-    assert "corrected skeleton" in tip.lower() and "not measured" in tip.lower()
-    assert window.metrics_bar._length_value.property("stale") is False
+    assert bar._length_value.property("stale") is True
+    assert "Measure again" in tip and "not used" not in tip  # outdated: no skip note
+    assert bar._area_value.property("stale") is False

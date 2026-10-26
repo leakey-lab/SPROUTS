@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 __all__ = ["StageStatus"]
 
 
+def _with_gt(predicted, traced) -> tuple[int, int]:
+    """``(images with a prediction or a GT file, those with a GT file)``: the images Measure
+    reads (O1: GT first). Walks only the GT stems (few), never the predictions."""
+    gt_only = sum(1 for stem in traced if stem not in predicted)
+    return len(predicted) + gt_only, len(traced)
+
+
 class _Signals(QObject):
     """Carries a pool count back to the GUI thread (unparented and kept alive by the job's
     closure: a job that ends after its StageStatus is gone emits into nothing)."""
@@ -68,11 +75,19 @@ class StageStatus(QObject):
             return self._generate_text(images, manager.masks, manager.skeleton_stems)
         if stage == "Measure":
             fresh = self._freshness or {}
+            length, area = fresh.get("length"), fresh.get("area")
+            skeletons, gt_skeletons = _with_gt(
+                manager.skeleton_stems, getattr(manager, "gt_skeleton_stems", ())
+            )
+            masks, gt_masks = _with_gt(manager.masks, getattr(manager, "gt_mask_stems", ()))
             return measure_text(
-                len(manager.skeleton_stems),
-                len(manager.masks),
-                fresh.get("length"),
-                fresh.get("area"),
+                skeletons,
+                masks,
+                length,
+                area,
+                # the pool's count of the folders, once in, replaces the library's
+                gt_skeletons=gt_skeletons if length is None else length.gt,
+                gt_masks=gt_masks if area is None else area.gt,
             )
         return None
 
@@ -108,7 +123,8 @@ class StageStatus(QObject):
         ``index`` is the window's MeasurementIndex (where the CSVs are); ``locate`` lets it
         look for them first (a few stats; pass False while a pool job parses them, since
         that call would wait for it). The inputs are the files next to each CSV, or the
-        folders Measure would read when there is no CSV yet. Each CSV's record of its inputs
+        folders Measure would read when there is no CSV yet, and the GT files Measure reads
+        first (``gt/skeletons/``, ``gt/mask/``; O1). Each CSV's record of its inputs
         (``<csv>.inputs.json``) is read in the pool too; with one, content is compared.
         """
         if index is None or layout is None:
@@ -126,18 +142,26 @@ class StageStatus(QObject):
         signals = self._signals
         root = layout.root
 
-        def freshness(folder, suffix, csv_path, images) -> Freshness:
+        def freshness(folder, suffix, csv_path, images, gt_folder) -> Freshness:
             record = load_inputs_record(csv_path) if csv_path else None
             return input_freshness(
-                folder, suffix, csv_path, record=record, project_root=root, images=images
+                folder,
+                suffix,
+                csv_path,
+                record=record,
+                project_root=root,
+                images=images,
+                gt_folder=gt_folder,
             )
 
         def work() -> None:
             try:
                 images = layout.scan_images()  # inputs whose image is gone are skipped (O37)
                 result = {
-                    "length": freshness(length_dir, SKELETON_SUFFIX, length_csv, images),
-                    "area": freshness(area_dir, ".png", area_csv, images),
+                    "length": freshness(
+                        length_dir, SKELETON_SUFFIX, length_csv, images, layout.gt_skeletons_dir
+                    ),
+                    "area": freshness(area_dir, ".png", area_csv, images, layout.gt_mask_dir),
                 }
             except Exception:  # noqa: BLE001 - the idle text then keeps the plain counts
                 logger.exception("Could not count the Measure inputs")

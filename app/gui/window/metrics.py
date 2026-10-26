@@ -1,9 +1,11 @@
 """The metrics controller: the Library's read-only metrics bar and the Measure CSVs behind it.
 
-Status comes from the mask / skeleton state in ``image_manager``. Root length / area are
-the values the Measure run wrote to its CSVs, read through :class:`MeasurementIndex` (never
-computed here, never parsed on the GUI thread: an unparsed CSV is parsed in the thread
-pool, then the bar is refreshed again).
+Status comes from the mask / skeleton state in ``image_manager``, in the Library badge's
+words (:func:`app.gui.library_index.status_text`). Root length / area are the values the
+Measure run wrote to its CSVs, read through :class:`MeasurementIndex` (never computed here,
+never parsed on the GUI thread: an unparsed CSV is parsed in the thread pool, then the bar
+is refreshed again). Each value's tooltip names the file it was measured from (the GT file
+or the prediction, O1) and, when the image's GT file was not used, why.
 
 :class:`MetricsController` owns that state; :class:`~app.gui.main_window.MainWindow` holds
 it as ``metrics`` and keeps its old names (``_refresh_metrics_bar``, ``_measurements``, …)
@@ -17,22 +19,36 @@ from typing import TYPE_CHECKING, Any, Protocol
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 
 from app.data_processing.measurement_index import Measurement, MeasurementIndex
+from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
+from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 
 from ..image_manager import project_layout_of
+from ..library_index import status_text
 from ._common import USER_ROLE
 
 logger = logging.getLogger(__name__)
 
-#: The LENGTH tooltip's line for an image with a GT skeleton (FR-03).
-CORRECTION_NOT_MEASURED = (
-    "A corrected skeleton exists (gt/skeletons/); it is not measured: "
-    "Measure reads the generated skeleton."
+#: The LENGTH / AREA tooltip line for an image whose GT file the last Measure run did not
+#: use (O1): ``noun`` "skeleton" / "mask", ``folder`` "skeletons" / "mask", ``why`` the reason.
+GT_NOT_USED = (
+    "A GT {noun} exists (gt/{folder}/) but was not used: {why}. Measure read the prediction."
 )
-#: The STATUS tooltip of an image with a GT skeleton (W17, display only).
-CORRECTED_STATUS_TIP = (
-    "Overlay and Side by side draw the corrected skeleton (gt/skeletons/); "
-    "Measure reads the generated skeleton (skeletons/), so root length is the generated one's."
+#: The STATUS tooltip of an image with a GT skeleton (W17).
+GT_STATUS_TIP = (
+    "Overlay and Side by side draw the GT skeleton (gt/skeletons/) when one exists, "
+    "else the prediction (skeletons/)."
 )
+#: Why a GT file was not used, in :data:`GT_NOT_USED`'s words. Only a GT skeleton is checked
+#: against its photo, so only its note names the photo.
+_WHY = {
+    "skeleton": {
+        SIZE: "it is not the photo's size",
+        UNEDITED: "it equals the prediction",
+        UNREADABLE: "it or its photo could not be read",
+    },
+    "mask": {UNREADABLE: "it could not be read"},
+}
+_FOLDER = {"skeleton": "skeletons", "mask": "mask"}
 
 if TYPE_CHECKING:
 
@@ -46,6 +62,30 @@ if TYPE_CHECKING:
         file_list: Any
 
         def _current_stage(self) -> str | None: ...
+
+
+def _source(measured_from: tuple[str, str] | None, csv_path: str | None) -> str | None:
+    """What a value was read from, for its tooltip ("Measured value from …"): the file it
+    was measured from (``gt/skeletons/g.png (GT)``, ``skeletons/p_fake.png (prediction)``)
+    and the CSV that holds it."""
+    if measured_from is None:
+        return csv_path
+    path, source = measured_from
+    label = f"{path} ({'GT' if source == SOURCE_GT else 'prediction'})"
+    return f"{label}, recorded in {csv_path}" if csv_path else label
+
+
+def _gt_note(
+    noun: str, state: str, reason: str | None, outdated: bool | None, source: str | None
+) -> str | None:
+    """:data:`GT_NOT_USED` when the image has a GT ``noun`` that its value's Measure run did
+    not use (``reason``) and the row says so (``source`` is ``prediction``); ``None``
+    otherwise, and for an outdated value (its tip says to measure again: a GT file saved
+    after the CSV is new, not skipped)."""
+    why = _WHY[noun].get(reason or "")
+    if state != SOURCE_GT or source != SOURCE_PREDICTION or why is None or outdated:
+        return None
+    return GT_NOT_USED.format(noun=noun, folder=_FOLDER[noun], why=why)
 
 
 class _MeasurementSignals(QObject):
@@ -87,7 +127,7 @@ class MetricsController:
         return self._window.image_manager.has_skeleton(stored_name)
 
     def image_has_gt_skeleton(self, stored_name) -> bool:
-        """True when a GT skeleton of the image is known (display only, FR-03)."""
+        """True when a GT skeleton of the image is known (Measure reads it first, O1)."""
         has_gt = getattr(self._window.image_manager, "has_gt_skeleton", None)
         return bool(stored_name and callable(has_gt) and has_gt(stored_name))
 
@@ -101,31 +141,32 @@ class MetricsController:
     def refresh(self, stored_name=None):
         """Update the read-only metrics strip for the selected image.
 
-        Status comes from the mask / skeleton state in ``image_manager``. Root
-        length / area are the values the Measure run wrote to its CSVs, read
-        through :class:`MeasurementIndex` (never computed here, never parsed on
-        the GUI thread: an unparsed CSV is parsed in the pool, then this runs again).
+        Status comes from the mask / skeleton state in ``image_manager``, in the Library
+        badge's words. Root length / area are the values the Measure run wrote to its CSVs,
+        read through :class:`MeasurementIndex` (never computed here, never parsed on the GUI
+        thread: an unparsed CSV is parsed in the pool, then this runs again). Each value's
+        tooltip names the file it was measured from (GT or prediction) and its CSV, and
+        says when the image's GT file was not used and why (a GT file saved after the CSV
+        shows the outdated tip instead).
         """
         bar = getattr(self._window, "metrics_bar", None)
         if bar is None:
             return
 
         status = None
-        corrected = self.image_has_gt_skeleton(stored_name)
+        mask_state = skeleton_state = SOURCE_NONE
         if stored_name:
-            if corrected:
-                status = "Skeleton corrected"
-            elif self.image_has_skeleton(stored_name):
-                status = "Skeleton ready"
-            elif self.image_has_mask(stored_name):
-                status = "Mask ready"
-            else:
-                status = "No mask"
+            manager = self._window.image_manager
+            mask_state = manager.mask_state(stored_name)
+            skeleton_state = manager.skeleton_state(stored_name)
+            status = status_text(mask_state, skeleton_state, manager.has_gt_labels(stored_name))
 
         measured = Measurement(None, None, None)
         outdated: dict[str, bool] = {}
-        sources: dict[str, str | None] = {}
+        csvs: dict[str, str | None] = {}
         by_content: dict[str, bool] = {}
+        skipped: dict[str, str] = {}
+        measured_from: dict = {}
         index = self.index
         if stored_name and index is not None:
             try:
@@ -134,11 +175,13 @@ class MetricsController:
                 # ready signal refreshes the bar).
                 if not self.loading and index.needs_load():
                     self.prewarm()
-                # Each value against its own input: a saved mask outdates AREA, never LENGTH.
+                # Each value against its own files: a saved mask outdates AREA, never LENGTH.
                 outdated = index.outdated(stored_name)
-                sources = index.sources()
+                csvs = index.sources()
                 # Without a record of its inputs, a CSV's staleness is by file time (R5).
                 by_content = index.by_content()
+                skipped = index.gt_skip_reason(stored_name)
+                measured_from = index.measured_from(stored_name)
             except Exception:
                 logger.exception("Could not read the measured values of %s", stored_name)
 
@@ -149,13 +192,22 @@ class MetricsController:
             name=stored_name,
             error=measured.error,
             stale=outdated.get("length", False),
-            source=sources.get("length"),
+            source=_source(measured_from.get("length"), csvs.get("length")),
             area_stale=outdated.get("area", False),
-            area_source=sources.get("area"),
-            length_note=CORRECTION_NOT_MEASURED if corrected else None,
-            status_tip=CORRECTED_STATUS_TIP if corrected else None,
+            area_source=_source(measured_from.get("area"), csvs.get("area")),
+            length_note=_gt_note(
+                "skeleton",
+                skeleton_state,
+                skipped.get("length"),
+                outdated.get("length"),
+                measured.length_source,
+            ),
+            status_tip=GT_STATUS_TIP if skeleton_state == SOURCE_GT else None,
             by_time=not by_content.get("length", True),
             area_by_time=not by_content.get("area", True),
+            area_note=_gt_note(
+                "mask", mask_state, skipped.get("area"), outdated.get("area"), measured.area_source
+            ),
         )
 
     def refresh_if_current(self, image_name):

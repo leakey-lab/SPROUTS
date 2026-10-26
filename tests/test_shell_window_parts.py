@@ -206,6 +206,12 @@ class Index:
     def by_content(self) -> dict:
         return {"length": True, "area": False}
 
+    def gt_skip_reason(self, _name) -> dict:
+        return {}
+
+    def measured_from(self, _name) -> dict:
+        return {"length": ("skeletons/a_fake.png", "prediction"), "area": ("gt/mask/a.png", "gt")}
+
     def prewarm(self) -> None:
         self.prewarmed += 1
 
@@ -217,6 +223,9 @@ def metrics_window(*, bar=None, stage=None, checks=None) -> SimpleNamespace:
             has_mask=lambda name: name == "a",
             has_skeleton=lambda _name: False,
             has_gt_skeleton=lambda _name: False,
+            mask_state=lambda name: "prediction" if name == "a" else "none",
+            skeleton_state=lambda _name: "none",
+            has_gt_labels=lambda _name: False,
             original_folder=None,
             images={},
         ),
@@ -258,17 +267,18 @@ def test_the_bar_shows_the_status_and_the_measured_values():
         {
             "length": 12.5,
             "area": 3.25,
-            "status": "Mask ready",
+            "status": "Mask: prediction · No skeleton · No classes",
             "name": "a",
             "error": None,
             "stale": False,
-            "source": "root_lengths.csv",
+            "source": "skeletons/a_fake.png (prediction), recorded in root_lengths.csv",
             "area_stale": True,
-            "area_source": "root_areas.csv",
+            "area_source": "gt/mask/a.png (GT), recorded in root_areas.csv",
             "length_note": None,
             "status_tip": None,
             "by_time": False,
             "area_by_time": True,
+            "area_note": None,
         }
     ]
 

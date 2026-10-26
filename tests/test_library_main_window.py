@@ -103,7 +103,7 @@ def test_load_results_accepts_the_skeletons_folder(mw, tmp_path, monkeypatch):
     assert errors == []
     assert os.path.normcase(mw.image_manager.processed_base_path) == os.path.normcase(str(skel))
     assert mw.image_manager.has_skeleton(STEMS[0])
-    assert mw.metrics_bar._status_value.text() == "Skeleton ready"
+    assert mw.metrics_bar._status_value.text() == "No mask · Skeleton: prediction · No classes"
 
 
 def test_load_results_keeps_the_legacy_images_layout(mw, tmp_path, monkeypatch):
@@ -126,12 +126,12 @@ def test_load_results_reports_a_missing_folder(mw, tmp_path, monkeypatch):
 def test_on_outputs_changed_picks_up_generated_masks(mw, tmp_path):
     folder = _open(mw, _project(tmp_path / "p"))
     _select(mw, STEMS[1])
-    assert mw.metrics_bar._status_value.text() == "No mask"
+    assert mw.metrics_bar._status_value.text() == "No mask · No skeleton · No classes"
     (folder / "mask").mkdir()
     QImage(8, 8, QImage.Format.Format_ARGB32).save(str(folder / "mask" / f"{STEMS[1]}.png"))
     mw.on_outputs_changed()
     assert mw.image_manager.has_mask(STEMS[1])
-    assert mw.metrics_bar._status_value.text() == "Mask ready"
+    assert mw.metrics_bar._status_value.text() == "Mask: prediction · No skeleton · No classes"
 
 
 # ------------------------------------------------------------------ PG-09 / PG-08

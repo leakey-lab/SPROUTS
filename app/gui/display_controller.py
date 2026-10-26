@@ -10,8 +10,8 @@ drag. ``DisplayController`` decides what the canvas shows for the selection:
   height.
 
 The skeleton drawn is the image's GT skeleton (``gt/skeletons/<stem>.png``) when one exists,
-else its ML skeleton (``skeletons/<stem>_fake.png``). Display only: Measure reads the ML
-skeleton either way (FR-03), and the metrics bar says "Skeleton corrected".
+else its ML skeleton (``skeletons/<stem>_fake.png``). Measure reads the GT skeleton first
+too, where it is valid (O1), and the metrics bar says "Skeleton: GT".
 
 The photo (and the side-by-side skeleton) is a
 :class:`~app.gui.canvas_layers.photo.PhotoLayerItem`, decoded like every canvas
@@ -309,7 +309,7 @@ class DisplayController:
         """Path of the skeleton drawn for the current image, looked up for this image only:
         its GT skeleton (``gt/skeletons/``) when one exists, else its ML skeleton.
 
-        Display only: Measure reads the ML skeleton either way (FR-03); the metrics bar
+        Measure reads the GT skeleton first too, where it is valid (O1); the metrics bar
         says which one an image has.
         """
         if self.current_fake_image is None:

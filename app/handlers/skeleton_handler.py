@@ -5,6 +5,10 @@ Each measurement runs as one named batch job (``main_window.jobs``) on a
 :class:`~app.gui.feedback.UiFeedback`, can be cancelled, and never crashes the
 app: a CSV held open by Excel ends in a Retry prompt that re-saves the rows
 already measured.
+
+GT first (O1): the predictions (``skeletons/`` / ``mask/``) and the GT files
+(``gt/skeletons/`` / ``gt/mask/``) are listed here, split by image (O37), and handed to the
+job; which file each image is measured from is decided on the job's worker, never here.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from app.inference.measure_run import (
     scan_png_files,
     split_inputs,
 )
+from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 from app.inference.metric_thread import MetricCalculatorThread
 from app.project_layout import ProjectLayout
 
@@ -45,6 +50,14 @@ def _noun(spec: MetricSpec, n: int) -> str:
     """ "mask(s)" for the area metric, "skeleton(s)" for the length metric."""
     noun = "mask" if spec.kind == AREA.kind else "skeleton"
     return noun if n == 1 else noun + "s"
+
+
+#: How the end-of-run notice counts each reason a GT file was not used.
+_SKIP_WORDS = (
+    (SIZE, "not the photo's size"),
+    (UNEDITED, "equal to the prediction"),
+    (UNREADABLE, "unreadable"),
+)
 
 
 def job_name(spec: MetricSpec) -> str:
@@ -97,25 +110,39 @@ class SkeletonHandler(HandlerDependencies):
         return kind == LENGTH.kind and self._generation_busy()
 
     def calculate_root_length(self):
-        """Measure root length of every ``*_fake.png`` in the project's skeleton folder."""
+        """Measure the root length of every image with a skeleton: its GT skeleton
+        (``gt/skeletons/<stem>.png``) where valid, else its ``*_fake.png`` in the project's
+        skeleton folder (O1)."""
         layout = self._layout()
         if layout is None:
             return
         folder = layout.resolve_skeletons_dir()
         if folder is None:
-            self._warn("No skeleton images found. Generate skeletons first.")
-            return
-        self._measure(LENGTH, layout, folder, lambda d: (layout.scan_skeletons(d), []))
+            if not self._has_gt(layout.gt_skeletons_dir):
+                self._warn("No skeleton images found. Generate skeletons first.")
+                return
+            folder = layout.skeletons_dir  # GT only: the CSV goes where Measure writes it
+        self._measure(
+            LENGTH,
+            layout,
+            folder,
+            lambda d: (layout.scan_skeletons(d), []),
+            layout.gt_skeletons_dir,
+        )
 
     def calculate_root_area(self):
-        """Measure root area of every ``*.png`` mask in the project's mask folder."""
+        """Measure the root area of every image with a mask: its GT mask
+        (``gt/mask/<stem>.png``) where readable, else its ``*.png`` in the project's mask
+        folder (O1)."""
         layout = self._layout()
         if layout is None:
             return
         folder = layout.resolve_masks_dir()
         if folder is None:
-            self._warn("No mask images found. Generate masks first.")
-            return
+            if not self._has_gt(layout.gt_mask_dir):
+                self._warn("No mask images found. Generate masks first.")
+                return
+            folder = layout.mask_dir  # GT only: the CSV goes where Measure writes it
         existing = [d for d in layout.mask_dir_candidates if os.path.isdir(d)]
         if len(existing) > 1:
             logger.warning("Both %s exist; measuring %s", " and ".join(existing), folder)
@@ -125,7 +152,7 @@ class SkeletonHandler(HandlerDependencies):
                 f"Measuring the older {os.path.relpath(folder, layout.root)} folder: "
                 f"masks in {others} are not measured."
             )
-        self._measure(AREA, layout, folder, scan_png_files)
+        self._measure(AREA, layout, folder, scan_png_files, layout.gt_mask_dir)
 
     def retry_measure(self, kind: str) -> bool:
         """Save the rows of ``kind``'s failed run again (no re-measuring); False if none."""
@@ -141,8 +168,17 @@ class SkeletonHandler(HandlerDependencies):
             self._warn("No images loaded. Load images first.")
         return layout
 
-    def _measure(self, spec: MetricSpec, layout: ProjectLayout, folder: str, scan) -> None:
-        """``scan(folder)`` -> ``(name -> path, shadowed)``; see :func:`split_inputs`."""
+    @staticmethod
+    def _has_gt(gt_folder: str) -> bool:
+        """True when ``gt_folder`` holds a ``*.png`` (one scandir)."""
+        return bool(scan_png_files(gt_folder)[0])
+
+    def _measure(
+        self, spec: MetricSpec, layout: ProjectLayout, folder: str, scan, gt_folder: str
+    ) -> None:
+        """``scan(folder)`` -> ``(name -> path, shadowed)`` of the predictions; the GT files
+        are the ``*.png`` of ``gt_folder``. Both are split by image (:func:`split_inputs`);
+        the job decides, per image, which one it measures."""
         if self.is_busy(spec.kind):
             self._warn(f"{job_name(spec)} is already running.")
             return
@@ -151,7 +187,12 @@ class SkeletonHandler(HandlerDependencies):
         except OSError as exc:
             self._cannot_read(folder, exc)
             return
-        if not images:
+        try:
+            gt_files, gt_shadowed = scan_png_files(gt_folder)
+        except OSError as exc:
+            self._cannot_read(gt_folder, exc)
+            return
+        if not images and not gt_files:
             self._warn(f"No images to measure in {folder}.")
             return
         try:
@@ -160,9 +201,14 @@ class SkeletonHandler(HandlerDependencies):
             self._cannot_read(layout.root, exc)
             return
         # O37: a mask or skeleton whose image is gone gets no row; the files stay on disk.
+        # GT files follow the same rules; they are named with their folder (gt/...).
         split = split_inputs(images, image_stems, shadowed)
-        if not split.kept:
-            n = len(split.without_image)
+        gt_split = split_inputs(gt_files, image_stems, gt_shadowed)
+        gt_prefix = os.path.relpath(gt_folder, layout.root).replace(os.sep, "/") + "/"
+        without_image = [*split.without_image, *(gt_prefix + n for n in gt_split.without_image)]
+        duplicates = [*split.duplicates, *(gt_prefix + n for n in gt_split.duplicates)]
+        if not split.kept and not gt_split.kept:
+            n = len(without_image)
             self._warn(
                 f"No images to measure in {folder}: its {n:,} {_noun(spec, n)} "
                 f"{'has' if n == 1 else 'have'} no image in the project."
@@ -174,8 +220,10 @@ class SkeletonHandler(HandlerDependencies):
                 split.kept,
                 folder,
                 project_root=layout.root,
-                without_image=split.without_image,
-                duplicates=split.duplicates,
+                without_image=without_image,
+                duplicates=duplicates,
+                gt_files=gt_split.kept,
+                photos=image_stems if spec.kind == LENGTH.kind else None,
             )
         )
 
@@ -226,6 +274,20 @@ class SkeletonHandler(HandlerDependencies):
             folder = folder_label(os.path.dirname(csv_path), thread.job.project_root)
             self.feedback.notify(f"Saved {name} in the {folder} folder", "success")
         self._notify_skipped(thread.job, name)
+        self._notify_gt_not_used(thread.job, name)
+
+    def _notify_gt_not_used(self, job: MeasureRun, csv_name: str) -> None:
+        """Say how many GT files were not measured, and why (named in the provenance)."""
+        report = job.gt_report
+        if report is None or not report.skipped:
+            return
+        reasons = [why for _stem, why in report.skipped]
+        counts = [f"{reasons.count(key):,} {words}" for key, words in _SKIP_WORDS if key in reasons]
+        n = len(reasons)
+        self._warn(
+            f"{n:,} GT {_noun(job.spec, n)} not used: {', '.join(counts)} "
+            f"(named in {csv_name}.provenance.json)"
+        )
 
     def _notify_skipped(self, job: MeasureRun, csv_name: str) -> None:
         """Say how many inputs were left out (O37) and where they are named."""

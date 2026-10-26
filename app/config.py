@@ -194,8 +194,30 @@ ROOT_LENGTHS_CSV = "root_lengths.csv"
 ROOT_AREAS_CSV = "root_areas.csv"
 LENGTH_VALUE_COLUMN = "Length (mm)"
 AREA_VALUE_COLUMN = "Area (mm²)"
-LENGTH_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", LENGTH_VALUE_COLUMN, "Error"]
-AREA_CSV_HEADERS = ["Image", "Tube", "Position", "Date", "Time", AREA_VALUE_COLUMN, "Error"]
+#: Last column of both CSVs: the row was measured from the GT file (``gt``) or the
+#: prediction (``prediction``); owner decision O1 (WG-T8). ``[5]`` and ``Error`` at ``[6]``
+#: keep their places.
+SOURCE_COLUMN = "Source"
+LENGTH_CSV_HEADERS = [
+    "Image",
+    "Tube",
+    "Position",
+    "Date",
+    "Time",
+    LENGTH_VALUE_COLUMN,
+    "Error",
+    SOURCE_COLUMN,
+]
+AREA_CSV_HEADERS = [
+    "Image",
+    "Tube",
+    "Position",
+    "Date",
+    "Time",
+    AREA_VALUE_COLUMN,
+    "Error",
+    SOURCE_COLUMN,
+]
 
 # --- Ground-truth (GT) tracing ---------------------------------------------
 # Hand-traced multi-class ground truth, independent of every ML model in the

@@ -13,9 +13,9 @@ SPROUTS works on one folder of images (the *project*) and writes next to it:
 <project>/
   <stem>.jpg | .jpeg | .png               original images (never modified)
   mask/<stem>.png                         predicted root masks (Generate; Correct never writes them)
-  mask/root_areas.csv                     root area per mask
+  mask/root_areas.csv                     root area per image (its GT mask first, else the prediction)
   skeletons/<stem>_fake.png               model-predicted skeletons
-  skeletons/root_lengths.csv              root length per skeleton
+  skeletons/root_lengths.csv              root length per image (its GT skeleton first, else the prediction)
   gt/<stem>.png, gt/classes.json          multi-class ground truth (Trace GT)
   gt/mask/<stem>.png                      GT root mask: a mask saved after a human edit
   gt/skeletons/<stem>.png                 GT skeleton: a skeleton saved after a human edit
@@ -64,26 +64,45 @@ dashboards.
 
 | File | One row per | Written by |
 |---|---|---|
-| `skeletons/root_lengths.csv` | `skeletons/*_fake.png` file | Measure > Root length |
-| `mask/root_areas.csv` | `mask/*.png` file (prediction) | Measure > Root area |
+| `skeletons/root_lengths.csv` | image with a GT skeleton (`gt/skeletons/<stem>.png`) or a predicted one (`skeletons/<stem>_fake.png`) | Measure > Root length |
+| `mask/root_areas.csv` | image with a GT mask (`gt/mask/<stem>.png`) or a predicted one (`mask/<stem>.png`) | Measure > Root area |
 
 Each run rewrites the whole file. Rows are sorted by `Tube`, then `Date`, `Time` and
 `Position`; rows without a tube come last.
 
+Measure reads GT first (owner decision O1; since 2026-10-25, WG-T8). Root length measures an
+image's GT skeleton `gt/skeletons/<stem>.png` where it is valid, else its prediction
+`skeletons/<stem>_fake.png`; root area measures its GT mask `gt/mask/<stem>.png` where it can
+be read, else its prediction `mask/<stem>.png`. An image with only a GT file gets a row too,
+and the CSV is then written to `skeletons/` or `mask/` (created when missing). A GT mask is
+used whatever its pixels (an emptied one measures 0). A GT skeleton is not used, and the
+prediction is measured instead, when it or its photo's size cannot be read (`unreadable`),
+when it is not the photo's size (`size`), or when it equals the prediction as *Correct*
+opens it (`unedited`: the editor's path measures a median 0.8 % longer than the
+prediction's on the same lines, so an unedited copy would change a value nobody edited); an
+emptied GT skeleton is used (0 mm). A GT file that is not used and has no prediction gets no
+row. The column `Source` says which file each row was measured from; the provenance names
+each GT file not used and why (`inputs.gt.skipped`), and the end of the run says how many.
+
 A row exists only for an input whose image is in the project (an image the Library lists:
 PNG or JPEG, matched without letter case). Masks, skeletons and ground-truth files whose
 image is gone are skipped, never deleted; the sidecar `<csv>.provenance.json` has
-`inputs.n_without_image`, `inputs.without_image` (file names, first 100),
+`inputs.n_without_image`, `inputs.without_image` (file names, first 100, GT files with their
+folder, e.g. `gt/skeletons/x.png`),
 `inputs.n_duplicate` and `inputs.duplicates` (files that share one image's name apart
 from letter case; only one of them is measured) (since 2026-10-25).
 
 Beside each CSV, Measure writes `<csv>.inputs.json` (e.g. `mask/root_areas.csv.inputs.json`):
 `{"csv_sha256": "<SHA-256 of the CSV bytes>", "inputs": {"mask/<stem>.png": [size, mtime_ns, "<SHA-256>"], ...}}`,
-one entry per file measured, keyed by its path relative to the project folder. "Changed since
+one entry per file measured (the GT file or the prediction) and one per GT file read but not
+used, keyed by its path relative to the project folder. "Changed since
 measured" (the Measure status line, the metrics bar) compares each input with its entry: size
 and modification time first, the content only when they differ, so a copied or restamped
 folder stays current and a repainted file with an older time is changed; inputs added or
-removed since are reported. A record whose `csv_sha256` does not match the CSV on disk (the
+removed since are reported. Each value follows the file its row names (`Source`): a `gt` row
+compares its GT file only, so a regenerated prediction under it changes nothing; a
+`prediction` row compares its prediction and the image's GT file, so a GT file saved after
+the CSV makes the value outdated. A record whose `csv_sha256` does not match the CSV on disk (the
 CSV was edited or replaced) is ignored, and so is a missing one: the comparison then falls
 back to file times (an input written after the CSV is changed). If the record cannot be
 written, the previous one is removed so it can never describe the new CSV. The record never
@@ -93,7 +112,7 @@ changes a CSV value.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|
-| `Image` | text | | Image stem: the skeleton file name without `_fake.png`, or the mask file name without `.png` |
+| `Image` | text | | Image stem: the prediction's file name without `_fake.png` / `.png`, or the GT file's without `.png` when the image has no prediction |
 | `Tube` | integer | | Tube number from the file name; empty if absent or if the row failed |
 | `Position` | integer | | Position along the tube; empty if absent or if the row failed |
 | `Date` | text `YYYY.MM.DD` | | Capture date from the file name (dots, not ISO 8601 dashes); empty if absent or failed |
@@ -101,6 +120,7 @@ changes a CSV value.
 | `Length (mm)` | decimal, 2 places | mm | Total root length in the image (`root_lengths.csv` only) |
 | `Area (mm²)` | decimal, 2 places | mm² | Total root area in the image (`root_areas.csv` only) |
 | `Error` | text | | Empty on success; otherwise the reason the image could not be measured, naming the file (never its folder; since 2026-10-25) |
+| `Source` | text | | `gt`: the value was measured from the image's GT file (`gt/skeletons/<stem>.png`, `gt/mask/<stem>.png`); `prediction`: from the model's prediction (`skeletons/<stem>_fake.png`, `mask/<stem>.png`). The last column (since 2026-10-25, WG-T8, O1); a CSV written before has no `Source` column, and every row in it is a prediction. `unedited` (a GT skeleton equal to the prediction, not used) is judged against the prediction on disk when Measure runs: a GT skeleton copied from an older prediction counts as edited once Generate has replaced that prediction, and is then measured as GT. |
 
 ### Zero versus failure
 
@@ -126,13 +146,15 @@ mapped onto the actual resolution of the file being measured: `mm_per_px_x = 18 
   `skimage.morphology.skeletonize`. Length is the arc length of the 1-pixel skeleton over
   its 8-connected neighbour pairs: horizontal steps cost `mm_per_px_x`, vertical steps
   `mm_per_px_y`, diagonal steps the diagonal `sqrt(mm_per_px_x² + mm_per_px_y²)`.
-  Model skeletons are 341 x 256, i.e. 0.0528 x 0.0508 mm per pixel.
+  Model skeletons are 341 x 256, i.e. 0.0528 x 0.0508 mm per pixel. GT skeletons are at the
+  photo's resolution (640 x 480: 0.0281 x 0.0271 mm per pixel).
 - **Area.** The mask PNG is read as grayscale; pixels above 127 are root. Area is the
   root-pixel count times `mm_per_px_x * mm_per_px_y`; a full 640 x 480 mask is 234 mm².
 - Values are rounded to 2 decimal places.
 
 Skeletons are predicted from the original images, not from the masks: correcting a mask
-changes `Area (mm²)` only. GT skeletons (`gt/skeletons/`) are not read by Measure.
+changes `Area (mm²)` only, and correcting a skeleton `Length (mm)` only. Measure reads the GT
+files first (see [Metric CSVs](#metric-csvs)); `Source` says which file a value came from.
 
 ### Encoding
 
@@ -155,7 +177,8 @@ The prediction and the GT mask of an image share the stem and live in two folder
 `gt/mask/`; it never writes or removes a file in `mask/`. Saving an edited prediction makes
 it GT; saving an empty (cleared) mask writes an empty GT mask; a mask edited back to equal
 its prediction removes the GT file. *Correct* also opens `mask/<stem>.jpg`/`.jpeg`
-predictions. Measure > Root area reads the `.png` files in `mask/`.
+predictions. Measure > Root area reads the GT mask where it can be read, else the `.png`
+prediction in `mask/`.
 
 When predicted masks already exist, *Generate* asks first: **Keep predictions (predict
 missing only)** (the default), **Replace all predictions**, or **Cancel**. Hand-corrected
@@ -169,7 +192,7 @@ cannot be decoded gets no mask file; it is listed in `mask/_sprouts_run.json`
 | File | Format | Meaning |
 |---|---|---|
 | `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
-| `gt/skeletons/<stem>.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | GT skeleton: a skeleton saved in *Correct* after an edit, at the source image's resolution exactly as edited; removed again when an edit makes it equal to the prediction. Not read by Measure. The Library's Overlay and Side by side views draw it when it exists. `skeleton_corrections/` is no longer read or written (no migration) |
+| `gt/skeletons/<stem>.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | GT skeleton: a skeleton saved in *Correct* after an edit, at the source image's resolution exactly as edited; removed again when an edit makes it equal to the prediction. Measured first by Measure > Root length where it is valid (see [Metric CSVs](#metric-csvs)). The Library's Overlay and Side by side views draw it when it exists. `skeleton_corrections/` is no longer read or written (no migration) |
 
 An image that cannot be decoded gets no skeleton file; it is listed in
 `skeletons/_sprouts_run.json` (`"failed"`) and in the warning shown at the end of the
@@ -180,7 +203,7 @@ run.
 Everything a person saves lives under `gt/`; the model's predictions in `mask/` and
 `skeletons/` are never written by the editor. `gt/mask/<stem>.png` and
 `gt/skeletons/<stem>.png` hold a root mask and a skeleton saved after a human edit (the
-GT that Measure prefers over the prediction, once the editor and Measure use them); the
+GT that Measure reads first, before the prediction); the
 class labels below are hand-traced, multi-class ground truth for training segmentation
 models.
 
@@ -292,7 +315,7 @@ with `git_commit` `null`, `runtime`, `models`, `inputs` and `parameters` empty (
 | `calibration` | `fov_width_mm`, `fov_height_mm` |
 | `runtime` | Python version and implementation, OS, versions of the libraries that were loaded, and (when PyTorch was used) its CUDA/cuDNN versions and precision flags |
 | `models` | per model: `path` (relative to the app folder), `sha256`, `size` in bytes; empty for the GT export |
-| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors`. Generation (`_sprouts_run.json`): `inputs` = `folder`, `n_images`, `names_sha256`; `parameters` = the batch size, `batch_policy` (`"fixed"`: every forward at `batch_size`, the last batch padded with zero images whose outputs are dropped, out of GPU memory stops the run; `"auto"`: the former VRAM-sized, halving behaviour; from `SPROUTS_BATCH_POLICY`) and the model's input settings; `outputs` = `status` (`completed`: the run reached the end, even if every input failed; `cancelled`; `failed`: it stopped with an error), `error` (`null` or `"<ExceptionType>: <message>"`), `n_inputs`, `n_written`, `n_failed`, `n_skipped`, `cancelled`, `batch_size`, `effective_batch_size` (on a GPU the batch size can change outputs slightly, see `docs/KNOWN_ISSUES.md` #7), `elapsed_s`, `failed` (`input` + `reason` per input), `skipped`, `batch_shapes` (forward size as a string key, largest first, -> number of input slots that ran at that size; zero-filled slots included; only forwards that returned a result count), `oom_events` (`{"at": <input file name of the slice's first slot>, "from": <slice length>, "to": <retry length>}` in the order they happened; a single image that runs out of memory alone is a `failed` entry, not an event), `free_vram_gib` (the driver's free GPU memory in GiB, read after the model loaded and before the first batch of a fixed-policy GPU run, 2 dp; `null` on the CPU or under `auto`). Under `fixed`, `batch_shapes` has one key (`batch_size`; padding rows are in the size, never in the count) and `oom_events` is always empty: running out of memory ends the run (`status` `failed`). |
+| `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors`. Measure (`root_lengths.csv.provenance.json` / `root_areas.csv.provenance.json`): `inputs` = `folder`, `n_images`, `names_sha256`, `n_without_image` / `without_image` and `n_duplicate` / `duplicates` (predictions by file name, GT files as `gt/skeletons/<file>` / `gt/mask/<file>`), and `gt` = `folder` (`gt/skeletons` / `gt/mask`), `n_used`, `files` (`{stem: SHA-256}` of the GT files measured), `skipped` (`[{"stem", "reason"}]`, reason `size` / `unedited` / `unreadable`); `parameters` = `input` (`"gt/skeletons/<stem>.png where valid, else skeletons/<stem>_fake.png"` / `"gt/mask/<stem>.png where readable, else mask/<stem>.png"`), `source_rule` (`"gt-first"`), `binarization` (and `estimator` for length); `outputs` = `csv`, `columns`, `value_column`, `n_rows`, `n_errors`, `n_zero`, `n_gt`, `n_prediction`. Generation (`_sprouts_run.json`): `inputs` = `folder`, `n_images`, `names_sha256`; `parameters` = the batch size, `batch_policy` (`"fixed"`: every forward at `batch_size`, the last batch padded with zero images whose outputs are dropped, out of GPU memory stops the run; `"auto"`: the former VRAM-sized, halving behaviour; from `SPROUTS_BATCH_POLICY`) and the model's input settings; `outputs` = `status` (`completed`: the run reached the end, even if every input failed; `cancelled`; `failed`: it stopped with an error), `error` (`null` or `"<ExceptionType>: <message>"`), `n_inputs`, `n_written`, `n_failed`, `n_skipped`, `cancelled`, `batch_size`, `effective_batch_size` (on a GPU the batch size can change outputs slightly, see `docs/KNOWN_ISSUES.md` #7), `elapsed_s`, `failed` (`input` + `reason` per input), `skipped`, `batch_shapes` (forward size as a string key, largest first, -> number of input slots that ran at that size; zero-filled slots included; only forwards that returned a result count), `oom_events` (`{"at": <input file name of the slice's first slot>, "from": <slice length>, "to": <retry length>}` in the order they happened; a single image that runs out of memory alone is a `failed` entry, not an event), `free_vram_gib` (the driver's free GPU memory in GiB, read after the model loaded and before the first batch of a fixed-policy GPU run, 2 dp; `null` on the CPU or under `auto`). Under `fixed`, `batch_shapes` has one key (`batch_size`; padding rows are in the size, never in the count) and `oom_events` is always empty: running out of memory ends the run (`status` `failed`). |
 | `provenance_error` | only in a minimal record (generation): why the full record could not be made, `"<ExceptionType>: <message>"` |
 
 Paths in records are relative to the app or project folder so a shared record does not

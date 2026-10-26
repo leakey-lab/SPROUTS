@@ -459,6 +459,13 @@ Five passes, not yet released:
     prediction** works on the skeleton too (one undoable step; a Save of it removes the GT
     file). Skeleton states read "GT" / "Prediction". No CSV value or output pixel changes;
     the goldens' `start.skeleton_source` reads `prediction` instead of `generated`.
+  - Library badge with three marks (WG-T6, O26): mask (green) and skeleton (orange) — a ring
+    for none, a circle for a prediction, a diamond for GT — and a purple class-labels mark;
+    hovering a row gives the words (`Mask: GT · Skeleton: prediction · No classes`).
+  - Metrics bar (WG-T8, O1): the status uses the Library badge's words (`Mask: … ·
+    Skeleton: … · Classes / No classes`, replacing *Skeleton corrected* / *Mask ready*), and
+    each value's tooltip names the file it was measured from (GT or prediction) and why a GT
+    file was not used.
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so
@@ -655,6 +662,28 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Measure reads GT first; `Source` column (2026-10-25, WG-T8, O1).** Root length measures
+  an image's GT skeleton (`gt/skeletons/<stem>.png`, saved in *Correct*) where it is valid,
+  else the prediction `skeletons/<stem>_fake.png`; root area measures its GT mask
+  (`gt/mask/<stem>.png`) where it can be read, else `mask/<stem>.png`. An image with only a
+  GT file gets a row. A GT skeleton is not used when it is not the photo's size, equals the
+  prediction as *Correct* opens it, or cannot be read (nor its photo's size); the end notice
+  counts them and the provenance names them (`inputs.gt.skipped`). Both CSVs gain a last
+  column `Source` (`gt` / `prediction`); `[5]` stays the value and `Error` stays at `[6]`.
+  The provenance adds `parameters.source_rule` `gt-first`, `inputs.gt` and
+  `outputs.n_gt` / `n_prediction`; the record of the inputs lists the file each value was
+  measured from, and freshness follows it (a regenerated prediction under a GT row stays
+  current; a GT file saved after the CSV makes the value outdated). Before / after (before:
+  44bace1; both metrics):
+  - Synthetic set (`test_measure_core`'s 8 images with photos, no `gt/`): 8 + 8 rows,
+    first seven columns byte-identical, `Source` = `prediction` on every row.
+  - The goldens' synthetic projects with their two skeleton corrections saved as GT through
+    the Correct skeleton layer: `synth_model_mask_and_skeleton` length 42.34 mm
+    (prediction) -> 60.83 mm (`gt`); `synth_blank_png` had no length row (no prediction)
+    and now has one, 28.86 mm (`gt`), in a `skeletons/` folder created for it. Their area
+    rows: unchanged, `prediction`. Nothing else changes.
+  - The audit's 3000-pair real sample (no `gt/`): 3000 + 3000 rows, first seven columns
+    byte-identical, `Source` = `prediction` on every row, no value changes.
 - **A 1 px click paints its pixel (2026-10-25, W3-T5, O11).** A click with the 1 px brush
   paints (or erases) exactly the clicked pixel in *Correct* and in the GT classes; it
   painted nothing and still added an empty undo step. A 1 px stroke along an exact

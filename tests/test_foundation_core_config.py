@@ -170,6 +170,7 @@ def test_existing_contract_values_unchanged():
         "Time",
         "Length (mm)",
         "Error",
+        "Source",  # WG-T8 (O1): gt / prediction, the last column
     ]
     assert config.AREA_CSV_HEADERS == [
         "Image",
@@ -179,7 +180,9 @@ def test_existing_contract_values_unchanged():
         "Time",
         "Area (mm²)",
         "Error",
+        "Source",
     ]
+    assert config.SOURCE_COLUMN == "Source"
     assert config.LENGTH_CSV_HEADERS[5] == config.LENGTH_VALUE_COLUMN
     assert config.AREA_CSV_HEADERS[5] == config.AREA_VALUE_COLUMN
     assert (config.MASK_BATCH_SIZE, config.MASK_THRESHOLD) == (16, 0.5)

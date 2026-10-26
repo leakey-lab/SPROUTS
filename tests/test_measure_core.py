@@ -86,10 +86,15 @@ def _legacy_row(name, path, kind):
         return row | {value_col: 0, "Error": str(e)}
 
 
-def _legacy_csv(images, kind, out_path):
+def _legacy_csv(images, kind, out_path, *, source=True):
+    """The legacy CSV of ``images``. Every input is a prediction: ``source`` adds the last
+    column ``Source`` = ``prediction`` (WG-T8, O1); without it, the seven columns written
+    before."""
     headers = LENGTH_CSV_HEADERS if kind == "length" else AREA_CSV_HEADERS
+    if not source:
+        headers = headers[:7]
     rows = sorted(
-        (_legacy_row(n, p, kind) for n, p in images.items()),
+        ({**_legacy_row(n, p, kind), "Source": "prediction"} for n, p in images.items()),
         key=lambda r: (
             r.get("Tube") or float("inf"),
             r.get("Date") or "",
@@ -185,11 +190,16 @@ def test_real_sample_is_byte_identical_to_legacy_pipeline(tmp_path, spec):
     names = sorted(e.name for e in os.scandir(folder) if e.name.endswith(suffix))
     sample = names[:: max(1, len(names) // 60)][:60]
     images = {n[: -len(suffix)]: os.path.join(folder, n) for n in sample}
-    legacy = _legacy_csv(images, spec.kind, str(tmp_path / "legacy.csv"))
-    run = MeasureRun(spec, images, str(tmp_path))
+    legacy = _legacy_csv(images, spec.kind, str(tmp_path / "legacy.csv"), source=False)
+    run = MeasureRun(spec, images, str(tmp_path), gt_files={})  # GT-first; no gt/ there
     run.compute()
     with open(legacy, "rb") as a, open(run.write(), "rb") as b:
-        assert b.read() == a.read()
+        legacy_lines, lines = a.read().split(b"\r\n"), b.read().split(b"\r\n")
+    # WG-T8: the first seven columns byte for byte, and the eighth is prediction everywhere
+    assert [line.rsplit(b",", 1)[0] for line in lines] == legacy_lines
+    assert [line.rsplit(b",", 1)[-1] for line in lines] == (
+        [b"Source"] + [b"prediction"] * len(images) + [b""]
+    )
 
 
 # --------------------------------------------------------------------------- RB-06

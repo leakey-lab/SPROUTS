@@ -1,13 +1,13 @@
-"""The Library shows a GT skeleton where one exists (W17, display only).
+"""The Library shows a GT skeleton where one exists (W17).
 
 ``gt/skeletons/<stem>.png`` is what the Correct stage saves (WG-T3; ``skeleton_corrections/``
-is retired). Measure does not read it (FR-03: root length is measured from the generated
-``skeletons/<stem>_fake.png``), but the Library's Overlay and Side by side drew the generated
-skeleton even when a saved edit existed, and nothing said an image had one. Now they draw the
-GT skeleton, the metrics bar says "Skeleton corrected" (the tooltip: which file is drawn, and
-that Measure reads the generated one), and the library row's skeleton mark is a diamond
-instead of a dot. The GT state is found by the folder scan and follows the Correct stage's
-saves without connecting its ``skeleton_saved`` signal (FR-03 pins that nothing listens to it).
+is retired), and Measure reads it first where it is valid (O1, WG-T8). The Library's Overlay
+and Side by side drew the generated skeleton even when a saved edit existed, and nothing said
+an image had one. Now they draw the GT skeleton, the metrics bar's status says
+"Skeleton: GT" (the badge's words; the tooltip: which file is drawn), and the library row's
+skeleton mark is a diamond instead of a dot. The GT state is found by the folder scan and
+follows the Correct stage's saves without connecting its ``skeleton_saved`` signal (nothing
+listens to it: the editor's ``dirty_changed`` carries the save).
 """
 
 from __future__ import annotations
@@ -141,17 +141,17 @@ def test_side_by_side_shows_the_gt_skeleton_too(window, tmp_path):
 
 
 # ======================================================================== what says so
-def test_the_metrics_bar_says_skeleton_corrected_and_what_is_measured(window, tmp_path):
+def test_the_metrics_bar_says_skeleton_gt_and_what_is_drawn(window, tmp_path):
     open_project(window, _corrected_project(tmp_path))
 
     select(window, 0)
 
     bar = window.metrics_bar
-    assert bar._status_value.text() == "Skeleton corrected"
+    assert bar._status_value.text() == "Mask: prediction · Skeleton: GT · No classes"
     tip = bar._status_cell.toolTip()
-    assert "gt/skeletons/" in tip and "generated" in tip
+    assert "gt/skeletons/" in tip and "prediction (skeletons/)" in tip
     select(window, 1)
-    assert bar._status_value.text() == "No mask"
+    assert bar._status_value.text() == "No mask · No skeleton · No classes"
     assert bar._status_cell.toolTip() == ""
 
 
@@ -195,7 +195,8 @@ def test_a_skeleton_saved_in_correct_reaches_the_library(window, tmp_path):
     assert os.path.isfile(project.correction(1))
     assert window.image_manager.has_gt_skeleton(STEMS[1])
     assert window.library_index.status_of(STEMS[1])[1] == "gt"
-    # FR-03 unchanged: nothing listens to skeleton_saved, and it is not a generated skeleton.
+    # Nothing listens to skeleton_saved (dirty_changed carries the save), and it is not a
+    # generated skeleton.
     assert editor.receivers(editor.skeleton_saved) == 0
     assert not window.image_manager.has_skeleton(STEMS[1])
 
@@ -204,7 +205,7 @@ def test_a_skeleton_saved_in_correct_reaches_the_library(window, tmp_path):
     assert os.path.normcase(window.display_controller.current_fake_image) == os.path.normcase(
         os.path.normpath(project.correction(1))
     )
-    assert window.metrics_bar._status_value.text() == "Skeleton corrected"
+    assert window.metrics_bar._status_value.text() == "No mask · Skeleton: GT · No classes"
 
 
 def test_a_gt_skeleton_edited_back_to_the_prediction_leaves_the_library(window, tmp_path):

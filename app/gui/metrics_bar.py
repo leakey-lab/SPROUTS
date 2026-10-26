@@ -1,7 +1,7 @@
 """Read-only metrics strip shown beneath the display canvas.
 
 Was a 56px two-line strip whose four cells, in practice, read
-``— · — · 18×13 mm · Mask ready`` — root length and area are only produced by
+``— · — · 18×13 mm · <status>`` — root length and area are only produced by
 the batch threads and written to CSV (KNOWN_ISSUES #3), so two of the four cells
 are permanently em-dashes and a third is a constant. 56px for one live value.
 
@@ -13,9 +13,10 @@ as ``—``, so the strip stays quiet until it has content.
 Still pure presentation: ``set_metrics`` formats what it is handed and never
 computes anything. Measured values come from the Measure CSVs through
 :class:`app.data_processing.measurement_index.MeasurementIndex` (read by the
-caller); a failed measurement shows ``failed`` with its message, and a value
-whose inputs changed after it was measured is shown in the warning colour with a
-"Measure again" tooltip (plus a line saying so when the comparison was by file time:
+caller); each value's tooltip names what it was measured from (the caller's ``source``:
+the GT file or the prediction, O1, and the CSV); a failed measurement shows ``failed`` with
+its message, and a value whose inputs changed after it was measured is shown in the warning
+colour with a "Measure again" tooltip (plus a line saying so when the comparison was by file time:
 the CSV has no record of its inputs). A value that is not a number (a CSV edited to hold ``nan``
 or ``inf``) shows ``—`` in the failure colour, never "nan mm". The FOV text is derived from
 :data:`app.config.CALIBRATION` (the single source of the field of view). The
@@ -41,13 +42,14 @@ _DASH = "—"
 _FAILED = "failed"
 #: The input a value was measured from changed after the Measure run (``{}``: which one).
 _OUTDATED_TIP = "{} changed after this measurement — run Measure again for a current value."
-#: The CSV row holds no number to show (``nan``, ``inf``): ``{}`` the CSV, ``{}`` the value.
-_NO_NUMBER_TIP = "{} holds no valid number for this image ({})"
-_LENGTH_INPUT = "The generated skeleton"
+#: The CSV row holds no number to show (``nan``, ``inf``): ``{}`` the value, ``{}`` the source
+#: (what it was measured from and its CSV).
+_NO_NUMBER_TIP = "This image has no valid number ({}): {}"
+_LENGTH_INPUT = "A skeleton of this image (GT or prediction)"
 #: An outdated value whose CSV has no record of its inputs: compared by file time (R5).
 _BY_TIME_TIP = "Compared by file time: this CSV has no record of its inputs."
 _ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
-_AREA_INPUT = "The mask"
+_AREA_INPUT = "A mask of this image (GT or prediction)"
 
 
 def fov_text() -> str:
@@ -231,17 +233,18 @@ class MetricsBar(QWidget):
         status_tip: str | None = None,
         by_time: bool = False,
         area_by_time: bool | None = None,
+        area_note: str | None = None,
     ) -> None:
         """Update the displayed values (read-only). Empty cells are hidden.
 
         ``error`` (a failed Measure row) is shown as ``failed`` in the first
         metric cell that has no value, with the message as its tooltip.
         ``stale`` flags a value whose input changed after it was measured and ``source``
-        names the CSV it was read from (tooltip): the LENGTH value's, and the AREA
-        value's too unless ``area_stale`` / ``area_source`` give AREA its own.
-        ``length_note`` is one more line for the LENGTH tooltip (e.g. that a corrected
-        skeleton exists and is not what was measured); ``status_tip`` is the STATUS
-        cell's tooltip. ``by_time`` says the LENGTH value's staleness was judged by file
+        names what it was read from (tooltip: "Measured value from …", the measured file
+        and its CSV): the LENGTH value's, and the AREA value's too unless ``area_stale`` /
+        ``area_source`` give AREA its own. ``length_note`` / ``area_note`` are one more line
+        for each tooltip (e.g. that a GT file exists and was not used); ``status_tip`` is
+        the STATUS cell's tooltip. ``by_time`` says the LENGTH value's staleness was judged by file
         time (its CSV has no record of its inputs), and the AREA value's too unless
         ``area_by_time`` gives AREA its own; an outdated value's tooltip then says so.
         """
@@ -274,6 +277,7 @@ class MetricsBar(QWidget):
             area_stale,
             area_source,
             changed=_AREA_INPUT,
+            note=area_note,
             by_time=area_by_time,
         )
         self._status_value.setText(status if status else _DASH)
@@ -360,7 +364,7 @@ class MetricsBar(QWidget):
             label.setText(_DASH)
             outdated = False
             color = tokens.DANGER
-            tips = [_NO_NUMBER_TIP.format(source or "The measurement CSV", value)]
+            tips = [_NO_NUMBER_TIP.format(value, source or "the measurement CSV")]
             if note:
                 tips.append(note)
         elif value is not None:

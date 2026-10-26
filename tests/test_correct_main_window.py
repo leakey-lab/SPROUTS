@@ -588,7 +588,7 @@ def test_a_mask_save_badges_the_image_and_refreshes_the_metrics_without_stat_per
 ):
     window, project = in_correct(make_window, tmp_path, 1)  # image 1 has no mask
     editor = window.correct_editor
-    assert window.metrics_bar._status_value.text() == "No mask"
+    assert window.metrics_bar._status_value.text() == "No mask · No skeleton · No classes"
     paint(editor, (20, 100), (60, 100))
     toasts = record_toasts(window)
     stats: list[str] = []

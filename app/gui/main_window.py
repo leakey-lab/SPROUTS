@@ -66,8 +66,8 @@ _same_path = _common.same_path
 _released = _common.released
 TREE_LOAD_DELAY_MS = navigator.TREE_LOAD_DELAY_MS
 JOB_BUTTONS = job_buttons.JOB_BUTTONS
-CORRECTION_NOT_MEASURED = metrics.CORRECTION_NOT_MEASURED
-CORRECTED_STATUS_TIP = metrics.CORRECTED_STATUS_TIP
+GT_NOT_USED = metrics.GT_NOT_USED
+GT_STATUS_TIP = metrics.GT_STATUS_TIP
 _MeasurementSignals = metrics._MeasurementSignals
 _LOAD_TOAST = project_loader._LOAD_TOAST
 _EDITOR_CHROME = body._EDITOR_CHROME
@@ -175,7 +175,8 @@ class MainWindow(QMainWindow):
             editor.navigate_requested.connect(self.navigate_image)
         # The Correct page reports every mask it writes or removes, on every save path
         # (Ctrl+S, PgDn, the prompt's Save). Connected once, here. Its skeleton_saved
-        # stays unconnected: a corrected skeleton is not measured (FR-03).
+        # stays unconnected: the Library follows a GT skeleton through the editor's
+        # dirty_changed (sync_open_correction), and Measure finds it on disk (O1).
         correct = self.correct_editor
         correct.mask_saved.connect(self.on_mask_saved)
         correct.mask_cleared.connect(self.on_mask_cleared)

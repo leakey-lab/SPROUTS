@@ -268,13 +268,19 @@ def test_one_image_is_decided_from_the_gt_bytes_read_once(gt_project, monkeypatc
 
     fallback = decide_length_source("s", layout.skeleton_path("s"), None, images["s"])
     assert fallback.source == MeasureSource("s", layout.skeleton_path("s"), PREDICTION)
-    rejected = decide_length_source(
-        "s", layout.skeleton_path("s"), layout.gt_skeleton_path("s"), images["s"]
-    )
-    assert (rejected.reason, rejected.fingerprint, rejected.data) == (SIZE, None, None)
+    gt_s = layout.gt_skeleton_path("s")
+    rejected = decide_length_source("s", layout.skeleton_path("s"), gt_s, images["s"])
+    with real_open(gt_s, "rb") as fh:
+        data = fh.read()
+    st = os.stat(gt_s)
+    # not used: no bytes handed on, but its fingerprint (Measure records every GT file read)
+    assert (rejected.reason, rejected.data) == (SIZE, None)
+    assert rejected.fingerprint == (st.st_size, st.st_mtime_ns, hashlib.sha256(data).hexdigest())
+    gone = decide_area_source("q", None, os.path.join(layout.gt_mask_dir, "q.png"))
+    assert (gone.source, gone.reason, gone.fingerprint) == (None, UNREADABLE, None)
 
 
-def test_the_images_with_a_gt_file_are_decided_through_the_given_map(gt_project):
+def test_every_image_is_decided_through_the_given_map(gt_project):
     layout, images = gt_project
     calls = []
 
@@ -288,12 +294,14 @@ def test_the_images_with_a_gt_file_are_decided_through_the_given_map(gt_project)
         assert resolve_length_sources(*args, mapper=pool.map) == serial
     assert resolve_length_sources(*args, mapper=recording_map) == serial
     fn, columns = calls[0]
-    assert fn is decide_length_source and columns[0] == ["g", "o", "s", "u", "x"]
+    # one call, one column per argument, every image (Measure measures each in its task)
+    assert fn is decide_length_source and columns[0] == ["g", "m", "o", "p", "s", "u", "x"]
+    assert len(calls) == 1 and len(columns) == 4
 
     area_args = (layout, layout.scan_masks(extensions=(".png",)), layout.scan_gt_masks())
     assert resolve_area_sources(*area_args, mapper=recording_map) == _area(layout)
     fn, columns = calls[1]
-    assert fn is decide_area_source and columns[0] == ["m", "o", "x"]
+    assert fn is decide_area_source and columns[0] == ["g", "m", "o", "p", "s", "u", "x"]
 
 
 def test_an_invalid_gt_file_without_a_prediction_gets_no_row_and_is_recorded(gt_project):

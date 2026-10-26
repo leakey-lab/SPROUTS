@@ -364,13 +364,16 @@ def test_a_shadowed_mask_is_recorded_as_a_duplicate(tmp_path, qapp, monkeypatch)
     mask = tmp_path / "mask" / "x_T1_L2_2024.01.02_010200_001.png"
     twin = tmp_path / "x_T1_L2_2024.01.02_010200_001.PNG.copy"
     shutil.copyfile(mask, twin)
-    monkeypatch.setattr(
+    listing = (
+        {"x_T1_L2_2024.01.02_010200_001": str(mask)},
+        [("x_T1_L2_2024.01.02_010200_001", str(twin))],
+    )
+    real_scan = measure_run.scan_png_files
+    mask_dir = os.path.normcase(str(tmp_path / "mask"))
+    monkeypatch.setattr(  # the mask folder only: gt/mask/ is listed as it is (empty)
         skeleton_handler,
         "scan_png_files",
-        lambda folder: (
-            {"x_T1_L2_2024.01.02_010200_001": str(mask)},
-            [("x_T1_L2_2024.01.02_010200_001", str(twin))],
-        ),
+        lambda folder: listing if os.path.normcase(folder) == mask_dir else real_scan(folder),
     )
     handler, mw = _handler(tmp_path, qapp)
 
@@ -389,6 +392,24 @@ def test_the_status_counts_a_shadowed_file_as_a_duplicate(tmp_path, monkeypatch)
     folder = str(tmp_path / "mask")
     monkeypatch.setattr(stage_summary.os, "scandir", lambda f: _Scan(f, ["a.png", "a.PNG"]))
     assert input_freshness(folder, ".png", None, images=["a"]) == Freshness(1, False, duplicates=1)
+
+
+def test_gt_files_without_an_image_are_counted_in_the_status_line(tmp_path):
+    """O37 for the GT files Measure reads first (WG-T8): one whose image is gone is skipped
+    and counted, never an input."""
+    (tmp_path / "mask").mkdir()
+    (tmp_path / "mask" / "a.png").write_bytes(b"x")
+    gt = tmp_path / "gt" / "mask"
+    gt.mkdir(parents=True)
+    for name in ("a.png", "gone.png"):
+        (gt / name).write_bytes(b"x")
+
+    fresh = input_freshness(str(tmp_path / "mask"), ".png", None, images=["a"], gt_folder=str(gt))
+
+    assert fresh == Freshness(1, False, without_image=1, gt=1)
+    assert measure_text(0, 0, area=fresh, gt_masks=fresh.gt).endswith(
+        "1 mask (1 GT): not measured yet (1 without an image: skipped)"
+    )
 
 
 def test_an_unreadable_image_folder_names_the_project_not_the_mask_folder(

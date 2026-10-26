@@ -8,7 +8,9 @@ would do. The status line's idle text now says it while one of them is on screen
   With the record of the files a Measure run measured (``<csv>.inputs.json``, R5),
   "changed" are the inputs whose content differs from the recorded one, and inputs added
   and removed since are named (``12 masks: 3 changed, 2 new, 1 removed since measured``);
-  without one, "changed" counts the inputs written after the metric's CSV.
+  without one, "changed" counts the inputs written after the metric's CSV. With GT files
+  (O1, Measure reads them first) each metric counts its images and says how many have one:
+  ``20 skeletons (2 GT): measured, current``.
 
 Qt-free. Counting what changed since a CSV reads one folder (:func:`input_freshness`), so
 it runs off the GUI thread; the counts of the other phrases come from the library state.
@@ -16,12 +18,21 @@ it runs off the GUI thread; the counts of the other phrases come from the librar
 
 from __future__ import annotations
 
+import csv
 import os
 from collections.abc import Collection, Container, Iterable
 from dataclasses import dataclass
 
+from app.config import SOURCE_COLUMN
 from app.inference.input_split import group_by_stem, split_inputs
-from app.inference.measure_inputs import InputsRecord, diff_inputs, input_key, scan_stamps
+from app.inference.measure_inputs import (
+    InputsRecord,
+    Stamp,
+    diff_inputs,
+    input_key,
+    scan_stamps,
+)
+from app.naming import stem_key
 
 __all__ = ["Freshness", "generate_text", "input_freshness", "measure_text", "missing"]
 
@@ -38,6 +49,8 @@ class Freshness:
     ``without_image``: files left out of ``inputs`` because their image is no longer in the
     project (Measure skips them, O37); ``duplicates``: files left out because another file of
     the same image is measured (a case-sensitive disk).
+
+    ``gt``: how many of the ``inputs`` images have a GT file (O1: Measure reads it first).
     """
 
     inputs: int
@@ -48,6 +61,7 @@ class Freshness:
     by_content: bool = False
     without_image: int = 0
     duplicates: int = 0
+    gt: int = 0
 
 
 def missing(images: Iterable[str], present: Container[str]) -> int:
@@ -71,7 +85,7 @@ def generate_text(images: Collection[str], masks: Container[str], skeletons: Con
     return " · ".join(parts)
 
 
-def _metric_text(noun: str, freshness: Freshness | None, inputs: int) -> str:
+def _metric_text(noun: str, freshness: Freshness | None, inputs: int, gt: int) -> str:
     if freshness is not None:
         inputs = freshness.inputs
     skipped = ""
@@ -82,7 +96,7 @@ def _metric_text(noun: str, freshness: Freshness | None, inputs: int) -> str:
         skipped += f" ({n:,} duplicate{'' if n == 1 else 's'} not counted)"
     if not inputs:
         return f"no {noun}s to measure{skipped}"
-    head = _count(inputs, noun)
+    head = _count(inputs, noun) + (f" ({gt:,} GT)" if gt else "")
     if freshness is None:
         return head
     if not freshness.measured:
@@ -106,14 +120,21 @@ def measure_text(
     masks: int,
     length: Freshness | None = None,
     area: Freshness | None = None,
+    *,
+    gt_skeletons: int = 0,
+    gt_masks: int = 0,
 ) -> str:
-    """``20 skeletons: measured, current · 12 masks: 3 changed since measured``.
+    """``20 skeletons (2 GT): measured, current · 12 masks: 3 changed since measured``.
 
-    ``skeletons`` / ``masks`` are the counts known without reading a folder; ``length`` /
-    ``area`` (from :func:`input_freshness`) replace them once known.
+    ``skeletons`` / ``masks`` (images with a skeleton / a mask) and ``gt_skeletons`` /
+    ``gt_masks`` (of them, with a GT file) are the counts known without reading a folder;
+    ``length`` / ``area`` (from :func:`input_freshness`) replace them once known.
     """
     return " · ".join(
-        (_metric_text("skeleton", length, skeletons), _metric_text("mask", area, masks))
+        (
+            _metric_text("skeleton", length, skeletons, gt_skeletons),
+            _metric_text("mask", area, masks, gt_masks),
+        )
     )
 
 
@@ -133,6 +154,132 @@ def _stem_of(path: str, cut: int) -> str:
     return name[: len(name) - cut]
 
 
+def _listed(
+    folder: str | None, suffix: str, root: str, images: Collection[str] | None
+) -> tuple[dict[str, Stamp], int, int]:
+    """``(input key -> stamp, without an image, duplicates)`` of the ``*suffix`` files of
+    ``folder`` Measure would read (with ``images``: those of an image in the project)."""
+    if not folder:
+        return {}, 0, 0
+    cut = len(suffix)
+    stamps = scan_stamps(folder, suffix, root)
+    if images is None:
+        return stamps, 0, 0
+    files = ((_stem_of(path, cut), path) for path, _size, _mtime in stamps.values())
+    keep, without_image, duplicates = _only_with_image(files, images)
+    return {key: st for key, st in stamps.items() if st[0] in keep}, without_image, duplicates
+
+
+def _has_source_column(csv_path: str) -> bool:
+    """True when the CSV's header names ``Source`` (written since O1); also when it cannot
+    be read (nothing is claimed then)."""
+    try:
+        with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+            header = next(csv.reader(fh), [])
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return True
+    return SOURCE_COLUMN in header
+
+
+def _removed(
+    record: InputsRecord,
+    current: Collection[str],
+    images: Collection[str],
+    folder: str | None,
+    gt_folder: str,
+    root: str,
+) -> int:
+    """Recorded files of ``folder`` and ``gt_folder`` that are gone (all recorded files when
+    one of them is the project folder). A GT file counts only when its image is no longer
+    an input: an image measured from its GT file and now from its prediction is new, and
+    counted once."""
+    keys = [input_key(path, root) for path in (folder, gt_folder) if path]
+    prefixes = tuple(key + "/" for key in keys if key != ".")
+    gt_prefix = input_key(gt_folder, root) + "/"
+    removed = 0
+    for key in record.inputs:
+        if key in current or (len(prefixes) == len(keys) and not key.startswith(prefixes)):
+            continue
+        name = key[len(gt_prefix) :] if key.startswith(gt_prefix) else None
+        if name is not None and "/" not in name and stem_key(name[: -len(".png")]) in images:
+            continue
+        removed += 1
+    return removed
+
+
+def _gt_first_freshness(
+    folder: str | None,
+    suffix: str,
+    csv_path: str | None,
+    record: InputsRecord | None,
+    root: str,
+    images: Collection[str] | None,
+    gt_folder: str,
+) -> Freshness:
+    """:func:`input_freshness` with the GT files of ``gt_folder``: one input per image (its
+    prediction or its GT file), judged as the metrics bar judges it
+    (``MeasurementIndex.outdated``).
+
+    Against ``record`` (by content): an image's GT file is always compared (one saved after
+    the CSV is new), its prediction only when the image has no GT file or the record lists
+    the prediction (it was measured: the GT file was not used); see :func:`_removed` for the
+    files that are gone. Without a record (by file time): an image's GT file alone when it
+    has one, else its prediction, is changed when written after the CSV; an image with a GT
+    file is changed whatever the times when the CSV has no ``Source`` column (written before
+    O1: Measure would now read that file)."""
+    predicted, p_without, p_duplicates = _listed(folder, suffix, root, images)
+    traced, g_without, g_duplicates = _listed(gt_folder, ".png", root, images)
+    gt_of = {stem_key(_stem_of(stamp[0], len(".png"))): key for key, stamp in traced.items()}
+    measured = record.inputs if record is not None else {}
+    current: dict[str, Stamp] = {}  # the files compared with the record
+    by_time: list[tuple[Stamp, bool]] = []  # per image: (the file compared by time, a GT file)
+    inputs: set[str] = set()  # the images, by stem key
+    for key, stamp in predicted.items():
+        image = stem_key(_stem_of(stamp[0], len(suffix)))
+        inputs.add(image)
+        gt_key = gt_of.get(image)
+        if gt_key is None:
+            current[key] = stamp
+            by_time.append((stamp, False))
+            continue
+        current[gt_key] = traced[gt_key]
+        by_time.append((traced[gt_key], True))
+        if key in measured:  # measured from the prediction: the GT file was not used
+            current[key] = stamp
+    for image, gt_key in gt_of.items():
+        if image not in inputs:
+            inputs.add(image)
+            current[gt_key] = traced[gt_key]
+            by_time.append((traced[gt_key], True))
+    common = dict(
+        inputs=len(by_time),
+        without_image=p_without + g_without,
+        duplicates=p_duplicates + g_duplicates,
+        gt=len(traced),
+    )
+    if record is not None:
+        diff = diff_inputs(record, current)
+        return Freshness(
+            measured=True,
+            changed=diff.changed,
+            new=diff.new,
+            removed=_removed(record, current, inputs, folder, gt_folder, root),
+            by_content=True,
+            **common,
+        )
+    csv_mtime = None
+    if csv_path:
+        try:
+            csv_mtime = os.stat(csv_path).st_mtime_ns
+        except OSError:
+            csv_mtime = None
+    changed = 0
+    if csv_mtime is not None:
+        before_o1 = not _has_source_column(csv_path)
+        changed = sum(1 for st, is_gt in by_time if st[2] > csv_mtime or (is_gt and before_o1))
+    return Freshness(measured=csv_mtime is not None, changed=changed, **common)
+
+
 def input_freshness(
     folder: str | None,
     suffix: str,
@@ -141,6 +288,7 @@ def input_freshness(
     record: InputsRecord | None = None,
     project_root: str | None = None,
     images: Collection[str] | None = None,
+    gt_folder: str | None = None,
 ) -> Freshness:
     """The ``*suffix`` files of ``folder`` against ``csv_path`` (one ``os.scandir``).
 
@@ -153,17 +301,20 @@ def input_freshness(
     project's images), only the files Measure would read are inputs: those whose image is
     gone are counted in ``without_image`` (O37), and a second file of an image in
     ``duplicates``. Never raises: an unreadable folder has no inputs.
+
+    ``gt_folder`` (``gt/skeletons/`` or ``gt/mask/``, its ``*.png``): Measure reads an
+    image's GT file first (O1). ``inputs`` then counts images, ``gt`` those with a GT file;
+    an image is changed when the file it was measured from changed (its GT file, or its
+    prediction when the record lists that), new when its GT file is not in the record.
     """
     cut = len(suffix)
+    if gt_folder is not None:
+        root = project_root or os.path.dirname(os.path.abspath(folder or gt_folder))
+        return _gt_first_freshness(folder, suffix, csv_path, record, root, images, gt_folder)
     if record is not None and folder:
         root = project_root or os.path.dirname(os.path.abspath(folder))
         folder_key = input_key(folder, root)
-        stamps = scan_stamps(folder, suffix, root)
-        without_image = duplicates = 0
-        if images is not None:
-            files = ((_stem_of(path, cut), path) for path, _size, _mtime in stamps.values())
-            keep, without_image, duplicates = _only_with_image(files, images)
-            stamps = {key: stamp for key, stamp in stamps.items() if stamp[0] in keep}
+        stamps, without_image, duplicates = _listed(folder, suffix, root, images)
         diff = diff_inputs(record, stamps, prefix=None if folder_key == "." else folder_key + "/")
         return Freshness(
             inputs=diff.inputs,

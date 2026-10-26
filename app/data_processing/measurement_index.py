@@ -22,11 +22,16 @@ Contract:
   for a CSV only where Measure writes it today (a few stats). The legacy
   ``test_latest`` search walks the project folders and their parents (about 60 ms
   at 46k images), so only the worker's :meth:`MeasurementIndex.prewarm` runs it.
+* GT first (O1): a row's ``Source`` says which file it was measured from, the GT file
+  (``gt/skeletons/<stem>.png``, ``gt/mask/<stem>.png``) or the prediction next to the CSV;
+  freshness follows that file, and the provenance sidecar says why a GT file was not used
+  (:meth:`MeasurementIndex.gt_skip_reason`).
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import os
 import threading
@@ -35,7 +40,8 @@ from collections.abc import Callable
 from functools import partial
 from typing import NamedTuple
 
-from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN
+from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN, SOURCE_COLUMN
+from app.gt.files import SOURCE_GT, SOURCE_PREDICTION
 from app.inference.measure_inputs import (
     InputsRecord,
     content_sha256,
@@ -45,6 +51,7 @@ from app.inference.measure_inputs import (
 )
 from app.naming import image_stem, stem_key
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
+from app.provenance import sidecar_path
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +59,7 @@ __all__ = ["Measurement", "MetricTable", "MeasurementIndex"]
 
 _IMAGE_COLUMN = "Image"
 _ERROR_COLUMN = "Error"
-_SOURCE_COLUMN = "Source"
+_SOURCE_COLUMN = SOURCE_COLUMN
 _Signature = tuple[int, int]
 #: A table's signature: its CSV's and its record's (``None``: no record file).
 _TableSignature = tuple[_Signature, _Signature | None]
@@ -120,6 +127,18 @@ def _table_signature(path: str) -> _TableSignature | None:
     return None if sig is None else (sig, _signature(inputs_record_path(path)))
 
 
+def _read_gt_skipped(csv_path: str) -> dict[str, str]:
+    """``stem_key -> reason`` of the GT files a Measure run did not use, from the CSV's
+    provenance sidecar (``inputs.gt.skipped``); empty when it has none or cannot be read."""
+    try:
+        with open(sidecar_path(csv_path), encoding="utf-8") as fh:
+            record = json.load(fh)
+        skipped = record["inputs"]["gt"]["skipped"]
+        return {stem_key(str(item["stem"])): str(item["reason"]) for item in skipped}
+    except (OSError, ValueError, RecursionError, KeyError, TypeError):
+        return {}
+
+
 def _read_metric_csv(path: str, value_column: str) -> _Rows:
     """The rows of one metric CSV by stem (:class:`_Rows`); none (logged) when it is
     unreadable. The ``Source`` column is read when the header has it (a CSV written before
@@ -181,6 +200,7 @@ class MetricTable:
         self._loaded_sig: _TableSignature | None = None
         self._rows: _Rows = _NO_ROWS
         self._record: InputsRecord | None = None
+        self._gt_skipped: dict[str, str] = {}
 
     @property
     def path(self) -> str | None:
@@ -193,11 +213,17 @@ class MetricTable:
         none (or one written for another CSV)."""
         return self._record
 
+    def gt_skip_reason(self, stem: str) -> str:
+        """Why the GT file of ``stem`` was not measured (``size``, ``unedited``,
+        ``unreadable``: the CSV's provenance), ``""`` when it was or there is none."""
+        return self._gt_skipped.get(stem_key(stem), "")
+
     def invalidate(self) -> None:
         """Forget the located path and the parsed rows (e.g. after a Measure run)."""
         with self._lock:
             self._path, self._searched_at, self._searched_full_at = None, None, None
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
+            self._gt_skipped = {}
 
     def _resolve(self, full: bool) -> tuple[str, _TableSignature] | None:
         """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
@@ -231,6 +257,7 @@ class MetricTable:
         found = self._resolve(full=load)
         if found is None:
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
+            self._gt_skipped = {}
             return None
         path, sig = found
         if sig != self._loaded_sig:
@@ -239,6 +266,7 @@ class MetricTable:
             if self._loaded_sig is None or sig[0] != self._loaded_sig[0]:
                 self._rows = _read_metric_csv(path, self.value_column)
             self._record = load_inputs_record(path)
+            self._gt_skipped = _read_gt_skipped(path)  # written with the record
             self._loaded_sig = sig
         return self._rows
 
@@ -288,6 +316,10 @@ class MeasurementIndex:
             **opts,
         )
         self._area = MetricTable(AREA_VALUE_COLUMN, self.layout.find_areas_csv, **opts)
+        #: ``{"length": {stem_key: path}, "area": {...}}``: the GT files (``gt/skeletons/``,
+        #: ``gt/mask/``) as :meth:`prewarm` listed them on a worker. The GUI thread's lookups
+        #: (:meth:`outdated`, :meth:`measured_from`) only stat; they never list a folder.
+        self._gt_listing: dict[str, dict[str, str]] = {"length": {}, "area": {}}
 
     @property
     def root(self) -> str:
@@ -321,9 +353,35 @@ class MeasurementIndex:
 
     def prewarm(self) -> None:
         """Look for the CSVs everywhere (legacy folders too) and parse any new or changed
-        one (≈90–360 ms for 46k rows, plus the legacy search: run off the GUI thread)."""
+        one (≈90–360 ms for 46k rows, plus the legacy search: run off the GUI thread), and
+        list the GT folders (one scandir each), which the GUI thread's lookups use."""
         self._length.load()
         self._area.load()
+        layout = self.layout
+        self._gt_listing = {
+            "length": {stem_key(stem): path for stem, path in layout.scan_gt_skeletons().items()},
+            "area": {stem_key(stem): path for stem, path in layout.scan_gt_masks().items()},
+        }
+
+    def _gt_file(self, metric: str, stem: str) -> str | None:
+        """The GT file of ``stem`` for ``metric``, with a few stats and never a folder
+        listing (GUI thread). The file named exactly like the image
+        (``gt/skeletons/<stem>.png`` / ``gt/mask/<stem>.png``, the name *Correct* saves
+        under) wins when it is another file than the one the last :meth:`prewarm` listed for
+        its stem key, as Measure's ``split_inputs`` keeps it (a case-sensitive disk with
+        both ``o.png`` and ``O.png``). Otherwise the listed file, while it is still there:
+        its name as on disk, so its record key matches (a case-insensitive disk finds
+        ``O.png`` for ``o`` under either name). Else the exact name (a GT file saved since)."""
+        layout = self.layout
+        path = (layout.gt_skeleton_path if metric == "length" else layout.gt_mask_path)(stem)
+        listed = self._gt_listing[metric].get(stem_key(stem))
+        if listed is not None and os.path.isfile(listed):
+            try:
+                same = listed == path or not os.path.isfile(path) or os.path.samefile(listed, path)
+            except OSError:  # one of them vanished since the stat: keep the one still there
+                same = not os.path.isfile(path)
+            return listed if same else path  # two files of one key: the one named like the image
+        return path if os.path.isfile(path) else None
 
     def invalidate(self) -> None:
         """Re-locate and re-read both CSVs on the next lookup (after a Measure run)."""
@@ -339,43 +397,109 @@ class MeasurementIndex:
         metric's inputs by content (its CSV has a record of them) rather than file time."""
         return {"length": self._length.record is not None, "area": self._area.record is not None}
 
+    def gt_skip_reason(self, stem: str) -> dict[str, str]:
+        """``{"length": reason, "area": reason}`` for each metric whose last Measure run did
+        not use the GT file of ``stem`` (``size``, ``unedited``, ``unreadable``; from the
+        CSVs' provenance, ``inputs.gt.skipped``); metrics without such a file are left out."""
+        stem = _key(stem)
+        found = {
+            "length": self._length.gt_skip_reason(stem),
+            "area": self._area.gt_skip_reason(stem),
+        }
+        return {metric: reason for metric, reason in found.items() if reason}
+
+    def measured_from(self, stem: str) -> dict[str, tuple[str, str] | None]:
+        """``{"length": (file, source), "area": (file, source)}``: the file each value of
+        ``stem`` was measured from, relative to the project folder (``gt/skeletons/g.png``,
+        ``skeletons/p_fake.png``), and its row's ``Source`` (``gt`` / ``prediction``; a CSV
+        without the column is ``prediction``); ``None`` for a metric without a row. Only
+        parsed CSVs are read (GUI thread); a GT file is looked for with a stat
+        (:meth:`_gt_file`)."""
+        stem = _key(stem)
+        layout = self.layout
+        length = self._measured("length", stem, SKELETON_SUFFIX, layout.gt_skeleton_path)
+        area = self._measured("area", stem, ".png", layout.gt_mask_path)
+        return {
+            metric: None if found is None else (input_key(found[0], layout.root), found[1])
+            for metric, found in (("length", length), ("area", area))
+        }
+
+    def _table(self, metric: str) -> MetricTable:
+        return self._length if metric == "length" else self._area
+
+    def _measured(
+        self, metric: str, stem: str, suffix: str, gt_path: Callable[[str], str]
+    ) -> tuple[str, str] | None:
+        """``(path, source)`` of the file ``stem``'s row of ``metric`` was measured from."""
+        table = self._table(metric)
+        csv_path = table.path
+        row = table.get(stem, load=False) if csv_path is not None else None
+        if row is None:
+            return None
+        if row.source == SOURCE_GT:
+            return self._gt_file(metric, stem) or gt_path(stem), SOURCE_GT
+        return os.path.join(os.path.dirname(csv_path), stem + suffix), SOURCE_PREDICTION
+
     def outdated(self, stem: str) -> dict[str, bool]:
-        """``{"length": bool, "area": bool}``: whether the input each value of ``stem`` was
+        """``{"length": bool, "area": bool}``: whether the files each value of ``stem`` was
         measured from changed since it was measured.
 
-        Each metric against its own input: length against the generated skeleton
-        ``<csv dir>/<stem>_fake.png``, area against the mask ``<csv dir>/<stem>.png`` (the
-        handlers write each CSV next to the files they measured), so a saved mask never
-        outdates the length. A metric without a row for ``stem`` is never outdated. With
-        the record of the CSV's inputs (``<csv>.inputs.json``, R5) the input is compared
-        with its entry: equal size and time, else equal content, is current (a copied or
-        restamped folder stays current); an input that is gone, or has no entry, is
-        outdated. Without a record, an input written after the CSV is outdated (mtime, so
-        a copied folder may report ``True`` spuriously). It never changes a value.
+        Each metric against its own files (a saved mask never outdates the length): the
+        file the row names (``Source``, O1) — the GT file (``gt/skeletons/<stem>.png``,
+        ``gt/mask/<stem>.png``) for a ``gt`` row, else the prediction next to the CSV
+        (``<csv dir>/<stem>_fake.png``, ``<csv dir>/<stem>.png``) — and, for a
+        ``prediction`` row, the image's GT file when one exists (one saved after the CSV
+        makes the value outdated; a regenerated prediction under a ``gt`` row does not). A
+        metric without a row for ``stem`` is never outdated. With the record of the CSV's
+        inputs (``<csv>.inputs.json``, R5) each file is compared with its entry: equal size
+        and time, else equal content, is current (a copied or restamped folder stays
+        current); a file that is gone, or has no entry, is outdated. Without a record, a file
+        written after the CSV is outdated (mtime, so a copied folder may report ``True``
+        spuriously): for a ``prediction`` row its prediction and the image's GT file, if
+        any; for a ``gt`` row its GT file alone, so a regenerated prediction under it does
+        not count (the status line, which sees no rows, compares an image's GT file alone
+        when it has one, else its prediction). A row of a CSV without the ``Source`` column
+        (written before O1) is outdated beside a GT file: Measure would now read that file.
+        It never changes a value; it never lists a folder (GT files: :meth:`_gt_file`).
         """
         stem = _key(stem)
-        root = self.layout.root
         return {
-            "length": self._table_outdated(self._length, stem, stem + SKELETON_SUFFIX, root),
-            "area": self._table_outdated(self._area, stem, stem + ".png", root),
+            "length": self._table_outdated("length", stem, SKELETON_SUFFIX),
+            "area": self._table_outdated("area", stem, ".png"),
         }
 
     def is_outdated(self, stem: str) -> bool:
         """True when either value of ``stem`` is outdated (see :meth:`outdated`)."""
         return any(self.outdated(stem).values())
 
-    @staticmethod
-    def _table_outdated(table: MetricTable, stem: str, file_name: str, root: str) -> bool:
+    def _table_outdated(self, metric: str, stem: str, suffix: str) -> bool:
+        table = self._table(metric)
         csv_path = table.path
-        if csv_path is None or table.get(stem, load=False) is None:
+        row = table.get(stem, load=False) if csv_path is not None else None
+        if row is None:
             return False
-        source = os.path.join(os.path.dirname(csv_path), file_name)
+        gt = self._gt_file(metric, stem)
+        if gt is not None and row.source is None:
+            return True  # a CSV from before O1: Measure would now read this GT file
+        if gt is None and row.source == SOURCE_GT:
+            return True  # the file it was measured from is gone
+        prediction = os.path.join(os.path.dirname(csv_path), stem + suffix)
         record = table.record
         if record is not None:
-            return _differs_from_record(record, source, root)
+            files = [gt] if row.source == SOURCE_GT else [prediction]
+            if gt is not None and row.source != SOURCE_GT:
+                files.append(gt)  # not used then: one saved or changed since outdates
+            return any(_differs_from_record(record, path, self.layout.root) for path in files)
         csv_sig = _signature(csv_path)
-        src_sig = _signature(source)
-        return csv_sig is not None and src_sig is not None and src_sig[0] > csv_sig[0]
+        if csv_sig is None:
+            return False
+        if row.source == SOURCE_PREDICTION:
+            # measured from its prediction (its GT file, if any, was not used): both count
+            files = [prediction, *([gt] if gt is not None else [])]
+        else:
+            files = [gt if gt is not None else prediction]
+        signatures = (_signature(path) for path in files)
+        return any(sig is not None and sig[0] > csv_sig[0] for sig in signatures)
 
 
 def _differs_from_record(record: InputsRecord, source: str, root: str) -> bool:

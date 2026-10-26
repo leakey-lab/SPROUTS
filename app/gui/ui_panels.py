@@ -234,7 +234,7 @@ def create_left_panel(main_window) -> QWidget:
     # Calculate Root Length button (Measure stage)
     main_window.calculate_length_button = create_text_button(
         "Root Length",
-        "Calculate Root Length\n\nMeasure total root length from skeleton data. Processes all skeleton files and calculates cumulative length measurements for each image.",
+        "Calculate Root Length\n\nMeasure the root length of each image. Measures the GT skeleton (gt/skeletons/) where one is valid, else the prediction (skeletons/).",
     )
     main_window.calculate_length_button.setStyleSheet(text_button_style)
     main_window.calculate_length_button.clicked.connect(main_window.calculate_root_length)
@@ -242,7 +242,7 @@ def create_left_panel(main_window) -> QWidget:
     # Calculate Root Area button (Measure stage)
     main_window.calculate_area_button = create_text_button(
         "Root Area",
-        "Calculate Root Area\n\nMeasure root surface area from segmentation masks. Processes all mask files and calculates pixel-based area measurements for each image.",
+        "Calculate Root Area\n\nMeasure the root area of each image. Measures the GT mask (gt/mask/) where one is readable, else the prediction (mask/).",
     )
     main_window.calculate_area_button.setStyleSheet(text_button_style)
     main_window.calculate_area_button.clicked.connect(main_window.calculate_root_area)

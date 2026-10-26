@@ -10,16 +10,18 @@ Dash/Plotly dashboards, and multi-class ground-truth tracing for training datase
 Two independent branches start from the **original images**:
 
 ```
-image → mask model (ResNet)       → mask/<stem>.png           → Correct → root area (mm²)   → mask/root_areas.csv
-image → skeleton model (Pix2Pix)  → skeletons/<stem>_fake.png           → root length (mm)  → skeletons/root_lengths.csv
+image → mask model (ResNet)       → mask/<stem>.png           → Correct → gt/mask/<stem>.png      → root area (mm²)   → mask/root_areas.csv
+image → skeleton model (Pix2Pix)  → skeletons/<stem>_fake.png → Correct → gt/skeletons/<stem>.png → root length (mm)  → skeletons/root_lengths.csv
 root_areas.csv + root_lengths.csv → Dash/Plotly dashboards
 ```
 
 The skeleton model reads the original image, not the mask, so correcting a mask changes
-**root area only**. Root length is measured from `skeletons/*_fake.png`; skeletons edited
-in *Correct* are saved as GT to `gt/skeletons/<stem>.png` and are not measured (the
-Library's Overlay and Side by side views draw the GT skeleton and mark the image *Skeleton
-corrected*).
+**root area only** and correcting a skeleton **root length only**. Edits saved in *Correct*
+are GT (`gt/mask/<stem>.png`, `gt/skeletons/<stem>.png`), and Measure reads GT first: an
+image's GT file where it is valid, else its prediction (`mask/<stem>.png`,
+`skeletons/<stem>_fake.png`). The last CSV column, `Source`, says which (`gt` /
+`prediction`). The Library's Overlay and Side by side views draw the GT skeleton, and the
+status reads *Skeleton: GT*.
 The models are described in [`docs/MODELS.md`](docs/MODELS.md), every output file and
 column in [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 
@@ -169,7 +171,7 @@ The top bar walks through the work in six stages, in this order (`F1` lists ever
 | **Trace GT** | `Alt+2` | Paint ground-truth classes for a segmentation dataset (see below). |
 | **Generate** | `Alt+3` | Generate masks and skeletons for all loaded images in one pass. |
 | **Correct** | `Alt+4` | Fix the mask (area) and the skeleton (length) of an image on one canvas. |
-| **Measure** | `Alt+5` | Compute root length (mm) and area (mm²). |
+| **Measure** | `Alt+5` | Compute root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. |
 | **Visualize** | `Alt+6` | Explore length and area trends across the trial. |
 
 A stage's keys work wherever the keyboard is while the stage is on screen, also right
@@ -187,11 +189,11 @@ a diamond. Hover a row for the words, e.g. `Mask: GT · Skeleton: prediction · 
 | File | Content |
 |---|---|
 | `mask/<stem>.png` | predicted root mask (grayscale 0/255, 640 x 480); *Correct* never changes it |
-| `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error` |
+| `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error, Source` |
 | `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
-| `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error` |
-| `gt/skeletons/<stem>.png` | skeleton saved in *Correct* after an edit: the GT skeleton (8-bit grey, 1-pixel lines at the photo's resolution, so a saved skeleton reopens unchanged); not measured |
-| `gt/mask/<stem>.png` | root mask saved in *Correct* after an edit: the GT mask (white on transparent, at the photo's size) |
+| `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error, Source` |
+| `gt/skeletons/<stem>.png` | skeleton saved in *Correct* after an edit: the GT skeleton (8-bit grey, 1-pixel lines at the photo's resolution, so a saved skeleton reopens unchanged); Measure reads it first where it is valid |
+| `gt/mask/<stem>.png` | root mask saved in *Correct* after an edit: the GT mask (white on transparent, at the photo's size); Measure reads it first |
 | `gt/<stem>.png`, `gt/classes.json` | multi-class ground truth (see below) |
 | `<csv>.provenance.json` | how a CSV was made: app version, git commit, calibration, runtime, input digest, error and zero counts |
 | `<csv>.inputs.json` | the files a CSV was measured from: each one's size, time and SHA-256, and the CSV's SHA-256 (what "changed since measured" compares) |
@@ -228,7 +230,11 @@ on `Error` before analysis. The CSVs are UTF-8: in Excel use *Data > From Text/C
 UTF-8, otherwise `mm²` shows as `mmÂ²`. Details: [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 Measure skips a mask or skeleton whose image is no longer in the project (an image the
 Library lists: PNG or JPEG) and says how many in the end notice and in the CSV's provenance
-file; the files stay on disk.
+file; the files stay on disk. Measure reads an image's GT file first. A GT skeleton of another
+size than the photo, one equal to the prediction as *Correct* opens it, or one that cannot be
+read (nor its photo's size) is not used: the prediction is measured, the end notice says how
+many, the CSV's provenance file names them, and the metrics bar's tooltip says why. A GT mask
+is used whenever it can be read.
 
 ## Calibration & measurement notes
 
@@ -279,8 +285,8 @@ are kept across restarts.
   `gt/skeletons/<stem>.png`; the prediction is never changed. A GT skeleton of another size
   opens resampled to the photo and is saved at the photo's size. **Load prediction** (dock,
   chip icon) puts the prediction back as one undoable step. **Load skeleton file…** in the
-  dock opens another file; if it differs from the skeleton shown, it counts as unsaved. GT
-  skeletons are not measured.
+  dock opens another file; if it differs from the skeleton shown, it counts as unsaved.
+  Measure reads the GT skeleton first where it is valid.
 - **Enhance** (the contrast button on the tool rail) changes how the photo is shown, for
   every image while it is on; it never changes a mask, a skeleton or a measurement. For
   `.jpg` / `.jpeg` photos, **Smooth JPEG blocks** (off by default) softens the 8 x 8
