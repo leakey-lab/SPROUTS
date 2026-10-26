@@ -111,7 +111,7 @@ def test_open_takes_the_saved_masks_0_1_plane_and_it_edits_like_any_plane(tmp_pa
 
     plane = document.history.plane
     assert plane.dtype == np.uint8 and plane.flags.c_contiguous and plane.flags.writeable
-    assert np.array_equal(plane, (saved > 200).astype(np.uint8))
+    assert np.array_equal(plane, (saved > 127).astype(np.uint8))
     assert np.array_equal(plane, MaskStore.for_image(image).read(image).astype(np.uint8))
     assert not document.is_dirty()
 

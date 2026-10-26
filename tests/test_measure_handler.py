@@ -319,3 +319,38 @@ def test_gt_files_of_two_sizes_warn_once(tmp_path, qapp):
 
     (message,) = _mixed_warnings(mw)
     assert message.startswith("The measured files have 2 sizes (640x480 ×1, 320x240 ×1): ")
+
+
+# --------------------------------------------------------------------------- M5: grey masks
+
+_GREY = "grey levels: pixels above 127 were counted as root."
+
+
+def _grey_warnings(mw):
+    return [
+        call.args[0]
+        for call in mw.feedback.calls
+        if call.name == "notify" and call.args[1] == "warn" and _GREY in call.args[0]
+    ]
+
+
+def test_grey_masks_warn_once(tmp_path, qapp):
+    _project(tmp_path, n=3, skeletons=False)
+    mask = next((tmp_path / "mask").iterdir())
+    grey = cv2.imread(str(mask), cv2.IMREAD_GRAYSCALE)
+    grey[0, 0] = 100
+    cv2.imwrite(str(mask), grey)
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+    assert _grey_warnings(mw) == ["1 mask has grey levels: pixels above 127 were counted as root."]
+
+
+def test_binary_masks_and_length_runs_do_not_warn_about_grey(tmp_path, qapp):
+    _project(tmp_path, n=2)
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+    handler.calculate_root_length()
+    _wait_idle(handler, qapp)
+    assert _grey_warnings(mw) == []

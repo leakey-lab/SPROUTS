@@ -29,8 +29,9 @@ import numpy as np
 from app.io_utils import atomic_write_bytes
 from app.project_layout import ProjectLayout
 
-# Grayscale value above which a stored mask pixel counts as foreground.
-MASK_THRESHOLD = 200
+# Grayscale value above which a stored mask pixel counts as foreground: the one threshold
+# of Correct, Measure and the GT readers (owner decision O10).
+MASK_THRESHOLD = 127
 
 
 class MaskFileError(OSError):

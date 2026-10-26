@@ -109,7 +109,7 @@ def saved_plane(path: str) -> np.ndarray:
     pixels = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if pixels.ndim == 3:
         pixels = pixels[:, :, 3] if pixels.shape[2] == 4 else pixels[:, :, 0]
-    return (pixels > 200).astype(np.uint8)
+    return (pixels > 127).astype(np.uint8)
 
 
 def read_bytes(path: str) -> bytes:

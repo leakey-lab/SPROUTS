@@ -501,7 +501,7 @@ def test_a_prediction_rewritten_before_a_hand_back_is_read_again_on_return(make_
     assert editor.save() is True
     gt = gt_mask(project)
     assert not os.path.exists(gt)  # removed against the prediction that was shown
-    shown = (imread_unicode(project.mask(), cv2.IMREAD_GRAYSCALE) > 200).astype(np.uint8)
+    shown = (imread_unicode(project.mask(), cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
     assert (shown == plane(editor)).all()
 
 

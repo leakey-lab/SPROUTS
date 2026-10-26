@@ -32,6 +32,7 @@ import numpy as np
 
 from app.config import AREA_VALUE_COLUMN, CALIBRATION, LENGTH_VALUE_COLUMN
 from app.io_utils import atomic_open, imread_unicode
+from app.masks.store import MASK_THRESHOLD
 from app.naming import parse_image_name as _parse_name
 
 logger = logging.getLogger(__name__)
@@ -87,13 +88,20 @@ def preprocess_image(image_path: str, *, data: bytes | None = None) -> np.ndarra
     return skeleton.view(np.uint8) * np.uint8(255)
 
 
-def load_mask(image_path: str, *, data: bytes | None = None) -> np.ndarray:
-    """Read a mask image and return a binary (0/255) array (``data``: its bytes, read)."""
+def _load_mask_and_grey_flag(image_path: str, data: bytes | None) -> tuple[np.ndarray, bool]:
+    """The binary (0/255) mask, and whether its grey decode holds a value other than 0 and
+    255 (a mask with grey levels: ``> MASK_THRESHOLD`` decides which pixels are root)."""
     img = _read_grey(image_path, data)
     if img is None:
         raise FileNotFoundError(f"Could not read mask: {os.path.basename(image_path)}")
-    _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
-    return binary
+    _, binary = cv2.threshold(img, MASK_THRESHOLD, 255, cv2.THRESH_BINARY)
+    non_binary = int(np.count_nonzero(img == 0)) + int(np.count_nonzero(img == 255)) != img.size
+    return binary, non_binary
+
+
+def load_mask(image_path: str, *, data: bytes | None = None) -> np.ndarray:
+    """Read a mask image and return a binary (0/255) array (``data``: its bytes, read)."""
+    return _load_mask_and_grey_flag(image_path, data)[0]
 
 
 # ----------------------------- metrics -------------------------------------
@@ -181,15 +189,16 @@ def _size_text(image: np.ndarray) -> str:
 def _metric_row(
     name: str,
     path: str,
-    measure: Callable[[str], tuple[float, str]],
+    measure: Callable[[str], tuple[float, str, dict]],
     value_column: str,
     label: str,
 ) -> dict:
     """One CSV row: ``measure(path)`` (the value and the decoded size) with the value
-    rounded to 2 dp, or a 0 row with ``Error``. ``_size_px`` is private to the row: the
-    CSV writer writes the headers only, so it is never a column."""
+    rounded to 2 dp, or a 0 row with ``Error``. ``_size_px`` (and the further private keys
+    ``measure`` returns, e.g. ``_non_binary``) are private to the row: the CSV writer writes
+    the headers only, so they are never a column."""
     try:
-        value, size = measure(path)
+        value, size, private = measure(path)
         info = parse_image_name(name)
         return {
             "Image": info["original_name"],
@@ -199,6 +208,7 @@ def _metric_row(
             "Time": info["time"],
             value_column: round(value, 2),
             "_size_px": size,
+            **private,
         }
     except Exception as e:  # per-image boundary: one bad file never aborts a run
         logger.error("%s metric failed for %r: %s", label, name, e)
@@ -217,20 +227,21 @@ def length_row(name: str, path: str, *, data: bytes | None = None) -> dict:
     """The ``root_lengths.csv`` row for the skeleton image at ``path`` (``data``: its bytes,
     already read; the row is the same)."""
 
-    def measure(p: str) -> tuple[float, str]:
+    def measure(p: str) -> tuple[float, str, dict]:
         skeleton = preprocess_image(p, data=data)
-        return root_length_mm(skeleton), _size_text(skeleton)
+        return root_length_mm(skeleton), _size_text(skeleton), {}
 
     return _metric_row(name, path, measure, LENGTH_VALUE_COLUMN, "Length")
 
 
 def area_row(name: str, path: str, *, data: bytes | None = None) -> dict:
     """The ``root_areas.csv`` row for the mask image at ``path`` (``data``: its bytes,
-    already read; the row is the same)."""
+    already read; the row is the same). A mask with grey levels also gets the private key
+    ``_non_binary: True`` (never a CSV column)."""
 
-    def measure(p: str) -> tuple[float, str]:
-        mask = load_mask(p, data=data)
-        return root_area_mm2(mask), _size_text(mask)
+    def measure(p: str) -> tuple[float, str, dict]:
+        mask, non_binary = _load_mask_and_grey_flag(p, data)
+        return root_area_mm2(mask), _size_text(mask), {"_non_binary": True} if non_binary else {}
 
     return _metric_row(name, path, measure, AREA_VALUE_COLUMN, "Area")
 

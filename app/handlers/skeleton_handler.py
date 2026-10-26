@@ -38,6 +38,7 @@ from app.inference.measure_run import (
 )
 from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 from app.inference.metric_thread import MetricCalculatorThread
+from app.masks.store import MASK_THRESHOLD
 from app.project_layout import ProjectLayout
 
 from .generate_skeleton_handler import GenerateSkeletonHandler
@@ -282,6 +283,7 @@ class SkeletonHandler(HandlerDependencies):
         self._notify_skipped(thread.job, name)
         self._notify_gt_not_used(thread.job, name)
         self._notify_mixed_sizes(rows)
+        self._notify_non_binary(thread.spec, rows)
 
     def _notify_mixed_sizes(self, rows: list[dict]) -> None:
         """Warn, once, when the files of one source group have more than one size (M2): the
@@ -297,6 +299,19 @@ class SkeletonHandler(HandlerDependencies):
             f"The measured files have {len(sizes)} sizes ({', '.join(listed)}): "
             f"one {fov_text()} field of view was applied to each."
         )
+
+    def _notify_non_binary(self, spec: MetricSpec, rows: list[dict]) -> None:
+        """Warn, once, when measured masks have grey levels (M5, O10): the pixels above
+        ``MASK_THRESHOLD`` were counted as root. The count is in the provenance
+        (``outputs.n_non_binary``)."""
+        if spec.kind != AREA.kind:
+            return
+        n = sum(1 for row in rows if row.get("_non_binary"))
+        if n:
+            self._warn(
+                f"{n:,} {'mask' if n == 1 else 'masks'} {'has' if n == 1 else 'have'} grey "
+                f"levels: pixels above {MASK_THRESHOLD} were counted as root."
+            )
 
     def _notify_gt_not_used(self, job: MeasureRun, csv_name: str) -> None:
         """Say how many GT files were not measured, and why (named in the provenance)."""

@@ -250,8 +250,8 @@ class MaskDocument:
     ) -> list[Notice]:
         """Open the mask of ``image_path`` for an image of ``size`` ``(w, h)``.
 
-        The GT mask, else the prediction, as saved (grey above 200) becomes the plane and
-        the baseline: clean, with an empty history. No file opens empty; a chosen file that
+        The GT mask, else the prediction, as saved (grey above `MASK_THRESHOLD`, 127) becomes
+        the plane and the baseline: clean, with an empty history. No file opens empty; a chosen file that
         cannot be decoded, or a GT mask of another size, opens empty too, is not shown and
         is kept (:meth:`unloaded_file`), with a warning notice. A prediction of another size
         is stretched to the image (nearest neighbour), with an info notice. ``read`` (a

@@ -472,6 +472,11 @@ Five passes, not yet released:
     dashboards' export, the metrics bar's field-of-view cell and About show the field of
     view each CSV was measured with, and say when this app now uses another. No CSV value
     changes.
+  - One mask threshold (W2-T6, M5, O10): Correct reads a mask at Measure's threshold (grey
+    > 127, was > 200), so the editor and Measure see the same root pixels. Only masks with
+    grey levels (legacy JPEG masks, files from other programs) open differently; saving one
+    in Correct then writes those pixels as root. Measure records `outputs.n_non_binary` and
+    warns when masks have grey levels. No CSV value changes.
 - **UX and speed pass (2026-09-30).** Display and interaction; saved pixels stay pinned by
   the goldens.
   - Keys: page shortcuts work wherever the keyboard is while their page is on screen, so

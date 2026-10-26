@@ -78,7 +78,7 @@ def _write(path: str, pixels: np.ndarray) -> None:
 def _model_mask(tmp_path) -> np.ndarray:
     """A saved 8-bit grey model mask; returns the expected 0/1 plane."""
     grey = np.zeros((60, 80), np.uint8)
-    grey[0, :4] = (150, 200, 201, 255)  # the threshold is "above 200"
+    grey[0, :4] = (100, 127, 128, 255)  # the threshold is "above 127" (MASK_THRESHOLD)
     grey[10:20, 30:40] = 255
     _write(_mask_path(tmp_path), grey)
     plane = np.zeros((60, 80), np.uint8)
@@ -132,7 +132,7 @@ def test_opens_empty_without_a_saved_mask(tmp_path):
     assert doc.gt_path == _gt_path(tmp_path) and doc.prediction_path is None
 
 
-def test_opens_a_model_mask_thresholded_above_200(tmp_path):
+def test_opens_a_model_mask_thresholded_above_127(tmp_path):
     expected = _model_mask(tmp_path)
     doc = MaskDocument()
 
@@ -146,10 +146,10 @@ def test_opens_a_model_mask_thresholded_above_200(tmp_path):
     assert doc.status() == _prediction_status()
 
 
-def test_opens_the_gt_mask_first_thresholded_above_200(tmp_path):
+def test_opens_the_gt_mask_first_thresholded_above_127(tmp_path):
     prediction = _model_mask(tmp_path)
     grey = np.zeros((60, 80), np.uint8)
-    grey[1, :3] = (200, 201, 255)
+    grey[1, :3] = (127, 128, 255)
     _write(_gt_path(tmp_path), grey)
     doc = MaskDocument()
 

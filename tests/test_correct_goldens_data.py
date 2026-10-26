@@ -123,8 +123,8 @@ def test_inputs_are_the_ones_the_goldens_were_captured_from(tmp_path):
     generated = imread_unicode(os.path.join(folder, GENERATED), cv2.IMREAD_UNCHANGED)
     assert sha(generated) == GENERATED_PIXELS_SHA
     # The first mask op only picks the brush, so its plane is the mask as opened
-    # (grey > 200 -> 1): the committed model mask is the one the goldens saw.
-    opened = (model_mask > 200).astype(np.uint8)
+    # (grey > 127 -> 1): the committed model mask is the one the goldens saw.
+    opened = (model_mask > 127).astype(np.uint8)
     assert sha(opened) == goldens["synth_model_mask_and_skeleton"]["mask"]["per_op_plane_sha256"][0]
 
     _, blank_image = make_synth_project(str(tmp_path), "synth_blank_png")

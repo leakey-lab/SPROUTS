@@ -534,3 +534,41 @@ def test_csv_calibration_takes_integers_as_floats(tmp_path):
         "fov_width_mm": 18.0,
         "fov_height_mm": 14.0,
     }
+
+
+# --------------------------------------------------------------------------- M5: non-binary masks
+
+
+def test_the_non_binary_count_is_recorded(tmp_path):
+    folder = tmp_path / "mask"
+    images = _masks_of_sizes(folder, [(_NAMES[0], (64, 80)), (_NAMES[1], (64, 80))])
+    grey = cv2.imread(images[_NAMES[1]], cv2.IMREAD_GRAYSCALE)
+    grey[0, 0] = 100
+    _write_png(folder / f"{_NAMES[1]}.png", grey)
+
+    run = MeasureRun(AREA, images, str(folder), project_root=str(tmp_path))
+    run.compute()
+    assert sum(1 for row in run.rows if row.get("_non_binary")) == 1
+    csv_path = run.write()
+
+    record = json.loads(open(provenance.sidecar_path(csv_path), encoding="utf-8").read())
+    assert record["outputs"]["n_non_binary"] == 1
+    assert record["parameters"]["binarization"] == "gray > 127"
+
+    stripped = tmp_path / "stripped.csv"
+    metrics.write_metric_csv(
+        [{k: v for k, v in row.items() if k != "_non_binary"} for row in run.rows],
+        str(stripped),
+        list(AREA.headers),
+    )
+    assert open(csv_path, "rb").read() == stripped.read_bytes()
+
+
+def test_length_records_carry_no_non_binary_count(tmp_path):
+    images = _make_dataset(tmp_path / "skeletons", "length")
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"), project_root=str(tmp_path))
+    run.compute()
+    csv_path = run.write()
+    record = json.loads(open(provenance.sidecar_path(csv_path), encoding="utf-8").read())
+    assert "n_non_binary" not in record["outputs"]
+    assert not any("_non_binary" in row for row in run.rows)

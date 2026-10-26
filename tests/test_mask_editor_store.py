@@ -6,7 +6,8 @@ import cv2
 import numpy as np
 import pytest
 
-from app.masks import MaskFileError, MaskStore, encode_mask_png
+from app.inference import metrics
+from app.masks import MASK_THRESHOLD, MaskFileError, MaskStore, encode_mask_png
 
 
 def _mask(h=60, w=80):
@@ -60,7 +61,7 @@ def test_round_trip_and_grayscale_readers_see_the_same_mask(tmp_path):
     assert np.array_equal(store.read("plot_001"), on)
     gray = cv2.imread(store.path_for("plot_001"), cv2.IMREAD_GRAYSCALE)
     assert set(np.unique(gray)) == {0, 255}
-    assert np.array_equal(gray > 200, on)
+    assert np.array_equal(gray > MASK_THRESHOLD, on)
 
 
 def test_png_bytes_are_deterministic():
@@ -104,7 +105,7 @@ def test_unreadable_file_raises(tmp_path):
 # ------------------------------------------------------------- what read() sees per format
 # read() is a grayscale decode + ``> MASK_THRESHOLD`` for every file kind. These pin that
 # contract for each kind a project can hold, so a faster decode path must keep it exactly:
-# the alpha channel is ignored, colours go through the luma weights, 200 itself is off.
+# the alpha channel is ignored, colours go through the luma weights, 127 itself is off.
 def _grid_bgr(colours) -> np.ndarray:
     """One 4x4 block per colour, side by side."""
     return np.concatenate([np.full((4, 4, len(c)), c, np.uint8) for c in colours], axis=1)
@@ -127,9 +128,23 @@ def _blocks(on: np.ndarray) -> list[bool]:
     return values
 
 
-def test_read_of_a_grey_model_mask_thresholds_at_200(tmp_path):
-    grey = np.array([[0, 199, 200, 201, 255]], np.uint8).repeat(4, 0).repeat(4, 1)
-    assert _blocks(_read_png(tmp_path, grey)) == [False, False, False, True, True]
+def test_read_of_a_grey_model_mask_thresholds_at_127(tmp_path):
+    grey = np.array([[0, 127, 128, 200, 255]], np.uint8).repeat(4, 0).repeat(4, 1)
+    assert _blocks(_read_png(tmp_path, grey)) == [False, False, True, True, True]
+
+
+def test_the_threshold_is_127():
+    assert MASK_THRESHOLD == 127
+
+
+def test_measure_and_the_mask_store_agree_on_a_grey_mask(tmp_path):
+    img = tmp_path / "a.jpg"
+    grey = np.arange(256, dtype=np.uint8).reshape(16, 16)  # 0..255 once each
+    store = MaskStore.for_image(str(img))
+    os.makedirs(store.directory)
+    assert cv2.imwrite(store.path_for("a"), grey)
+    measured = np.count_nonzero(metrics.load_mask(store.path_for("a")) == 255)
+    assert measured == np.count_nonzero(store.read("a")) == 128
 
 
 def test_read_of_an_editor_rgba_mask_is_the_saved_plane(tmp_path):
@@ -150,17 +165,19 @@ def test_read_of_rgba_ignores_the_alpha_channel(tmp_path):
 def test_read_of_coloured_pixels_uses_their_luma(tmp_path, alpha):
     colours = [
         (255, 255, 255),  # white: on
-        (0, 255, 0),  # pure green (BGR), luma about 150: off
+        (0, 255, 0),  # pure green (BGR), luma about 150: on
         (255, 255, 180),  # pale cyan-ish, luma about 223: on
-        (201, 201, 201),  # grey just over the threshold: on
-        (200, 200, 200),  # exactly the threshold: off
+        (201, 201, 201),  # light grey: on
+        (200, 200, 200),  # grey 200 (was the threshold before O10): on
+        (128, 128, 128),  # just over the threshold: on
+        (127, 127, 127),  # exactly the threshold: off
         (0, 0, 255),  # pure red, luma about 76: off
         (255, 0, 0),  # pure blue, luma about 29: off (its first channel alone would be on)
     ]
     if alpha is not None:
         colours = [(*c, alpha) for c in colours]
     got = _blocks(_read_png(tmp_path, _grid_bgr(colours)))
-    assert got == [True, False, True, True, False, False, False]
+    assert got == [True, True, True, True, True, True, False, False, False]
 
 
 def test_read_of_a_legacy_jpg_mask(tmp_path):
@@ -171,7 +188,7 @@ def test_read_of_a_legacy_jpg_mask(tmp_path):
     path = os.path.join(store.directory, "a.jpg")
     assert cv2.imwrite(path, on.astype(np.uint8) * 255, [cv2.IMWRITE_JPEG_QUALITY, 95])
     assert store.find("a") == path
-    assert np.array_equal(store.read("a"), cv2.imread(path, cv2.IMREAD_GRAYSCALE) > 200)
+    assert np.array_equal(store.read("a"), cv2.imread(path, cv2.IMREAD_GRAYSCALE) > MASK_THRESHOLD)
     assert np.array_equal(store.read("a")[12:36, 20:44], on[12:36, 20:44])  # inside the edges
 
 
@@ -222,7 +239,7 @@ def _encoded(img, ext=".png", params=()) -> bytes:
 
 def _reference(path: str):
     gray = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_GRAYSCALE)
-    return None if gray is None else gray > 200
+    return None if gray is None else gray > MASK_THRESHOLD
 
 
 def _mask_file_cases() -> dict[str, tuple[bytes, str]]:

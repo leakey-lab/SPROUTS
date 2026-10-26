@@ -40,6 +40,7 @@ from app.inference.input_split import InputSplit, group_by_stem, split_by_image,
 from app.inference.measure_inputs import Fingerprint
 from app.inference.measure_sources import GT, PREDICTION, GtReport, MeasureSource, SourceDecision
 from app.inference.metrics import area_row, length_row, run_metric_pool, write_metric_csv
+from app.masks.store import MASK_THRESHOLD
 from app.project_layout import ProjectLayout
 from app.provenance import csv_calibration
 
@@ -107,7 +108,7 @@ AREA = MetricSpec(
     parameters={
         "input": "gt/mask/<stem>.png where readable, else mask/<stem>.png",
         "source_rule": "gt-first",
-        "binarization": "gray > 127",
+        "binarization": f"gray > {MASK_THRESHOLD}",
     },
 )
 
@@ -123,6 +124,8 @@ PREDICTION_ONLY: dict[str, dict[str, str]] = {
 
 #: The private row key holding the decoded size of the file a row was measured from.
 _SIZE_KEY = "_size_px"
+#: The private row key set on a mask whose grey decode holds levels other than 0 and 255.
+_NON_BINARY_KEY = "_non_binary"
 
 
 def sizes_px(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
@@ -424,20 +427,23 @@ class MeasureRun:
                     "files": dict(report.files),  # a read-only mapping: JSON wants a dict
                     "skipped": [{"stem": stem, "reason": why} for stem, why in report.skipped],
                 }
+            outputs: dict[str, Any] = {
+                "csv": os.path.basename(csv_path),
+                "columns": list(self.spec.headers),
+                "value_column": self.spec.value_column,
+                "n_rows": len(rows),
+                "n_errors": sum(1 for r in rows if r.get("Error")),
+                "n_zero": sum(1 for r in rows if not r.get(self.spec.value_column)),
+                "n_gt": sum(1 for r in rows if r.get(SOURCE_COLUMN) == GT),
+                "n_prediction": sum(1 for r in rows if r.get(SOURCE_COLUMN) == PREDICTION),
+            }
+            if self.spec.kind == AREA.kind:
+                outputs["n_non_binary"] = sum(1 for r in rows if r.get(_NON_BINARY_KEY))
             record = provenance.build_record(
                 self.spec.activity,
                 inputs=inputs,
                 parameters=self._parameters(),
-                outputs={
-                    "csv": os.path.basename(csv_path),
-                    "columns": list(self.spec.headers),
-                    "value_column": self.spec.value_column,
-                    "n_rows": len(rows),
-                    "n_errors": sum(1 for r in rows if r.get("Error")),
-                    "n_zero": sum(1 for r in rows if not r.get(self.spec.value_column)),
-                    "n_gt": sum(1 for r in rows if r.get(SOURCE_COLUMN) == GT),
-                    "n_prediction": sum(1 for r in rows if r.get(SOURCE_COLUMN) == PREDICTION),
-                },
+                outputs=outputs,
             )
             provenance.write_sidecar(csv_path, record)
         except Exception:  # provenance is additive; the CSV is already safe
