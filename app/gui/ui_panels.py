@@ -213,10 +213,9 @@ def create_left_panel(main_window) -> QWidget:
 
     # Generate Skeleton button (kept wired + reparented)
     main_window.generate_button = create_text_button(
-        "Generate Skeleton",
-        "Generate Skeleton\n\nPredict root skeletons directly from the original images "
-        "(Pix2Pix skeletonizer) for length measurement. Independent of masks: mask "
-        "corrections change root area only.",
+        "Skeletons only",
+        "Skeletons only — predict skeletons from the original images (Pix2Pix); "
+        "masks are not read or regenerated.",
     )
     main_window.generate_button.setStyleSheet(text_button_style)
     main_window.generate_button.clicked.connect(main_window.skeleton_handler.generate_skeleton)
@@ -226,23 +225,30 @@ def create_left_panel(main_window) -> QWidget:
         "Generate Mask + Skeleton",
         "Generate Mask + Skeleton\n\nRun the ResNet segmentation model over all "
         "loaded images (masks -> root area), then predict skeletons from the same "
-        "original images (Pix2Pix -> root length). One click runs both.",
+        "original images (Pix2Pix -> root length). One click runs both. They are "
+        "independent: correcting a mask changes root area only, correcting a skeleton "
+        "root length only.",
     )
     main_window.generate_all_button.setStyleSheet(text_button_style)
     main_window.generate_all_button.clicked.connect(main_window.generate_all)
 
     # Calculate Root Length button (Measure stage)
     main_window.calculate_length_button = create_text_button(
-        "Root Length",
-        "Calculate Root Length\n\nMeasure the root length of each image. Measures the GT skeleton (gt/skeletons/) where one is valid, else the prediction (skeletons/).",
+        "Measure Length",
+        "Measure Length\n\nRoot length (mm) of every image, from its skeleton: the GT skeleton "
+        "saved in Correct where there is one, else the predicted skeleton in skeletons/. "
+        "Writes skeletons/root_lengths.csv. Skeletons whose image is no longer in the project "
+        "are skipped.",
     )
     main_window.calculate_length_button.setStyleSheet(text_button_style)
     main_window.calculate_length_button.clicked.connect(main_window.calculate_root_length)
 
     # Calculate Root Area button (Measure stage)
     main_window.calculate_area_button = create_text_button(
-        "Root Area",
-        "Calculate Root Area\n\nMeasure the root area of each image. Measures the GT mask (gt/mask/) where one is readable, else the prediction (mask/).",
+        "Measure Area",
+        "Measure Area\n\nRoot area (mm²) of every image, from its mask: the GT mask saved in "
+        "Correct where there is one, else the predicted mask in mask/. Writes "
+        "mask/root_areas.csv. Masks whose image is no longer in the project are skipped.",
     )
     main_window.calculate_area_button.setStyleSheet(text_button_style)
     main_window.calculate_area_button.clicked.connect(main_window.calculate_root_area)

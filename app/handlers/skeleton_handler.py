@@ -105,6 +105,7 @@ class SkeletonHandler(HandlerDependencies):
         self.area_calculator_thread: MetricCalculatorThread | None = None
         self._retry_jobs: dict[str, MeasureRun] = {}  # measured rows whose CSV save failed
         self._retry_box: QMessageBox | None = None
+        self._again_box: QMessageBox | None = None  # the "Measure again?" prompt
 
     # ------------------------------------------------------------------ public API
     def generate_skeleton(self, input_dir: str | None = None) -> bool:
@@ -241,6 +242,7 @@ class SkeletonHandler(HandlerDependencies):
                 gt_files=gt_split.kept,
                 photos=image_stems if spec.kind == LENGTH.kind else None,
                 calibration=calibration,
+                ask_if_unchanged=True,
             )
         )
         if started and calibration.problem:  # said only for a run that really started
@@ -263,6 +265,7 @@ class SkeletonHandler(HandlerDependencies):
         thread.finished.connect(partial(self._on_finished, thread))
         thread.failed.connect(partial(self._on_failed, thread))
         thread.cancelled.connect(partial(self._on_cancelled, thread))
+        thread.unchanged.connect(partial(self._on_unchanged, thread))
         thread.progress.connect(self.feedback.task_progress)
         name = job_name(spec)
         if not self.jobs.try_start(name, thread):
@@ -397,6 +400,53 @@ class SkeletonHandler(HandlerDependencies):
     def _on_cancelled(self, thread: MetricCalculatorThread) -> None:
         self._release(thread)
         self.feedback.task_finished(f"{job_name(thread.spec)} cancelled; no CSV written")
+
+    def _on_unchanged(self, thread: MetricCalculatorThread) -> None:
+        """Nothing changed since the CSV was written: end the run's task, then ask."""
+        self._release(thread)
+        job = thread.job
+        name = os.path.basename(job.csv_path)
+        self.feedback.task_finished(f"Nothing changed since the last measurement: {name} kept")
+        self._ask_measure_again(job)
+
+    def _ask_measure_again(self, job: MeasureRun) -> None:
+        """Non-modal "Measure again?" prompt (default Cancel); Yes measures with no more
+        questions. Deletes itself once answered; ``_again_box`` is the newest open prompt."""
+        n = len(job.images)
+        name = os.path.basename(job.csv_path)
+        box = QMessageBox(self._parent())
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Measure")
+        box.setText("Nothing changed since the last measurement. Measure again?")
+        box.setInformativeText(
+            f"{name} already holds the values of these {n:,} {_noun(job.spec, n)}."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        box.button(QMessageBox.StandardButton.Yes).setText("Measure again")
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.finished.connect(partial(self._on_again_answer, job, box))
+        self._again_box = box
+        box.open()
+
+    def _on_again_answer(self, job: MeasureRun, box: QMessageBox, result: int) -> None:
+        if self._again_box is box:  # an older prompt's answer keeps the newer box
+            self._again_box = None
+        if result != QMessageBox.StandardButton.Yes.value:
+            return
+        self._start(
+            MeasureRun(
+                job.spec,
+                job.predictions,
+                job.output_dir,
+                project_root=job.project_root,
+                without_image=job.without_image,
+                duplicates=job.duplicates,
+                gt_files=job.gt_files,
+                photos=job.photos or None,
+                calibration=job.calibration,
+            )
+        )
 
     def _offer_retry(self, kind: str, message: str) -> None:
         """Non-modal Retry/Cancel prompt; Retry re-saves the kept rows.

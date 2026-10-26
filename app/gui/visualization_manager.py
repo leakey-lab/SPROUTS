@@ -117,7 +117,7 @@ def _find_lengths_csv(layout: ProjectLayout) -> CsvLookup:
         None,
         "No root length data",
         "No root length data was found.\n\n"
-        "Run Measure → Root Length first (after generating skeletons).\n\n"
+        "Run Measure → Measure Length first (after generating skeletons).\n\n"
         "Expected file locations:\n"
         f"  • {os.path.join(layout.skeletons_dir, ROOT_LENGTHS_CSV)}\n"
         f"  • {os.path.join(layout.root, ROOT_LENGTHS_CSV)}",
@@ -130,7 +130,7 @@ def _find_areas_csv(layout: ProjectLayout) -> CsvLookup:
         return CsvLookup(
             None,
             "No mask data",
-            "No masks folder was found.\n\nGenerate masks first, then run Measure → Root Area.",
+            "No masks folder was found.\n\nGenerate masks first, then run Measure → Measure Area.",
         )
     path = layout.find_areas_csv()
     if path:
@@ -139,7 +139,7 @@ def _find_areas_csv(layout: ProjectLayout) -> CsvLookup:
         None,
         "No root area data",
         "No root area data was found.\n\n"
-        "Run Measure → Root Area first (after generating masks).\n\n"
+        "Run Measure → Measure Area first (after generating masks).\n\n"
         f"Expected file:\n  • {os.path.join(masks_dir, ROOT_AREAS_CSV)}",
     )
 

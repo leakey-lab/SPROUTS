@@ -219,3 +219,8 @@ def test_without_a_provider_or_a_place_the_page_shows_no_position(make_editor, t
     editor.load_image(project.b, project.folder)
     assert editor.status_chip.position_label.isHidden()
     assert "library position" in caplog.text
+
+
+def test_correct_with_no_image_says_select_an_image(make_editor):
+    editor = make_editor()
+    assert editor.status_chip.hint_label.text() == "Select an image in the Library"

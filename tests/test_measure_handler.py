@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pytest
 from PyQt6 import sip
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app import provenance
 from app.gui.feedback import RecordingFeedback
@@ -467,3 +467,99 @@ def test_a_refused_run_says_nothing_about_the_project_file(tmp_path, qapp):
     assert handler.area_calculator_thread is None
     assert [w for w in _warnings(mw) if "sprouts_project.json" in w] == []
     assert any("Generating skeletons" in w for w in _warnings(mw))
+
+
+# ----------------------------------------------------------------- "Measure again?" (R8, O17)
+AGAIN_TEXT = "Nothing changed since the last measurement. Measure again?"
+
+
+def _measure_area_twice(tmp_path, qapp, between=None, before=None):
+    """Measure area once (after ``before``), run ``between``, ask again: ``(handler, mw, csv, mtime)``."""
+    _project(tmp_path, skeletons=False)
+    if before is not None:
+        before()
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+    csv = tmp_path / "mask" / "root_areas.csv"
+    mtime = csv.stat().st_mtime_ns
+    if between is not None:
+        between()
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+    return handler, mw, csv, mtime
+
+
+def test_measuring_again_with_nothing_changed_asks_first(tmp_path, qapp):
+    handler, mw, csv, mtime = _measure_area_twice(tmp_path, qapp)
+    box = handler._again_box
+    assert box is not None and box.isVisible()
+    assert box.text() == AGAIN_TEXT
+    assert box.informativeText() == "root_areas.csv already holds the values of these 4 masks."
+    assert box.defaultButton() is box.button(QMessageBox.StandardButton.Cancel)
+    assert csv.stat().st_mtime_ns == mtime
+    time.sleep(0.02)
+    box.done(QMessageBox.StandardButton.Yes.value)
+    assert handler._again_box is None
+    _wait_idle(handler, qapp)
+    assert csv.stat().st_mtime_ns > mtime
+
+
+def test_a_changed_input_measures_without_asking(tmp_path, qapp):
+    def repaint():
+        mask = next((tmp_path / "mask").glob("*.png"))
+        cv2.imwrite(str(mask), np.full((64, 80), 255, np.uint8))
+
+    handler, mw, csv, mtime = _measure_area_twice(tmp_path, qapp, between=repaint)
+    assert handler._again_box is None
+    assert csv.stat().st_mtime_ns > mtime
+
+
+def test_a_csv_without_a_record_measures_without_asking(tmp_path, qapp):
+    def forget():
+        os.remove(tmp_path / "mask" / "root_areas.csv.inputs.json")
+
+    handler, mw, csv, mtime = _measure_area_twice(tmp_path, qapp, between=forget)
+    assert handler._again_box is None
+    assert csv.stat().st_mtime_ns > mtime
+
+
+def test_cancel_keeps_the_csv(tmp_path, qapp):
+    handler, mw, csv, mtime = _measure_area_twice(tmp_path, qapp)
+    box = handler._again_box
+    box.done(QMessageBox.StandardButton.Cancel.value)
+    _wait_idle(handler, qapp)
+    assert handler.area_calculator_thread is None
+    assert csv.stat().st_mtime_ns == mtime
+    finished = [c.args[0] for c in mw.feedback.calls if c.name == "task_finished"]
+    assert finished[-1] == "Nothing changed since the last measurement: root_areas.csv kept"
+
+
+def _write_gt_mask(tmp_path, offset=0):
+    stem = next((tmp_path / "mask").glob("*.png")).stem
+    gt = np.zeros((64, 80), np.uint8)
+    gt[10 + offset : 30 + offset, 10:30] = 255
+    (tmp_path / "gt" / "mask").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(tmp_path / "gt" / "mask" / f"{stem}.png"), gt)
+
+
+def test_measuring_again_with_a_gt_file_asks_first(tmp_path, qapp):
+    handler, mw, csv, mtime = _measure_area_twice(
+        tmp_path, qapp, before=lambda: _write_gt_mask(tmp_path)
+    )
+    box = handler._again_box
+    assert box is not None and box.text() == AGAIN_TEXT
+    assert box.informativeText() == "root_areas.csv already holds the values of these 4 masks."
+    assert csv.stat().st_mtime_ns == mtime
+    box.done(QMessageBox.StandardButton.Cancel.value)
+
+
+def test_editing_the_gt_mask_measures_without_asking(tmp_path, qapp):
+    handler, mw, csv, mtime = _measure_area_twice(
+        tmp_path,
+        qapp,
+        before=lambda: _write_gt_mask(tmp_path),
+        between=lambda: _write_gt_mask(tmp_path, offset=7),
+    )
+    assert handler._again_box is None
+    assert csv.stat().st_mtime_ns > mtime

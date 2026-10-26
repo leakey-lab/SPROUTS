@@ -44,8 +44,11 @@ def chip_content(
     if state == "error":
         failed = next(status for status in ranked if status.state == "error")
         label, tip = failed.label, failed.tooltip
-    hint, hint_tip = layer.tool_hint()
-    hint = f"{title(layer.noun)} · {hint}"
+    if path:
+        hint, hint_tip = layer.tool_hint()
+        hint = f"{title(layer.noun)} · {hint}"
+    else:
+        hint, hint_tip = "Select an image in the Library", ""
     name = os.path.basename(path) or "No image"
     return (name, (state, label, tip), (hint, hint_tip, layer.color), position)
 

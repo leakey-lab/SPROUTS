@@ -39,7 +39,7 @@ from app.config import SKELETONIZER_DIR
 from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
 from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
-from app.project_layout import ProjectLayout
+from app.project_layout import SKELETON_SUFFIX, ProjectLayout
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,6 @@ CROP_SIZE = 256  # square generator output; with ASPECT_RATIO -> config.SKELETON
 ASPECT_RATIO = 3 / 4
 USE_DROPOUT = True  # no_dropout is False by default
 EPOCH = "latest"
-SKELETON_SUFFIX = "_fake.png"
 
 # =============================================================================
 # UTILITY FUNCTIONS

@@ -597,6 +597,8 @@ def test_a_failed_provenance_write_removes_the_earlier_sidecar(gt_project, qapp,
         raise OSError("disk full")
 
     monkeypatch.setattr(measure_run.provenance, "write_sidecar", broken)
+    # Force a re-measure: nothing changed, so the run would stop at "Measure again?".
+    os.remove(csv_path + ".inputs.json")
     _run(layout, qapp, "length")
 
     assert os.path.isfile(csv_path)

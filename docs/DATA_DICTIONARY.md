@@ -194,7 +194,7 @@ cannot be decoded gets no mask file; it is listed in `mask/_sprouts_run.json`
 
 | File | Format | Meaning |
 |---|---|---|
-| `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image; light lines on a dark background, binarised at measure time (see above) |
+| `skeletons/<stem>_fake.png` | RGB PNG, 341 x 256 | Skeleton predicted by the skeleton model from `<stem>`'s original image (`_fake` is the Pix2Pix name for a generated image); light lines on a dark background, binarised at measure time (see above) |
 | `gt/skeletons/<stem>.png` | 8-bit grayscale PNG, 1-pixel lines, 255 on 0 | GT skeleton: a skeleton saved in *Correct* after an edit, at the source image's resolution exactly as edited; removed again when an edit makes it equal to the prediction. Measured first by Measure > Root length where it is valid (see [Metric CSVs](#metric-csvs)). The Library's Overlay and Side by side views draw it when it exists. `skeleton_corrections/` is no longer read or written (no migration) |
 
 An image that cannot be decoded gets no skeleton file; it is listed in

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from app.gt.files import gt_files
 from app.naming import image_stem
+from app.project_layout import SKELETON_SUFFIX
 
 from ..image_manager import project_layout_of
 from ..panels import Panel
@@ -158,7 +159,7 @@ def generated_skeleton_for(window: "MainWindow", image_path: str) -> str | None:
     base = getattr(window.image_manager, "processed_base_path", None)
     if not base or not image_path:
         return None
-    return os.path.join(base, f"{image_stem(image_path)}_fake.png")
+    return os.path.join(base, f"{image_stem(image_path)}{SKELETON_SUFFIX}")
 
 
 def switch_right_panel(window: "MainWindow", panel) -> bool:

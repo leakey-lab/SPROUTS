@@ -123,11 +123,11 @@ def missing_dashboard_data(
     manager = window.image_manager
     if kind == "length":
         inputs, made = manager.skeleton_stems, "skeletons"
-        button, csv_path = "Root Length", os.path.join(layout.skeletons_dir, ROOT_LENGTHS_CSV)
+        button, csv_path = "Measure Length", os.path.join(layout.skeletons_dir, ROOT_LENGTHS_CSV)
     else:
         inputs, made = manager.masks, "masks"
         masks_dir = layout.resolve_masks_dir() or layout.mask_dir
-        button, csv_path = "Root Area", os.path.join(masks_dir, ROOT_AREAS_CSV)
+        button, csv_path = "Measure Area", os.path.join(masks_dir, ROOT_AREAS_CSV)
     if inputs:
         stage, step = "Measure", f"Run Measure → {button} to chart the {noun} of this trial."
     else:

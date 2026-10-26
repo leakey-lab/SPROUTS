@@ -115,7 +115,8 @@ _STAGES = [
         "Generate",
         "Generate",
         "cpu",
-        "Generate masks and skeletons for all loaded images in one pass.",
+        "Predict masks (root area) and skeletons (root length) for all loaded images in one "
+        "pass. Both come from the photo; neither follows the other.",
     ),
     (
         "Correct",
@@ -360,14 +361,6 @@ class ShellTopbar(QFrame):
         # Remove GT…: the Correct page owns it (on while an image is open and nothing is
         # unsaved) and asks before it deletes the image's GT files.
         mw.gt_remove_button = mw.correct_editor.actions.remove_button
-
-        # Skeleton-only regeneration never touches masks (RB-01): the wired
-        # legacy button, next to the one-pass masks-then-skeletons run.
-        mw.generate_button.setText("Skeletons only")
-        mw.generate_button.setToolTip(
-            "Skeletons only — predict skeletons from the original images (Pix2Pix); "
-            "masks are not read or regenerated."
-        )
 
         pages = {
             "Library": (mw.action_bar_view_seg,),

@@ -327,6 +327,14 @@ def _by_key(files: Mapping[str, str]) -> dict[str, str]:
     return found
 
 
+def pairs(
+    predictions: Mapping[str, str], gt_files: Mapping[str, str]
+) -> list[tuple[str | None, str | None]]:
+    """``(prediction path, GT path)`` of every image of ``predictions`` and ``gt_files``
+    (paired by stem key; ``None`` for a side the image lacks). Nothing is read."""
+    return [(i.prediction, i.gt) for i in _pair(predictions, gt_files)]
+
+
 def _pair(predictions: Mapping[str, str], gt_files: Mapping[str, str]) -> list[_Image]:
     """Every image of ``predictions`` and ``gt_files``, by stem key."""
     predicted, traced = _by_key(predictions), _by_key(gt_files)

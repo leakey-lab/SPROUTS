@@ -510,6 +510,11 @@ Five passes, not yet released:
     **Clear**, in the dock, named for the active layer, whose tooltip says what Save then
     writes; the top bar's Clear button is gone, which narrows the window's minimum width from
     877 to 759 px (W4-T1, O18, E1).
+  - The Measure buttons read *Measure Length* / *Measure Area* and say what they read and
+    write; measuring again with nothing changed since the CSV (inputs, field of view, length
+    method) asks first, also when values come from GT files (R8, O17, W2-T8a). The Generate
+    stage says masks give area and skeletons length, independently (O14). Correct with no
+    image open says "Select an image in the Library" (X9).
   - Calibration on record (W2-T4, M2 step 1): each Measure CSV's provenance records the
     pixel sizes of the measured files (`inputs.sizes_px`); Measure warns once when the GT
     files of a run have more than one size (the photos differ) or the predictions do; the

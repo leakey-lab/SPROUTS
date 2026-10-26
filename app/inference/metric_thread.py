@@ -24,10 +24,13 @@ class MetricCalculatorThread(GuardedThread):
             measured rows stay on :attr:`job`, so ``MetricCalculatorThread(job)``
             retries only the write.
         cancelled(): stopped after ``cancel()``; no CSV was written.
+        unchanged(): the job asked (``ask_if_unchanged``) and nothing changed since the CSV
+            was written; nothing was measured or written, and the caller decides.
     """
 
     finished = pyqtSignal(str)
     progress = pyqtSignal(int)
+    unchanged = pyqtSignal()
 
     def __init__(self, job: MeasureRun) -> None:
         super().__init__()
@@ -46,6 +49,10 @@ class MetricCalculatorThread(GuardedThread):
         if not self.job.images:
             logger.debug("%s: no images, skipping", name)
             self.finished.emit("")
+            return
+        if self.job.ask_if_unchanged and self.job.rows is None and self.job.unchanged():
+            logger.info("%s: nothing changed since %s", name, self.job.csv_path)
+            self.unchanged.emit()
             return
         logger.info("%s: processing %d images → %s", name, len(self.job.images), self.output_dir)
         t0 = time.monotonic()

@@ -168,9 +168,9 @@ The top bar walks through the work in five stages, in this order (`F1` lists eve
 | Stage | Key | What it does |
 |---|---|---|
 | **Library** | `Alt+1` | Browse and select minirhizotron images from the tree. |
-| **Generate** | `Alt+2` | Generate masks and skeletons for all loaded images in one pass. |
+| **Generate** | `Alt+2` | Predict masks (root area) and skeletons (root length) for all loaded images in one pass. Both come from the photo; neither follows the other. |
 | **Correct** | `Alt+3` | Fix the model's mask (area) and skeleton (length), and paint class labels (GT for training), on one canvas. |
-| **Measure** | `Alt+4` | Compute root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. |
+| **Measure** | `Alt+4` | **Measure Length** / **Measure Area**: root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. Measuring again with nothing changed since the CSV (inputs, field of view, length method) asks first. |
 | **Visualize** | `Alt+5` | Explore length and area trends across the trial. |
 
 A stage's keys work wherever the keyboard is while the stage is on screen, also right
@@ -189,7 +189,7 @@ a diamond. Hover a row for the words, e.g. `Mask: GT · Skeleton: prediction · 
 |---|---|
 | `mask/<stem>.png` | predicted root mask (grayscale 0/255, 640 x 480); *Correct* never changes it |
 | `mask/root_areas.csv` | `Image, Tube, Position, Date, Time, Area (mm²), Error, Source` |
-| `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256) |
+| `skeletons/<stem>_fake.png` | predicted skeleton (RGB, 341 x 256); `_fake` is the Pix2Pix name for a generated image |
 | `skeletons/root_lengths.csv` | `Image, Tube, Position, Date, Time, Length (mm), Error, Source` |
 | `gt/skeletons/<stem>.png` | skeleton saved in *Correct* after an edit: the GT skeleton (8-bit grey, 1-pixel lines at the photo's resolution, so a saved skeleton reopens unchanged); Measure reads it first where it is valid |
 | `gt/mask/<stem>.png` | root mask saved in *Correct* after an edit: the GT mask (white on transparent, at the photo's size); Measure reads it first |

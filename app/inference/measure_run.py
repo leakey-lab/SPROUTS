@@ -47,7 +47,7 @@ from app.inference.measure_inputs import Fingerprint
 from app.inference.measure_sources import GT, PREDICTION, GtReport, MeasureSource, SourceDecision
 from app.inference.metrics import area_row, length_row, run_metric_pool, write_metric_csv
 from app.masks.store import MASK_THRESHOLD
-from app.project_layout import ProjectLayout
+from app.project_layout import SKELETON_SUFFIX, ProjectLayout
 from app.provenance import csv_calibration
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ LENGTH = MetricSpec(
     value_column=LENGTH_VALUE_COLUMN,
     row=length_row,
     parameters={
-        "input": "gt/skeletons/<stem>.png where valid, else skeletons/<stem>_fake.png",
+        "input": f"gt/skeletons/<stem>.png where valid, else skeletons/<stem>{SKELETON_SUFFIX}",
         "source_rule": "gt-first",
         "binarization": "Otsu, inverted if mostly white",
         "estimator": LENGTH_METHOD,
@@ -124,7 +124,10 @@ SPECS: dict[str, MetricSpec] = {LENGTH.kind: LENGTH, AREA.kind: AREA}
 #: The ``input`` / ``source_rule`` parameters of a run that has no GT input (the legacy
 #: shims measure the predictions they are given, nothing else): the inputs before O1.
 PREDICTION_ONLY: dict[str, dict[str, str]] = {
-    LENGTH.kind: {"input": "generated skeletons (*_fake.png)", "source_rule": "prediction"},
+    LENGTH.kind: {
+        "input": f"generated skeletons (*{SKELETON_SUFFIX})",
+        "source_rule": "prediction",
+    },
     AREA.kind: {"input": "masks (*.png)", "source_rule": "prediction"},
 }
 
@@ -213,6 +216,8 @@ class MeasureRun:
             :func:`app.calibration.load_project_calibration`); ``None`` is the app's default.
             Every row, GT or prediction, is measured with it on its own file's pixel grid,
             and the provenance records it (:func:`app.calibration.calibration_record`).
+        ask_if_unchanged: the Qt thread then stops before measuring when
+            :meth:`unchanged` holds, so the caller can ask whether to measure again (R8).
     """
 
     def __init__(
@@ -229,8 +234,10 @@ class MeasureRun:
         sources: Mapping[str, str] | None = None,
         gt_report: GtReport | None = None,
         calibration: ProjectCalibration | None = None,
+        ask_if_unchanged: bool = False,
     ) -> None:
         self.spec = spec
+        self.ask_if_unchanged = ask_if_unchanged
         self.calibration = default_calibration() if calibration is None else calibration
         self.predictions = dict(images)
         self.gt_files = None if gt_files is None else dict(gt_files)
@@ -396,21 +403,55 @@ class MeasureRun:
                 logger.warning("Could not remove the earlier record of %s", csv_path)
 
     def unchanged(self) -> bool:
-        """True when the CSV's record names exactly :attr:`images` (and, for a GT-first run
-        after :meth:`compute`, the GT files it read) and none of them changed since it was
-        written (size and time, else content); False without a record that matches the CSV
-        on disk."""
+        """True when nothing that decides the CSV's values changed since it was written.
+
+        Its record (:mod:`app.inference.measure_inputs`) names the files it measured, each
+        with the size, time and content it had, and none of them changed; and the CSV was
+        measured with this run's field of view (and, for length, the current estimator,
+        from its provenance sidecar). False without a record or a sidecar that matches.
+
+        Stats only, no decoding. A GT file is recorded whether used or skipped; a
+        prediction only when it was measured, so the prediction of an image whose GT file
+        is recorded is left out when it is not (it was not read). Limits: the record cannot
+        tell a used GT file from a skipped one whose prediction was unopenable; a
+        regenerated prediction of a used-GT image, and a photo of another size, are not
+        noticed."""
         record = measure_inputs.load_inputs_record(self.csv_path)
-        if record is None:
+        if record is None or not self._measured_like_this_run():
             return False
         paths = {*self.images.values(), *(self.gt_files or {}).values()}
-        wanted = {measure_inputs.input_key(p, self.project_root) for p in paths}
         folders = {os.path.dirname(os.path.abspath(p)) for p in paths}
         current: dict[str, measure_inputs.Stamp] = {}
         for folder in folders:
-            stamps = measure_inputs.scan_stamps(folder, "", self.project_root)
-            current.update((key, stamp) for key, stamp in stamps.items() if key in wanted)
-        return measure_inputs.is_unchanged(record, current)
+            current.update(measure_inputs.scan_stamps(folder, "", self.project_root))
+
+        def key(path: str) -> str:
+            return measure_inputs.input_key(path, self.project_root)
+
+        needed = {key(p) for p in paths}
+        for prediction, gt in measure_sources.pairs(self.predictions, self.gt_files or {}):
+            if prediction is None or gt is None:
+                continue
+            if key(gt) in record.inputs and key(prediction) not in record.inputs:
+                needed.discard(key(prediction))  # shadowed by its used GT file
+        return measure_inputs.is_unchanged(
+            record, {k: stamp for k, stamp in current.items() if k in needed}
+        )
+
+    def _measured_like_this_run(self) -> bool:
+        """The CSV's sidecar names this run's field of view and, for length, estimator. A
+        CSV without a sidecar (or without a ``calibration`` in it) has no claim to check."""
+        recorded = provenance.csv_calibration(self.csv_path)
+        if recorded is not None and not provenance.same_calibration(
+            recorded, calibration_record(self.calibration)
+        ):
+            return False
+        if self.spec.kind != LENGTH.kind:
+            return True
+        sidecar = provenance.read_sidecar(self.csv_path)
+        parameters = sidecar.get("parameters") if sidecar is not None else None
+        estimator = parameters.get("estimator") if isinstance(parameters, dict) else None
+        return estimator is None or estimator == LENGTH_METHOD
 
     def _parameters(self) -> dict:
         """The spec's parameters; a run without GT input (no ``gt_files`` and no
