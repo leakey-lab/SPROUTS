@@ -48,6 +48,7 @@ from app.gt import (  # noqa: E402
     Registry,
     Tracing,
     default_registry,
+    load_registry,
     read_tracing,
     registry_path,
     save_registry,
@@ -910,6 +911,26 @@ def test_classes_saved_by_the_page_are_no_change_on_disk(page, project, monkeypa
 
     assert reads == [] and not page.session.files_changed()
     assert page.layers[CLASSES].can_undo() and page.layers[CLASSES].can_redo()
+
+
+def test_a_restored_class_is_applied_saved_and_no_change_on_disk(
+    make_editor, project, monkeypatch, notices
+):
+    """WG-T9: Restore in the class editor ends in the page's usual Classes… path."""
+    retired = default_registry().retire("nodule")
+    save_registry(project.folder, retired)
+    editor = make_editor(project.a, project.folder)
+    layer = editor.layers[CLASSES]
+    assert layer.registry().by_key("nodule").retired
+    fake_class_editor(monkeypatch, retired.restore("nodule"))
+
+    editor.edit_classes()
+
+    assert layer.registry().by_key("nodule").retired is False
+    assert load_registry(project.folder).by_key("nodule").retired is False
+    assert not editor.session.files_changed()
+    assert ("Classes updated", "success") in notices
+    assert "nodule" in editor.class_panel._rows
 
 
 def test_classes_without_an_image_says_where_classes_are_kept(make_editor, notices):
