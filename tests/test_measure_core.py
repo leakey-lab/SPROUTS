@@ -306,7 +306,11 @@ def test_write_adds_provenance_sidecar_without_touching_csv(tmp_path):
     assert os.path.basename(sidecar) == "root_lengths.csv.provenance.json"
     record = json.loads(open(sidecar, encoding="utf-8").read())
     assert record["kind"] == "root_length"
-    assert record["calibration"] == {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+    assert record["calibration"] == {
+        "fov_width_mm": 18.0,
+        "fov_height_mm": 13.0,
+        "source": "default",
+    }
     assert record["inputs"]["folder"] == "skeletons"
     assert record["inputs"]["n_images"] == 4
     assert record["inputs"]["names_sha256"] == provenance.names_digest(images)

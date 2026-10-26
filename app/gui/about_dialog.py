@@ -24,6 +24,7 @@ import platform
 import re
 import threading
 from collections.abc import Callable, Mapping
+from typing import Any
 
 from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices, QGuiApplication
@@ -39,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app import APP_FULL_NAME, LICENSE_SPDX, __version__
+from app.calibration import calibration_record, calibration_words
 from app.config import PROJECT_ROOT
 from app.gui import canvas_gl
 from app.gui.widgets import tokens
@@ -50,9 +52,11 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "AboutDialog",
     "CITATION_PATH",
+    "calibration_text",
     "citation_text",
     "details_text",
     "measured_with_text",
+    "project_calibration",
     "runtime_text",
 ]
 
@@ -132,20 +136,45 @@ def _fov(calibration: Mapping[str, float] | None = None) -> str:
     return fov_text(calibration)
 
 
-def _differs(calibration: Mapping[str, float]) -> bool:
-    from app.gui.metrics_bar import differs_from_running
+def calibration_text(calibration: Mapping[str, Any] | None = None) -> str:
+    """The Calibration row: ``18×13.5 mm (this project's field of view)`` for the open
+    project's (:func:`project_calibration`, from its project file), else
+    ``18×13 mm (this app's field of view)``: the words of
+    :func:`app.calibration.calibration_words`, shared with the metrics bar and the export."""
+    return f"{_fov(calibration)} ({calibration_words(calibration).owner} field of view)"
 
-    return differs_from_running(calibration)
+
+def _differs(calibration: Mapping[str, float], current: Mapping[str, float] | None) -> bool:
+    from app.gui.metrics_bar import differs_from_current
+
+    return differs_from_current(calibration, current)
+
+
+def project_calibration(window: object | None) -> dict[str, Any] | None:
+    """The field of view of the project open in ``window`` (``fov_width_mm``,
+    ``fov_height_mm``, ``source``: :func:`app.calibration.calibration_record`, O3); ``None``
+    without one (the running default is meant then). ``window`` is read duck-typed:
+    ``window.metrics.current_calibration()``."""
+    current = getattr(getattr(window, "metrics", None), "current_calibration", None)
+    if not callable(current):
+        return None
+    try:
+        return calibration_record(current())
+    except Exception:  # never let the About box fail on a project probe
+        logger.exception("Project calibration unavailable")
+        return None
 
 
 def measured_with_text(window: object | None) -> str | None:
     """``FOV 18×13.5 mm (root_lengths.csv)``, one line per Measure CSV of the project open in
-    ``window`` that was measured with another field of view than the running one (M2);
-    ``None`` when there is no such CSV, no project or no CSV record. ``window`` is read
-    duck-typed: ``window.metrics.index`` is a ``MeasurementIndex``."""
+    ``window`` that was measured with another field of view than the project's (its
+    :func:`project_calibration`, else the running one; M2, O3); ``None`` when there is no such
+    CSV, no project or no CSV record. ``window`` is read duck-typed: ``window.metrics.index``
+    is a ``MeasurementIndex``."""
     index = getattr(getattr(window, "metrics", None), "index", None)
     if index is None:
         return None
+    current = project_calibration(window)
     try:
         calibrations = index.calibrations()
         csvs = index.sources()
@@ -156,7 +185,7 @@ def measured_with_text(window: object | None) -> str | None:
     for metric, calibration in calibrations.items():
         if calibration is None:
             continue
-        if _differs(calibration):
+        if _differs(calibration, current):
             name = os.path.basename(csvs.get(metric) or "") or f"the {metric} CSV"
             lines.append(f"FOV {_fov(calibration)} ({name})")
     return "\n".join(lines) or None
@@ -242,18 +271,20 @@ def details_text(
     runtime: str | None = None,
     canvas: str | None = None,
     measured_with: str | None = None,
+    calibration: Mapping[str, float] | None = None,
 ) -> str:
     """Plain-text provenance block for a methods section or lab notebook; ``runtime`` is
     the Runtime line (:func:`runtime_text` without a device guess when None), ``canvas``
     the Canvas line (the dialog fills it; None means not checked, never probed here),
     ``measured_with`` the dialog's "Measured with" text (:func:`measured_with_text`), a line
-    of its own when given."""
+    of its own when given; ``calibration`` the open project's field of view
+    (:func:`project_calibration`; ``None``: the running one)."""
     statuses = statuses or {}
     lines = [
         f"{APP_FULL_NAME} v{__version__}",
         f"Commit: {_commit()}",
         f"License: {LICENSE_SPDX} (weights CC-BY-4.0)",
-        f"Calibration FOV: {_fov()}",
+        f"Calibration FOV: {calibration_text(calibration)}",
         *([f"Measured with: {'; '.join(measured_with.splitlines())}"] if measured_with else []),
         f"Runtime: {runtime_text() if runtime is None else runtime}",
         f"Canvas: {canvas or 'not checked'}",
@@ -333,7 +364,8 @@ class AboutDialog(QDialog):
         self._grid.setColumnStretch(1, 1)
         self._add_fact("Commit", _commit())
         self._add_fact("License", f"{LICENSE_SPDX} · weights CC-BY-4.0")
-        self._add_fact("Calibration", f"FOV {_fov()}")
+        self._calibration = project_calibration(parent)
+        self._add_fact("Calibration", f"FOV {calibration_text(self._calibration)}")
         self._measured_with = measured_with_text(parent)
         if self._measured_with:
             self._add_fact("Measured with", self._measured_with)
@@ -419,7 +451,13 @@ class AboutDialog(QDialog):
         if self._runtime_label.text() not in (runtime, _CHECKING):  # not while asking the driver
             self._runtime_label.setText(runtime)
         QGuiApplication.clipboard().setText(
-            details_text(self._statuses, runtime, canvas_gl.canvas_line()[0], self._measured_with)
+            details_text(
+                self._statuses,
+                runtime,
+                canvas_gl.canvas_line()[0],
+                self._measured_with,
+                calibration=self._calibration,
+            )
         )
 
     def copy_citation(self) -> None:

@@ -4,7 +4,9 @@ The two stages showed the Library canvas and their buttons, and nothing said wha
 would do. The status line's idle text now says it while one of them is on screen:
 
 * Generate: ``40 images · 28 without a mask · 20 without a skeleton``;
-* Measure: ``20 skeletons: measured, current · 12 masks: 3 changed since measured``.
+* Measure: ``20 skeletons: measured, current · 12 masks: 3 changed since measured``; a
+  CSV measured with another field of view or length method than the project's now says
+  ``measured with another field of view or length method: measure again`` (O3).
   With the record of the files a Measure run measured (``<csv>.inputs.json``, R5),
   "changed" are the inputs whose content differs from the recorded one, and inputs added
   and removed since are named (``12 masks: 3 changed, 2 new, 1 removed since measured``);
@@ -51,6 +53,9 @@ class Freshness:
     the same image is measured (a case-sensitive disk).
 
     ``gt``: how many of the ``inputs`` images have a GT file (O1: Measure reads it first).
+
+    ``method_note``: the CSV was measured with another field of view than the project's, or
+    (length) another length method (:func:`app.calibration.method_note`, O3); ``""``: not.
     """
 
     inputs: int
@@ -62,6 +67,7 @@ class Freshness:
     without_image: int = 0
     duplicates: int = 0
     gt: int = 0
+    method_note: str = ""
 
 
 def missing(images: Iterable[str], present: Container[str]) -> int:
@@ -101,6 +107,10 @@ def _metric_text(noun: str, freshness: Freshness | None, inputs: int, gt: int) -
         return head
     if not freshness.measured:
         return f"{head}: not measured yet{skipped}"
+    if freshness.method_note:
+        return (
+            f"{head}: measured with another field of view or length method: measure again{skipped}"
+        )
     parts = [
         f"{count:,} {what}"
         for count, what in (

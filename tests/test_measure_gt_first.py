@@ -519,6 +519,8 @@ class _NoteIndex:
     """A measured image whose sidecar lists a skipped GT file for both metrics (stale when
     the rows say ``gt``)."""
 
+    root = None  # no project file is read: the default field of view (O3)
+
     def __init__(self, source: str) -> None:
         self.source = source
 
@@ -541,6 +543,9 @@ class _NoteIndex:
 
     def calibrations(self) -> dict:
         return {"length": None, "area": None}
+
+    def method_notes(self, _current) -> dict:
+        return {"length": "", "area": ""}
 
     def gt_skip_reason(self, _name) -> dict:
         return {"length": "size", "area": "unreadable"}

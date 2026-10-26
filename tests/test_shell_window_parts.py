@@ -189,6 +189,8 @@ class Bar:
 class Index:
     """A measurement index stand-in: one measured image, counters for what was asked."""
 
+    root = None  # no project file is read: the default field of view (O3)
+
     def __init__(self, *, needs_load: bool = False) -> None:
         self._needs_load = needs_load
         self.asked = self.prewarmed = 0
@@ -211,6 +213,9 @@ class Index:
 
     def calibrations(self) -> dict:
         return {"length": None, "area": None}
+
+    def method_notes(self, _current) -> dict:
+        return {"length": "", "area": ""}
 
     def gt_skip_reason(self, _name) -> dict:
         return {}
@@ -285,6 +290,7 @@ def test_the_bar_shows_the_status_and_the_measured_values():
             "by_time": False,
             "area_by_time": True,
             "area_note": None,
+            "method_notes": {"length": "", "area": ""},
         }
     ]
 

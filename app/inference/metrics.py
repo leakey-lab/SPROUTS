@@ -30,12 +30,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 
-from app.config import AREA_VALUE_COLUMN, CALIBRATION, LENGTH_VALUE_COLUMN
+from app import config
+from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN, Calibration
 from app.io_utils import atomic_open, imread_unicode
 from app.masks.store import MASK_THRESHOLD
 from app.naming import parse_image_name as _parse_name
 
 logger = logging.getLogger(__name__)
+
+# The app's default field of view as this module bound it before O3; kept importable for code
+# that reads ``metrics.CALIBRATION`` (a benchmark imports this module). The functions read
+# ``config.CALIBRATION`` at call time instead.
+CALIBRATION = config.CALIBRATION
 
 # --------------------------- image -> binary -------------------------------
 
@@ -119,20 +125,27 @@ def skeleton_arc_length_px(skeleton: np.ndarray) -> tuple[float, float, float]:
     return orth_x, orth_y, diag
 
 
-def root_length_mm(skeleton: np.ndarray) -> float:
-    """Root length in mm from a skeleton, using arc-length + per-axis calibration."""
+def root_length_mm(skeleton: np.ndarray, *, calibration: Calibration | None = None) -> float:
+    """Root length in mm from a skeleton, using arc-length + per-axis calibration.
+
+    ``calibration``: the field of view (a project's, O3); ``None`` is
+    :data:`app.config.CALIBRATION`, read at call time."""
     h, w = skeleton.shape[:2]
-    mx, my = CALIBRATION.mm_per_px(w, h)
+    cal = config.CALIBRATION if calibration is None else calibration
+    mx, my = cal.mm_per_px(w, h)
     orth_x, orth_y, diag = skeleton_arc_length_px(skeleton)
     diag_mm = math.hypot(mx, my)
     return orth_x * mx + orth_y * my + diag * diag_mm
 
 
-def root_area_mm2(mask: np.ndarray) -> float:
-    """Root area in mm^2 from a binary mask, calibrated to the mask's resolution."""
+def root_area_mm2(mask: np.ndarray, *, calibration: Calibration | None = None) -> float:
+    """Root area in mm^2 from a binary mask, calibrated to the mask's resolution.
+
+    ``calibration``: as :func:`root_length_mm`."""
     h, w = mask.shape[:2]
     root_pixels = int(np.count_nonzero(mask == 255))
-    return root_pixels * CALIBRATION.area_per_px_mm2(w, h)
+    cal = config.CALIBRATION if calibration is None else calibration
+    return root_pixels * cal.area_per_px_mm2(w, h)
 
 
 # Backwards-compatible aliases (kept so existing imports keep working).
@@ -223,25 +236,31 @@ def _metric_row(
         }
 
 
-def length_row(name: str, path: str, *, data: bytes | None = None) -> dict:
+def length_row(
+    name: str, path: str, *, data: bytes | None = None, calibration: Calibration | None = None
+) -> dict:
     """The ``root_lengths.csv`` row for the skeleton image at ``path`` (``data``: its bytes,
-    already read; the row is the same)."""
+    already read; the row is the same), measured with ``calibration`` (``None``: the app's)."""
 
     def measure(p: str) -> tuple[float, str, dict]:
         skeleton = preprocess_image(p, data=data)
-        return root_length_mm(skeleton), _size_text(skeleton), {}
+        return root_length_mm(skeleton, calibration=calibration), _size_text(skeleton), {}
 
     return _metric_row(name, path, measure, LENGTH_VALUE_COLUMN, "Length")
 
 
-def area_row(name: str, path: str, *, data: bytes | None = None) -> dict:
+def area_row(
+    name: str, path: str, *, data: bytes | None = None, calibration: Calibration | None = None
+) -> dict:
     """The ``root_areas.csv`` row for the mask image at ``path`` (``data``: its bytes,
-    already read; the row is the same). A mask with grey levels also gets the private key
-    ``_non_binary: True`` (never a CSV column)."""
+    already read; the row is the same), measured with ``calibration`` (``None``: the app's).
+    A mask with grey levels also gets the private key ``_non_binary: True`` (never a CSV
+    column)."""
 
     def measure(p: str) -> tuple[float, str, dict]:
         mask, non_binary = _load_mask_and_grey_flag(p, data)
-        return root_area_mm2(mask), _size_text(mask), {"_non_binary": True} if non_binary else {}
+        area = root_area_mm2(mask, calibration=calibration)
+        return area, _size_text(mask), {"_non_binary": True} if non_binary else {}
 
     return _metric_row(name, path, measure, AREA_VALUE_COLUMN, "Area")
 

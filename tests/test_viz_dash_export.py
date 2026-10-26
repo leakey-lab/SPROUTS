@@ -249,3 +249,56 @@ def test_export_filename_is_descriptive_and_sortable():
     assert dash_export.export_filename("root_area", "profile", when) == (
         "root_area_profile_20260928_174512.csv"
     )
+
+
+def test_the_export_compares_with_the_projects_calibration(tmp_path):
+    """O3: the export compares the CSV's recorded field of view with its project's."""
+    root = tmp_path / "project"
+    (root / "skeletons").mkdir(parents=True)
+    (root / "sprouts_project.json").write_text(
+        '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}}',
+        encoding="utf-8",
+    )
+    source = root / "skeletons" / "root_lengths.csv"
+    source.write_text("Image,Tube\n", encoding="utf-8")
+    provenance.write_sidecar(source, {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}})
+    table = dash_export.ExportTable(pd.DataFrame({"a": [1]}), description="d")
+    lines = dash_export.provenance_lines(
+        table, source_csv=str(source), metric_column="Length (mm)", view="stacked"
+    )
+    (line,) = [line for line in lines if line.startswith("# calibration: ")]
+    assert "18.00 x 13.50 mm, as recorded with root_lengths.csv" in line
+    assert "this app now uses" not in line
+    # Recorded at 13.0 in a 13.5 project: the note names the project's field of view.
+    provenance.write_sidecar(source, {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}})
+    lines = dash_export.provenance_lines(
+        table, source_csv=str(source), metric_column="Length (mm)", view="stacked"
+    )
+    (line,) = [line for line in lines if line.startswith("# calibration: ")]
+    assert line.endswith("; this project uses 18.00 x 13.50 mm")
+
+
+def test_the_export_takes_the_project_root_when_the_caller_knows_it(tmp_path):
+    """A CSV outside the project's folders (or deeper than the walk) is compared with the
+    project's field of view when the caller passes the project root (review I3)."""
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "sprouts_project.json").write_text(
+        '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}}',
+        encoding="utf-8",
+    )
+    source = tmp_path / "copied" / "root_lengths.csv"
+    source.parent.mkdir()
+    source.write_text("Image,Tube\n", encoding="utf-8")
+    provenance.write_sidecar(source, {"calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.0}})
+    table = dash_export.ExportTable(pd.DataFrame({"a": [1]}), description="d")
+    text = dash_export.render_csv(
+        table,
+        source_csv=str(source),
+        metric_column="Length (mm)",
+        view="stacked",
+        project_root=str(root),
+    )
+    assert _header(text)["calibration"].endswith("; this project uses 18.00 x 13.50 mm")
+    # Without it, the CSV's own folders hold no project file: the app's default, the same.
+    assert "uses" not in dash_export.calibration_line(str(source))

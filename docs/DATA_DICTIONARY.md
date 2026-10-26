@@ -314,7 +314,7 @@ with `git_commit` `null`, `runtime`, `models`, `inputs` and `parameters` empty (
 | `created_utc` | ISO 8601 UTC time, e.g. `2026-09-28T22:42:02Z` |
 | `app` | `name`, `full_name`, `version` |
 | `git_commit` | commit of the code that ran (from `.git`, or `build_info.json` in the Windows app); `null` if unknown |
-| `calibration` | `fov_width_mm`, `fov_height_mm` |
+| `calibration` | `fov_width_mm`, `fov_height_mm`, `source` (`"default"`: the app's field of view; `"project"`: the project's `sprouts_project.json`). A project-sourced record also has `file` (`"sprouts_project.json"`), `evidence` (the file's `calibration.source` text, `""` when it has none) and, when the file states it, `reference_size_px` (`[width, height]`). Generation records always carry the default (generation uses no field of view). |
 | `runtime` | Python version and implementation, OS, versions of the libraries that were loaded, and (when PyTorch was used) its CUDA/cuDNN versions and precision flags |
 | `models` | per model: `path` (relative to the app folder), `sha256`, `size` in bytes; empty for the GT export |
 | `inputs`, `parameters`, `outputs` | set by the writer. GT export: `inputs` = project folder name, number of images, the class registry with its original ids; `parameters` = `val_fraction`, `group_by_tube`, `only_complete`, `seed`; `outputs` = `exported`, `train`, `val`, `skipped_incomplete`, `errors`. Measure (`root_lengths.csv.provenance.json` / `root_areas.csv.provenance.json`): `inputs` = `folder`, `n_images`, `names_sha256`, `n_without_image` / `without_image` and `n_duplicate` / `duplicates` (predictions by file name, GT files as `gt/skeletons/<file>` / `gt/mask/<file>`), and `gt` = `folder` (`gt/skeletons` / `gt/mask`), `n_used`, `files` (`{stem: SHA-256}` of the GT files measured), `skipped` (`[{"stem", "reason"}]`, reason `size` / `unedited` / `unreadable`); `parameters` = `input` (`"gt/skeletons/<stem>.png where valid, else skeletons/<stem>_fake.png"` / `"gt/mask/<stem>.png where readable, else mask/<stem>.png"`), `source_rule` (`"gt-first"`), `binarization` (and `estimator` for length); `outputs` = `csv`, `columns`, `value_column`, `n_rows`, `n_errors`, `n_zero`, `n_gt`, `n_prediction` and, for area only, `n_non_binary` (masks whose grey decode held a value other than 0 and 255; Measure then warns once); and `inputs.sizes_px` = `{"WxH": n, ...}`, the number of measured files of each decoded pixel size, most common first, GT files and predictions together (Error rows are not counted). GT files are at the photo's resolution (for example `640x480`), predictions at the model's (skeletons `341x256`, masks `640x480`), so a project that mixes GT and predictions lists both sizes without that being a problem. Measure warns once when the GT files of a run have more than one size (the photos differ, and one field of view is applied to each), or when the predictions do (files the model did not write); a project without GT files is not checked for photo sizes. The decoded size lives only on the in-memory row (`_size_px`); it is never a CSV column. Generation (`_sprouts_run.json`): `inputs` = `folder`, `n_images`, `names_sha256`; `parameters` = the batch size, `batch_policy` (`"fixed"`: every forward at `batch_size`, the last batch padded with zero images whose outputs are dropped, out of GPU memory stops the run; `"auto"`: the former VRAM-sized, halving behaviour; from `SPROUTS_BATCH_POLICY`) and the model's input settings; `outputs` = `status` (`completed`: the run reached the end, even if every input failed; `cancelled`; `failed`: it stopped with an error), `error` (`null` or `"<ExceptionType>: <message>"`), `n_inputs`, `n_written`, `n_failed`, `n_skipped`, `cancelled`, `batch_size`, `effective_batch_size` (on a GPU the batch size can change outputs slightly, see `docs/KNOWN_ISSUES.md` #7), `elapsed_s`, `failed` (`input` + `reason` per input), `skipped`, `batch_shapes` (forward size as a string key, largest first, -> number of input slots that ran at that size; zero-filled slots included; only forwards that returned a result count), `oom_events` (`{"at": <input file name of the slice's first slot>, "from": <slice length>, "to": <retry length>}` in the order they happened; a single image that runs out of memory alone is a `failed` entry, not an event), `free_vram_gib` (the driver's free GPU memory in GiB, read after the model loaded and before the first batch of a fixed-policy GPU run, 2 dp; `null` on the CPU or under `auto`). Under `fixed`, `batch_shapes` has one key (`batch_size`; padding rows are in the size, never in the count) and `oom_events` is always empty: running out of memory ends the run (`status` `failed`). |
@@ -322,6 +322,22 @@ with `git_commit` `null`, `runtime`, `models`, `inputs` and `parameters` empty (
 
 Paths in records are relative to the app or project folder so a shared record does not
 reveal user or drive names. Loaders ignore these files.
+
+### `sprouts_project.json`
+
+Optional, in the project folder (next to the images). UTF-8 JSON (a BOM is accepted):
+`schema` = `1`; `calibration.fov_width_mm`, `calibration.fov_height_mm` (numbers above 0,
+the camera's field of view in mm); optional `calibration.reference_size_px` (`[width,
+height]`, whole numbers above 0: the image size the field of view was measured at; Measure
+warns once when measured files have another width / height ratio, by more than 1 %);
+optional `calibration.source` (text: how the field of view was measured). Unknown keys are
+ignored. Missing: the default field of view. Invalid: the default, and Measure says why
+(`sprouts_project.json was not used (<reason>): measured with the default field of view
+18×13 mm.`). A CSV whose provenance records another field of view (or, for length, another
+`parameters.estimator`) is marked outdated in the metrics bar and on the Measure status line
+until measured again; a CSV without a provenance `calibration` is never marked. The
+dashboards' export finds the file of the CSV's project by looking up to five folders above
+the CSV, nearest first.
 
 ## Windows app build information
 

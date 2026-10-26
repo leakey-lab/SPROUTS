@@ -21,9 +21,15 @@ from typing import Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
+from app.calibration import (
+    PROJECT_FILENAME,
+    aspect_mismatches,
+    default_calibration,
+    fov_label,
+    load_project_calibration,
+)
 from app.gui.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
-from app.gui.metrics_bar import fov_text
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
 from app.inference.measure_run import (
@@ -34,6 +40,7 @@ from app.inference.measure_run import (
     MetricSpec,
     mixed_sizes,
     scan_png_files,
+    sizes_px,
     split_inputs,
 )
 from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
@@ -221,7 +228,9 @@ class SkeletonHandler(HandlerDependencies):
                 f"{'has' if n == 1 else 'have'} no image in the project."
             )
             return
-        self._start(
+        # O3: the project's field of view (sprouts_project.json), else the default.
+        calibration = load_project_calibration(layout.root)
+        started = self._start(
             MeasureRun(
                 spec,
                 split.kept,
@@ -231,8 +240,14 @@ class SkeletonHandler(HandlerDependencies):
                 duplicates=duplicates,
                 gt_files=gt_split.kept,
                 photos=image_stems if spec.kind == LENGTH.kind else None,
+                calibration=calibration,
             )
         )
+        if started and calibration.problem:  # said only for a run that really started
+            self._warn(
+                f"{PROJECT_FILENAME} was not used ({calibration.problem}): measured with the "
+                f"default field of view {fov_label(default_calibration().calibration)}."
+            )
 
     def _cannot_read(self, folder: str, exc: OSError) -> None:
         logger.exception("Cannot list %s", folder)
@@ -282,23 +297,49 @@ class SkeletonHandler(HandlerDependencies):
             self.feedback.notify(f"Saved {name} in the {folder} folder", "success")
         self._notify_skipped(thread.job, name)
         self._notify_gt_not_used(thread.job, name)
-        self._notify_mixed_sizes(rows)
+        self._notify_sizes(thread.job, rows)
         self._notify_non_binary(thread.spec, rows)
 
-    def _notify_mixed_sizes(self, rows: list[dict]) -> None:
-        """Warn, once, when the files of one source group have more than one size (M2): the
-        photos differ, and one field of view was applied to all of them. The sizes are in
-        the provenance (``inputs.sizes_px``)."""
+    def _notify_sizes(self, job: MeasureRun, rows: list[dict]) -> None:
+        """Warn, once, about the sizes of the measured files: one warning for one cause.
+
+        * The files of one source group have more than one size (M2): the photos differ,
+          and one field of view was applied to all of them (sizes in the provenance,
+          ``inputs.sizes_px``).
+        * Files have another width / height ratio than the reference size the project file
+          states (O3): the field of view spans each whole image, so it fits only files of the
+          reference's shape.
+
+        When both apply (an odd-shaped file among others), one warning says both."""
+        fov = fov_label(job.calibration.calibration)
         sizes = mixed_sizes(rows)
-        if sizes is None:
+        reference = job.calibration.reference_size_px
+        n = aspect_mismatches(sizes_px(rows), reference)
+        shape = None
+        if n and reference is not None:
+            shape = (
+                f"another shape than the {reference[0]}×{reference[1]} reference in "
+                f"{PROJECT_FILENAME}"
+            )
+        if sizes is None and shape is None:
             return
-        listed = [f"{size} ×{n:,}" for size, n in list(sizes.items())[:_SIZES_LISTED]]
+        if sizes is None:
+            self._warn(
+                f"{n:,} measured {'file' if n == 1 else 'files'} {'has' if n == 1 else 'have'} "
+                f"{shape}: the field of view was applied to each whole image."
+            )
+            return
+        listed = [f"{size} ×{count:,}" for size, count in list(sizes.items())[:_SIZES_LISTED]]
         if len(sizes) > _SIZES_LISTED:
             listed.append("…")
-        self._warn(
-            f"The measured files have {len(sizes)} sizes ({', '.join(listed)}): "
-            f"one {fov_text()} field of view was applied to each."
-        )
+        head = f"The measured files have {len(sizes)} sizes ({', '.join(listed)})"
+        if shape is None:
+            self._warn(f"{head}: one {fov} field of view was applied to each.")
+        else:
+            self._warn(
+                f"{head}, and {n:,} {'has' if n == 1 else 'have'} {shape}: "
+                f"one {fov} field of view was applied to each whole image."
+            )
 
     def _notify_non_binary(self, spec: MetricSpec, rows: list[dict]) -> None:
         """Warn, once, when measured masks have grey levels (M5, O10): the pixels above

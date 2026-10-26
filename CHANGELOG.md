@@ -357,6 +357,9 @@ Five passes, not yet released:
 
 ### Added
 - **Owner-decisions build (2026-10-25).**
+  - Per-project field of view in `sprouts_project.json`, recorded with every measurement;
+    CSVs measured with another field of view or length method are marked outdated (O3
+    mechanism, memo Q3, W3-T2). The default stays 18 x 13 mm in this step.
   - Enhance popover: **Smooth JPEG blocks** (off by default, shown only for `.jpg` /
     `.jpeg` photos) softens the 8 x 8 compression blocks when zoomed in. Display only:
     masks, skeletons, ground truth and measurements are untouched (pinned by the Correct

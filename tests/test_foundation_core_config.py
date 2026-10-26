@@ -26,6 +26,7 @@ FOUNDATION_MODULES = (
     "app.user_paths",
     "app.provenance",
     "app.models",
+    "app.calibration",
 )
 HEAVY_MODULES = ("torch", "torchvision", "cv2", "PyQt6", "dash", "pandas", "plotly")
 

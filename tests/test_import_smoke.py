@@ -57,6 +57,7 @@ APP_MODULES = [
     "app.visualization.root_length_visulization",
     "app.visualization.root_area_visualization",
     # Modules added by the UI/perf refinement packages (and older ones never listed).
+    "app.calibration",
     "app.config",
     "app.data_processing.measurement_index",
     "app.design.tokens",

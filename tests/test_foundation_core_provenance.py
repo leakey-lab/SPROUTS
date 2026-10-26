@@ -55,7 +55,9 @@ def test_build_record_shape():
     assert record["app"]["name"] == "SPROUTS"
     assert "git_commit" in record
     assert (
-        record["calibration"] == calibration_info() == {"fov_width_mm": 18.0, "fov_height_mm": 13.0}
+        record["calibration"]
+        == calibration_info()
+        == {"fov_width_mm": 18.0, "fov_height_mm": 13.0, "source": "default"}
     )
     assert record["runtime"]["python"]
     assert record["inputs"] == {"folder": "skeletons", "n_images": 3}

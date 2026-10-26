@@ -31,15 +31,15 @@ Contract:
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import os
 import threading
 import time
 from collections.abc import Callable
 from functools import partial
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
+from app.calibration import ProjectCalibration, fov_of, method_note
 from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN, SOURCE_COLUMN
 from app.gt.files import SOURCE_GT, SOURCE_PREDICTION
 from app.inference.measure_inputs import (
@@ -51,7 +51,7 @@ from app.inference.measure_inputs import (
 )
 from app.naming import image_stem, stem_key
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
-from app.provenance import csv_calibration, sidecar_path
+from app.provenance import read_sidecar
 
 logger = logging.getLogger(__name__)
 
@@ -127,16 +127,24 @@ def _table_signature(path: str) -> _TableSignature | None:
     return None if sig is None else (sig, _signature(inputs_record_path(path)))
 
 
-def _read_gt_skipped(csv_path: str) -> dict[str, str]:
+def _gt_skipped_of(record: dict[str, Any] | None) -> dict[str, str]:
     """``stem_key -> reason`` of the GT files a Measure run did not use, from the CSV's
-    provenance sidecar (``inputs.gt.skipped``); empty when it has none or cannot be read."""
+    provenance ``record`` (``inputs.gt.skipped``); empty when it has none."""
     try:
-        with open(sidecar_path(csv_path), encoding="utf-8") as fh:
-            record = json.load(fh)
         skipped = record["inputs"]["gt"]["skipped"]
         return {stem_key(str(item["stem"])): str(item["reason"]) for item in skipped}
-    except (OSError, ValueError, RecursionError, KeyError, TypeError):
+    except (KeyError, TypeError):
         return {}
+
+
+def _method_of(record: dict[str, Any] | None, calibration: dict[str, float] | None) -> dict | None:
+    """What :func:`app.calibration.method_note` reads of a CSV's provenance: the field of
+    view it was measured with and its ``parameters.estimator``; ``None`` without a record."""
+    if record is None:
+        return None
+    parameters = record.get("parameters")
+    estimator = parameters.get("estimator") if isinstance(parameters, dict) else None
+    return {"calibration": calibration, "parameters": {"estimator": estimator}}
 
 
 def _read_metric_csv(path: str, value_column: str) -> _Rows:
@@ -202,6 +210,7 @@ class MetricTable:
         self._record: InputsRecord | None = None
         self._gt_skipped: dict[str, str] = {}
         self._calibration: dict[str, float] | None = None
+        self._method: dict | None = None
 
     @property
     def path(self) -> str | None:
@@ -221,6 +230,13 @@ class MetricTable:
         the CSV is loaded)."""
         return self._calibration
 
+    @property
+    def method(self) -> dict | None:
+        """The loaded CSV's field of view and length method (``calibration``,
+        ``parameters.estimator``) as :func:`app.calibration.method_note` reads them; ``None``
+        without a provenance sidecar (or before the CSV is loaded)."""
+        return self._method
+
     def gt_skip_reason(self, stem: str) -> str:
         """Why the GT file of ``stem`` was not measured (``size``, ``unedited``,
         ``unreadable``: the CSV's provenance), ``""`` when it was or there is none."""
@@ -231,7 +247,7 @@ class MetricTable:
         with self._lock:
             self._path, self._searched_at, self._searched_full_at = None, None, None
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
-            self._gt_skipped, self._calibration = {}, None
+            self._gt_skipped, self._calibration, self._method = {}, None, None
 
     def _resolve(self, full: bool) -> tuple[str, _TableSignature] | None:
         """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
@@ -265,7 +281,7 @@ class MetricTable:
         found = self._resolve(full=load)
         if found is None:
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
-            self._gt_skipped, self._calibration = {}, None
+            self._gt_skipped, self._calibration, self._method = {}, None, None
             return None
         path, sig = found
         if sig != self._loaded_sig:
@@ -274,8 +290,10 @@ class MetricTable:
             if self._loaded_sig is None or sig[0] != self._loaded_sig[0]:
                 self._rows = _read_metric_csv(path, self.value_column)
             self._record = load_inputs_record(path)
-            self._gt_skipped = _read_gt_skipped(path)  # written with the record
-            self._calibration = csv_calibration(path)
+            sidecar = read_sidecar(path)  # written with the record; read once per load
+            self._gt_skipped = _gt_skipped_of(sidecar)
+            self._calibration = fov_of(sidecar.get("calibration")) if sidecar else None
+            self._method = _method_of(sidecar, self._calibration)
             self._loaded_sig = sig
         return self._rows
 
@@ -402,6 +420,16 @@ class MeasurementIndex:
         was measured with (``fov_width_mm``, ``fov_height_mm``); ``None`` for a metric without
         a CSV, or whose CSV has no provenance sidecar. Parsed state only (GUI thread)."""
         return {"length": self._length.calibration, "area": self._area.calibration}
+
+    def method_notes(self, current: ProjectCalibration) -> dict[str, str]:
+        """``{"length": note, "area": note}``: why each loaded CSV's values cannot be
+        compared with new ones measured with ``current`` (another field of view, or for
+        length another length method; :func:`app.calibration.method_note`); ``""`` = none.
+        Parsed state only (GUI thread)."""
+        return {
+            "length": method_note(self._length.method, kind="length", current=current),
+            "area": method_note(self._area.method, kind="area", current=current),
+        }
 
     def sources(self) -> dict[str, str | None]:
         """``{"length": csv path | None, "area": csv path | None}`` currently in use."""

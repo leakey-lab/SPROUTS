@@ -154,3 +154,22 @@ def test_the_bar_shows_the_field_of_view_recorded_with_the_shown_value(app):
     assert _shown_fov(Measurement(None, None, None), {"length": recorded}, csvs) == running
     assert _shown_fov(both, {"length": None, "area": None}, csvs) == running
     assert _shown_fov(both, {}, {}) == running
+
+
+def test_a_method_note_marks_the_value_outdated(app):
+    """O3: a value measured with another field of view (or length method) is flagged, not
+    hidden; its tooltip gets the note as a line of its own."""
+    note = (
+        "Measured with field of view 18×13 mm; this project uses 18×13.5 mm. "
+        "Measure again before comparing with new values."
+    )
+    bar = MetricsBar()
+    bar.set_metrics(length=18.77, area=16.41, method_notes={"length": "", "area": note})
+    assert bar._area_value.text() == "16.41 mm²"
+    assert bar._area_value.property("stale") is True
+    assert note in bar._area_cell.toolTip().split("\n")
+    assert "changed after this measurement" not in bar._area_cell.toolTip()
+    assert bar._length_value.property("stale") is False
+    assert note not in bar._length_cell.toolTip()
+    bar.set_metrics(length=18.77, area=16.41)
+    assert bar._area_value.property("stale") is False

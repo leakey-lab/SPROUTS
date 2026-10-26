@@ -20,13 +20,19 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 
+from app.calibration import (
+    ProjectCalibration,
+    calibration_record,
+    calibration_words,
+    load_project_calibration,
+)
 from app.data_processing.measurement_index import Measurement, MeasurementIndex
 from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 
 from ..image_manager import project_layout_of
 from ..library_index import status_text
-from ..metrics_bar import differs_from_running, fov_text
+from ..metrics_bar import differs_from_current, fov_owner_tip, fov_text
 from ._common import USER_ROLE
 
 logger = logging.getLogger(__name__)
@@ -95,10 +101,15 @@ def _shown_fov(
     measured: Measurement,
     calibrations: Mapping[str, Mapping[str, float] | None],
     csvs: Mapping[str, str | None],
+    current: ProjectCalibration | None = None,
 ) -> tuple[str, str]:
     """``(text, tooltip)`` of the FOV cell: the field of view recorded with the CSV of the
-    shown value (length's, else area's), and when that differs from the running one the
-    line saying so; without such a record, the running one (M2)."""
+    shown value (length's, else area's), and when that differs from ``current`` (the open
+    project's, O3; ``None``: the running default) the line saying so; without such a
+    record, ``current``'s (M2). The texts say "project" for a project file's calibration,
+    else "app" (:func:`app.calibration.calibration_words`)."""
+    ours = None if current is None else calibration_record(current)
+    words = calibration_words(current)
     shown = (("length", measured.length_mm), ("area", measured.area_mm2))
     for metric, value in shown:
         recorded = calibrations.get(metric)
@@ -107,10 +118,10 @@ def _shown_fov(
         text = fov_text(recorded)
         name = os.path.basename(csvs.get(metric) or "") or "its CSV"
         tip = f"Field of view recorded with {name}"
-        if differs_from_running(recorded):
-            tip += f"\nThis app now uses {fov_text()}"
+        if differs_from_current(recorded, ours):
+            tip += f"\n{words.uses.capitalize()} {fov_text(ours)}"
         return text, tip
-    return fov_text(), "This app's field of view"
+    return fov_text(ours), fov_owner_tip(current)
 
 
 class _MeasurementSignals(QObject):
@@ -156,6 +167,12 @@ class MetricsController:
         has_gt = getattr(self._window.image_manager, "has_gt_skeleton", None)
         return bool(stored_name and callable(has_gt) and has_gt(stored_name))
 
+    def current_calibration(self) -> ProjectCalibration:
+        """The open project's field of view (its ``sprouts_project.json``, O3), else the
+        app's default (also without a project). Read when the file changed (one stat)."""
+        index = self.index
+        return load_project_calibration(index.root if index is not None else None)
+
     def current_image_name(self) -> str | None:
         """Stem of the image selected in the library (else the one on the display)."""
         file_list = getattr(self._window, "file_list", None)
@@ -193,6 +210,8 @@ class MetricsController:
         skipped: dict[str, str] = {}
         measured_from: dict = {}
         calibrations: dict = {}
+        method_notes: dict[str, str] = {}
+        current = self.current_calibration()
         index = self.index
         if stored_name and index is not None:
             try:
@@ -209,10 +228,12 @@ class MetricsController:
                 skipped = index.gt_skip_reason(stored_name)
                 measured_from = index.measured_from(stored_name)
                 calibrations = index.calibrations()
+                # Measured with another field of view or length method: outdated (O3).
+                method_notes = index.method_notes(current)
             except Exception:
                 logger.exception("Could not read the measured values of %s", stored_name)
 
-        bar.set_fov(*_shown_fov(measured, calibrations, csvs))
+        bar.set_fov(*_shown_fov(measured, calibrations, csvs, current))
         bar.set_metrics(
             length=measured.length_mm,
             area=measured.area_mm2,
@@ -236,6 +257,7 @@ class MetricsController:
             area_note=_gt_note(
                 "mask", mask_state, skipped.get("area"), outdated.get("area"), measured.area_source
             ),
+            method_notes=method_notes,
         )
 
     def refresh_if_current(self, image_name):

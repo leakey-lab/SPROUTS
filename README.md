@@ -257,8 +257,14 @@ applied. A photo with an orientation tag is shown as stored (not as a photo view
 it), and its mask, skeleton and GT line up with it. The field of view belongs to the
 sensor's stored axes, so this is also the calibrated orientation.
 
-If your imaging system has a different FOV, change it in one place:
-`app/config.py`.
+If your imaging system has a different FOV, change the default in one place,
+`app/config.py`, or state it per project. A project can state its own field of view in
+`sprouts_project.json` next to the images:
+`{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5, "reference_size_px": [640, 480], "source": "how it was measured"}}`.
+Measure uses it and records it (with `"source": "project"`) in each CSV's
+`.provenance.json`; a missing or invalid file means the default, and Measure says why. A
+CSV measured with another field of view or length method is marked outdated until
+measured again.
 
 Each CSV's `.provenance.json` records the field of view it was measured with
 (`calibration`) and the pixel sizes of the measured files (`inputs.sizes_px`); the

@@ -26,6 +26,12 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from app import provenance
+from app.calibration import (
+    LENGTH_METHOD,
+    ProjectCalibration,
+    calibration_record,
+    default_calibration,
+)
 from app.config import (
     AREA_CSV_HEADERS,
     AREA_VALUE_COLUMN,
@@ -77,7 +83,8 @@ class MetricSpec:
     csv_name: str
     headers: tuple[str, ...]
     value_column: str
-    row: Callable[..., dict]  # row(image name, path, data=<file bytes | None>) -> CSV row
+    # row(image name, path, data=<file bytes | None>, calibration=<Calibration | None>) -> CSV row
+    row: Callable[..., dict]
     parameters: Mapping[str, object]
 
 
@@ -93,7 +100,7 @@ LENGTH = MetricSpec(
         "input": "gt/skeletons/<stem>.png where valid, else skeletons/<stem>_fake.png",
         "source_rule": "gt-first",
         "binarization": "Otsu, inverted if mostly white",
-        "estimator": "8-connected arc length with per-axis pixel pitch",
+        "estimator": LENGTH_METHOD,
     },
 )
 
@@ -202,6 +209,10 @@ class MeasureRun:
         sources: name -> ``Source`` of each row when there are no ``gt_files`` (tests; a
             name not in it, or no mapping, is ``prediction``).
         gt_report: the GT report written to the provenance when there are no ``gt_files``.
+        calibration: the project's field of view (O3; the caller reads it,
+            :func:`app.calibration.load_project_calibration`); ``None`` is the app's default.
+            Every row, GT or prediction, is measured with it on its own file's pixel grid,
+            and the provenance records it (:func:`app.calibration.calibration_record`).
     """
 
     def __init__(
@@ -217,8 +228,10 @@ class MeasureRun:
         photos: Mapping[str, str] | None = None,
         sources: Mapping[str, str] | None = None,
         gt_report: GtReport | None = None,
+        calibration: ProjectCalibration | None = None,
     ) -> None:
         self.spec = spec
+        self.calibration = default_calibration() if calibration is None else calibration
         self.predictions = dict(images)
         self.gt_files = None if gt_files is None else dict(gt_files)
         self.photos = dict(photos or {})
@@ -320,8 +333,12 @@ class MeasureRun:
         if source is None:
             return None
         if source.source == GT and decision.data is not None:
-            return self.spec.row(source.stem, source.path, data=decision.data)
+            return self._row(source.stem, source.path, data=decision.data)
         return self._measure(source.stem, source.path)
+
+    def _row(self, name: str, path: str, *, data: bytes | None = None) -> dict:
+        """``spec.row`` measured with this run's field of view."""
+        return self.spec.row(name, path, data=data, calibration=self.calibration.calibration)
 
     def _remember(self, path: str, fingerprint: Fingerprint) -> None:
         """Record ``path`` as read with ``fingerprint`` (any thread)."""
@@ -340,10 +357,10 @@ class MeasureRun:
                 st = os.fstat(fh.fileno())
                 data = fh.read()
         except OSError:
-            return self.spec.row(name, path)
+            return self._row(name, path)
         digest = hashlib.sha256(data).hexdigest()
         self._remember(path, (st.st_size, st.st_mtime_ns, digest))
-        return self.spec.row(name, path, data=data)
+        return self._row(name, path, data=data)
 
     def write(self) -> str:
         """Atomically write the CSV (then its provenance sidecar and the record of its
@@ -444,6 +461,7 @@ class MeasureRun:
                 inputs=inputs,
                 parameters=self._parameters(),
                 outputs=outputs,
+                calibration=calibration_record(self.calibration),
             )
             provenance.write_sidecar(csv_path, record)
         except Exception:  # provenance is additive; the CSV is already safe

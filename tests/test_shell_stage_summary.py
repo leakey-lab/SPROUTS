@@ -170,3 +170,17 @@ def test_the_measure_stage_says_whether_each_csv_is_current(window, tmp_path):
             == "Ready · 3 skeletons: not measured yet · 2 masks: 1 changed since measured"
         )
     ), window.statusline_message.text()
+
+
+def test_a_method_note_says_measure_again():
+    """O3: a CSV measured with another field of view or length method asks to measure again."""
+    length = Freshness(inputs=20, measured=True, method_note="Measured with field of view …")
+    area = Freshness(inputs=12, measured=True)
+    assert measure_text(20, 12, length, area) == (
+        "20 skeletons: measured with another field of view or length method: measure again"
+        " · 12 masks: measured, current"
+    )
+    # Not measured yet: nothing was measured with another field of view.
+    assert measure_text(1, 0, Freshness(1, False, method_note="x"), None) == (
+        "1 skeleton: not measured yet · no masks to measure"
+    )

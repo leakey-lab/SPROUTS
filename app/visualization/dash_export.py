@@ -22,9 +22,9 @@ from typing import Any
 
 import pandas as pd
 
+from app.calibration import calibration_record, calibration_words, load_for_output
 from app.provenance import (
     app_info,
-    calibration_info,
     csv_calibration,
     file_sha256,
     git_commit,
@@ -176,18 +176,21 @@ def _fov_mm(calibration: Mapping[str, float]) -> str:
     return f"{calibration['fov_width_mm']:.2f} x {calibration['fov_height_mm']:.2f} mm"
 
 
-def calibration_line(source_csv: str) -> str:
+def calibration_line(source_csv: str, project_root: str | None = None) -> str:
     """The ``calibration`` header line: the field of view ``source_csv`` was measured with
-    (its provenance sidecar), and this app's when that differs; this app's alone, saying so,
-    when the CSV has no record (M2)."""
+    (its provenance sidecar), and its project's (``project_root``'s when the caller knows it,
+    else the project file found above the CSV: :func:`app.calibration.load_for_output`, O3;
+    else the app's) when that differs; the project's alone, saying so, when the CSV has no
+    record (M2). "project" or "app": :func:`app.calibration.calibration_words`."""
     name = os.path.basename(source_csv)
-    ours = calibration_info()
+    current = load_for_output(source_csv, project_root)
+    ours, words = calibration_record(current), calibration_words(current)
     recorded = csv_calibration(source_csv)
     if recorded is None:
-        return f"field of view {_fov_mm(ours)}, this app's: no record next to {name} {_FORMULA}"
+        return f"field of view {_fov_mm(ours)}, {words.owner}: no record next to {name} {_FORMULA}"
     line = f"field of view {_fov_mm(recorded)}, as recorded with {name} {_FORMULA}"
     if not same_calibration(recorded, ours):
-        line += f"; this app now uses {_fov_mm(ours)}"
+        line += f"; {words.uses} {_fov_mm(ours)}"
     return line
 
 
@@ -198,8 +201,10 @@ def provenance_lines(
     metric_column: str,
     view: str,
     generated_at: datetime | None = None,
+    project_root: str | None = None,
 ) -> list[str]:
-    """``# key: value`` header lines describing where the rows come from."""
+    """``# key: value`` header lines describing where the rows come from (``project_root``:
+    the project of ``source_csv`` when known, for its field of view; :func:`calibration_line`)."""
     when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     info = app_info()
     commit = git_commit()
@@ -216,7 +221,7 @@ def provenance_lines(
             "software",
             f"{info['name']} {info['version']} (git {commit[:12] if commit else 'unknown'})",
         ),
-        ("calibration", calibration_line(source_csv)),
+        ("calibration", calibration_line(source_csv, project_root)),
         ("read_with", 'pandas.read_csv(path, comment="#")'),
     ]
     return [f"# {key}: {_one_line(value)}" for key, value in fields]
@@ -229,6 +234,7 @@ def render_csv(
     metric_column: str,
     view: str,
     generated_at: datetime | None = None,
+    project_root: str | None = None,
 ) -> str:
     """The export file's text: provenance lines, then the table as CSV."""
     header = provenance_lines(
@@ -237,6 +243,7 @@ def render_csv(
         metric_column=metric_column,
         view=view,
         generated_at=generated_at,
+        project_root=project_root,
     )
     return "\n".join(header) + "\n" + table.frame.to_csv(index=False, lineterminator="\n")
 

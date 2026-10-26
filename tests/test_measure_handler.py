@@ -354,3 +354,114 @@ def test_binary_masks_and_length_runs_do_not_warn_about_grey(tmp_path, qapp):
     handler.calculate_root_length()
     _wait_idle(handler, qapp)
     assert _grey_warnings(mw) == []
+
+
+# --------------------------------------------------------------------------- O3: project FOV
+
+
+def _write_project_file(tmp_path, text):
+    (tmp_path / "sprouts_project.json").write_text(text, encoding="utf-8")
+
+
+def _warnings(mw):
+    return [c.args[0] for c in mw.feedback.calls if c.name == "notify" and c.args[1] == "warn"]
+
+
+def test_measure_reads_the_project_file(tmp_path, qapp):
+    import csv
+
+    from app.config import AREA_VALUE_COLUMN, Calibration
+    from app.inference import metrics
+
+    _project(tmp_path, n=2, skeletons=False)
+    _write_project_file(
+        tmp_path, '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5}}'
+    )
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+
+    csv_path = tmp_path / "mask" / "root_areas.csv"
+    record = provenance.read_sidecar(csv_path)
+    assert record["calibration"]["source"] == "project"
+    assert record["calibration"]["fov_height_mm"] == 13.5
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 2
+    for row in rows:
+        mask = metrics.load_mask(str(tmp_path / "mask" / f"{row['Image']}.png"))
+        expected = metrics.root_area_mm2(mask, calibration=Calibration(18.0, 13.5))
+        assert float(row[AREA_VALUE_COLUMN]) == round(expected, 2)
+    assert not any("sprouts_project.json" in w for w in _warnings(mw))
+
+
+def test_an_invalid_project_file_warns_once_and_measures_with_the_default(tmp_path, qapp):
+    _project(tmp_path, n=2, skeletons=False)
+    _write_project_file(tmp_path, "{")
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+
+    project_warnings = [w for w in _warnings(mw) if "sprouts_project.json" in w]
+    assert project_warnings == [
+        "sprouts_project.json was not used (it is not valid JSON): "
+        "measured with the default field of view 18×13 mm."
+    ]
+    record = provenance.read_sidecar(tmp_path / "mask" / "root_areas.csv")
+    assert record["calibration"]["source"] == "default"
+
+
+def test_files_of_another_shape_warn_once(tmp_path, qapp):
+    _write_project_file(
+        tmp_path,
+        '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5, '
+        '"reference_size_px": [640, 480]}}',
+    )
+    for i in range(2):
+        _extra_image(tmp_path, f"v_T{i + 1}_L2_2024.01.02_01020{i}_001", (60, 80), "mask")
+    _extra_image(tmp_path, "v_T9_L2_2024.01.02_010209_001", (48, 96), "mask")
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+
+    # One odd file is one cause: the size and shape warnings are one (review M2).
+    sizes = [w for w in _warnings(mw) if "another shape" in w or w.startswith(_MIXED)]
+    assert sizes == [
+        "The measured files have 2 sizes (80x60 ×2, 96x48 ×1), and 1 has another shape than "
+        "the 640×480 reference in sprouts_project.json: one 18×13.5 mm field of view was "
+        "applied to each whole image."
+    ]
+
+
+def test_files_all_of_another_shape_warn_once(tmp_path, qapp):
+    _write_project_file(
+        tmp_path,
+        '{"schema": 1, "calibration": {"fov_width_mm": 18.0, "fov_height_mm": 13.5, '
+        '"reference_size_px": [640, 480]}}',
+    )
+    for i in range(2):
+        _extra_image(tmp_path, f"v_T{i + 1}_L2_2024.01.02_01020{i}_001", (48, 96), "mask")
+    handler, mw = _handler(tmp_path, qapp)
+    handler.calculate_root_area()
+    _wait_idle(handler, qapp)
+
+    sizes = [w for w in _warnings(mw) if "another shape" in w or w.startswith(_MIXED)]
+    assert sizes == [
+        "2 measured files have another shape than the 640×480 reference in "
+        "sprouts_project.json: the field of view was applied to each whole image."
+    ]
+
+
+def test_a_refused_run_says_nothing_about_the_project_file(tmp_path, qapp):
+    _project(tmp_path, n=2, skeletons=False)
+    _write_project_file(tmp_path, "{")
+    jobs = SimpleNamespace(
+        try_start=lambda name, thread: False,
+        running_name=lambda: "Generating skeletons",
+        is_busy=lambda: True,
+    )
+    handler, mw = _handler(tmp_path, qapp, jobs=jobs)
+    handler.calculate_root_area()
+    assert handler.area_calculator_thread is None
+    assert [w for w in _warnings(mw) if "sprouts_project.json" in w] == []
+    assert any("Generating skeletons" in w for w in _warnings(mw))

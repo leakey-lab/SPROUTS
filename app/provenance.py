@@ -24,7 +24,6 @@ import functools
 import hashlib
 import json
 import logging
-import math
 import os
 import platform
 import re
@@ -35,6 +34,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app import APP_FULL_NAME, APP_NAME, __version__
+from app.calibration import fov_of, same_fov
 from app.config import CALIBRATION, PROJECT_ROOT
 from app.io_utils import atomic_write_text
 
@@ -102,9 +102,11 @@ def app_info() -> dict[str, str]:
     return {"name": APP_NAME, "full_name": APP_FULL_NAME, "version": __version__}
 
 
-def calibration_info() -> dict[str, float]:
-    """The physical calibration every metric depends on (read-only)."""
-    return dataclasses.asdict(CALIBRATION)
+def calibration_info() -> dict[str, Any]:
+    """The app's default physical calibration (read-only): ``fov_width_mm``,
+    ``fov_height_mm`` and ``"source": "default"``. A Measure run records its project's
+    instead (:func:`app.calibration.calibration_record`, O3)."""
+    return {**dataclasses.asdict(CALIBRATION), "source": "default"}
 
 
 def _read_text(path: str) -> str:
@@ -362,6 +364,7 @@ def build_record(
     models: Mapping[str, str | os.PathLike[str]] | None = None,
     parameters: Mapping[str, Any] | None = None,
     outputs: Mapping[str, Any] | None = None,
+    calibration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Provenance record for one output or batch run.
 
@@ -369,7 +372,10 @@ def build_record(
     ``models`` maps a model name to its checkpoint path, recorded with its
     SHA-256 and size; ``inputs``/``parameters``/``outputs`` are free-form
     JSON-able sections supplied by the writer (prefer :func:`portable_path`
-    for paths). ``created_utc`` is ISO-8601 UTC with a ``Z`` suffix.
+    for paths). ``calibration``: the field of view the output was made with (a Measure
+    run's project calibration); ``None`` records the app's default
+    (:func:`calibration_info`: generation uses no field of view). ``created_utc`` is
+    ISO-8601 UTC with a ``Z`` suffix.
     """
     return {
         "schema": SCHEMA,
@@ -377,7 +383,7 @@ def build_record(
         "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "app": app_info(),
         "git_commit": git_commit(PROJECT_ROOT),
-        "calibration": calibration_info(),
+        "calibration": calibration_info() if calibration is None else dict(calibration),
         "runtime": runtime_info(),
         "models": {name: _model_entry(path) for name, path in (models or {}).items()},
         "inputs": dict(inputs or {}),
@@ -432,24 +438,14 @@ def csv_calibration(csv_path: str) -> dict[str, float] | None:
     from its provenance sidecar; ``None`` without a sidecar, or one whose two values are not
     both finite numbers above zero (a bool, text, ``NaN`` and ``inf`` are not)."""
     record = read_sidecar(csv_path)
-    calibration = record.get("calibration") if record is not None else None
-    if not isinstance(calibration, dict):
-        return None
-    found: dict[str, float] = {}
-    for key in ("fov_width_mm", "fov_height_mm"):
-        value = calibration.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        if not math.isfinite(value) or value <= 0:
-            return None
-        found[key] = float(value)
-    return found
+    return fov_of(record.get("calibration") if record is not None else None)
 
 
 def same_calibration(a: Mapping[str, float], b: Mapping[str, float]) -> bool:
     """True when two fields of view (``fov_width_mm``, ``fov_height_mm``) are equal as
-    numbers: the one rule that decides a CSV's recorded field of view is another one."""
-    return all(math.isclose(a[k], b[k]) for k in ("fov_width_mm", "fov_height_mm"))
+    numbers: the one rule that decides a CSV's recorded field of view is another one
+    (:func:`app.calibration.same_fov`)."""
+    return same_fov(a, b)
 
 
 def _json_default(obj: Any) -> Any:

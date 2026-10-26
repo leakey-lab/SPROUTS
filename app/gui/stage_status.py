@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 
+from app.calibration import load_project_calibration, method_note
 from app.inference.measure_inputs import load_inputs_record
 from app.project_layout import SKELETON_SUFFIX
+from app.provenance import read_sidecar
 
 from .stage_summary import Freshness, generate_text, input_freshness, measure_text
 
@@ -126,6 +129,8 @@ class StageStatus(QObject):
         folders Measure would read when there is no CSV yet, and the GT files Measure reads
         first (``gt/skeletons/``, ``gt/mask/``; O1). Each CSV's record of its inputs
         (``<csv>.inputs.json``) is read in the pool too; with one, content is compared.
+        Each CSV's provenance is compared with the project's field of view there as well
+        (``Freshness.method_note``, O3).
         """
         if index is None or layout is None:
             return
@@ -142,9 +147,9 @@ class StageStatus(QObject):
         signals = self._signals
         root = layout.root
 
-        def freshness(folder, suffix, csv_path, images, gt_folder) -> Freshness:
+        def freshness(kind, folder, suffix, csv_path, images, gt_folder, current) -> Freshness:
             record = load_inputs_record(csv_path) if csv_path else None
-            return input_freshness(
+            counted = input_freshness(
                 folder,
                 suffix,
                 csv_path,
@@ -153,15 +158,28 @@ class StageStatus(QObject):
                 images=images,
                 gt_folder=gt_folder,
             )
+            if not csv_path:
+                return counted
+            note = method_note(read_sidecar(csv_path), kind=kind, current=current)
+            return replace(counted, method_note=note) if note else counted
 
         def work() -> None:
             try:
                 images = layout.scan_images()  # inputs whose image is gone are skipped (O37)
+                current = load_project_calibration(root)  # O3: the project's field of view
                 result = {
                     "length": freshness(
-                        length_dir, SKELETON_SUFFIX, length_csv, images, layout.gt_skeletons_dir
+                        "length",
+                        length_dir,
+                        SKELETON_SUFFIX,
+                        length_csv,
+                        images,
+                        layout.gt_skeletons_dir,
+                        current,
                     ),
-                    "area": freshness(area_dir, ".png", area_csv, images, layout.gt_mask_dir),
+                    "area": freshness(
+                        "area", area_dir, ".png", area_csv, images, layout.gt_mask_dir, current
+                    ),
                 }
             except Exception:  # noqa: BLE001 - the idle text then keeps the plain counts
                 logger.exception("Could not count the Measure inputs")

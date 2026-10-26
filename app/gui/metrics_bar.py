@@ -17,7 +17,9 @@ caller); each value's tooltip names what it was measured from (the caller's ``so
 the GT file or the prediction, O1, and the CSV); a failed measurement shows ``failed`` with
 its message, and a value whose inputs changed after it was measured is shown in the warning
 colour with a "Measure again" tooltip (plus a line saying so when the comparison was by file time:
-the CSV has no record of its inputs). A value that is not a number (a CSV edited to hold ``nan``
+the CSV has no record of its inputs). A value measured with another field of view than the
+open project's, or (length) another length method, is shown outdated the same way, its
+tooltip saying why (the caller's ``method_notes``, O3). A value that is not a number (a CSV edited to hold ``nan``
 or ``inf``) shows ``—`` in the failure colour, never "nan mm". The FOV text is derived from
 :data:`app.config.CALIBRATION` (the single source of the field of view) until a measured value
 is shown: then :meth:`MetricsBar.set_fov` shows the field of view recorded with that value's
@@ -31,12 +33,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
+from typing import Any
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QPainter, QPalette
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from app import config
+from app.calibration import ProjectCalibration, calibration_words
 from app.gui.library_index import fit_label, stem_forms
 from app.gui.widgets import tokens
 from app.provenance import same_calibration
@@ -51,8 +55,6 @@ _NO_NUMBER_TIP = "This image has no valid number ({}): {}"
 _LENGTH_INPUT = "A skeleton of this image (GT or prediction)"
 #: An outdated value whose CSV has no record of its inputs: compared by file time (R5).
 _BY_TIME_TIP = "Compared by file time: this CSV has no record of its inputs."
-#: The FOV cell's tooltip while no CSV's own field of view is shown.
-_APP_FOV_TIP = "This app's field of view"
 _ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
 _AREA_INPUT = "A mask of this image (GT or prediction)"
 
@@ -66,13 +68,23 @@ def fov_text(calibration: Mapping[str, float] | None = None) -> str:
     return f"{calibration['fov_width_mm']:g}×{calibration['fov_height_mm']:g} mm"
 
 
-def differs_from_running(calibration: Mapping[str, float]) -> bool:
+def fov_owner_tip(current: ProjectCalibration | Mapping[str, Any] | None = None) -> str:
+    """The FOV cell's tooltip while no CSV's own field of view is shown: "This project's field
+    of view" for a project file's calibration, else "This app's field of view"
+    (:func:`app.calibration.calibration_words`)."""
+    return f"{calibration_words(current).owner.capitalize()} field of view"
+
+
+def differs_from_current(
+    calibration: Mapping[str, float], current: Mapping[str, float] | None = None
+) -> bool:
     """True when ``calibration`` (a CSV's recorded field of view) is another field of view than
-    the running one, compared as numbers (the one rule of the export, the bar and About)."""
-    cal = config.CALIBRATION
-    return not same_calibration(
-        calibration, {"fov_width_mm": cal.fov_width_mm, "fov_height_mm": cal.fov_height_mm}
-    )
+    ``current`` (the open project's, O3; ``None``: the running default), compared as numbers
+    (the one rule of the export, the bar and About)."""
+    if current is None:
+        cal = config.CALIBRATION
+        current = {"fov_width_mm": cal.fov_width_mm, "fov_height_mm": cal.fov_height_mm}
+    return not same_calibration(calibration, current)
 
 
 class _ElidedLabel(QLabel):
@@ -177,7 +189,7 @@ class MetricsBar(QWidget):
         self._length_cell, self._length_value = self._add_cell(row, "LENGTH", accent=True)
         self._area_cell, self._area_value = self._add_cell(row, "AREA")
         self._fov_cell, self._fov_value = self._add_cell(row, "FOV")
-        self.set_fov(fov_text(), _APP_FOV_TIP)
+        self.set_fov(fov_text(), fov_owner_tip())
         self._status_cell, self._status_value = self._add_cell(row, "STATUS")
         # The Library display's zoom (the editors show theirs in their zoom cluster).
         self._zoom_cell, self._zoom_value = self._add_cell(row, "ZOOM")
@@ -250,6 +262,7 @@ class MetricsBar(QWidget):
         by_time: bool = False,
         area_by_time: bool | None = None,
         area_note: str | None = None,
+        method_notes: Mapping[str, str] | None = None,
     ) -> None:
         """Update the displayed values (read-only). Empty cells are hidden.
 
@@ -263,7 +276,11 @@ class MetricsBar(QWidget):
         the STATUS cell's tooltip. ``by_time`` says the LENGTH value's staleness was judged by file
         time (its CSV has no record of its inputs), and the AREA value's too unless
         ``area_by_time`` gives AREA its own; an outdated value's tooltip then says so.
+        ``method_notes`` (``{"length": note, "area": note}``, O3): a value with a note was
+        measured with another field of view or length method; it is shown outdated and the
+        note is a line of its own in its tooltip.
         """
+        method_notes = method_notes or {}
         length_error = error if error and length is None else None
         area_error = error if error and length is not None and area is None else None
         if area_stale is None:
@@ -283,6 +300,7 @@ class MetricsBar(QWidget):
             changed=_LENGTH_INPUT,
             note=length_note,
             by_time=by_time,
+            method_note=method_notes.get("length", ""),
         )
         self._show_metric(
             self._area_cell,
@@ -295,6 +313,7 @@ class MetricsBar(QWidget):
             changed=_AREA_INPUT,
             note=area_note,
             by_time=area_by_time,
+            method_note=method_notes.get("area", ""),
         )
         self._status_value.setText(status if status else _DASH)
         self._name_value.setText(name if name else _DASH)
@@ -377,10 +396,13 @@ class MetricsBar(QWidget):
         changed: str = "Its input",
         note: str | None = None,
         by_time: bool = False,
+        method_note: str = "",
     ) -> None:
         """Fill one metric cell: a value, ``failed`` + message, or hidden. ``changed`` names
         the input an outdated value was measured from; ``note`` is one more tooltip line;
-        ``by_time``: an outdated value was judged by file time (said in its tooltip).
+        ``by_time``: an outdated value was judged by file time (said in its tooltip);
+        ``method_note``: the value was measured with another field of view or length method
+        (outdated, the note a tooltip line of its own).
         A value that is not a finite number shows the dash in the failure colour."""
         if value is not None and not math.isfinite(value):
             label.setText(_DASH)
@@ -391,13 +413,15 @@ class MetricsBar(QWidget):
                 tips.append(note)
         elif value is not None:
             label.setText(f"{value:.2f} {unit}")
-            outdated = bool(stale)
+            outdated = bool(stale) or bool(method_note)
             color = tokens.WARN if outdated else label.property("baseColor")
             tips = [f"Measured value from {source}" if source else "Measured value"]
-            if outdated:
+            if stale:
                 tips.append(_OUTDATED_TIP.format(changed))
                 if by_time:
                     tips.append(_BY_TIME_TIP)
+            if method_note:
+                tips.append(method_note)
             if note:
                 tips.append(note)
         elif error:
