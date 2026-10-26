@@ -52,22 +52,30 @@ __all__ = ["Measurement", "MetricTable", "MeasurementIndex"]
 
 _IMAGE_COLUMN = "Image"
 _ERROR_COLUMN = "Error"
+_SOURCE_COLUMN = "Source"
 _Signature = tuple[int, int]
 #: A table's signature: its CSV's and its record's (``None``: no record file).
 _TableSignature = tuple[_Signature, _Signature | None]
 
 
 class Measurement(NamedTuple):
-    """Measured values for one image; ``None`` where nothing was measured."""
+    """Measured values for one image; ``None`` where nothing was measured.
+
+    ``length_source`` / ``area_source``: the row's ``Source`` cell (``"gt"`` or
+    ``"prediction"``, O1); ``None`` without a row, or for a CSV written before that column.
+    """
 
     length_mm: float | None
     area_mm2: float | None
     error: str | None
+    length_source: str | None = None
+    area_source: str | None = None
 
 
 class _Row(NamedTuple):
     value: float | None
     error: str
+    source: str | None = None
 
 
 def _key(name: str) -> str:
@@ -114,7 +122,8 @@ def _table_signature(path: str) -> _TableSignature | None:
 
 def _read_metric_csv(path: str, value_column: str) -> _Rows:
     """The rows of one metric CSV by stem (:class:`_Rows`); none (logged) when it is
-    unreadable."""
+    unreadable. The ``Source`` column is read when the header has it (a CSV written before
+    it gives ``None``)."""
     rows: dict[str, _Row] = {}
     try:
         with open(path, newline="", encoding="utf-8-sig") as fh:
@@ -123,15 +132,17 @@ def _read_metric_csv(path: str, value_column: str) -> _Rows:
             i_img = header.index(_IMAGE_COLUMN)
             i_val = header.index(value_column)
             i_err = header.index(_ERROR_COLUMN) if _ERROR_COLUMN in header else None
+            i_src = header.index(_SOURCE_COLUMN) if _SOURCE_COLUMN in header else None
             for rec in reader:
                 if len(rec) <= max(i_img, i_val):
                     continue
                 err = rec[i_err].strip() if i_err is not None and i_err < len(rec) else ""
+                src = rec[i_src].strip() if i_src is not None and i_src < len(rec) else ""
                 try:
                     value = None if err else float(rec[i_val])
                 except ValueError:
                     value = None
-                rows[_key(rec[i_img])] = _Row(value, err)
+                rows[_key(rec[i_img])] = _Row(value, err, src or None)
     except (OSError, UnicodeDecodeError, csv.Error, ValueError) as exc:
         logger.warning("Cannot read measurements from %s: %s", path, exc)
         return _NO_ROWS
@@ -283,7 +294,8 @@ class MeasurementIndex:
         return self.layout.root
 
     def lookup(self, stem: str, *, load: bool = True) -> Measurement:
-        """``(length_mm, area_mm2, error)`` for ``stem`` (a stem, file name or path).
+        """``(length_mm, area_mm2, error, length_source, area_source)`` for ``stem`` (a
+        stem, file name or path).
 
         ``load=False`` answers only from already-parsed CSVs (GUI thread); pair
         it with :meth:`needs_load` + :meth:`prewarm` in a worker.
@@ -299,6 +311,8 @@ class MeasurementIndex:
             length.value if length is not None else None,
             area.value if area is not None else None,
             "; ".join(errors) or None,
+            length.source if length is not None else None,
+            area.source if area is not None else None,
         )
 
     def needs_load(self) -> bool:

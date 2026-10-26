@@ -53,8 +53,9 @@ def test_values_are_read_verbatim_from_both_csvs(tmp_path):
     m = MeasurementIndex(str(tmp_path)).lookup(STEM)
 
     assert m == Measurement(18.77, 16.41, None)
-    length, area, error = m  # tuple-compatible
+    length, area, error, length_source, area_source = m  # tuple-compatible
     assert (length, area, error) == (18.77, 16.41, None)
+    assert (length_source, area_source) == (None, None)  # no Source column
 
 
 def test_lookup_accepts_image_path_or_file_name(tmp_path):
