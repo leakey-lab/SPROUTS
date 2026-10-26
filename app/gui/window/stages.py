@@ -21,6 +21,7 @@ from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
 
 from .. import visualization_manager
 from ..image_manager import project_layout_of
+from ..key_text import platform_keys
 from ..panels import Panel
 
 if TYPE_CHECKING:
@@ -106,7 +107,12 @@ def missing_dashboard_data(
         return None
     layout = project_layout_of(window.image_manager)
     if layout is None or not window.image_manager.images:
-        return "No images loaded", "Open a folder of root images first (Ctrl+O).", "", None
+        return (
+            "No images loaded",
+            platform_keys("Open a folder of root images first (Ctrl+O)."),
+            "",
+            None,
+        )
     noun = "root length" if kind == "length" else "root area"
     is_busy = getattr(getattr(window, "skeleton_handler", None), "is_busy", None)
     if callable(is_busy) and is_busy(kind):  # a run rewrites what it would chart

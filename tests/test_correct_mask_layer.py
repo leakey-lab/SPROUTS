@@ -43,6 +43,7 @@ from app.gui.correct.layer import (  # noqa: E402
 from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
 from app.gui.correct.tool_router import ToolRouter  # noqa: E402
 from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.paint_canvas import PaintCanvas, pixmap_to_argb_array  # noqa: E402
 from app.gui.patch_history import PatchHistory  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
@@ -54,7 +55,7 @@ STEM = "plot_T001_L001_2024.07.18_111530_001_SMM"
 W, H = 160, 120
 NO_MODS = Qt.KeyboardModifier.NoModifier
 MASK_COLOUR = QColor(tokens.MASK)
-CLEARED = "Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask."
+CLEARED = platform_keys("Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask.")
 FILL_MISS = "Fill works inside a closed outline. Close the loop first."
 NOT_SHOWN_SIZE_TEXT = (
     "Saved mask size does not match the image: it is not shown and is kept unless you save over it"

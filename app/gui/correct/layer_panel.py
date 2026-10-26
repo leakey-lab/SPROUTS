@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import QFrame, QGridLayout, QLabel, QWidget
 
 from app.gui import shortcuts
 from app.gui.correct.layer import CLASSES, LAYER_IDS, EditLayer, LayerStatus
+from app.gui.key_text import platform_keys
 from app.gui.widgets import IconButton, keep_canvas_focus, tokens
 from app.gui.widgets.icons import load_icon
 from app.gui.widgets.overlays import StatusChip, _FloatingPanel
@@ -102,7 +103,7 @@ class _EyeButton(IconButton):
 
     def _retip(self, shown: bool) -> None:
         keys = [
-            " / ".join(shortcuts.keys_for(action, shortcuts.CORRECT))
+            platform_keys(" / ".join(shortcuts.keys_for(action, shortcuts.CORRECT)))
             for action in ("toggle_layers", "toggle_reference")
         ]
         self.setToolTip(
@@ -148,7 +149,7 @@ class LayerRow(QFrame):
 
         keys = shortcuts.keys_for(action, shortcuts.CORRECT)
         mono = f"color: {tokens.TEXT_FAINT}; font-family: {tokens.MONO}; font-size: 11px;"
-        self.key_label = _label(keys[0] if keys else "", mono)
+        self.key_label = _label(platform_keys(keys[0]) if keys else "", mono)
         self.key_label.setFixedWidth(12)
         self.swatch = QLabel()
         self.swatch.setFixedSize(12, 12)

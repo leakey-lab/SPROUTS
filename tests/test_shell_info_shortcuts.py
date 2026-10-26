@@ -12,6 +12,7 @@ from PyQt6.QtGui import QKeySequence, QShortcut  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
 
 from app.gui import shortcuts as sc  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
 
 
@@ -75,14 +76,16 @@ def test_global_keys_the_integrator_wires():
     assert sc.keys_for("next_image", sc.GLOBAL) == ("PgDown",)
     assert sc.keys_for("previous_image", sc.GLOBAL) == ("PgUp",)
     assert sc.STAGE_KEYS == tuple(f"Alt+{i}" for i in range(1, 6))
-    assert sc.keys_for("go_to_stage", sc.GLOBAL) == sc.STAGE_KEYS
+    assert sc.keys_for("go_to_stage", sc.GLOBAL) == tuple(
+        key for column in zip(*sc.stage_keys(), strict=True) for key in column
+    )
 
 
 def test_correct_sheet_lists_both_layers_keys_and_gestures():
     specs = sc.specs_for(sc.CORRECT)
     labels = " ".join(s.label for s in specs)
     for key in ("Enter", "Esc", "Delete", "Ctrl+click", "Shift+drag", "Double-click"):
-        assert key in labels
+        assert platform_keys(key) in labels
     keys = {key for spec in specs for key in spec.keys}
     mask_keys, skeleton_keys = {"B", "F"}, {"V", "P", "C", "S"}
     layer_keys = {"1", "2", "X", "H", "Shift+H", "E", "[", "]", "Ctrl+S"}
@@ -104,7 +107,7 @@ def test_correct_sheet_lists_class_digits():
 
 def test_tooltip_appends_the_first_key():
     assert sc.tooltip("Eraser", "eraser", sc.CORRECT) == "Eraser (E)"
-    assert sc.tooltip("Redo", "redo", sc.CORRECT) == "Redo (Ctrl+Y)"
+    assert sc.tooltip("Redo", "redo", sc.CORRECT) == platform_keys("Redo (Ctrl+Y)")
     assert sc.tooltip("Nothing", "no_such_action", sc.CORRECT) == "Nothing"
 
 
@@ -202,7 +205,7 @@ def test_install_shortcuts_accepts_one_slot_per_key(app):
     """Alt+1 … Alt+5 each go to their own stage."""
     w = QWidget()
     hits = []
-    slots = [lambda i=i: hits.append(i) for i in range(len(sc.STAGE_KEYS))]
+    slots = [lambda i=i: hits.append(i) for i in range(len(sc.keys_for("go_to_stage", sc.GLOBAL)))]
     installed = sc.install_shortcuts(w, sc.GLOBAL, {"go_to_stage": slots})
     installed["go_to_stage"][2].activated.emit()
     assert hits == [2]

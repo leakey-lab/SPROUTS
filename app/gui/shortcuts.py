@@ -28,7 +28,12 @@ binds them ``WidgetWithChildrenShortcut`` (MainWindow on the library, the chrome
 the display; each editor on its own page), so exactly one is live. Stage accelerators
 are ``Alt+1 … Alt+5``, one per ribbon stage (not ``Ctrl+digit``: ``Ctrl+0`` /
 ``Ctrl+1`` are the canvas fit / 100 % keys and a window-level ``Ctrl+1`` would
-make them ambiguous).
+make them ambiguous). On macOS Option+digit types a character in a text field, so each
+stage also gets ``Ctrl+Alt+N`` (Cmd+Option+N; :func:`stage_keys`).
+
+Texts show the platform's key names (``Cmd`` / ``Option`` on macOS,
+:func:`app.gui.key_text.platform_keys`); the registry itself is written with Qt's
+``Ctrl`` / ``Alt``.
 
 The module is Qt-free (the registry is plain data); only
 :func:`install_shortcuts` imports PyQt6, lazily.
@@ -36,9 +41,12 @@ The module is Qt-free (the registry is plain data); only
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+
+from app.gui.key_text import platform_keys
 
 if TYPE_CHECKING:  # pragma: no cover
     from PyQt6.QtGui import QShortcut
@@ -50,9 +58,11 @@ __all__ = [
     "CORRECT",
     "SCOPES",
     "STAGE_KEYS",
+    "stage_keys",
     "CLASS_KEYS",
     "ShortcutSpec",
     "REGISTRY",
+    "build_registry",
     "specs_for",
     "find_spec",
     "keys_for",
@@ -76,6 +86,17 @@ GESTURE: Kind = "gesture"
 #: Alt+1 … Alt+5 select the five ribbon stages in order (``shell_chrome.STAGES``).
 STAGE_KEYS: tuple[str, ...] = tuple(f"Alt+{i}" for i in range(1, 6))
 
+
+def stage_keys(platform: str | None = None) -> tuple[tuple[str, ...], ...]:
+    """The keys of each stage, in ribbon order: ``("Alt+N",)``, on macOS also ``Ctrl+Alt+N``.
+
+    Qt reads ``Ctrl+Alt+N`` there as Cmd+Option+N, which a text field does not take for
+    typing a character as it does Option+N.
+    """
+    mac = (sys.platform if platform is None else platform).startswith("darwin")
+    return tuple((key, key.replace("Alt", "Ctrl+Alt")) if mac else (key,) for key in STAGE_KEYS)
+
+
 #: 1 … 9, then 0: the class keys (the n-th labelled class; 0 = Ignore).
 CLASS_KEYS: tuple[str, ...] = tuple(str(n) for n in (*range(1, 10), 0))
 
@@ -86,7 +107,8 @@ class ShortcutSpec:
 
     ``keys`` are Qt ``PortableText`` sequences (``"Ctrl+Shift+Z"``); for
     gestures they are free text (``"Ctrl+wheel"``). ``display`` overrides the
-    sheet's key column when the key list is long (``"1–9, 0"``).
+    sheet's key column when the key list is long (``"1–9, 0"``). :attr:`label` shows the
+    platform's key names (``Cmd`` / ``Option`` on macOS).
     """
 
     action: str
@@ -98,8 +120,8 @@ class ShortcutSpec:
 
     @property
     def label(self) -> str:
-        """Key column text for the F1 sheet."""
-        return self.display or " / ".join(self.keys)
+        """Key column text for the F1 sheet, with this platform's key names."""
+        return platform_keys(self.display or " / ".join(self.keys))
 
 
 def _rows(scope: str, rows: Iterable[tuple]) -> tuple[ShortcutSpec, ...]:
@@ -123,6 +145,10 @@ def _zoom_rows(kind: Kind) -> list[tuple]:
     ]
 
 
+#: Trackpad pinch (``CanvasViewMixin``); the same row on every canvas.
+_PINCH_ROW = ("zoom_pinch", ("Pinch",), "Zoom about the fingers", GESTURE)
+
+
 def _canvas_rows(kind: Kind) -> list[tuple]:
     """Zoom / pan keys of an editor canvas."""
     return [
@@ -130,6 +156,7 @@ def _canvas_rows(kind: Kind) -> list[tuple]:
         ("pixel_grid", ("Ctrl+'",), "Show or hide the pixel grid (at 800 % and above)", kind),
         ("pan", ("Space",), "Hold and drag to pan (middle-drag also pans)", KEY, "Space (hold)"),
         ("zoom_wheel", ("Ctrl+wheel",), "Zoom about the cursor", GESTURE),
+        _PINCH_ROW,
     ]
 
 
@@ -142,6 +169,7 @@ def _library_rows() -> list[tuple]:
         *_zoom_rows(SHORTCUT),
         ("pan", ("Drag",), "Drag to pan (middle-drag too)", GESTURE),
         ("zoom_wheel", ("Ctrl+wheel",), "Zoom about the cursor", GESTURE),
+        _PINCH_ROW,
     ]
 
 
@@ -199,26 +227,33 @@ def _correct_rows() -> list[tuple]:
     ]
 
 
-REGISTRY: tuple[ShortcutSpec, ...] = (
-    *_rows(
-        GLOBAL,
-        [
-            ("help", ("F1", "?"), "Show this keyboard-shortcut sheet"),
-            ("open_folder", ("Ctrl+O",), "Open a folder of root images"),
-            (
-                "go_to_stage",
-                STAGE_KEYS,
-                "Go to stage 1–5 in ribbon order (Library … Visualize)",
-                SHORTCUT,
-                "Alt+1 … Alt+5",
-            ),
-            ("next_image", ("PgDown",), "Next image (editors save or ask first)"),
-            ("previous_image", ("PgUp",), "Previous image"),
-        ],
-    ),
-    *_rows(LIBRARY, _library_rows()),
-    *_rows(CORRECT, _correct_rows()),
-)
+def build_registry(platform: str | None = None) -> tuple[ShortcutSpec, ...]:
+    """Every row for ``platform`` (default: this one); only the stage keys differ: every ``Alt+N``
+    first, then (macOS) every ``Ctrl+Alt+N``, so key ``i`` still means stage ``i`` for ``i < 5``."""
+    stage_row = (
+        "go_to_stage",
+        tuple(key for column in zip(*stage_keys(platform), strict=True) for key in column),
+        "Go to stage 1–5 in ribbon order (Library … Visualize)",
+        SHORTCUT,
+        "Alt+1 … Alt+5",
+    )
+    return (
+        *_rows(
+            GLOBAL,
+            [
+                ("help", ("F1", "?"), "Show this keyboard-shortcut sheet"),
+                ("open_folder", ("Ctrl+O",), "Open a folder of root images"),
+                stage_row,
+                ("next_image", ("PgDown",), "Next image (editors save or ask first)"),
+                ("previous_image", ("PgUp",), "Previous image"),
+            ],
+        ),
+        *_rows(LIBRARY, _library_rows()),
+        *_rows(CORRECT, _correct_rows()),
+    )
+
+
+REGISTRY: tuple[ShortcutSpec, ...] = build_registry()
 
 
 # ------------------------------------------------------------------ queries
@@ -239,9 +274,10 @@ def keys_for(action: str, scope: str) -> tuple[str, ...]:
 
 
 def tooltip(text: str, action: str, scope: str) -> str:
-    """``"Eraser (E)"`` — ``text`` plus the action's first key, if it has one."""
+    """``"Eraser (E)"`` — ``text`` plus the action's first key, if it has one (shown with
+    this platform's key names)."""
     keys = keys_for(action, scope)
-    return f"{text} ({keys[0]})" if keys else text
+    return f"{text} ({platform_keys(keys[0])})" if keys else text
 
 
 def scope_for_stage(stage_key: str | None) -> str | None:
@@ -285,7 +321,8 @@ def install_shortcuts(
     """Create one ``QShortcut`` per registry key for each action in ``handlers``.
 
     A handler is one callable for every key of the action, or a sequence with
-    one callable per key (``go_to_stage``: Alt+1 … Alt+5).
+    one callable per key (``go_to_stage``: Alt+1 … Alt+5, each followed by Ctrl+Alt+N on
+    macOS).
 
     ``context`` defaults to ``WindowShortcut``: the keys work wherever the keyboard is
     in ``widget``'s window while ``widget`` is on screen (Qt ignores the shortcuts of a

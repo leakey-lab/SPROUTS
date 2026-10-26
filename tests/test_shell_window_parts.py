@@ -27,6 +27,7 @@ from PyQt6.QtCore import QEvent, QSettings, QThreadPool  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from app.data_processing.measurement_index import Measurement  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.main_window import MainWindow  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
 from app.gui.window import (  # noqa: E402
@@ -477,7 +478,7 @@ def test_visualize_before_a_folder_names_the_first_step():
     )
     assert stages.missing_dashboard_data(window, "length") == (
         "No images loaded",
-        "Open a folder of root images first (Ctrl+O).",
+        platform_keys("Open a folder of root images first (Ctrl+O)."),
         "",
         None,
     )

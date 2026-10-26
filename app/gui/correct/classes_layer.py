@@ -38,6 +38,7 @@ from app.gui.correct.layer import (
     project_label,
 )
 from app.gui.correct.raster_layer import RasterLayer
+from app.gui.key_text import platform_keys
 from app.gui.patch_history import Patch
 from app.gui.widgets import tokens
 
@@ -54,7 +55,9 @@ class ClassesLayer(RasterLayer):
     color = tokens.ACCENT
     Z = 1.2
     DEFAULT_OPACITY = 0.60
-    CLEARED_NOTICE = "Class labels cleared. Ctrl+Z to undo; Save writes an empty file."
+    CLEARED_NOTICE = platform_keys(
+        "Class labels cleared. Ctrl+Z to undo; Save writes an empty file."
+    )
     document: ClassesDocument
 
     def __init__(self, host: LayerHost, scene: QGraphicsScene) -> None:

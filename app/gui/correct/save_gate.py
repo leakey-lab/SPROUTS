@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.gui.correct.layer import EditLayer, SaveOutcome, project_label
+from app.gui.key_text import platform_keys
 
 __all__ = [
     "CANCEL",
@@ -171,7 +172,8 @@ class SaveGate:
         label = unloaded_label_of(layer)
         if label:
             if not ask:
-                message = f"{label} could not be shown: save with Ctrl+S to replace it"
+                save = platform_keys("save with Ctrl+S")
+                message = f"{label} could not be shown: {save} to replace it"
                 return _declined(layer_id, message, "warn")
             answer = self._prompts.ask_replace_unloaded(self._parent(), layer.noun, label)
             if answer != REPLACE:
@@ -193,7 +195,8 @@ class SaveGate:
             return SaveOutcome(layer_id, ok=True, message=reloaded_message(layer.noun), kind="info")
         label = _changed_label(taken, now, self._root())
         if not ask:
-            message = f"{label} changed on disk after you opened it: press Ctrl+S to choose"
+            choose = platform_keys("press Ctrl+S")
+            message = f"{label} changed on disk after you opened it: {choose} to choose"
             return _declined(layer_id, message, "warn")
         answer = self._prompts.ask_changed_on_disk(self._parent(), layer.noun, label)
         if answer == OVERWRITE:

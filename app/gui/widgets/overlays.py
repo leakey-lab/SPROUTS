@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..key_text import platform_keys
 from . import tokens
 from .controls import DockSlider, IconButton
 from .effects import pop_shadow
@@ -207,14 +208,14 @@ class ZoomCluster(CornerPanel):
 
     def __init__(self, parent=None, *, corner: str = "br", margin: int = 14, v_margin: int = 18):
         super().__init__(parent, corner=corner, margin=margin, v_margin=v_margin)
-        self.zoom_out_button = IconButton("zoomOut", "Zoom out (Ctrl+-)")
+        self.zoom_out_button = IconButton("zoomOut", platform_keys("Zoom out (Ctrl+-)"))
         self.zoom_pct_label = QToolButton()
         self.zoom_pct_label.setObjectName("zoomReadout")
         self.zoom_pct_label.setStyleSheet(_ZOOM_READOUT_QSS)
         self.zoom_pct_label.setFixedSize(50, 30)
         self.zoom_pct_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.zoom_in_button = IconButton("zoomIn", "Zoom in (Ctrl+=)")
-        self.fit_button = IconButton("fit", "Fit to window (Ctrl+0)")
+        self.zoom_in_button = IconButton("zoomIn", platform_keys("Zoom in (Ctrl+=)"))
+        self.fit_button = IconButton("fit", platform_keys("Fit to window (Ctrl+0)"))
         self.add_widget(self.zoom_out_button)
         self.add_widget(self.zoom_pct_label)
         self.add_widget(self.zoom_in_button)
@@ -252,7 +253,9 @@ class ZoomCluster(CornerPanel):
         """Show ``factor`` (1.0 = 100 %) in the readout."""
         self._factor = float(factor)
         percent = round(self._factor * 100)
-        tip = "Fit to window (Ctrl+0)" if self._at_actual_pixels() else "Actual pixels (Ctrl+1)"
+        tip = platform_keys(
+            "Fit to window (Ctrl+0)" if self._at_actual_pixels() else "Actual pixels (Ctrl+1)"
+        )
         tip += " · right-click: zoom presets"
         self.zoom_pct_label.setText(f"{percent}%")
         self.zoom_pct_label.setToolTip(tip)

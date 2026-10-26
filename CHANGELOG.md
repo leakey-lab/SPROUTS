@@ -357,6 +357,10 @@ Five passes, not yet released:
 
 ### Added
 - **Owner-decisions build (2026-10-25).**
+  - Key texts show Cmd / Option on macOS (F1 sheet, tooltips, hints); on macOS each stage
+    also answers to Cmd+Option+N (Option+N types a character in a text field); the F1 sheet
+    lists the trackpad Pinch gesture (zoom about the fingers) in the Library and Correct
+    scopes (WX-T7, O21).
   - `docs/examples/`: three real photos (the audit's T001 L044, T001 L050, T012 L047 of
     2024-07-18) with their mask, skeleton, Measure CSVs and a graph;
     `tests/test_correct_goldens_real.py` replays the Correct goldens on them in CI.

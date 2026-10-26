@@ -41,6 +41,7 @@ from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
 from app.gui.correct.mask_tools import argb_to_plane, fill_source, mask_lut  # noqa: E402
 from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer  # noqa: E402
 from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.paint_canvas import PaintCanvas, pixmap_to_argb_array  # noqa: E402
 from app.gui.patch_history import PatchHistory  # noqa: E402
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel  # noqa: E402
@@ -498,7 +499,8 @@ def test_the_rail_and_the_dock_name_each_tool_with_its_key(make_editor):
     assert {key: b.toolTip() for key, b in editor.controls.tool_buttons.items()} == RAIL_TIPS
     assert "Space" in editor.chrome.pan_button.toolTip()
     assert "(S)" in editor.controls.smooth_button.toolTip()
-    assert "Ctrl+Y" in editor.redo_button.toolTip() and "Ctrl+Z" in editor.undo_button.toolTip()
+    assert platform_keys("Ctrl+Y") in editor.redo_button.toolTip()
+    assert platform_keys("Ctrl+Z") in editor.undo_button.toolTip()
     assert editor.enhance_button is editor.chrome.enhance_button
     assert editor.pan_button is editor.chrome.pan_button
 
@@ -1327,7 +1329,8 @@ def test_an_emptied_mask_saves_an_empty_gt_mask_and_reports_it_once(make_editor,
     assert png_colour_type(project.gt_mask()) == 6  # O9: an empty GT mask
     assert not cv2.imread(project.gt_mask(), cv2.IMREAD_UNCHANGED).any()
     assert masks == [project.a] and cleared == []
-    assert ("Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask.", "info") in notices
+    cleared = platform_keys("Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask.")
+    assert (cleared, "info") in notices
     assert notices[-2:] == [
         ("Saved mask · a.png", "success"),
         ("Empty mask saved as GT for a.png: root area 0", "info"),
@@ -1955,7 +1958,7 @@ def test_delete_removes_the_picked_branch_and_undo_restores_it(make_editor, proj
     assert editor.router.canvas_key_press(key_event(Qt.Key.Key_Delete))
 
     assert not raster(editor)[110, 30:170].any()
-    assert notices[-1][0].startswith("Branch deleted") and "Ctrl+Z" in notices[-1][0]
+    assert notices[-1][0].startswith("Branch deleted") and platform_keys("Ctrl+Z") in notices[-1][0]
     editor.undo()
     assert np.array_equal(raster(editor), before)
 

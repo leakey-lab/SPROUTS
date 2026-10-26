@@ -57,6 +57,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.gui import canvas_gl, shortcuts
+from app.gui.key_text import platform_keys
 from app.gui.library_index import count_label
 from app.gui.panels import Panel
 from app.gui.task_progress import TaskProgressWidget
@@ -295,14 +296,17 @@ class ShellTopbar(QFrame):
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self.stage_buttons: dict[str, QToolButton] = {}
+        stage_keys = shortcuts.stage_keys()
         for index, (key, label, icon_name, tip) in enumerate(_STAGES):
             btn = QToolButton(steps)
             btn.setText(label)
             btn.setAccessibleName(label)
             btn.setIcon(_stage_icon(icon_name))
             btn.setIconSize(QSize(15, 15))
-            keys = shortcuts.STAGE_KEYS[index] if index < len(shortcuts.STAGE_KEYS) else None
-            btn.setToolTip(f"{label} — {tip} ({keys})" if keys else f"{label} — {tip}")
+            keys = " / ".join(stage_keys[index]) if index < len(stage_keys) else None
+            btn.setToolTip(
+                f"{label} — {tip} ({platform_keys(keys)})" if keys else f"{label} — {tip}"
+            )
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)

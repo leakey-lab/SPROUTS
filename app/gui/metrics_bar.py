@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from app import config
 from app.calibration import ProjectCalibration, calibration_words
+from app.gui.key_text import platform_keys
 from app.gui.library_index import fit_label, stem_forms
 from app.gui.widgets import tokens
 from app.provenance import same_calibration
@@ -55,7 +56,9 @@ _NO_NUMBER_TIP = "This image has no valid number ({}): {}"
 _LENGTH_INPUT = "A skeleton of this image (GT or prediction)"
 #: An outdated value whose CSV has no record of its inputs: compared by file time (R5).
 _BY_TIME_TIP = "Compared by file time: this CSV has no record of its inputs."
-_ZOOM_TIP = "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
+_ZOOM_TIP = platform_keys(
+    "Ctrl+0 fit · Ctrl+1 100 % · Ctrl+= / Ctrl+- zoom · Ctrl+wheel zooms about the cursor"
+)
 _AREA_INPUT = "A mask of this image (GT or prediction)"
 
 

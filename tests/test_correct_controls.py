@@ -48,6 +48,7 @@ from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer  # noqa: E4
 from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
 from app.gui.editor_chrome import EditorChrome  # noqa: E402
 from app.gui.image_normalization_interface import NormalizationControls  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 from app.gui.widgets.icons import load_icon  # noqa: E402
 from app.gui.widgets.overlay_geometry import LayoutMetrics  # noqa: E402
@@ -629,12 +630,20 @@ def test_each_button_requests_its_action_and_touches_no_layer(make_page, button,
     assert untouched(page)
 
 
+def test_the_undo_and_redo_tooltips_show_cmd_on_macos(make_page, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    controls = make_page(show=False).controls
+
+    assert controls.undo_button.toolTip() == "Undo (Cmd+Z)"
+    assert controls.redo_button.toolTip() == "Redo (Cmd+Y / Cmd+Shift+Z)"
+
+
 @pytest.mark.parametrize(
     "button, words",
     [
-        ("undo_button", ["Undo", "Ctrl+Z"]),
-        ("redo_button", ["Redo", "Ctrl+Y", "Ctrl+Shift+Z"]),
-        ("save_button", ["Save", "Ctrl+S"]),
+        ("undo_button", ["Undo", platform_keys("Ctrl+Z")]),
+        ("redo_button", ["Redo", platform_keys("Ctrl+Y"), platform_keys("Ctrl+Shift+Z")]),
+        ("save_button", ["Save", platform_keys("Ctrl+S")]),
         ("load_button", ["Load skeleton file"]),
         ("smooth_button", ["Smooth", "(S)"]),
     ],
@@ -1034,7 +1043,10 @@ def test_save_and_clear_follow_the_image_and_the_unsaved_state(make_page):
     assert controls.clear_icon_button.isEnabled() and not controls.save_button.isEnabled()
     assert "Nothing unsaved" in controls.save_button.toolTip()
     controls.set_image_actions(True, True)
-    assert controls.save_button.isEnabled() and "Ctrl+S" in controls.save_button.toolTip()
+    assert (
+        controls.save_button.isEnabled()
+        and platform_keys("Ctrl+S") in controls.save_button.toolTip()
+    )
     assert "Nothing unsaved" not in controls.save_button.toolTip()
     controls.set_image_actions(False, True)  # no image wins over a stale dirty flag
     assert not controls.save_button.isEnabled() and not controls.clear_icon_button.isEnabled()

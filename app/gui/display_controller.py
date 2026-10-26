@@ -50,6 +50,7 @@ from PyQt6.QtGui import QPainter
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QVBoxLayout
 
 from app.enhancement import DECODE_FLAGS
+from app.gui.key_text import platform_keys
 from app.gui.widgets import tokens
 from app.io_utils import imread_unicode
 
@@ -133,7 +134,7 @@ class DisplayController:
     OVERLAY_OPACITY = 0.8  # the skeleton reads clearly, the root under it stays visible
     SIDE_BY_SIDE_GAP = 12  # image pixels between the image and its skeleton
     EMPTY_MESSAGE = "Select an image in the library"
-    EMPTY_HINT = "Ctrl+wheel to zoom  ·  Ctrl+0 to fit  ·  drag to pan"
+    EMPTY_HINT = platform_keys("Ctrl+wheel to zoom  ·  Ctrl+0 to fit  ·  drag to pan")
 
     def __init__(self, main_window):
         self.main_window = main_window

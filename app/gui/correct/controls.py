@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QWid
 from app.gui import shortcuts
 from app.gui.correct.chip import title
 from app.gui.correct.layer import CLASSES, MASK, SKELETON
+from app.gui.key_text import platform_keys
 from app.gui.widgets import DockSlider, IconButton, keep_canvas_focus, tokens
 from app.gui.widgets.buttons import ghost_button, primary_button
 from app.gui.widgets.icons import load_icon
@@ -243,7 +244,7 @@ class CorrectControls(QObject):
         dock.add_separator()
 
         scope = shortcuts.CORRECT
-        redo_keys = " / ".join(shortcuts.keys_for("redo", scope))
+        redo_keys = platform_keys(" / ".join(shortcuts.keys_for("redo", scope)))
         self.load_button = IconButton("load", _LOAD_TIP)
         self.prediction_button = IconButton("cpu", _PREDICTION_TIP.format(noun="mask"))
         self.undo_button = IconButton("undo", shortcuts.tooltip("Undo", "undo", scope))

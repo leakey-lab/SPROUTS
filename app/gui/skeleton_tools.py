@@ -27,6 +27,7 @@ from app.editing.geometry import (
     sample_catmull_rom,
 )
 from app.gui.correct.layer import ToolSpec
+from app.gui.key_text import platform_keys
 
 if TYPE_CHECKING:
     from app.gui.skeleton_graph_model import SkeletonCorrectionModel
@@ -396,7 +397,7 @@ class PolylineTool(SkeletonTool):
         draft.reset()
         host.refresh_draft()
         host.render_skeleton(full=True)
-        host.notify("Branch deleted · Ctrl+Z to undo", "info")
+        host.notify(platform_keys("Branch deleted · Ctrl+Z to undo"), "info")
 
     def deactivate(self):
         self.host.draft.reset()
@@ -404,7 +405,7 @@ class PolylineTool(SkeletonTool):
     def hint(self):
         draft = self.host.draft
         n = len(draft.points)
-        help_text = (
+        help_text = platform_keys(
             "Click to place points. Drag points to adjust. Ctrl+click a segment to add a "
             "bend. Shift+drag a segment to move the whole line. Enter or double-click "
             f"finishes the line, Esc cancels it, {SMOOTH_KEY} smooths it into a curve "
@@ -416,7 +417,9 @@ class PolylineTool(SkeletonTool):
                 "Esc cancels"
             )
         elif n == 0:
-            text = "Polyline · click to place points · Ctrl+click a segment adds a bend"
+            text = platform_keys(
+                "Polyline · click to place points · Ctrl+click a segment adds a bend"
+            )
         elif n == 1:
             text = "Polyline · 1 point · click to add more"
         else:

@@ -173,7 +173,9 @@ The top bar walks through the work in five stages, in this order (`F1` lists eve
 | **Measure** | `Alt+4` | **Measure Length** / **Measure Area**: root length (mm) and area (mm²), from each image's GT file where it is valid, else its prediction. Measuring again with nothing changed since the CSV (inputs, field of view, length method) asks first. |
 | **Visualize** | `Alt+5` | Explore length and area trends across the trial. |
 
-A stage's keys work wherever the keyboard is while the stage is on screen, also right
+On macOS, Cmd replaces Ctrl and Option replaces Alt in every key the app names, and each
+stage also answers to Cmd+Option+1…5 (Option+N alone types a character in a text field). A
+stage's keys work wherever the keyboard is while the stage is on screen, also right
 after a click in the library tree. In the Library, `Ctrl+0`, `Ctrl+1` and `Ctrl+=` /
 `Ctrl+-` fit the photo, show it at 100 % and zoom. *Visualize* opens the dashboard you
 chose last (root length at first); with nothing to chart yet it says what to run first.

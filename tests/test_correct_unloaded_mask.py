@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import QMessageBox  # noqa: E402
 
 from app.gui import editor_prompts  # noqa: E402
 from app.gui.correct.layer import MASK, LayerStatus  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.masks import write_mask_file  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     CANCEL,
@@ -106,7 +107,7 @@ def test_a_2048_photo_never_loses_its_unshown_mask(make_editor, tmp_path, answer
     editor.navigate(1)
     assert moved == [] and read_bytes(mask) == before  # PgDn stays, and asks nothing
     assert notices[-1] == (
-        "gt/mask/a.png could not be shown: save with Ctrl+S to replace it",
+        platform_keys("gt/mask/a.png could not be shown: save with Ctrl+S to replace it"),
         "warn",
     )
     assert len(answers.seen) == 1

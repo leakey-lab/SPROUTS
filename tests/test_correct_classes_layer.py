@@ -55,6 +55,7 @@ from app.gui.correct.layer import (  # noqa: E402
 )
 from app.gui.correct.mask_tools import MaskToolHost  # noqa: E402
 from app.gui.correct.session import CorrectSession, SaveReport  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 from tests.correct_fakes import FakeHost, FakeLayer, FakePrompts  # noqa: E402
@@ -212,8 +213,8 @@ def test_the_classes_layer_misses_no_member_and_answers_the_optional_protocols(s
         tokens.ACCENT,
         1.2,
     )
-    assert (
-        layer.CLEARED_NOTICE == "Class labels cleared. Ctrl+Z to undo; Save writes an empty file."
+    assert layer.CLEARED_NOTICE == platform_keys(
+        "Class labels cleared. Ctrl+Z to undo; Save writes an empty file."
     )
     assert layer.opacity() == pytest.approx(0.60) and layer.item.zValue() == 1.2
     assert (layer.current_tool, layer.size(), layer.active_class()) == ("brush", 8, "root")

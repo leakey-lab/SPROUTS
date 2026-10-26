@@ -21,6 +21,7 @@ from app.gui.brush_preview import BrushPreview
 from app.gui.canvas_layers.skeleton import SkeletonLayerItem
 from app.gui.correct.layer import REFERENCE_DIM, SKELETON, SaveOutcome, SizeSpec
 from app.gui.correct.skeleton_document import GeneratedResolver, SkeletonDocument, SkeletonRead
+from app.gui.key_text import platform_keys
 from app.gui.skeleton_overlay import SkeletonDecorations
 from app.gui.skeleton_tools import (
     CLOSED_HINT,
@@ -41,7 +42,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from app.gui.skeleton_tools import SkeletonTool
 
 __all__ = ["DraftState", "SkeletonLayer"]
-
 _MOD = Qt.KeyboardModifier
 _NO_KEY_MODS = _MOD.ControlModifier | _MOD.AltModifier | _MOD.MetaModifier  # S is not Smooth
 _STEP = 0.12  # [ and ]: the eraser grows or shrinks by 12 %, at least 1 px
@@ -59,7 +59,7 @@ class SkeletonLayer:
     DEFAULT_OPACITY = 0.85
     RENDER_INTERVAL_MS = 16
     Z = 1.5
-    CLEARED_NOTICE = "Skeleton cleared. Ctrl+Z to undo."
+    CLEARED_NOTICE = platform_keys("Skeleton cleared. Ctrl+Z to undo.")
     DRAFT_DISCARDED_NOTICE = "Polyline draft discarded"
     ERASER_SIZE = SizeSpec("erase", "Eraser size ([ and ])", *ERASER_RANGE)
     draw_thickness = 3  # ToolHost: width of drawn lines before thinning, px

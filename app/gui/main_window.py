@@ -382,8 +382,11 @@ class MainWindow(QMainWindow):
     # ==================== Shortcuts / help ====================
 
     def _install_global_shortcuts(self) -> None:
-        """F1 / ?, Ctrl+O and Alt+1…6 from the shortcut registry (window-wide)."""
+        """F1 / ?, Ctrl+O and Alt+1…5 from the shortcut registry (window-wide)."""
+        # One slot per key, in the registry's order: every Alt+N, then (macOS) every Ctrl+Alt+N.
+        assert len(self.ribbon_buttons) == len(shortcuts.stage_keys()), "one key set per stage"
         stage_slots = [lambda k=k: self._go_to_stage(k) for k in self.ribbon_buttons]
+        stage_slots *= len(shortcuts.stage_keys()[0])
         self._global_shortcuts = shortcuts.install_shortcuts(
             self,
             shortcuts.GLOBAL,

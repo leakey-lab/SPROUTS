@@ -46,6 +46,7 @@ from app.gui import (  # noqa: E402
     skeleton_graph_model,
 )
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.panels import Panel  # noqa: E402
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
@@ -286,10 +287,11 @@ def test_the_topbar_has_five_stages_with_alt_1_to_alt_5(make_window):
     assert shortcuts.STAGE_KEYS == ("Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5")
     assert len(shortcuts.STAGE_KEYS) == len(shell_chrome.STAGES)
     bound = [s.key().toString() for s in window._global_shortcuts["go_to_stage"]]
-    assert bound == list(shortcuts.STAGE_KEYS)
+    assert bound[: len(shortcuts.STAGE_KEYS)] == list(shortcuts.STAGE_KEYS)  # stage i: key i
+    assert len(bound) == sum(map(len, shortcuts.stage_keys()))
     assert window.ribbon_buttons["Correct"].toolTip() == (
         "Correct — Fix the model's mask (area) and skeleton (length), and paint class labels "
-        "(GT for training), on one canvas. (Alt+3)"
+        f"(GT for training), on one canvas. ({platform_keys(' / '.join(shortcuts.stage_keys()[2]))})"
     )
     assert window.welcome.stage_labels() == STAGE_NAMES  # five welcome chips
 

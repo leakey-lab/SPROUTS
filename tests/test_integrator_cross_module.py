@@ -122,10 +122,11 @@ def test_stage_tooltips_name_their_alt_key(app):
     from unittest.mock import MagicMock
 
     from app.gui import shell_chrome, shortcuts
+    from app.gui.key_text import platform_keys
 
     bar = shell_chrome.ShellTopbar(MagicMock())  # a stand-in window: only slots are wired
-    for (key, *_), keys in zip(shell_chrome.STAGES, shortcuts.STAGE_KEYS, strict=True):
-        assert bar.stage_buttons[key].toolTip().endswith(f"({keys})")
+    for (key, *_), keys in zip(shell_chrome.STAGES, shortcuts.stage_keys(), strict=True):
+        assert bar.stage_buttons[key].toolTip().endswith(f"({platform_keys(' / '.join(keys))})")
 
 
 # --------------------------------------------------------------------------- workers

@@ -21,18 +21,21 @@ from app.gui.correct.save_gate import (
     write_stamps_of,
 )
 from app.gui.correct.session import CorrectSession
+from app.gui.key_text import platform_keys
 from tests.correct_fakes import FakeHost, FakeLayer, FakePrompts
 
 IMAGE = "/data/images/a.jpg"
 BASE = "/data/images"
 PARENT = "PARENT"
 KEPT = "Mask not saved: mask/a.png was kept"
-PGDN = "mask/a.png could not be shown: save with Ctrl+S to replace it"
+PGDN = platform_keys("mask/a.png could not be shown: save with Ctrl+S to replace it")
 # The mask file at open, and rewritten by another program afterwards.
 AT_OPEN = (("/data/images/mask/a.png", 1, 10),)
 REWRITTEN = (("/data/images/mask/a.png", 2, 10),)
 RELOADED = "Mask reloaded: the file changed on disk"
-CHANGED_PGDN = "mask/a.png changed on disk after you opened it: press Ctrl+S to choose"
+CHANGED_PGDN = platform_keys(
+    "mask/a.png changed on disk after you opened it: press Ctrl+S to choose"
+)
 CHANGED_KEPT = "Mask not saved: mask/a.png changed on disk"
 
 

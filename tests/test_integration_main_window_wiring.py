@@ -275,7 +275,8 @@ def test_global_shortcuts_come_from_the_registry(mw):
         for action, bound in mw._global_shortcuts.items()
     }
     assert keys["open_folder"] == list(shortcuts.keys_for("open_folder", shortcuts.GLOBAL))
-    assert len(keys["go_to_stage"]) == len(mw.ribbon_buttons) == len(shell_chrome.STAGES)
+    assert len(mw.ribbon_buttons) == len(shell_chrome.STAGES)
+    assert len(keys["go_to_stage"]) == len(mw.ribbon_buttons) * len(shortcuts.stage_keys()[0])
     assert mw._help_shortcut_f1.key().toString() == "F1"
     for bound in mw._global_shortcuts.values():
         assert all(s.context() == Qt.ShortcutContext.WindowShortcut for s in bound)

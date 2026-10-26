@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import QMessageBox  # noqa: E402
 
 from app.gui import editor_prompts  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from tests.test_correct_editor import (  # noqa: E402
     CANCEL,
     DISCARD,
@@ -54,7 +55,10 @@ CORRECTION_PROMPT = (
     "Skeleton changed on disk",
     "gt/skeletons/a.png changed on disk after you opened it.",
 )
-PGDN = ("gt/mask/a.png changed on disk after you opened it: press Ctrl+S to choose", "warn")
+PGDN = (
+    platform_keys("gt/mask/a.png changed on disk after you opened it: press Ctrl+S to choose"),
+    "warn",
+)
 CANCELLED = ("Mask not saved: gt/mask/a.png changed on disk", "info")
 NOUNS = {MASK: "Mask", SKELETON: "Skeleton"}
 

@@ -31,6 +31,7 @@ from app.gui.correct.layer import (
 from app.gui.correct.mask_document import SOURCE_GT, MaskDocument, MaskRead
 from app.gui.correct.mask_tools import argb_to_plane, fill_source, mask_lut
 from app.gui.correct.raster_layer import RasterLayer
+from app.gui.key_text import platform_keys
 from app.gui.widgets import tokens
 
 __all__ = ["MaskLayer"]
@@ -49,7 +50,7 @@ class MaskLayer(RasterLayer):
     color = tokens.MASK
     Z = 1.0
     DEFAULT_OPACITY = 0.60
-    CLEARED_NOTICE = "Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask."
+    CLEARED_NOTICE = platform_keys("Mask cleared. Ctrl+Z to undo; Save writes an empty GT mask.")
     document: MaskDocument
 
     def __init__(self, host: LayerHost, scene: QGraphicsScene) -> None:

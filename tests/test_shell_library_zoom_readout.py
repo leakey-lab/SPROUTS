@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 from app.gui import canvas_gl  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.metrics_bar import MetricsBar  # noqa: E402
 from tests.qt_teardown import flush_deleted  # noqa: E402
 from tests.test_correct_editor import qapp  # noqa: E402
@@ -55,7 +56,7 @@ def test_the_zoom_cell_formats_the_factor(app):
     assert bar._zoom_value.text() == "435 %"
     bar.set_zoom(0.084)
     assert bar._zoom_value.text() == "8.4 %"
-    assert "Ctrl+0" in bar._zoom_cell.toolTip()
+    assert platform_keys("Ctrl+0") in bar._zoom_cell.toolTip()
     bar.set_metrics()  # nothing selected: no zoom to report
     assert bar._zoom_cell.isHidden()
     bar.deleteLater()

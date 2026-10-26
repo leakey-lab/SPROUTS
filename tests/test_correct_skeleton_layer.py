@@ -45,6 +45,7 @@ from app.gui.correct.layer import (  # noqa: E402
     missing_members,
 )
 from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer  # noqa: E402
+from app.gui.key_text import platform_keys  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
 from tests.correct_fakes import FakeHost  # noqa: E402
 
@@ -314,7 +315,7 @@ def test_hints_are_todays_including_the_empty_skeleton_hint(host, scene, project
 
     layer.set_tool("polyline")
     assert layer.tool_hint()[0] == (
-        "Polyline · click to place points · Ctrl+click a segment adds a bend"
+        platform_keys("Polyline · click to place points · Ctrl+click a segment adds a bend")
     )
 
 
@@ -701,7 +702,7 @@ def test_delete_removes_the_picked_branch_and_undo_restores_it(layer, host):
 
     assert not layer.document.model.mask[240, 110:530].any()
     assert layer.draft.points == []
-    assert ("notify", "Branch deleted · Ctrl+Z to undo", "info") in host.calls
+    assert ("notify", platform_keys("Branch deleted · Ctrl+Z to undo"), "info") in host.calls
     assert layer.undo() is True
     assert np.array_equal(layer.document.model.mask, before)
 
@@ -830,7 +831,7 @@ def test_clear_is_undoable_and_posts_the_cleared_notice(layer, host):
     assert layer.clear() is True
 
     assert not layer.document.model.mask.any()
-    assert ("notify", "Skeleton cleared. Ctrl+Z to undo.", "info") in host.calls
+    assert ("notify", platform_keys("Skeleton cleared. Ctrl+Z to undo."), "info") in host.calls
     assert layer.undo() is True
     assert layer.document.model.mask[240, 100:540].all()
 
