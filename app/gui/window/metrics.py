@@ -16,6 +16,7 @@ controller directly, so the browse path costs no extra call.
 import logging
 import os
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Protocol
 
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
@@ -219,22 +220,26 @@ class MetricsController:
         current = self.current_calibration()
         index = self.index
         if stored_name and index is not None:
+            # The calls below stat each CSV once between them (a stand-in may not group).
+            reading = getattr(index, "reading", None)
             try:
-                measured = index.lookup(stored_name, load=False)
-                # needs_load() waits for the CSV lock: never while a worker parses (its
-                # ready signal refreshes the bar).
-                if not self.loading and index.needs_load():
-                    self.prewarm()
-                # Each value against its own files: a saved mask outdates AREA, never LENGTH.
-                outdated = index.outdated(stored_name)
-                csvs = index.sources()
-                # Without a record of its inputs, a CSV's staleness is by file time (R5).
-                by_content = index.by_content()
-                skipped = index.gt_skip_reason(stored_name)
-                measured_from = index.measured_from(stored_name)
-                calibrations = index.calibrations()
-                # Measured with another field of view or length method: outdated (O3).
-                method_notes = index.method_notes(current)
+                with reading() if callable(reading) else nullcontext():
+                    measured = index.lookup(stored_name, load=False)
+                    # needs_load() waits for the CSV lock: never while a worker parses (its
+                    # ready signal refreshes the bar).
+                    if not self.loading and index.needs_load():
+                        self.prewarm()
+                    # Each value against its own files: a saved mask outdates AREA, never
+                    # LENGTH.
+                    outdated = index.outdated(stored_name)
+                    csvs = index.sources()
+                    # Without a record of its inputs, a CSV's staleness is by file time (R5).
+                    by_content = index.by_content()
+                    skipped = index.gt_skip_reason(stored_name)
+                    measured_from = index.measured_from(stored_name)
+                    calibrations = index.calibrations()
+                    # Measured with another field of view or length method: outdated (O3).
+                    method_notes = index.method_notes(current)
             except Exception:
                 logger.exception("Could not read the measured values of %s", stored_name)
 

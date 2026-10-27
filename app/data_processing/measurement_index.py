@@ -14,7 +14,8 @@ Contract:
   never the ``0`` the thread writes for failures.
 * A CSV is parsed once and re-parsed only when its ``(mtime_ns, size)``
   changes, so a warm lookup is one ``os.stat`` per metric (two with the record of its
-  inputs, ``<csv>.inputs.json``, read with it) plus a dict get.
+  inputs, ``<csv>.inputs.json``, read with it) plus a dict get. The calls of one metrics-bar
+  refresh share those stats (:meth:`MeasurementIndex.reading`).
 * Qt-free and thread-safe: :meth:`MeasurementIndex.prewarm` is meant for a
   worker thread; ``lookup(stem, load=False)`` never parses and never blocks,
   which is what the GUI thread should call.
@@ -32,11 +33,13 @@ Contract:
 from __future__ import annotations
 
 import csv
+import itertools
 import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import partial
 from typing import Any, NamedTuple
 
@@ -47,6 +50,7 @@ from app.gt.files import SOURCE_GT, SOURCE_PREDICTION
 from app.inference.measure_inputs import (
     InputsRecord,
     content_sha256,
+    file_key,
     input_key,
     inputs_record_path,
     load_inputs_record,
@@ -65,6 +69,8 @@ _SOURCE_COLUMN = SOURCE_COLUMN
 _Signature = tuple[int, int]
 #: A table's signature: its CSV's and its record's (``None``: no record file).
 _TableSignature = tuple[_Signature, _Signature | None]
+_Found = tuple[str, _TableSignature] | None  # the CSV in use and its signature
+_HOLDS = itertools.count(1)  # tokens of MetricTable.held
 
 
 class Measurement(NamedTuple):
@@ -221,6 +227,23 @@ class MetricTable:
         self._gt_skipped: dict[str, str] = {}
         self._calibration: dict[str, float] | None = None
         self._method: dict | None = None
+        # A :meth:`held` block: (thread id, token); and its one look for the CSV, (token,
+        # found), kept under the lock.
+        self._hold: tuple[int, int] | None = None
+        self._held: tuple[int, _Found] | None = None
+
+    @contextmanager
+    def held(self) -> Iterator[None]:
+        """Within the block, this thread's calls that do not load (``get(load=False)``,
+        :meth:`needs_load`) look for the CSV and stat it once for all of them, not once each
+        (a metrics-bar refresh asked four times). A load meanwhile (a worker's :meth:`load`)
+        drops what was held: the calls after it look again."""
+        previous = self._hold
+        self._hold = (threading.get_ident(), next(_HOLDS))
+        try:
+            yield
+        finally:
+            self._hold, self._held = previous, None
 
     @property
     def path(self) -> str | None:
@@ -258,9 +281,26 @@ class MetricTable:
             self._path, self._searched_at, self._searched_full_at = None, None, None
             self._loaded_sig, self._rows, self._record = None, _NO_ROWS, None
             self._gt_skipped, self._calibration, self._method = {}, None, None
+            self._held = None
 
-    def _resolve(self, full: bool) -> tuple[str, _TableSignature] | None:
-        """The CSV and its signature; ``full`` searches with ``locate``, else ``locate_fast``."""
+    def _resolve(self, full: bool) -> _Found:
+        """The CSV and its signature (lock held); ``full`` searches with ``locate``, else
+        ``locate_fast``, once per :meth:`held` block of this thread."""
+        if full:
+            self._held = None  # a load: the held calls after it look again
+            return self._find(full)
+        hold = self._hold
+        token = hold[1] if hold is not None and hold[0] == threading.get_ident() else None
+        held = self._held
+        if token is not None and held is not None and held[0] == token:
+            return held[1]
+        found = self._find(full)
+        if token is not None:
+            self._held = (token, found)
+        return found
+
+    def _find(self, full: bool) -> _Found:
+        """:meth:`_resolve`'s look for the CSV, with its stats."""
         if self._path is not None:
             sig = _table_signature(self._path)
             if sig is not None:
@@ -378,10 +418,29 @@ class MeasurementIndex:
         #: ``gt/mask/``) as :meth:`prewarm` listed them on a worker. The GUI thread's lookups
         #: (:meth:`outdated`, :meth:`measured_from`) only stat; they never list a folder.
         self._gt_listing: dict[str, dict[str, str]] = {"length": {}, "area": {}}
+        #: folder -> :func:`app.inference.measure_inputs.key_prefix` (for :meth:`_input_key`).
+        self._prefixes: dict[str, str | None] = {}
 
     @property
     def root(self) -> str:
         return self.layout.root
+
+    @contextmanager
+    def reading(self) -> Iterator[None]:
+        """One group of this thread's calls (a metrics-bar refresh): those that do not load
+        (``lookup(load=False)``, :meth:`needs_load`, :meth:`outdated`,
+        :meth:`measured_from`) stat each CSV and its record once for all of them, 4 stats
+        instead of 16 (:meth:`MetricTable.held`)."""
+        with self._length.held(), self._area.held():
+            yield
+
+    def _input_key(self, path: str) -> str:
+        """``input_key(path, root)``: one relpath per folder for an absolute path (a relative
+        one follows the working folder, so it is keyed alone)."""
+        root = self.layout.root
+        if os.path.isabs(path) and os.path.isabs(root):
+            return file_key(path, root, self._prefixes)
+        return input_key(path, root)
 
     def find_lengths_csv(self) -> str | None:
         """The project's ``root_lengths.csv``, as :meth:`ProjectLayout.find_lengths_csv`
@@ -507,11 +566,10 @@ class MeasurementIndex:
         parsed CSVs are read (GUI thread); a GT file is looked for with a stat
         (:meth:`_gt_file`)."""
         stem = _key(stem)
-        layout = self.layout
         length = self._measured("length", stem, SKELETON_SUFFIX)
         area = self._measured("area", stem, ".png")
         return {
-            metric: None if found is None else (input_key(found[0], layout.root), found[1])
+            metric: None if found is None else (self._input_key(found[0]), found[1])
             for metric, found in (("length", length), ("area", area))
         }
 
@@ -582,7 +640,7 @@ class MeasurementIndex:
             files = [gt] if row.source == SOURCE_GT else [prediction]
             if gt is not None and row.source != SOURCE_GT:
                 files.append(gt)  # not used then: one saved or changed since outdates
-            return any(_differs_from_record(record, path, self.layout.root) for path in files)
+            return any(_differs_from_record(record, path, self._input_key) for path in files)
         csv_sig = _signature(csv_path)
         if csv_sig is None:
             return False
@@ -612,14 +670,15 @@ def _another_named_like(stem: str, prediction: str, suffix: str) -> bool:
         return True
 
 
-def _differs_from_record(record: InputsRecord, source: str, root: str) -> bool:
-    """True when ``source`` is gone, has no entry in ``record``, or its content differs
-    from the recorded one (hashed only when its size or time differ)."""
+def _differs_from_record(record: InputsRecord, source: str, key_of: Callable[[str], str]) -> bool:
+    """True when ``source`` is gone, has no entry in ``record`` (under ``key_of(source)``,
+    its :func:`~app.inference.measure_inputs.input_key`), or its content differs from the
+    recorded one (hashed only when its size or time differ)."""
     try:
         st = os.stat(source)
     except OSError:
         return True
-    entry = record.inputs.get(input_key(source, root))
+    entry = record.inputs.get(key_of(source))
     if entry is None:
         return True
     if (st.st_size, st.st_mtime_ns) == entry[:2]:

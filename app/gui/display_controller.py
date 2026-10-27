@@ -300,8 +300,10 @@ class DisplayController:
         except Exception:  # noqa: BLE001 - the display decodes the photo itself
             logger.exception("The Correct page's photo of %s is unavailable", path)
             return None
+        if found is None:
+            return None  # the usual case: no stat for it (three per Library click)
         stamp = file_stamp(path)
-        if found is None or stamp[1:] == (None,) or tuple(found[0][1:]) != stamp[1:]:
+        if stamp[1:] == (None,) or tuple(found[0][1:]) != stamp[1:]:
             return None
         self.read_ahead.keep(path, stamp, found[1])
         return found[1]

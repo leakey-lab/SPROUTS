@@ -440,6 +440,8 @@ class MetricsBar(QWidget):
             cell.setVisible(False)
             return
         label.setProperty("stale", outdated)
-        label.setStyleSheet(_value_qss(color))
+        qss = _value_qss(color)
+        if label.styleSheet() != qss:  # a restyle re-polishes the label: only on a change
+            label.setStyleSheet(qss)
         cell.setToolTip("\n".join(tips))
         cell.setVisible(True)

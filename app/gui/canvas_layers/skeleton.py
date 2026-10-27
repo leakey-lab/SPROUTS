@@ -312,9 +312,12 @@ class SkeletonLayerItem(QGraphicsItem):
 
         The tier is decided by the segments of the whole on-screen part (``seen``), so a
         small repaint (a hover on the raster viewport) draws the tier of the full frame;
-        only ``exposed`` is drawn. A tile not extracted yet (extraction stops after
-        EXTRACT_BUDGET_MS per paint) draws the pixel overlay, and the item asks for another
-        paint until every tile on screen is done.
+        only ``exposed`` is drawn. The 2 px line is given the lines of all of ``seen`` too:
+        ``drawLines`` strokes 16 lines at a time and a translucent joint blends once inside
+        a batch, twice across one, so only the full frame's list keeps a repainted joint as
+        the full frame drew it (the 1 px line does not depend on its batches). A tile not
+        extracted yet (extraction stops after EXTRACT_BUDGET_MS per paint) draws the pixel
+        overlay, and the item asks for another paint until every tile on screen is done.
         """
         gl = _is_gl(painter)
         limit = self.GL_SEGMENT_BUDGET if gl else self.RASTER_THIN_BUDGET
@@ -329,10 +332,10 @@ class SkeletonLayerItem(QGraphicsItem):
             self._paint_tiles(painter, waiting)
         if pending:
             self.update(seen)  # extract the rest in the next frames
-        drawn = _edges(exposed, reach)
+        thin = not gl and count > self.RASTER_HALO_BUDGET
+        drawn = _edges(exposed if thin else seen, reach)
         tiles = [self._tile_vectors.get(key) for key in self._tiles_in(drawn)]
         tiles = [tile for tile in tiles if tile is not None]
-        thin = not gl and count > self.RASTER_HALO_BUDGET
         if not tiles:
             return "vector-thin" if thin else "vector"
         parts = [tile.visible(drawn) for tile in tiles]
