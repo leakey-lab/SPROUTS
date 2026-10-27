@@ -1,10 +1,12 @@
 """``app.gt.store`` gives the results of its original ``np.unique`` code (a guard for speedups).
 
 Trace GT opens a tracing through ``align_to_registry`` and saves it through
-``write_tracing``; the dataset export calls both and ``present_keys`` for every image. At
-2048 x 1536 their ``np.unique`` sorts cost about 20 ms each (PKG-GT, 2026-09-30), so they
-may be replaced by histograms: these tests pin the results (ids, warnings, the changed flag,
-present keys and the written PNG bytes) against the original code, copied here verbatim.
+``write_tracing``; the dataset export aligns every image (its id remap and counts are pinned
+in ``tests/test_gt_export_equivalence.py``) and ``present_keys`` is the public "which classes
+have pixels". At 2048 x 1536 their ``np.unique`` sorts cost about 20 ms each (PKG-GT,
+2026-09-30), so they may be replaced by histograms: these tests pin the results (ids,
+warnings, the changed flag, present keys and the written PNG bytes) against the original
+code, copied here verbatim.
 """
 
 import io

@@ -3,8 +3,9 @@
 The dialog says it up front, before anything is chosen. Counting ran four ``os.path``
 calls per image on the GUI thread: at 46k images the dialog showed 0.65 s late (and the
 count came from one ``gt/`` listing per folder already). It now slices each path instead,
-and still lists each ``gt/`` folder once; the count is the one the old code gave, pinned
-here on awkward paths and random subsets of them.
+and still lists each ``gt/`` folder once; the count is the one the old code gives with the
+O7 rule (names compared without case on every platform), pinned here on awkward paths and
+random subsets of them.
 """
 
 from __future__ import annotations
@@ -20,7 +21,9 @@ from app.gui.export_dataset_dialog import count_traced
 
 
 def _reference_count(images: dict[str, str]) -> int:
-    """``count_traced`` as the export dialog first shipped it (8ae250e)."""
+    """``count_traced`` as the export dialog first shipped it (8ae250e), with the O7 rule of
+    3905d6e: names compared without case on every platform (``str.lower``, where
+    ``os.path.normcase`` folds case on Windows only)."""
     listed: dict[str, set[str]] = {}
     traced = 0
     for path in images.values():
@@ -28,11 +31,11 @@ def _reference_count(images: dict[str, str]) -> int:
         names = listed.get(folder)
         if names is None:
             try:
-                names = {os.path.normcase(name) for name in os.listdir(folder)}
+                names = {name.lower() for name in os.listdir(folder)}
             except OSError:
                 names = set()
             listed[folder] = names
-        if os.path.normcase(os.path.basename(gt_path(path))) in names:
+        if os.path.basename(gt_path(path)).lower() in names:
             traced += 1
     return traced
 

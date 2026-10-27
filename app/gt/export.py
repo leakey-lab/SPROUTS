@@ -25,17 +25,19 @@ import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
+import cv2
 import numpy as np
 from PIL import Image
 
 from app.config import GT_BACKGROUND_ID, GT_DIRNAME, GT_IGNORE_ID
+from app.gt.files import LabelsIndex
 from app.gt.registry import Registry
 from app.gt.store import (
     GtFileError,
     align_to_registry,
     gt_path,
+    histogram,
     is_complete,
-    present_keys,
     read_tracing,
 )
 from app.io_utils import atomic_open, atomic_write_text, path_key
@@ -67,8 +69,9 @@ _PROVENANCE_KIND = "gt_export"
 # them is read.
 _PROTECTED_DIRS = ("mask", "skeletons", GT_DIRNAME)
 # Pillow refuses to open an image over twice ``Image.MAX_IMAGE_PIXELS`` (about 179 Mpx)
-# with this error, which is neither OSError nor ValueError: one such image or tracing is
-# that stem's export error, like any unreadable file, and never ends the whole export.
+# with this error, which is neither OSError nor ValueError: one such source image is that
+# stem's export error, like any unreadable file, and never ends the whole export (a tracing
+# Pillow refuses is a ``GtFileError`` of ``read_tracing``).
 _TOO_LARGE = Image.DecompressionBombError
 
 
@@ -118,7 +121,10 @@ def remap_ids(ids: np.ndarray, registry: Registry) -> np.ndarray:
     lut[GT_BACKGROUND_ID] = GT_BACKGROUND_ID
     for new_id, c in enumerate(registry.labelled(), start=1):
         lut[c.id] = new_id
-    return lut[ids].astype(np.uint8)
+    if ids.dtype == np.uint8 and ids.ndim == 2 and ids.size:
+        # The same table lookup, about 10x faster (cv2.LUT keeps the shape of 2-D arrays only).
+        return cv2.LUT(np.ascontiguousarray(ids), lut)
+    return lut[ids]
 
 
 def assign_splits(
@@ -165,7 +171,7 @@ def _manifest_fields(registry: Registry) -> list[str]:
 def _pixel_counts(remapped: np.ndarray, registry: Registry) -> dict[str, int]:
     """Pixels per exported id (``remap_ids`` output): background, each labelled class
     in registry order, Ignore (retired and unknown classes included)."""
-    counts = np.bincount(remapped.ravel(), minlength=GT_IGNORE_ID + 1)
+    counts = histogram(remapped)
     row = {"px_background": int(counts[GT_BACKGROUND_ID])}
     for new_id, c in enumerate(registry.labelled(), start=1):
         row[f"px_{c.key}"] = int(counts[new_id])
@@ -173,17 +179,26 @@ def _pixel_counts(remapped: np.ndarray, registry: Registry) -> dict[str, int]:
     return row
 
 
-def _exif_orientation(image_path: str) -> int | str:
-    """The image's EXIF orientation tag (1-8), or ``""`` when it has none or it is unreadable.
+def _checked_orientation(image_path: str, shape: tuple[int, ...]) -> int | str:
+    """The image's EXIF orientation tag (1-8), or ``""`` when it has none or it is unreadable,
+    once the image is the size of its tracing (one open of the image).
 
-    Only recorded: the pixels are always the stored grid (W2-T10, ``tests/test_exif_policy.py``).
+    Raises ``ValueError`` when a tracing is not the size of its source image: Correct treats
+    such a file as unusable (the image was replaced or resized after tracing); exported, the
+    pair would be misaligned. A missing or unidentifiable image raises ``OSError``, one Pillow
+    refuses as too large ``DecompressionBombError``. The tag is only recorded: the pixels are
+    always the stored grid (W2-T10, ``tests/test_exif_policy.py``).
     """
-    try:
-        with Image.open(image_path) as image:
+    with Image.open(image_path) as image:
+        width, height = image.size
+        if tuple(shape) != (height, width):
+            gt_h, gt_w = shape[:2]
+            raise ValueError(f"GT is {gt_w}x{gt_h} but the image is {width}x{height}")
+        try:
             value = image.getexif().get(_EXIF_ORIENTATION_TAG)
-    except Exception as exc:  # a metadata column must never fail an export
-        logger.debug("No EXIF orientation for %s: %s", image_path, exc)
-        return ""
+        except Exception as exc:  # a metadata column must never fail an export
+            logger.debug("No EXIF orientation for %s: %s", image_path, exc)
+            return ""
     if isinstance(value, int) and 1 <= value <= 8:
         return value
     return ""
@@ -218,11 +233,17 @@ def _check_out_dir(project_dir: str, out_dir: str) -> None:
             )
 
 
-def _labels_file(image_path: str, listed: dict[str, dict[str, str]]) -> str:
+def _labels_file(
+    image_path: str, index: LabelsIndex, listed: dict[str, dict[str, str]]
+) -> str | None:
     """The class labels of ``image_path``: ``gt/<stem>.png``, else a ``.png`` of ``gt/`` whose
-    stem differs only in case (O7), as Correct and the Library find it; else that exact name
-    (absent). ``listed`` keeps one listing of ``gt/`` per image folder, made on the folder's
-    first image without the exact file."""
+    stem differs only in case (O7), as Correct and the Library find it; else None.
+
+    ``index`` answers most images without a file check (the names of each folder's ``gt/``);
+    ``listed`` keeps one ranked scan of ``gt/`` per image folder, made on the folder's first
+    image that may have labels but has no exact file."""
+    if index.lacks_labels(image_path):
+        return None
     exact = gt_path(image_path)
     if os.path.exists(exact):
         return exact
@@ -232,22 +253,41 @@ def _labels_file(image_path: str, listed: dict[str, dict[str, str]]) -> str:
         labels = ProjectLayout(folder).scan_gt_labels()
         found = listed[folder] = {stem_key(stem): path for stem, path in labels.items()}
     stem = os.path.splitext(os.path.basename(image_path))[0]  # gt_path's stem
-    return found.get(stem_key(stem), exact)
+    return found.get(stem_key(stem))
 
 
-def _check_image_size(image_path: str, shape: tuple[int, ...]) -> None:
-    """Raise ``ValueError`` when a tracing is not the size of its source image.
+def _export_stem(
+    stem: str,
+    image_path: str,
+    ids: np.ndarray,
+    registry: Registry,
+    masks_dir: str,
+    images_dir: str,
+) -> dict:
+    """Write the mask and the image copy of one stem; its manifest row (without the split).
 
-    Correct treats such a file as unusable (the image was replaced or resized
-    after tracing); exported, the pair would be misaligned. Reads the image
-    header only; a missing or unidentifiable image raises ``OSError``, one Pillow
-    refuses as too large ``DecompressionBombError``.
+    An image that is missing, unreadable, too large or not the size of ``ids`` raises
+    (``OSError``, ``DecompressionBombError``, ``ValueError``) before anything is written; a
+    failed write raises ``OSError`` and leaves what was written for the caller to remove.
     """
-    with Image.open(image_path) as image:
-        width, height = image.size
-    if tuple(shape) != (height, width):
-        gt_h, gt_w = shape[:2]
-        raise ValueError(f"GT is {gt_w}x{gt_h} but the image is {width}x{height}")
+    orientation = _checked_orientation(image_path, ids.shape)
+    remapped = remap_ids(ids, registry)
+    Image.fromarray(remapped, mode="L").save(os.path.join(masks_dir, f"{stem}.png"))
+    ext = os.path.splitext(image_path)[1]
+    shutil.copy2(image_path, os.path.join(images_dir, f"{stem}{ext}"))
+    counts = _pixel_counts(remapped, registry)
+    parsed = parse_image_name(stem)
+    return {
+        "stem": stem,
+        "source_image": image_path,
+        "tube": _or_blank(parsed.tube),
+        "position": _or_blank(parsed.position),
+        "date": _or_blank(parsed.date),
+        # One export id per labelled class: the class is present when its id has pixels.
+        "classes_present": ";".join(c.key for c in registry.labelled() if counts[f"px_{c.key}"]),
+        "exif_orientation": orientation,
+        **counts,
+    }
 
 
 def _write_split_file(path: str, stems: list[str]) -> None:
@@ -319,7 +359,8 @@ def export_dataset(
     ``out_dir`` inside ``mask/``, ``skeletons/`` or ``gt/`` raises ``ExportError``.
     The folder is resolved to an absolute path once, at
     the start (``D:out`` is the current folder of drive D then), and every file, check,
-    message and the result use it.
+    message and the result use it. ``progress_cb`` gets the percent done, once per new
+    value: 0 at the first image, 100 at the end.
     """
     out_dir = os.path.abspath(options.out_dir)
     _check_out_dir(project_dir, out_dir)
@@ -337,23 +378,23 @@ def export_dataset(
 
     errors: list[tuple[str, str]] = []
     skipped_incomplete = 0
-    exported_stems: list[str] = []
-    manifest_rows: dict[str, dict] = {}
+    rows: dict[str, dict] = {}  # exported stem -> its manifest row, in export order
+    index = LabelsIndex()  # the names of each image folder's gt/
     listed: dict[str, dict[str, str]] = {}  # image folder -> its gt/ labels by stem key
 
     stems = sorted(images)
     n = len(stems)
+    progress = _Progress(progress_cb, n)
     for i, stem in enumerate(stems):
         image_path = images[stem]
-        gt_file = _labels_file(image_path, listed)
-        if os.path.exists(gt_file):
+        gt_file = _labels_file(image_path, index, listed)
+        if gt_file is not None:  # read_tracing gives None if the file went in the meantime
             try:
                 tracing = read_tracing(gt_file)
-            except (GtFileError, _TOO_LARGE) as exc:
+            except GtFileError as exc:
                 logger.warning("Skipping unreadable GT file for %s: %s", stem, exc)
                 errors.append((stem, str(exc)))
-                _emit_progress(progress_cb, i, n)
-                continue
+                tracing = None
 
             if tracing is not None:
                 try:
@@ -364,31 +405,9 @@ def export_dataset(
                     if options.only_complete and not is_complete(aligned, registry):
                         skipped_incomplete += 1
                     else:
-                        _check_image_size(image_path, aligned.ids.shape)
-                        remapped = remap_ids(aligned.ids, registry)
-                        mask_out_path = os.path.join(masks_dir, f"{stem}.png")
-                        Image.fromarray(remapped, mode="L").save(mask_out_path)
-
-                        ext = os.path.splitext(image_path)[1]
-                        image_out_path = os.path.join(images_dir, f"{stem}{ext}")
-                        shutil.copy2(image_path, image_out_path)
-
-                        parsed = parse_image_name(stem)
-                        present = present_keys(aligned, registry)
-                        classes_present = ";".join(
-                            c.key for c in registry.labelled() if c.key in present
+                        rows[stem] = _export_stem(
+                            stem, image_path, aligned.ids, registry, masks_dir, images_dir
                         )
-                        manifest_rows[stem] = {
-                            "stem": stem,
-                            "source_image": image_path,
-                            "tube": _or_blank(parsed.tube),
-                            "position": _or_blank(parsed.position),
-                            "date": _or_blank(parsed.date),
-                            "classes_present": classes_present,
-                            "exif_orientation": _exif_orientation(image_path),
-                            **_pixel_counts(remapped, registry),
-                        }
-                        exported_stems.append(stem)
                 except (OSError, ValueError, _TOO_LARGE) as exc:
                     # A missing/unreadable/too large source image, or a write
                     # failure (disk full, bad permissions, malformed array), must
@@ -400,12 +419,10 @@ def export_dataset(
                     ext = os.path.splitext(image_path)[1]
                     _remove_if_exists(os.path.join(masks_dir, f"{stem}.png"))
                     _remove_if_exists(os.path.join(images_dir, f"{stem}{ext}"))
-                    manifest_rows.pop(stem, None)
-                    if stem in exported_stems:
-                        exported_stems.remove(stem)
 
-        _emit_progress(progress_cb, i, n)
+        progress(i)
 
+    exported_stems = list(rows)
     splits = assign_splits(
         exported_stems, options.val_fraction, options.group_by_tube, options.seed
     )
@@ -426,9 +443,7 @@ def export_dataset(
         writer = csv.DictWriter(fh, fieldnames=_manifest_fields(registry))
         writer.writeheader()
         for stem in exported_stems:
-            row = dict(manifest_rows[stem])
-            row["split"] = splits.get(stem, "train")
-            writer.writerow(row)
+            writer.writerow({**rows[stem], "split": splits.get(stem, "train")})
 
     if errors:
         # One line per error, whatever the message contains.
@@ -446,7 +461,7 @@ def export_dataset(
         errors=errors,
     )
     _write_provenance(manifest_path, project_dir, n, registry, options, result)
-    _emit_progress(progress_cb, n, n)
+    progress(n)
     return result
 
 
@@ -462,7 +477,17 @@ def _remove_if_exists(path: str) -> None:
         pass
 
 
-def _emit_progress(progress_cb: Callable[[int], None] | None, i: int, n: int) -> None:
-    if progress_cb is None:
-        return
-    progress_cb(int(100 * i / n) if n else 100)
+class _Progress:
+    """Reports the percent done of ``n`` stems to ``progress_cb``, once per new value: one
+    queued signal per image (46k) took about a tenth of a large export's time."""
+
+    def __init__(self, progress_cb: Callable[[int], None] | None, n: int) -> None:
+        self._progress_cb, self._n, self._last = progress_cb, n, None
+
+    def __call__(self, i: int) -> None:
+        if self._progress_cb is None:
+            return
+        percent = int(100 * i / self._n) if self._n else 100
+        if percent != self._last:
+            self._last = percent
+            self._progress_cb(percent)

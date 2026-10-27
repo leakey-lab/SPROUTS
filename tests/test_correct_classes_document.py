@@ -32,6 +32,7 @@ from app.gt import (
     save_registry,
     write_tracing,
 )
+from app.gt import store as gt_store
 from app.gui.correct import classes_document, classes_paint
 from app.gui.correct.classes_document import ClassesDocument, ClassesRead, ClassesSaveResult
 from app.gui.correct.classes_paint import canvas_ids, class_lut
@@ -504,7 +505,7 @@ def test_counts_follow_the_patches(gt_project, seed):
 
 
 def test_counts_stay_exact_on_the_bincount_path(gt_project, monkeypatch):
-    monkeypatch.setattr(classes_paint, "_EXACT_HIST_MAX", 50)
+    monkeypatch.setattr(gt_store, "_EXACT_HIST_MAX", 50)
     doc = opened(gt_project, size=(120, 90))
     rng = np.random.default_rng(9)
     for _ in _random_session(doc, rng, 40):
@@ -531,7 +532,7 @@ def test_histogram_is_exact_on_both_paths(monkeypatch):
     strided = ids.ravel()[::3]
     assert np.array_equal(histogram(strided), np.bincount(strided, minlength=256))
     assert np.array_equal(histogram(np.zeros((0, 5), np.uint8)), np.zeros(256))
-    monkeypatch.setattr(classes_paint, "_EXACT_HIST_MAX", 100)  # above it: np.bincount
+    monkeypatch.setattr(gt_store, "_EXACT_HIST_MAX", 100)  # above it: np.bincount
     assert np.array_equal(histogram(ids), expected)
     assert histogram(ids).dtype == np.int64
 

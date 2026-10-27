@@ -16,6 +16,7 @@ are, so Enter in the folder field no longer opens the folder picker).
 
 from __future__ import annotations
 
+import logging
 import os
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -34,10 +35,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.gt import gt_dir
 from app.gt.export import ExportError, ExportOptions, ExportResult, export_dataset
+from app.gt.files import LabelsIndex
 from app.gt.registry import Registry
 from app.gui.widgets import tokens
+from app.workers import is_user_condition
+
+logger = logging.getLogger(__name__)
 
 # Failed images listed in the summary; the rest are counted ("…and N more").
 _MAX_LISTED_ERRORS = 10
@@ -50,29 +54,10 @@ _NOTHING_TRACED = (
 
 
 def count_traced(images: dict[str, str]) -> int:
-    """How many of ``images`` (stem -> image path) have a ``gt/<stem>.png``.
-
-    One listing of each ``gt/`` folder, not one file check per image, and per image only
-    string slicing: four ``os.path`` calls per image took 0.65 s at 46k images, on the GUI
-    thread while the dialog opened. The count is the one the export finds: ``gt/<stem>.png``,
-    its stem compared without case on every platform (O7).
-    """
-    sep, alt = os.sep, os.altsep or os.sep
-    listed: dict[str, set[str]] = {}
-    traced = 0
-    for path in images.values():
-        cut = max(path.rfind(sep), path.rfind(alt))
-        if cut < 0:  # a bare (or drive-relative) name: the general path functions
-            folder_key, name = os.path.split(path)
-        else:  # the folder as spelled, with its separator; the file name after it
-            folder_key, name = path[: cut + 1], path[cut + 1 :]
-        names = listed.get(folder_key)
-        if names is None:
-            names = listed[folder_key] = _gt_names(os.path.dirname(path))
-        # gt_path's name: the image's stem + ".png", compared without case (O7).
-        if names and (os.path.splitext(name)[0] + ".png").lower() in names:
-            traced += 1
-    return traced
+    """How many of ``images`` (stem -> image path) have a ``gt/<stem>.png``, its stem compared
+    without case on every platform (O7): one listing of each ``gt/`` folder, no file check per
+    image (the dialog counts on the GUI thread while it opens; ``LabelsIndex``)."""
+    return LabelsIndex().count(images.values())
 
 
 def traced_sentence(traced: int, total: int) -> str:
@@ -83,16 +68,9 @@ def traced_sentence(traced: int, total: int) -> str:
     return f"{traced} of {total} {noun} {verb} class labels."
 
 
-def _gt_names(folder: str) -> set[str]:
-    """The names in ``folder``'s ``gt/`` in lower case (none when it cannot be listed)."""
-    try:
-        return {name.lower() for name in os.listdir(gt_dir(folder))}
-    except OSError:
-        return set()
-
-
 class ExportThread(QThread):
-    """Runs ``export_dataset`` off the GUI thread."""
+    """Runs ``export_dataset`` off the GUI thread; every run ends in ``finished_ok`` or
+    ``failed`` (a one-line message; an unexpected error's traceback goes to the log)."""
 
     progress = pyqtSignal(int)
     finished_ok = pyqtSignal(object)  # ExportResult
@@ -121,10 +99,19 @@ class ExportThread(QThread):
                 self._options,
                 progress_cb=self.progress.emit,
             )
-        except ExportError as exc:
+        except ExportError as exc:  # a refused request: its own message, nothing to log
             self.failed.emit(str(exc))
-        except Exception as exc:  # thread boundary: surface anything, never crash the app
-            self.failed.emit(f"Export failed: {exc}")
+        except BaseException as exc:  # noqa: BLE001 - thread boundary: SystemExit must report too
+            # Unreported, the dialog would stay "Exporting…" with every control off.
+            if is_user_condition(exc):
+                logger.warning("Dataset export failed: %s", exc)
+            else:
+                logger.exception("Dataset export failed")
+            try:
+                message = f"Export failed: {exc}"
+            except Exception:  # a broken __str__ must not break the error path
+                message = f"Export failed: {type(exc).__name__}"
+            self.failed.emit(message)
         else:
             self.finished_ok.emit(result)
 

@@ -35,6 +35,9 @@ from app.io_utils import atomic_write_bytes
 logger = logging.getLogger(__name__)
 
 _VALID_MODES = ("P", "L")
+# cv2.calcHist counts in float32, exact up to 2**24 per value: arrays up to this many
+# pixels are counted by it (about 10x faster than np.bincount), larger ones by np.bincount.
+_EXACT_HIST_MAX = 1 << 24
 
 
 class GtFileError(ValueError):
@@ -66,6 +69,17 @@ def _present_ids(ids: np.ndarray) -> list[int]:
         return []
     hist = cv2.calcHist([np.ascontiguousarray(ids, dtype=np.uint8)], [0], None, [256], [0, 256])
     return np.flatnonzero(hist.ravel()).tolist()
+
+
+def histogram(ids: np.ndarray) -> np.ndarray:
+    """Pixels per value (256 int64 counts) of a uint8 array of any shape; exact."""
+    if ids.size == 0:
+        return np.zeros(256, np.int64)
+    if ids.size > _EXACT_HIST_MAX:
+        return np.bincount(ids.ravel(), minlength=256).astype(np.int64)
+    if ids.ndim != 2:
+        ids = np.ascontiguousarray(ids).reshape(1, -1)
+    return cv2.calcHist([ids], [0], None, [256], [0, 256]).ravel().astype(np.int64)
 
 
 def _hex_to_rgb(color: str) -> list[int]:
@@ -126,7 +140,8 @@ def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
 
 
 def read_tracing(path: str) -> Tracing | None:
-    """Read a GT PNG. Returns ``None`` if missing; raises ``GtFileError`` if unreadable."""
+    """Read a GT PNG. Returns ``None`` if missing; raises ``GtFileError`` if unreadable (a file
+    Pillow refuses as too large or broken included)."""
     if not os.path.exists(path):
         return None
     try:
@@ -139,7 +154,9 @@ def read_tracing(path: str) -> Tracing | None:
             text = getattr(image, "text", {}) or {}
     except GtFileError:
         raise
-    except (OSError, ValueError) as exc:
+    except Image.DecompressionBombError as exc:  # over twice Image.MAX_IMAGE_PIXELS
+        raise GtFileError(str(exc)) from exc  # Pillow's text, as the export has always listed it
+    except (OSError, ValueError, SyntaxError) as exc:  # SyntaxError: Pillow's "broken PNG file"
         raise GtFileError(f"Could not read GT file {path}: {exc}") from exc
 
     raw_meta = text.get(GT_META_CHUNK)

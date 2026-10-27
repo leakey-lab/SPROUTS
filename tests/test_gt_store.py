@@ -4,13 +4,15 @@ Tests for the GT palette-PNG store (``app/gt/store.py``).
 Covers the write/read round trip (ids, ``reviewed``, ``file_classes``), the
 palette + transparency written into the PNG, path derivation (multi-dot
 stems, non-ASCII paths), atomic writes, error handling for the wrong PNG
-mode or a corrupt metadata chunk, ``align_to_registry`` (spec §1.4), and
-``present_keys``/``is_complete``.
+mode, a corrupt metadata chunk, a file Pillow refuses as too large and a broken
+PNG chunk, ``align_to_registry`` (spec §1.4), and ``present_keys``/``is_complete``.
 """
 
 from __future__ import annotations
 
 import os
+import struct
+import zlib
 
 import numpy as np
 import pytest
@@ -36,6 +38,41 @@ def _ids_with_values(shape, values):
     h, w = shape
     flat = np.array([values[i % len(values)] for i in range(h * w)], dtype=np.uint8)
     return flat.reshape(h, w)
+
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _chunk(kind: bytes, data: bytes) -> bytes:
+    """One PNG chunk: length, type, data and CRC."""
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+
+def write_header_bomb(path) -> None:
+    """A palette PNG whose header says 20000 x 10000 px, over twice Pillow's default limit:
+    Pillow refuses it when it opens the file, whatever follows the header."""
+    header = struct.pack(">IIBBBBB", 20000, 10000, 8, 3, 0, 0, 0)
+    with open(path, "wb") as fh:
+        fh.write(_PNG_SIGNATURE + _chunk(b"IHDR", header) + _chunk(b"PLTE", bytes(3)))
+        fh.write(_chunk(b"IDAT", zlib.compress(b"\0")) + _chunk(b"IEND", b""))
+
+
+def break_a_chunk(path) -> None:
+    """Split the pixel data of the PNG at ``path`` in two chunks and corrupt the second one's
+    type: Pillow opens the file, then raises ``SyntaxError`` ("broken PNG file") on load."""
+    data, pos, out = open(path, "rb").read(), len(_PNG_SIGNATURE), _PNG_SIGNATURE
+    while pos < len(data):
+        (size,) = struct.unpack(">I", data[pos : pos + 4])
+        kind, body = data[pos + 4 : pos + 8], data[pos + 8 : pos + 8 + size]
+        pos += 12 + size
+        if kind != b"IDAT":
+            out += _chunk(kind, body)
+            continue
+        half = len(body) // 2
+        second = _chunk(b"IDAT", body[half:])
+        out += _chunk(b"IDAT", body[:half]) + second[:4] + b"I\x00AT" + second[8:]
+    with open(path, "wb") as fh:
+        fh.write(out)
 
 
 def test_round_trip_ids_and_chunk(tmp_path):
@@ -151,6 +188,28 @@ def test_bad_chunk_json_raises(tmp_path):
     img.save(path, format="PNG", pnginfo=info)
     with pytest.raises(GtFileError):
         read_tracing(str(path))
+
+
+def test_a_file_pillow_refuses_as_too_large_is_unreadable(tmp_path):
+    """Pillow's own error, which is neither OSError nor ValueError, is a ``GtFileError`` with
+    Pillow's text (the export lists that text as before)."""
+    path = tmp_path / "bomb.png"
+    write_header_bomb(path)
+
+    with pytest.raises(GtFileError) as caught:
+        read_tracing(str(path))
+
+    assert str(caught.value).startswith("Image size (200000000 pixels) exceeds limit")
+    assert isinstance(caught.value.__cause__, Image.DecompressionBombError)
+
+
+def test_a_broken_png_chunk_is_unreadable(tmp_path):
+    path = str(tmp_path / "gt" / "a.png")
+    write_tracing(path, Tracing(ids=_ids_with_values((40, 50), [0, 1, 2])), default_registry())
+    break_a_chunk(path)
+
+    with pytest.raises(GtFileError, match="broken PNG file"):
+        read_tracing(path)
 
 
 def test_file_without_chunk_reads_empty_meta(tmp_path):

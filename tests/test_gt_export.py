@@ -376,6 +376,29 @@ def test_export_writes_errors_txt_only_when_there_are_errors(tmp_path):
     assert stem == corrupt_stem and message == " ".join(result.errors[0][1].split())
 
 
+def test_progress_reports_each_percent_once(tmp_path):
+    """One call per new percent, from 0 at the first image to 100 at the end, not one per
+    image (46k queued signals took about a tenth of a large export)."""
+    project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
+    for i in range(300):  # images without labels count too
+        images[f"plot_T9_L{i:03d}_2024.01.01_120000"] = os.path.join(project_dir, f"u{i}.png")
+    values: list[int] = []
+
+    export_dataset(
+        project_dir, images, export_registry, ExportOptions(str(tmp_path / "out")), values.append
+    )
+
+    n = len(images)
+    assert values == sorted({int(100 * i / n) for i in range(n)}) + [100]
+    assert values[:2] == [0, 1] and len(values) == 101
+
+    empty: list[int] = []
+    export_dataset(
+        project_dir, {}, export_registry, ExportOptions(str(tmp_path / "e")), empty.append
+    )
+    assert empty == [100]
+
+
 def test_export_missing_out_dir_is_created(tmp_path):
     project_dir, images, _write_reg, export_registry = _build_project(tmp_path)
     out_dir = tmp_path / "nested" / "out"

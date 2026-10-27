@@ -15,6 +15,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import logging
 import threading
 
 import numpy as np
@@ -212,23 +213,102 @@ def test_close_event_during_run_is_ignored(app, tmp_path, blocked_export):
     assert not dialog.export_thread.isRunning()  # finished before Close is offered
 
 
-def test_unexpected_worker_exception_is_reported_not_fatal(app, tmp_path, monkeypatch):
+def _failing_export(monkeypatch, exc: BaseException) -> None:
     import app.gui.export_dataset_dialog as mod
 
-    def _boom(*_args, **_kwargs):
-        raise RuntimeError("unexpected boom")
+    def _raise(*_args, **_kwargs):
+        raise exc
 
-    monkeypatch.setattr(mod, "export_dataset", _boom)
+    monkeypatch.setattr(mod, "export_dataset", _raise)
+
+
+def _logged(caplog) -> list[tuple[int, bool]]:
+    """``(level, with a traceback)`` of each record the dialog's module logged."""
+    return [
+        (record.levelno, record.exc_info is not None)
+        for record in caplog.records
+        if record.name == "app.gui.export_dataset_dialog"
+    ]
+
+
+def _run_failing_export(tmp_path) -> ExportDatasetDialog:
     project_dir, images, registry = _build_project(tmp_path)
     dialog = ExportDatasetDialog(project_dir, images, registry)
-    dialog.output_edit.setText(str(tmp_path / "export_out_boom"))
-
+    dialog.output_edit.setText(str(tmp_path / "export_out_failing"))
     dialog.start_export()
     _wait_for_thread(dialog)
+    return dialog
+
+
+def test_unexpected_worker_exception_is_reported_not_fatal(app, tmp_path, monkeypatch, caplog):
+    _failing_export(monkeypatch, RuntimeError("unexpected boom"))
+
+    dialog = _run_failing_export(tmp_path)
 
     assert dialog.result_summary is None
-    assert "unexpected boom" in dialog.status_label.text()
+    assert dialog.status_label.text() == "Export failed: unexpected boom"
     assert dialog.export_button.text() == "Export" and dialog.export_button.isEnabled()
+    assert _logged(caplog) == [(logging.ERROR, True)]  # a bug: its traceback is in the log
+
+
+class _Odd(BaseException):
+    """Neither an Exception nor an interrupt, as a library may raise."""
+
+
+@pytest.mark.parametrize(
+    "exc", [SystemExit(3), KeyboardInterrupt(), _Odd("odd")], ids=["exit", "interrupt", "other"]
+)
+def test_any_base_exception_is_reported_and_the_controls_come_back(
+    app, tmp_path, monkeypatch, caplog, exc
+):
+    """Escaping the thread it left the dialog at "Exporting…" with every control off (and
+    SystemExit kept the thread from ending, so the dialog could not be closed)."""
+    _failing_export(monkeypatch, exc)
+
+    dialog = _run_failing_export(tmp_path)
+
+    assert not dialog.export_thread.isRunning()
+    assert dialog.status_label.text() == f"Export failed: {exc}"
+    assert dialog.export_button.isEnabled() and dialog.cancel_button.isEnabled()
+    assert _logged(caplog) == [(logging.ERROR, True)]
+
+
+def test_an_error_whose_text_fails_is_reported_by_its_type(app, tmp_path, monkeypatch):
+    class _NoText(Exception):
+        def __str__(self):
+            raise RuntimeError("no text")
+
+    _failing_export(monkeypatch, _NoText())
+
+    dialog = _run_failing_export(tmp_path)
+
+    assert dialog.status_label.text() == "Export failed: _NoText"
+    assert dialog.export_button.isEnabled()
+
+
+def test_a_file_held_open_elsewhere_is_reported_without_a_traceback(
+    app, tmp_path, monkeypatch, caplog
+):
+    from app.io_utils import FileLockedError
+
+    exc = FileLockedError(str(tmp_path / "manifest.csv"))
+    _failing_export(monkeypatch, exc)
+
+    dialog = _run_failing_export(tmp_path)
+
+    assert dialog.status_label.text() == f"Export failed: {exc}"
+    assert _logged(caplog) == [(logging.WARNING, False)]  # a user condition, not a bug
+
+
+def test_a_refused_request_keeps_its_message_and_logs_nothing(app, tmp_path, monkeypatch, caplog):
+    from app.gt.export import ExportError
+
+    _failing_export(monkeypatch, ExportError("Output directory is not empty: X"))
+
+    dialog = _run_failing_export(tmp_path)
+
+    assert dialog.status_label.text() == "Output directory is not empty: X"
+    assert _logged(caplog) == []
 
 
 def test_summary_lists_failed_images(app, tmp_path, monkeypatch):

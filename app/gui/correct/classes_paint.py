@@ -18,13 +18,11 @@ import numpy as np
 
 from app.config import GT_BACKGROUND_ID, GT_UNKNOWN_COLOR
 from app.gt import Registry
+from app.gt.store import histogram
 
 __all__ = ["N_IDS", "canvas_ids", "class_lut", "histogram"]
 
 N_IDS = 256  # class ids are uint8
-# cv2.calcHist counts in float32, exact up to 2**24 per value: arrays up to this many
-# pixels are counted by it (about 10x faster than np.bincount), larger ones by np.bincount.
-_EXACT_HIST_MAX = 1 << 24
 # A canvas word that never occurs (alpha 0 but a colour: a transparent pixel reads back as
 # 0): the expected word of committed ids no class owns, so they are always colour-matched.
 _NEVER_ON_CANVAS = 1
@@ -40,17 +38,6 @@ def _word(color: str) -> int:
     """``color`` as one canvas pixel word ``B | G << 8 | R << 16 | A << 24``."""
     b, g, r, a = _bgra(color)
     return b | (g << 8) | (r << 16) | (a << 24)
-
-
-def histogram(ids: np.ndarray) -> np.ndarray:
-    """Pixels per value (256 int64 counts) of a uint8 array of any shape; exact."""
-    if ids.size == 0:
-        return np.zeros(N_IDS, np.int64)
-    if ids.size > _EXACT_HIST_MAX:
-        return np.bincount(ids.ravel(), minlength=N_IDS).astype(np.int64)
-    if ids.ndim != 2:
-        ids = np.ascontiguousarray(ids).reshape(1, -1)
-    return cv2.calcHist([ids], [0], None, [N_IDS], [0, N_IDS]).ravel().astype(np.int64)
 
 
 def class_lut(registry: Registry) -> np.ndarray:
