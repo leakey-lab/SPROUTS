@@ -25,13 +25,14 @@ from collections.abc import Callable
 from datetime import datetime
 from enum import Enum, auto
 
-from PyQt6.QtCore import QObject, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QLabel, QMainWindow, QStackedLayout, QWidget
 
 from app.design import tokens
+from app.workers import GuardedThread
 
 from ._viz_server import DASH_HOST, _DashServerThreadBase, join_qthread, release_qthread
 
@@ -94,25 +95,26 @@ def _error_text(exc: BaseException) -> str:
     return text or type(exc).__name__
 
 
-class DashInitWorker(QThread):
-    """Runs a dashboard build (CSV -> processor -> Dash app) off the GUI thread."""
+class DashInitWorker(GuardedThread):
+    """Runs a dashboard build (CSV -> processor -> Dash app) off the GUI thread.
+
+    Any failure, ``SystemExit`` too, is logged with its traceback and sent as
+    ``failed(text)``; unreported, the window would show "Loading data…" until it
+    was released.
+    """
 
     built = pyqtSignal(object, object)  # processor, dash_app
-    failed = pyqtSignal(str)
 
     def __init__(self, build: Builder, parent: QObject | None = None):
         super().__init__(parent)
         self._build = build
 
-    def run(self) -> None:
-        try:
-            processor, dash_app = self._build()
-        except BaseException as exc:  # noqa: BLE001 -- SystemExit too: reported, never raised
-            # Unreported, the window would show "Loading data…" until it was released.
-            logger.exception("Dashboard initialisation failed")
-            self.failed.emit(_error_text(exc))
-            return
+    def work(self) -> None:
+        processor, dash_app = self._build()
         self.built.emit(processor, dash_app)
+
+    def describe(self, exc: BaseException) -> str:
+        return _error_text(exc)
 
 
 class _Stage(Enum):

@@ -362,16 +362,34 @@ def test_a_build_ending_in_any_exception_is_reported(qapp, exc, text):
 
 
 def test_a_build_that_exits_is_reported_in_place_with_its_traceback(make_window, caplog):
+    from app.workers import LOGGER_NAME
+
     def exiting():
         raise SystemExit("a library called sys.exit")
 
-    with caplog.at_level(logging.ERROR, logger="app.visualization.viz_window"):
+    with caplog.at_level(logging.ERROR, logger=LOGGER_NAME):
         window = make_window(build=exiting)
         assert wait_until(lambda: window.failed)
 
     assert "a library called sys.exit" in window.loading_label.text()
     assert window.server_thread is None
     assert "Traceback" in caplog.text
+    assert any(r.exc_info and r.exc_info[0] is SystemExit for r in caplog.records)
+
+
+def test_the_build_worker_uses_the_shared_thread_error_boundary(qapp):
+    # One boundary for every worker (app.workers): the build worker only words its message.
+    from app.visualization.viz_window import DashInitWorker
+    from app.workers import GuardedThread
+
+    assert issubclass(DashInitWorker, GuardedThread)
+    assert DashInitWorker.run is GuardedThread.run
+    built = []
+    worker = DashInitWorker(lambda: ("processor", "dash app"))
+    worker.built.connect(lambda processor, dash_app: built.append((processor, dash_app)))
+    worker.failed.connect(built.append)
+    worker.run()
+    assert built == [("processor", "dash app")]
 
 
 def test_an_unchartable_csv_is_reported_with_the_processors_reason():

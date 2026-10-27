@@ -238,6 +238,44 @@ def test_work_must_be_implemented(qapp):
     assert rec.failed[0].startswith("NotImplementedError")
 
 
+class _WordedThread(_RaisingThread):
+    """Words its own failure message, like the dashboard build worker."""
+
+    def describe(self, exc: BaseException) -> str:
+        return f"Could not finish: {exc}"
+
+
+class _BrokenWordingThread(_RaisingThread):
+    def describe(self, exc: BaseException) -> str:
+        raise SystemExit("describe() itself failed")
+
+
+def test_the_default_message_is_describe_error(qapp):
+    exc = ValueError("bad value")
+    assert GuardedThread().describe(exc) == describe_error(exc) == "ValueError: bad value"
+
+
+@pytest.mark.parametrize("exc", [OSError("disk gone"), SystemExit("disk gone")])
+def test_a_subclass_words_its_own_failure_message(qapp, caplog, exc):
+    thread = _WordedThread(exc)
+    rec = _Recorder(thread)
+    with caplog.at_level(logging.ERROR, logger="app.handlers.worker_base"):
+        thread.start()
+        assert thread.wait(5000)
+        _pump_until(lambda: rec.failed)
+    assert rec.failed == ["Could not finish: disk gone"]
+    assert rec.cancelled == 0
+    assert any(r.exc_info and r.exc_info[0] is type(exc) for r in caplog.records)
+
+
+def test_a_broken_describe_falls_back_to_describe_error(qapp):
+    thread = _BrokenWordingThread(RuntimeError("boom"))
+    rec = _Recorder(thread)
+    thread.run()  # on this thread: whatever escapes run() would escape the worker thread
+    _pump_until(lambda: rec.failed)
+    assert rec.failed == ["RuntimeError: boom"]
+
+
 # --- JobRegistry -------------------------------------------------------------------
 
 

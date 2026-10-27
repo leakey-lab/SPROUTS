@@ -454,6 +454,31 @@ def test_a_released_dashboard_is_not_kept_alive_by_dash(tmp_path, builder):
     assert alive() is None
 
 
+def test_only_the_first_dashboard_reads_the_plugin_entry_points(tmp_path, monkeypatch):
+    # Dash read every installed package's entry points for plugin hooks on each new app
+    # (5-20 ms per dashboard): it never sets its own read-once flag.
+    import dash._hooks as dash_hooks
+
+    from app.visualization.dash_shell import create_dash_app
+
+    scans = []
+    distributions = dash_hooks._importlib_metadata.distributions
+
+    def counted():
+        scans.append(1)
+        return distributions()
+
+    monkeypatch.setattr(dash_hooks._importlib_metadata, "distributions", counted)
+    monkeypatch.setattr(dash_hooks.HooksManager, "_registered", False)
+    first = create_dash_app(__name__)
+    create_dash_app(__name__)
+    build_length_app(tmp_path)
+    build_area_app(tmp_path)
+
+    assert len(scans) == 1
+    assert first.config.name == __name__
+
+
 # ---- a memoized figure is converted for the browser once --------------------------
 
 

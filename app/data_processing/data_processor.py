@@ -185,26 +185,31 @@ class MetricDataProcessor:
                 names = ", ".join(repr(column) for column in missing)
                 self._load_problem = f"The CSV has no {names} column{'s' * (len(missing) > 1)}."
                 return pd.DataFrame()
-            df["Date"] = pd.to_datetime(df["Date"], format="%Y.%m.%d", errors="coerce")
-            # No integer downcast: int8 positions overflow in the depth-interval
-            # arithmetic (124 -> interval end 130 wraps to -126, PV-01).
-            df["Tube"] = pd.to_numeric(df["Tube"], errors="coerce")
-            df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
-            df[self.value_column] = pd.to_numeric(df[self.value_column], errors="coerce").astype(
-                "float64"
+            # Only the columns the charts read, typed in a frame of their own: the Image,
+            # Time and Error text (80 % of the memory) is neither kept while the dashboard
+            # is open nor copied by the steps below (dropna copies every column).
+            chart = pd.DataFrame(
+                {
+                    "Date": pd.to_datetime(df["Date"], format="%Y.%m.%d", errors="coerce"),
+                    # No integer downcast: int8 positions overflow in the depth-interval
+                    # arithmetic (124 -> interval end 130 wraps to -126, PV-01).
+                    "Tube": pd.to_numeric(df["Tube"], errors="coerce"),
+                    "Position": pd.to_numeric(df["Position"], errors="coerce"),
+                    self.value_column: pd.to_numeric(df[self.value_column], errors="coerce").astype(
+                        "float64"
+                    ),
+                },
+                index=df.index,
             )
-            required = [*KEY_COLUMNS, self.value_column]
             self.exclusions = RowExclusions.from_mask(
-                df[required].isna().any(axis=1), df.get("Error"), df.get("Image")
+                chart.isna().any(axis=1), df.get("Error"), df.get("Image")
             )
             if self.exclusions.total:
                 logger.warning("%s: %s", self.csv_path, self.exclusions.message())
-            df.dropna(subset=required, inplace=True)
-            df["Tube"] = df["Tube"].astype("int64")
-            df["Position"] = df["Position"].astype("int64")
-            # Only what the charts read: the Image, Time and Error text was 80 % of the
-            # frame's memory, kept for as long as the dashboard stayed open.
-            return df[required]
+            chart.dropna(inplace=True)
+            chart["Tube"] = chart["Tube"].astype("int64")
+            chart["Position"] = chart["Position"].astype("int64")
+            return chart
         except Exception as exc:
             logger.exception("Failed to load CSV %s", self.csv_path)
             self._load_problem = f"The CSV could not be read: {exc}"

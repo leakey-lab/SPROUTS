@@ -11,7 +11,7 @@ therefore subclass ``GuardedThread`` and implement ``work()``:
   ``cancel()`` was requested) -> ``cancelled`` is emitted;
 * ``work()`` raises anything else (``SystemExit`` and ``KeyboardInterrupt`` too)
   -> the traceback is logged and ``failed`` is emitted with a user-facing one-line
-  message (``describe_error``).
+  message (``describe()``: ``describe_error`` unless the subclass words its own).
 
 Exactly one of those outcomes happens per run.
 
@@ -94,6 +94,10 @@ class GuardedThread(QThread):
         """The job body, run on the worker thread. Subclasses must implement it."""
         raise NotImplementedError(f"{type(self).__name__} must implement work()")
 
+    def describe(self, exc: BaseException) -> str:
+        """The ``failed`` message for ``exc``; a subclass may word its own."""
+        return describe_error(exc)
+
     def run(self) -> None:
         """Run ``work()`` inside the error boundary (do not override)."""
         try:
@@ -107,7 +111,11 @@ class GuardedThread(QThread):
                 logger.warning("%s failed: %s", type(self).__name__, exc)
             else:
                 logger.exception("%s failed", type(self).__name__)
-            self.failed.emit(describe_error(exc))
+            try:
+                message = self.describe(exc)
+            except BaseException:  # noqa: BLE001 - a broken describe() must not escape run()
+                message = describe_error(exc)
+            self.failed.emit(message)
 
     def cancel(self) -> None:
         """Ask the job to stop at its next ``check_cancelled()`` (thread-safe)."""

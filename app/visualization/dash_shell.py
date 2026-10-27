@@ -169,6 +169,12 @@ def create_dash_app(import_name: str, title: str = "SPROUTS") -> Dash:
     holder = sys.modules.get("dash._get_app")
     if getattr(holder, "APP", None) is app:
         holder.APP = None
+    # Each new Dash app reads every installed package's entry points for plugin hooks
+    # (5-20 ms) because Dash never sets its own read-once flag. The first app has loaded
+    # them all, so later dashboards skip the scan.
+    hooks = getattr(sys.modules.get("dash._hooks"), "HooksManager", None)
+    if getattr(hooks, "_registered", None) is False:
+        hooks._registered = True
     return app
 
 
