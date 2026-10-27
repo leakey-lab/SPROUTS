@@ -1,20 +1,22 @@
 """
-Qt-free storage of the masks the Correct Mask editor saves.
+Qt-free reading of mask files, and writing of the masks the Correct Mask editor saves.
 
-A mask of image ``<project>/<stem>.<ext>`` lives at ``<project>/mask/<stem>.png``
-(legacy ``.jpg`` / ``.jpeg`` / upper-case variants are still found and
-removed). On disk it is a white-on-transparent RGBA PNG: RGBA 255 where the
-mask is set, 0 elsewhere. Every reader (grayscale + threshold, QPixmap) sees
-exactly the pixels the editor wrote before; the files are only far smaller,
-because they are now zlib-compressed (the old ``QImage.save(..., 100)`` meant
+The prediction of image ``<project>/<stem>.<ext>`` is ``<project>/mask/<stem>.png``
+(legacy ``.jpg`` / ``.jpeg`` / upper-case variants are still found); :class:`MaskStore`
+reads it and never writes or removes it. A mask the editor saves is GT, written by
+:func:`write_mask_file` to ``gt/mask/<stem>.png``. On disk it is a white-on-transparent
+RGBA PNG: RGBA 255 where the mask is set, 0 elsewhere. Every reader (grayscale +
+threshold, QPixmap) sees exactly the pixels the editor wrote before; the files are only
+far smaller, because they are now zlib-compressed (the old ``QImage.save(..., 100)`` meant
 compression level 0: 1.2 MiB per 640x480 mask instead of a few KiB).
 
 Writes are atomic (temp file + ``os.replace``, see :mod:`app.io_utils`): a
 failed save never leaves a truncated mask behind and keeps the previous file.
 
-Reads are a grayscale decode thresholded at :data:`MASK_THRESHOLD`, of the bytes read
-once. A plain 8-bit grey PNG (a model mask) and a plain 8-bit RGBA PNG whose R == G == B
-(an editor mask) take an exact faster path: see :func:`_decode_plain_png`.
+Reads (:func:`read_mask_file`, of a prediction and of a GT mask alike) are a grayscale
+decode thresholded at :data:`MASK_THRESHOLD`, of the bytes read once. A plain 8-bit grey
+PNG (a model mask) and a plain 8-bit RGBA PNG whose R == G == B (an editor mask) take an
+exact faster path: see :func:`_decode_plain_png`.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from app.io_utils import atomic_write_bytes
+from app.io_utils import atomic_write_bytes, imdecode_bytes
 from app.project_layout import ProjectLayout
 
 # Grayscale value above which a stored mask pixel counts as foreground: the one threshold
@@ -174,12 +176,7 @@ def _decode_plain_png(data: bytes) -> np.ndarray | None:
 def _decode_reference(data: bytes) -> np.ndarray | None:
     """The reference decode of a file's bytes: what ``imread_unicode(path,
     cv2.IMREAD_GRAYSCALE)`` returns for the file, without reading it a second time."""
-    if not data:
-        return None
-    try:
-        return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
-    except cv2.error:
-        return None
+    return imdecode_bytes(data, cv2.IMREAD_GRAYSCALE)
 
 
 def _read_bytes(path: str) -> bytes | None:
@@ -189,6 +186,19 @@ def _read_bytes(path: str) -> bytes | None:
         return np.fromfile(path, np.uint8).tobytes()
     except (OSError, ValueError):
         return None
+
+
+def read_mask_file(path: str) -> np.ndarray | None:
+    """The mask file at ``path`` as an ``(h, w)`` bool array: its grey decode above
+    :data:`MASK_THRESHOLD`, of the bytes read once (exact fast path first, else the
+    reference decode). ``None`` when it cannot be read or decoded."""
+    data = _read_bytes(path)
+    if data is None:
+        return None
+    gray = _decode_plain_png(data)
+    if gray is None:
+        gray = _decode_reference(data)
+    return None if gray is None else gray > MASK_THRESHOLD
 
 
 def encode_mask_png(on: np.ndarray) -> bytes:
@@ -214,7 +224,7 @@ def write_mask_file(path: str, on: np.ndarray, *, durable: bool = True) -> None:
 
 @dataclass(frozen=True)
 class MaskStore:
-    """Reads, writes and removes the saved masks of one project folder."""
+    """Reads the predicted masks (``mask/``) of one project folder; never writes them."""
 
     layout: ProjectLayout
 
@@ -228,7 +238,7 @@ class MaskStore:
         return self.layout.mask_dir
 
     def path_for(self, stem: str) -> str:
-        """Where :meth:`write` saves the mask of ``stem`` (``mask/<stem>.png``)."""
+        """``mask/<stem>.png``: the PNG name of ``stem``'s prediction."""
         return self.layout.mask_path(stem)
 
     def find(self, stem: str) -> str | None:
@@ -243,31 +253,7 @@ class MaskStore:
         path = self.find(stem)
         if path is None:
             return None
-        gray = None
-        data = _read_bytes(path)  # None when the file is gone or locked: a MaskFileError
-        if data is not None:
-            gray = _decode_plain_png(data)
-            if gray is None:
-                gray = _decode_reference(data)
-        if gray is None:
+        on = read_mask_file(path)  # None also when the file is gone or locked
+        if on is None:
             raise MaskFileError(f"cannot decode {path}")
-        return gray > MASK_THRESHOLD
-
-    def write(self, stem: str, on: np.ndarray, *, durable: bool = True) -> str:
-        """Save ``on`` atomically as ``mask/<stem>.png``; returns the path.
-
-        Raises ``OSError`` (including :class:`app.io_utils.FileLockedError`) when
-        the folder or file cannot be written; the previous file is then unchanged.
-        """
-        path = self.path_for(stem)
-        write_mask_file(path, on, durable=durable)
-        return path
-
-    def remove(self, stem: str) -> bool:
-        """Delete every saved variant of ``stem``'s mask; True if one was removed."""
-        removed = False
-        for path in self.layout.mask_candidates(stem):
-            if os.path.isfile(path):
-                os.remove(path)
-                removed = True
-        return removed
+        return on

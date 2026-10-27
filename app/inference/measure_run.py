@@ -16,7 +16,6 @@ same pool task that measures the image (the measuring mapper); each row's ``Sour
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import threading
@@ -42,7 +41,13 @@ from app.config import (
     SOURCE_COLUMN,
 )
 from app.inference import measure_inputs, measure_sources
-from app.inference.input_split import InputSplit, group_by_stem, split_by_image, split_inputs
+from app.inference.input_split import (
+    InputSplit,
+    group_by_stem,
+    png_stem,
+    split_by_image,
+    split_inputs,
+)
 from app.inference.measure_inputs import Fingerprint
 from app.inference.measure_sources import GT, PREDICTION, GtReport, MeasureSource, SourceDecision
 from app.inference.metrics import area_row, length_row, run_metric_pool, write_metric_csv
@@ -83,7 +88,8 @@ class MetricSpec:
     csv_name: str
     headers: tuple[str, ...]
     value_column: str
-    # row(image name, path, data=<file bytes | None>, calibration=<Calibration | None>) -> CSV row
+    # row(image name, path, data=<file bytes | None>, calibration=<Calibration | None>,
+    #     memo=<the run's dict | None>) -> CSV row
     row: Callable[..., dict]
     parameters: Mapping[str, object]
 
@@ -121,8 +127,9 @@ AREA = MetricSpec(
 
 SPECS: dict[str, MetricSpec] = {LENGTH.kind: LENGTH, AREA.kind: AREA}
 
-#: The ``input`` / ``source_rule`` parameters of a run that has no GT input (the legacy
-#: shims measure the predictions they are given, nothing else): the inputs before O1.
+#: The ``input`` / ``source_rule`` parameters of a run that has no GT input (a run built
+#: without ``gt_files`` measures the predictions it is given, nothing else): the inputs
+#: before O1.
 PREDICTION_ONLY: dict[str, dict[str, str]] = {
     LENGTH.kind: {
         "input": f"generated skeletons (*{SKELETON_SUFFIX})",
@@ -179,12 +186,9 @@ def scan_png_files(folder: str) -> tuple[dict[str, str], list[tuple[str, str]]]:
     try:
         with os.scandir(folder) as entries:
             for entry in entries:
-                name = entry.name
-                dot = name.rfind(".")
-                if dot <= 0 or name[dot:].lower() != ".png" or not name[:dot].lstrip("."):
-                    continue
-                if entry.is_file():
-                    files.append((name[:dot], entry.path))
+                stem = png_stem(entry.name)
+                if stem is not None and entry.is_file():
+                    files.append((stem, entry.path))
     except (FileNotFoundError, NotADirectoryError):
         return {}, []
     return group_by_stem(files)
@@ -262,6 +266,10 @@ class MeasureRun:
         #: input key -> (size, mtime_ns, sha256) of each file measured (filled by compute()).
         self.fingerprints: dict[str, Fingerprint] = {}
         self._fingerprints_lock = threading.Lock()
+        self._key_prefixes: dict[str, str | None] = {}  # folder -> its files' key prefix
+        #: While compute() measures: the measurements of the small files that measured 0, by
+        #: their bytes (``memo`` of :func:`app.inference.metrics.length_row`).
+        self._memo: dict | None = None
 
     @property
     def csv_path(self) -> str:
@@ -277,12 +285,16 @@ class MeasureRun:
         With ``gt_files`` each image is decided and measured in one pool task
         (:meth:`_measure_gt_first`). Each row gets its ``Source``."""
         if self.rows is None:
-            self.fingerprints = {}
+            self.fingerprints, self._key_prefixes = {}, {}
+            self._memo = {}
             resolved = None
-            if self.gt_files is None:
-                rows = run_metric_pool(self.images, self._measure, progress_cb, should_stop)
-            else:
-                rows, resolved = self._measure_gt_first(progress_cb, should_stop)
+            try:
+                if self.gt_files is None:
+                    rows = run_metric_pool(self.images, self._measure, progress_cb, should_stop)
+                else:
+                    rows, resolved = self._measure_gt_first(progress_cb, should_stop)
+            finally:  # a run kept for a Retry of its write keeps no file bytes
+                self._memo = None
             if should_stop is not None and should_stop():
                 return None
             if resolved is not None:
@@ -300,8 +312,8 @@ class MeasureRun:
         should_stop: Callable[[], bool] | None,
     ) -> tuple[list[dict], tuple[dict[str, MeasureSource], GtReport]]:
         """The rows, and the sources and GT report, of a GT-first run: the resolver of
-        :mod:`~app.inference.measure_sources` with a measuring mapper. Each pool task
-        decides one image, records the GT file it read (used or not), measures the file
+        :mod:`~app.inference.measure_sources` with a measuring mapper. A pool worker
+        decides each image, records the GT file it read (used or not), measures the file
         the decision names (a used GT file from the bytes it validated) and keeps the
         decision without those bytes."""
         rows: list[dict] = []
@@ -346,14 +358,17 @@ class MeasureRun:
         return self._measure(source.stem, source.path)
 
     def _row(self, name: str, path: str, *, data: bytes | None = None) -> dict:
-        """``spec.row`` measured with this run's field of view."""
-        return self.spec.row(name, path, data=data, calibration=self.calibration.calibration)
+        """``spec.row`` measured with this run's field of view (and its memo)."""
+        return self.spec.row(
+            name, path, data=data, calibration=self.calibration.calibration, memo=self._memo
+        )
 
     def _remember(self, path: str, fingerprint: Fingerprint) -> None:
-        """Record ``path`` as read with ``fingerprint`` (any thread)."""
-        size, mtime_ns, digest = fingerprint
-        measure_inputs.remember_sha256(path, size, mtime_ns, digest)
-        key = measure_inputs.input_key(path, self.project_root)
+        """Record ``path`` as read with ``fingerprint`` (any thread).
+
+        Not kept in the session's hash cache: its readers hash a file only when its size or
+        time differ from the record's, so they never ask for this stamp (~400 B a file)."""
+        key = measure_inputs.file_key(path, self.project_root, self._key_prefixes)
         with self._fingerprints_lock:
             self.fingerprints[key] = fingerprint
 
@@ -361,15 +376,11 @@ class MeasureRun:
         """One row, from the file read once: its bytes are measured and hashed, and its
         size and time recorded as they were when it was read (R5). A file that cannot be
         opened gets the row ``spec.row(name, path)`` gives it, and no fingerprint."""
-        try:
-            with open(path, "rb") as fh:
-                st = os.fstat(fh.fileno())
-                data = fh.read()
-        except OSError:
+        read = measure_sources.read_fingerprinted(path)
+        if read is None:
             return self._row(name, path)
-        digest = hashlib.sha256(data).hexdigest()
-        self._remember(path, (st.st_size, st.st_mtime_ns, digest))
-        return self._row(name, path, data=data)
+        self._remember(path, read[1])
+        return self._row(name, path, data=read[0])
 
     def write(self) -> str:
         """Atomically write the CSV (then its provenance sidecar and the record of its
@@ -422,15 +433,16 @@ class MeasureRun:
         if record is None or not self._measured_like_this_run():
             return False
         paths = {*self.images.values(), *(self.gt_files or {}).values()}
-        folders = {os.path.dirname(os.path.abspath(p)) for p in paths}
+        keys, folders = measure_inputs.keys_and_folders(paths, self.project_root)
         current: dict[str, measure_inputs.Stamp] = {}
         for folder in folders:
             current.update(measure_inputs.scan_stamps(folder, "", self.project_root))
 
-        def key(path: str) -> str:
-            return measure_inputs.input_key(path, self.project_root)
+        def key(path: str) -> str:  # a prediction measured from its GT file is not in paths
+            found = keys.get(path)
+            return measure_inputs.input_key(path, self.project_root) if found is None else found
 
-        needed = {key(p) for p in paths}
+        needed = set(keys.values())
         for prediction, gt in measure_sources.pairs(self.predictions, self.gt_files or {}):
             if prediction is None or gt is None:
                 continue
@@ -457,7 +469,8 @@ class MeasureRun:
 
     def _parameters(self) -> dict:
         """The spec's parameters; a run without GT input (no ``gt_files`` and no
-        ``gt_report``: the legacy shims) measured predictions only, and says so."""
+        ``gt_report``: a run built without them, by a script or a test) measured predictions
+        only, and says so."""
         parameters = dict(self.spec.parameters)
         if self.gt_files is None and self.gt_report is None:
             parameters.update(PREDICTION_ONLY[self.spec.kind])

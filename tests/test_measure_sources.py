@@ -235,6 +235,25 @@ def test_an_unsplit_scan_with_two_files_of_one_image_is_refused(tmp_path):
         resolve_length_sources(layout, {}, {}, {"b": "gt/b.png", "B": "gt/B.png"})
 
 
+def test_images_of_names_each_image_as_its_row_will(tmp_path):
+    """The job's images before compute(): an image with a prediction is named and found by
+    it (its GT file only differs in case), a GT-only image by its GT file; the scans must be
+    split (two files of one image are refused, the first two named in order)."""
+    predictions = {"Img1": "skeletons/Img1_fake.png", "img2": "skeletons/img2_fake.png"}
+    gt_files = {"IMG1": "gt/skeletons/IMG1.png", "only_gt": "gt/skeletons/only_gt.png"}
+    assert measure_sources.images_of(predictions, gt_files) == {
+        "Img1": "skeletons/Img1_fake.png",
+        "img2": "skeletons/img2_fake.png",
+        "only_gt": "gt/skeletons/only_gt.png",
+    }
+    assert measure_sources.images_of(predictions, {}) == predictions
+    assert measure_sources.images_of({}, gt_files) == gt_files
+    with pytest.raises(ValueError, match="'a' and 'A'"):
+        measure_sources.images_of({"a": "a.png", "b": "b.png", "A": "A.png"}, {})
+    with pytest.raises(ValueError, match="'g' and 'G'"):
+        measure_sources.images_of(predictions, {"g": "gt/g.png", "G": "gt/G.png"})
+
+
 def test_the_report_is_read_only(gt_project):
     layout, images = gt_project
     _, report = _length(layout, images)

@@ -10,10 +10,8 @@ import pytest
 from PyQt6.QtCore import QCoreApplication, Qt
 
 from app.inference import measure_run
-from app.inference.measure_run import LENGTH
+from app.inference.measure_run import AREA, LENGTH, MeasureRun
 from app.inference.metric_thread import MetricCalculatorThread
-from app.inference.root_area_inference_handler import RootAreaCalculatorThread
-from app.inference.root_length_inference_handler import RootLengthCalculatorThread
 from app.io_utils import FileLockedError
 from app.workers import GuardedThread
 
@@ -36,6 +34,11 @@ def _skeletons(folder, n=3):
     return images
 
 
+def _thread(spec, images, output_dir):
+    """The thread the app starts for a Measure run of ``images`` (no GT files)."""
+    return MetricCalculatorThread(MeasureRun(spec, images, output_dir))
+
+
 def _run(thread, qapp):
     """Start ``thread`` and pump events until its queued signals were delivered."""
     got = {"finished": [], "failed": [], "cancelled": [], "progress": []}
@@ -56,34 +59,33 @@ def _lock(monkeypatch):
     monkeypatch.setattr(measure_run, "write_metric_csv", locked)
 
 
-def test_threads_keep_their_public_signals_and_constructors(tmp_path):
-    length = RootLengthCalculatorThread({"a": "p"}, str(tmp_path))
-    area = RootAreaCalculatorThread({"a": "p"}, str(tmp_path))
-    for thread, attr in ((length, "fake_images"), (area, "mask_images")):
+def test_threads_keep_their_public_signals(tmp_path):
+    for spec in (LENGTH, AREA):
+        thread = _thread(spec, {"a": "p"}, str(tmp_path))
         assert isinstance(thread, GuardedThread)
-        assert getattr(thread, attr) == {"a": "p"}
+        assert thread.job.images == {"a": "p"}
         assert thread.output_dir == str(tmp_path)
-        for sig in ("finished", "progress", "failed", "cancelled"):
+        for sig in ("finished", "progress", "failed", "cancelled", "unchanged"):
             assert hasattr(thread, sig)
 
 
 def test_success_emits_finished_with_csv_path(tmp_path, qapp):
     images = _skeletons(tmp_path / "skeletons")
-    got = _run(RootLengthCalculatorThread(images, str(tmp_path / "skeletons")), qapp)
+    got = _run(_thread(LENGTH, images, str(tmp_path / "skeletons")), qapp)
     assert got["failed"] == [] and got["cancelled"] == []
     assert got["finished"] == [os.path.join(str(tmp_path / "skeletons"), "root_lengths.csv")]
     assert got["progress"][-1] == 100
 
 
 def test_empty_input_finishes_with_empty_path(tmp_path, qapp):
-    got = _run(RootAreaCalculatorThread({}, str(tmp_path)), qapp)
+    got = _run(_thread(AREA, {}, str(tmp_path)), qapp)
     assert got["finished"] == [""]
 
 
 def test_locked_csv_emits_failed_instead_of_aborting(tmp_path, qapp, monkeypatch):
     images = _skeletons(tmp_path / "skeletons")
     _lock(monkeypatch)
-    thread = RootLengthCalculatorThread(images, str(tmp_path / "skeletons"))
+    thread = _thread(LENGTH, images, str(tmp_path / "skeletons"))
     got = _run(thread, qapp)
     assert got["finished"] == []
     assert len(got["failed"]) == 1
@@ -94,7 +96,7 @@ def test_locked_csv_emits_failed_instead_of_aborting(tmp_path, qapp, monkeypatch
 def test_retry_rewrites_kept_rows_without_measuring_again(tmp_path, qapp, monkeypatch):
     images = _skeletons(tmp_path / "skeletons")
     _lock(monkeypatch)
-    first = RootLengthCalculatorThread(images, str(tmp_path / "skeletons"))
+    first = _thread(LENGTH, images, str(tmp_path / "skeletons"))
     _run(first, qapp)
     monkeypatch.undo()  # the user closed Excel
 
@@ -108,7 +110,7 @@ def test_retry_rewrites_kept_rows_without_measuring_again(tmp_path, qapp, monkey
 
 def test_cancel_emits_cancelled_and_writes_no_csv(tmp_path, qapp):
     images = _skeletons(tmp_path / "skeletons", n=6)
-    thread = RootLengthCalculatorThread(images, str(tmp_path / "skeletons"))
+    thread = _thread(LENGTH, images, str(tmp_path / "skeletons"))
     # Cancel from the worker thread on the first progress tick (the Cancel button).
     thread.progress.connect(lambda _pct: thread.cancel(), Qt.ConnectionType.DirectConnection)
     got = _run(thread, qapp)
@@ -119,5 +121,5 @@ def test_cancel_emits_cancelled_and_writes_no_csv(tmp_path, qapp):
 
 
 def test_generic_thread_reports_its_spec(tmp_path):
-    thread = MetricCalculatorThread(measure_run.MeasureRun(LENGTH, {}, str(tmp_path)))
+    thread = MetricCalculatorThread(MeasureRun(LENGTH, {}, str(tmp_path)))
     assert thread.spec is LENGTH

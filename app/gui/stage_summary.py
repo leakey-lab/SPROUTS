@@ -26,7 +26,7 @@ from collections.abc import Collection, Container, Iterable
 from dataclasses import dataclass
 
 from app.config import SOURCE_COLUMN
-from app.inference.input_split import group_by_stem, split_inputs
+from app.inference.input_split import group_by_stem, png_stem, split_inputs
 from app.inference.measure_inputs import (
     InputsRecord,
     Stamp,
@@ -37,6 +37,10 @@ from app.inference.measure_inputs import (
 from app.naming import stem_key
 
 __all__ = ["Freshness", "generate_text", "input_freshness", "measure_text", "missing"]
+
+#: Suffixes listed by the name rule of Measure's own listing (masks and GT files: the
+#: extension in any case, hidden names too), so the count is of the files Measure reads.
+_NAME_RULES = {".png": png_stem}
 
 
 @dataclass(frozen=True)
@@ -159,8 +163,9 @@ def _only_with_image(
 
 
 def _stem_of(path: str, cut: int) -> str:
-    """The file name of ``path`` without its last ``cut`` characters (the suffix)."""
-    name = os.path.basename(path)
+    """The file name of ``path`` (a :func:`scan_stamps` path: ``os.sep`` separators) without
+    its last ``cut`` characters (the suffix)."""
+    name = path[path.rfind(os.sep) + 1 :]  # os.path.basename, ~20x faster on Windows
     return name[: len(name) - cut]
 
 
@@ -172,7 +177,7 @@ def _listed(
     if not folder:
         return {}, 0, 0
     cut = len(suffix)
-    stamps = scan_stamps(folder, suffix, root)
+    stamps = scan_stamps(folder, suffix, root, stem_of=_NAME_RULES.get(suffix))
     if images is None:
         return stamps, 0, 0
     files = ((_stem_of(path, cut), path) for path, _size, _mtime in stamps.values())
@@ -196,21 +201,24 @@ def _removed(
     current: Collection[str],
     images: Collection[str],
     folder: str | None,
-    gt_folder: str,
+    gt_folder: str | None,
     root: str,
 ) -> int:
-    """Recorded files of ``folder`` and ``gt_folder`` that are gone (all recorded files when
-    one of them is the project folder). A GT file counts only when its image is no longer
-    an input: an image measured from its GT file and now from its prediction is new, and
-    counted once."""
+    """Recorded files of ``folder`` and ``gt_folder`` (``None``: no GT files) that are gone
+    (all recorded files when one of them is the project folder). A GT file counts only when
+    its image is no longer an input: an image measured from its GT file and now from its
+    prediction is new, and counted once."""
     keys = [input_key(path, root) for path in (folder, gt_folder) if path]
     prefixes = tuple(key + "/" for key in keys if key != ".")
-    gt_prefix = input_key(gt_folder, root) + "/"
+    gt_prefix = None if gt_folder is None else input_key(gt_folder, root) + "/"
     removed = 0
     for key in record.inputs:
         if key in current or (len(prefixes) == len(keys) and not key.startswith(prefixes)):
             continue
-        name = key[len(gt_prefix) :] if key.startswith(gt_prefix) else None
+        if gt_prefix is not None and key.startswith(gt_prefix):
+            name = key[len(gt_prefix) :]
+        else:
+            name = None
         if name is not None and "/" not in name and stem_key(name[: -len(".png")]) in images:
             continue
         removed += 1
@@ -224,10 +232,10 @@ def _gt_first_freshness(
     record: InputsRecord | None,
     root: str,
     images: Collection[str] | None,
-    gt_folder: str,
+    gt_folder: str | None,
 ) -> Freshness:
-    """:func:`input_freshness` with the GT files of ``gt_folder``: one input per image (its
-    prediction or its GT file), judged as the metrics bar judges it
+    """:func:`input_freshness` with the GT files of ``gt_folder`` (``None``: no GT files):
+    one input per image (its prediction or its GT file), judged as the metrics bar judges it
     (``MeasurementIndex.outdated``).
 
     Against ``record`` (by content): an image's GT file is always compared (one saved after
@@ -277,17 +285,22 @@ def _gt_first_freshness(
             by_content=True,
             **common,
         )
-    csv_mtime = None
-    if csv_path:
-        try:
-            csv_mtime = os.stat(csv_path).st_mtime_ns
-        except OSError:
-            csv_mtime = None
+    csv_mtime = _csv_mtime(csv_path)
     changed = 0
     if csv_mtime is not None:
-        before_o1 = not _has_source_column(csv_path)
+        before_o1 = bool(traced) and not _has_source_column(csv_path)  # only GT files ask
         changed = sum(1 for st, is_gt in by_time if st[2] > csv_mtime or (is_gt and before_o1))
     return Freshness(measured=csv_mtime is not None, changed=changed, **common)
+
+
+def _csv_mtime(csv_path: str | None) -> int | None:
+    """``st_mtime_ns`` of the CSV, ``None`` without one."""
+    if not csv_path:
+        return None
+    try:
+        return os.stat(csv_path).st_mtime_ns
+    except OSError:
+        return None
 
 
 def input_freshness(
@@ -302,9 +315,12 @@ def input_freshness(
 ) -> Freshness:
     """The ``*suffix`` files of ``folder`` against ``csv_path`` (one ``os.scandir``).
 
-    Hidden files (the ``.<name>.tmp`` of a write in progress) are not inputs. With
-    ``record`` (the CSV's :func:`~app.inference.measure_inputs.load_inputs_record`; keys
-    relative to ``project_root``, default the parent of ``folder`` as in Measure), an input
+    The temp file of a write in progress (``.<name>.<token>.tmp``) is not an input.
+    ``*.png`` files are listed as Measure lists them (the extension in any case, hidden
+    names too: :func:`~app.inference.input_split.png_stem`); other suffixes match without
+    case and skip hidden names. With ``record`` (the CSV's
+    :func:`~app.inference.measure_inputs.load_inputs_record`; keys relative to
+    ``project_root``, default the parent of ``folder`` as in Measure), an input
     is changed when its content differs from the recorded one (hashed only when its size
     or time differ), and new and removed inputs are counted. Without one, an input is
     changed when it was written after the CSV (mtime). With ``images`` (the stems of the
@@ -317,58 +333,7 @@ def input_freshness(
     an image is changed when the file it was measured from changed (its GT file, or its
     prediction when the record lists that), new when its GT file is not in the record.
     """
-    cut = len(suffix)
-    if gt_folder is not None:
-        root = project_root or os.path.dirname(os.path.abspath(folder or gt_folder))
-        return _gt_first_freshness(folder, suffix, csv_path, record, root, images, gt_folder)
-    if record is not None and folder:
-        root = project_root or os.path.dirname(os.path.abspath(folder))
-        folder_key = input_key(folder, root)
-        stamps, without_image, duplicates = _listed(folder, suffix, root, images)
-        diff = diff_inputs(record, stamps, prefix=None if folder_key == "." else folder_key + "/")
-        return Freshness(
-            inputs=diff.inputs,
-            measured=True,
-            changed=diff.changed,
-            new=diff.new,
-            removed=diff.removed,
-            by_content=True,
-            without_image=without_image,
-            duplicates=duplicates,
-        )
-    csv_mtime = None
-    if csv_path:
-        try:
-            csv_mtime = os.stat(csv_path).st_mtime_ns
-        except OSError:
-            csv_mtime = None
-    mtimes: dict[str, int] = {}  # path -> mtime_ns
-    files: list[tuple[str, str]] = []  # (stem, path)
-    if folder:
-        try:
-            with os.scandir(folder) as entries:
-                for entry in entries:
-                    name = entry.name
-                    if name.startswith(".") or not name.lower().endswith(suffix):
-                        continue
-                    try:
-                        if not entry.is_file():
-                            continue
-                        mtimes[entry.path] = entry.stat().st_mtime_ns
-                    except OSError:
-                        continue
-                    files.append((name[: len(name) - cut], entry.path))
-        except OSError:
-            pass
-    without_image = duplicates = 0
-    if images is not None:
-        keep, without_image, duplicates = _only_with_image(files, images)
-        mtimes = {path: mtime for path, mtime in mtimes.items() if path in keep}
-    changed = sum(1 for m in mtimes.values() if csv_mtime is not None and m > csv_mtime)
-    return Freshness(
-        inputs=len(mtimes),
-        measured=csv_mtime is not None,
-        changed=changed,
-        without_image=without_image,
-        duplicates=duplicates,
-    )
+    if gt_folder is None and not folder:  # nothing to list: the CSV alone
+        return Freshness(0, measured=_csv_mtime(csv_path) is not None)
+    root = project_root or os.path.dirname(os.path.abspath(folder or gt_folder))
+    return _gt_first_freshness(folder, suffix, csv_path, record, root, images, gt_folder)

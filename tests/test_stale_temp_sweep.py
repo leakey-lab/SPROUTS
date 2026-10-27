@@ -397,6 +397,7 @@ def test_save_registry_bytes_are_unchanged(tmp_path):
 def test_gt_saves_are_durable(tmp_path, monkeypatch):
     synced = []
     monkeypatch.setattr(io_utils.os, "fsync", lambda fd: synced.append(fd))
+    monkeypatch.setattr(io_utils, "_sync_folder", lambda folder: None)  # file fsyncs only
     write_tracing(str(tmp_path / "gt" / "a.png"), empty_tracing(4, 4), default_registry())
     assert len(synced) == 1
     save_registry(str(tmp_path), default_registry())

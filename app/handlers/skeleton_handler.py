@@ -32,6 +32,7 @@ from app.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
+from app.inference.input_split import images_by_key
 from app.inference.measure_run import (
     AREA,
     LENGTH,
@@ -128,6 +129,8 @@ class SkeletonHandler(HandlerDependencies):
         """Measure the root length of every image with a skeleton: its GT skeleton
         (``gt/skeletons/<stem>.png``) where valid, else its ``*_fake.png`` in the project's
         skeleton folder (O1)."""
+        if self.refuse_while_loading():  # R7: before the scans and their warnings
+            return
         layout = self._layout()
         if layout is None:
             return
@@ -149,6 +152,8 @@ class SkeletonHandler(HandlerDependencies):
         """Measure the root area of every image with a mask: its GT mask
         (``gt/mask/<stem>.png``) where readable and the photo's size, else its ``*.png`` in the project's mask
         folder (O1)."""
+        if self.refuse_while_loading():  # R7: before the scans and their warnings
+            return
         layout = self._layout()
         if layout is None:
             return
@@ -217,8 +222,9 @@ class SkeletonHandler(HandlerDependencies):
             return
         # O37: a mask or skeleton whose image is gone gets no row; the files stay on disk.
         # GT files follow the same rules; they are named with their folder (gt/...).
-        split = split_inputs(images, image_stems, shadowed)
-        gt_split = split_inputs(gt_files, image_stems, gt_shadowed)
+        by_key = images_by_key(image_stems)
+        split = split_inputs(images, image_stems, shadowed, by_key=by_key)
+        gt_split = split_inputs(gt_files, image_stems, gt_shadowed, by_key=by_key)
         gt_prefix = os.path.relpath(gt_folder, layout.root).replace(os.sep, "/") + "/"
         without_image = [*split.without_image, *(gt_prefix + n for n in gt_split.without_image)]
         duplicates = [*split.duplicates, *(gt_prefix + n for n in gt_split.duplicates)]

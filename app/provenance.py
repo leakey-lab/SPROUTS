@@ -36,7 +36,7 @@ from typing import Any
 from app import APP_FULL_NAME, APP_NAME, __version__
 from app.calibration import fov_of, same_fov
 from app.config import CALIBRATION, PROJECT_ROOT
-from app.io_utils import atomic_write_text
+from app.io_utils import atomic_write_text, sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -184,12 +184,7 @@ def git_commit(root: str = PROJECT_ROOT) -> str | None:
 
 
 # ------------------------------------------------------------------ hashing
-def _hash_file(path: str) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+_hash_file = sha256_file  # looked up at call time (tests count the files hashed)
 
 
 def file_sha256(path: str | os.PathLike[str]) -> str | None:

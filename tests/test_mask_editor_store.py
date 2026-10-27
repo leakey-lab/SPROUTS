@@ -1,4 +1,4 @@
-"""AR-11 / PE-07 / RB-11: Qt-free storage of hand-traced masks (``mask/<stem>.png``)."""
+"""AR-11 / PE-07 / RB-11: Qt-free mask files: the reader of ``mask/`` and the GT mask writer."""
 
 import os
 
@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from app.inference import metrics
-from app.masks import MASK_THRESHOLD, MaskFileError, MaskStore, encode_mask_png
+from app.masks import MASK_THRESHOLD, MaskFileError, MaskStore, encode_mask_png, write_mask_file
 
 
 def _mask(h=60, w=80):
@@ -34,6 +34,11 @@ def test_paths_follow_the_project_layout(tmp_path):
     assert store.read("plot_001") is None
 
 
+def test_the_prediction_store_cannot_write_or_remove_a_prediction():
+    # Predictions are never overwritten (O1): a mask the editor saves is GT (gt/mask/).
+    assert not hasattr(MaskStore, "write") and not hasattr(MaskStore, "remove")
+
+
 def test_write_is_pixel_identical_to_the_qt_writer_and_far_smaller(tmp_path):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
@@ -42,7 +47,8 @@ def test_write_is_pixel_identical_to_the_qt_writer_and_far_smaller(tmp_path):
     on = np.zeros((480, 640), bool)
     on[100:110, 50:600] = True
     store = MaskStore.for_image(str(tmp_path / "a.jpg"))
-    path = store.write("a", on)
+    path = store.path_for("a")
+    write_mask_file(path, on)
     ref = tmp_path / "ref.png"
     _qt_reference_png(ref, on)
 
@@ -57,7 +63,7 @@ def test_write_is_pixel_identical_to_the_qt_writer_and_far_smaller(tmp_path):
 def test_round_trip_and_grayscale_readers_see_the_same_mask(tmp_path):
     on = _mask()
     store = MaskStore.for_image(str(tmp_path / "plot_001.png"))
-    store.write("plot_001", on)
+    write_mask_file(store.path_for("plot_001"), on)
     assert np.array_equal(store.read("plot_001"), on)
     gray = cv2.imread(store.path_for("plot_001"), cv2.IMREAD_GRAYSCALE)
     assert set(np.unique(gray)) == {0, 255}
@@ -70,7 +76,8 @@ def test_png_bytes_are_deterministic():
 
 def test_failed_replace_keeps_the_previous_file(tmp_path, monkeypatch):
     store = MaskStore.for_image(str(tmp_path / "a.png"))
-    path = store.write("a", _mask())
+    path = store.path_for("a")
+    write_mask_file(path, _mask())
     before = open(path, "rb").read()
 
     def _boom(*_a, **_k):
@@ -78,19 +85,9 @@ def test_failed_replace_keeps_the_previous_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "replace", _boom)
     with pytest.raises(OSError):
-        store.write("a", np.zeros((60, 80), bool) | True)
+        write_mask_file(path, np.zeros((60, 80), bool) | True)
     assert open(path, "rb").read() == before
     assert sorted(os.listdir(tmp_path / "mask")) == ["a.png"]
-
-
-def test_remove_deletes_every_saved_variant(tmp_path):
-    store = MaskStore.for_image(str(tmp_path / "a.png"))
-    store.write("a", _mask())
-    jpg = os.path.join(store.directory, "a.jpg")
-    cv2.imwrite(jpg, np.zeros((60, 80), np.uint8))
-    assert store.remove("a") is True
-    assert store.find("a") is None and not os.path.exists(jpg)
-    assert store.remove("a") is False
 
 
 def test_unreadable_file_raises(tmp_path):
@@ -150,7 +147,7 @@ def test_measure_and_the_mask_store_agree_on_a_grey_mask(tmp_path):
 def test_read_of_an_editor_rgba_mask_is_the_saved_plane(tmp_path):
     on = _mask()
     store = MaskStore.for_image(str(tmp_path / "a.png"))
-    store.write("a", on)
+    write_mask_file(store.path_for("a"), on)
     assert np.array_equal(store.read("a"), on)
 
 

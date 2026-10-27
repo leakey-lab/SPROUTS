@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import errno
 import os
+import stat
 import sys
 
 import cv2
@@ -284,17 +285,23 @@ def test_read_only_target_is_not_reported_as_locked(tmp_path, monkeypatch):
     assert _leftovers(tmp_path) == ["ro.csv"]
 
 
-def test_durable_writes_fsync_and_bulk_writes_can_skip_it(tmp_path, monkeypatch):
-    synced = []
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_durable_writes_fsync_and_bulk_writes_can_skip_it(tmp_path, monkeypatch, platform):
+    synced, folders = [], []
     monkeypatch.setattr(io_utils.os, "fsync", lambda fd: synced.append(fd))
+    monkeypatch.setattr(io_utils, "_sync_folder", folders.append)
+    monkeypatch.setattr(io_utils, "_current_platform", lambda: platform)
+    synced_folders = [] if platform == "win32" else [os.path.abspath(tmp_path)]
     atomic_write_bytes(tmp_path / "hand_made.png", b"x")
     assert len(synced) == 1
+    assert folders == synced_folders  # off Windows the rename is made durable too
     atomic_write_bytes(tmp_path / "generated.png", b"y", durable=False)
     atomic_write_text(tmp_path / "t.txt", "z", durable=False)
     with atomic_open(tmp_path / "s.csv", "w", durable=False) as fh:
         fh.write("a")
     imwrite_unicode(tmp_path / "g.png", _sample_image(), durable=False)
     assert len(synced) == 1
+    assert folders == synced_folders
     assert (tmp_path / "generated.png").read_bytes() == b"y"
     assert sorted(os.listdir(tmp_path)) == [
         "g.png",
@@ -303,6 +310,63 @@ def test_durable_writes_fsync_and_bulk_writes_can_skip_it(tmp_path, monkeypatch)
         "s.csv",
         "t.txt",
     ]
+
+
+def test_the_folder_is_synced_after_the_swap_and_never_fails_a_save(tmp_path, monkeypatch):
+    events = []
+    real_replace = os.replace
+    monkeypatch.setattr(io_utils, "_current_platform", lambda: "linux")
+    monkeypatch.setattr(io_utils.os, "fsync", lambda fd: events.append("fsync"))
+    monkeypatch.setattr(
+        io_utils.os, "replace", lambda a, b: events.append("replace") or real_replace(a, b)
+    )
+    monkeypatch.setattr(io_utils, "_sync_folder", lambda folder: events.append(folder))
+    atomic_write_bytes(tmp_path / "a.png", b"old")
+    assert events == ["fsync", "replace", os.path.abspath(tmp_path)]
+
+    def refuse(*_args):
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.undo()
+    monkeypatch.setattr(io_utils, "_current_platform", lambda: "linux")
+    monkeypatch.setattr(io_utils.os, "open", refuse)  # the folder cannot be opened
+    atomic_write_bytes(tmp_path / "a.png", b"new")
+    assert (tmp_path / "a.png").read_bytes() == b"new"
+    assert _leftovers(tmp_path) == ["a.png"]
+
+
+def test_a_folder_sync_never_raises(tmp_path):
+    io_utils._sync_folder(str(tmp_path))  # on Windows a folder cannot be opened: no error
+    io_utils._sync_folder(str(tmp_path / "missing"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the folder fsync of Linux and macOS")
+def test_posix_saves_fsync_the_file_then_swap_then_fsync_the_folder(tmp_path, monkeypatch):
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        events.append("folder" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", lambda a, b: events.append("replace") or real_replace(a, b))
+    atomic_write_bytes(tmp_path / "a.png", b"x")
+    assert events == ["file", "replace", "folder"]
+
+    def refuse_folders(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "Invalid argument")  # a file system without it
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", refuse_folders)
+    atomic_write_bytes(tmp_path / "a.png", b"new")
+    assert (tmp_path / "a.png").read_bytes() == b"new"
+    assert _leftovers(tmp_path) == ["a.png"]
+    events.clear()
+    monkeypatch.setattr(os, "fsync", fsync)
+    atomic_write_bytes(tmp_path / "b.png", b"y", durable=False)
+    assert events == ["replace"]  # a bulk write syncs nothing
 
 
 def test_temp_name_fits_255_utf8_bytes_on_posix(tmp_path):

@@ -213,6 +213,113 @@ def test_hashes_are_cached_for_the_session(tmp_path, monkeypatch):
     assert len(calls) == 3
 
 
+def _counting_reads(monkeypatch) -> list[str]:
+    """The records :func:`load_inputs_record` parses (not served from its shared parse)."""
+    reads: list[str] = []
+    real = measure_inputs._read_inputs_record
+    monkeypatch.setattr(
+        measure_inputs, "_read_inputs_record", lambda path: reads.append(path) or real(path)
+    )
+    return reads
+
+
+def test_a_held_record_is_parsed_once_while_its_files_keep_their_size_and_time(
+    tmp_path, monkeypatch
+):
+    """The metrics bar's index holds the record of each loaded CSV; the Measure status count
+    and MeasureRun.unchanged() then reuse that parse (7.6 MB of JSON at 46k images)."""
+    _layout, run, _stems = _measured(tmp_path)
+    held = load_inputs_record(run.csv_path)
+    reads = _counting_reads(monkeypatch)
+    assert load_inputs_record(run.csv_path) is held
+    assert load_inputs_record(os.path.join(os.path.dirname(run.csv_path), ".", "root_areas.csv"))
+    assert reads == []
+    with pytest.raises(TypeError):
+        held.inputs["mask/new.png"] = (1, 2, "0" * 64)  # shared: read-only
+    os.remove(inputs_record_path(run.csv_path))
+    assert load_inputs_record(run.csv_path) is None  # gone: never served from the parse
+
+
+def test_a_record_no_one_holds_is_parsed_again(tmp_path, monkeypatch):
+    _layout, run, _stems = _measured(tmp_path)
+    assert load_inputs_record(run.csv_path) is not None  # not held: freed at once
+    reads = _counting_reads(monkeypatch)
+    assert load_inputs_record(run.csv_path) is not None
+    assert reads == [run.csv_path]
+
+
+def test_a_record_rewritten_with_the_same_size_and_time_is_read_again(tmp_path):
+    """A coarse file clock (FAT, HFS+) can keep a rewritten record's stamp: the writer drops
+    the shared parse of the CSV it writes."""
+    _layout, run, stems = _measured(tmp_path)
+    held = load_inputs_record(run.csv_path)
+    record_path = inputs_record_path(run.csv_path)
+    before = os.stat(record_path)
+    key = f"mask/{stems[0]}.png"
+    size, mtime_ns, digest = held.inputs[key]
+    other = "0" * 64 if digest != "0" * 64 else "1" * 64
+    measure_inputs.write_inputs_record(run.csv_path, {**held.inputs, key: (size, mtime_ns, other)})
+    os.utime(record_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert os.stat(record_path).st_size == before.st_size
+    assert load_inputs_record(run.csv_path).inputs[key] == (size, mtime_ns, other)
+
+
+def test_a_changed_csv_is_never_paired_with_a_held_record(tmp_path):
+    _layout, run, _stems = _measured(tmp_path)
+    held = load_inputs_record(run.csv_path)
+    with open(run.csv_path, "a", encoding="utf-8") as fh:
+        fh.write("\n")
+    assert held is not None and load_inputs_record(run.csv_path) is None
+
+
+def test_a_record_for_another_csv_is_parsed_once_while_its_files_keep_their_size_and_time(
+    tmp_path, monkeypatch
+):
+    _layout, run, _stems = _measured(tmp_path)
+    with open(run.csv_path, "a", encoding="utf-8") as fh:
+        fh.write("\n")
+    reads = _counting_reads(monkeypatch)
+    assert load_inputs_record(run.csv_path) is None
+    assert load_inputs_record(run.csv_path) is None
+    assert reads == [run.csv_path]
+
+
+def _fails_once(real, path):
+    """``real`` (``open`` or a hash function) that raises a sharing violation on its first
+    call for ``path``: a transient read failure (antivirus, a file not downloaded yet)."""
+    target = os.path.normcase(os.path.abspath(path))
+    left = [1]
+
+    def flaky(name, *args, **kwargs):
+        if left[0] and os.path.normcase(os.path.abspath(name)) == target:
+            left[0] = 0
+            raise PermissionError(13, "sharing violation (simulated)", name)
+        return real(name, *args, **kwargs)
+
+    return flaky
+
+
+def test_a_record_that_could_not_be_read_is_read_again(tmp_path, monkeypatch):
+    """A failed read is not kept: with the record taken for missing, the status count would
+    fall back to file times and every Measure click would measure everything again."""
+    _layout, run, _stems = _measured(tmp_path)
+    flaky = _fails_once(open, inputs_record_path(run.csv_path))
+    monkeypatch.setattr(measure_inputs, "open", flaky, raising=False)
+    assert load_inputs_record(run.csv_path) is None
+    again = load_inputs_record(run.csv_path)
+    assert again is not None and again.inputs
+    assert run.unchanged() is True
+
+
+def test_a_csv_that_could_not_be_hashed_is_hashed_again(tmp_path, monkeypatch):
+    _layout, run, _stems = _measured(tmp_path)
+    monkeypatch.setattr(measure_inputs, "_sha256_cache", {})  # the CSV's hash is not known
+    flaky = _fails_once(measure_inputs._hash_file, run.csv_path)
+    monkeypatch.setattr(measure_inputs, "_hash_file", flaky)
+    assert load_inputs_record(run.csv_path) is None
+    assert load_inputs_record(run.csv_path) is not None
+
+
 def test_measure_text_names_changed_new_and_removed():
     text = measure_text(0, 0, area=Freshness(46175, True, 36, removed=3, by_content=True))
     assert text.endswith("46,175 masks: 36 changed, 3 removed since measured")

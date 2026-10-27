@@ -272,6 +272,52 @@ def test_run_metric_pool_stops_early_when_asked():
     assert len(rows) < len(images)
 
 
+def test_an_error_in_a_worker_ends_the_pool_without_measuring_the_rest():
+    """The error is raised once the running images end: the pending ones are not measured
+    first (a Cancel meanwhile would go unheard), and it is the worker's own error."""
+    import time
+
+    calls = []
+
+    def worker(name, path):
+        calls.append(name)
+        if name == "0":
+            raise MemoryError("simulated")
+        time.sleep(0.005)
+        return {"Image": name}
+
+    images = {str(i): "p" for i in range(400)}
+    with pytest.raises(MemoryError, match="simulated"):
+        metrics.run_metric_pool(images, worker)
+    assert len(calls) < len(images) // 2
+
+
+@pytest.mark.parametrize("total", [5, 255, 256, 1000, 4100])
+def test_the_pool_gives_the_rows_and_progress_of_one_image_at_a_time(total):
+    """Images run in tasks of several (fewer futures); the rows, their order and the
+    progress values are those of measuring the images one by one."""
+    import random
+    import time
+
+    def worker(name, path):
+        if random.random() < 0.01:
+            time.sleep(0.001)
+        return {"Image": name, "Tube": int(name) % 7 or None, "Path": path}
+
+    images = {f"{i:05d}": f"p{i}" for i in random.Random(total).sample(range(10 * total), total)}
+    progress = []
+    rows = metrics.run_metric_pool(images, worker, progress_cb=progress.append)
+    serial = sorted((worker(name, path) for name, path in images.items()), key=metrics._sort_key)
+    assert rows == serial
+    expected, last = [], -1
+    for done in range(1, total + 1):
+        pct = int(done / total * 100)
+        if pct != last:
+            expected.append(pct)
+            last = pct
+    assert progress == expected
+
+
 def test_cancelled_compute_keeps_no_rows(tmp_path):
     images = _make_dataset(tmp_path / "in", "length", _NAMES[:3])
     run = MeasureRun(LENGTH, images, str(tmp_path))
@@ -575,3 +621,127 @@ def test_length_records_carry_no_non_binary_count(tmp_path):
     record = json.loads(open(provenance.sidecar_path(csv_path), encoding="utf-8").read())
     assert "n_non_binary" not in record["outputs"]
     assert not any("_non_binary" in row for row in run.rows)
+
+
+# --------------------------------------------------------------------------- the run's memo
+
+
+def _same_files(folder, names, data, suffix):
+    """One file per name, every one holding ``data``: ``name -> path``."""
+    folder.mkdir(parents=True, exist_ok=True)
+    images = {}
+    for name in names:
+        path = folder / f"{name}{suffix}"
+        path.write_bytes(data)
+        images[name] = str(path)
+    return images
+
+
+def _serial_pool(monkeypatch):
+    """Measure the run's images one after another (pool threads that miss the memo at the
+    same moment each decode: harmless, but it makes a call count depend on the timing)."""
+
+    def serial(images, worker, progress_cb=None, should_stop=None):
+        rows = [worker(name, path) for name, path in images.items()]
+        return sorted(rows, key=metrics._sort_key)
+
+    monkeypatch.setattr(measure_run, "run_metric_pool", serial)
+
+
+def _counting(monkeypatch, name):
+    """Count the calls of ``metrics.<name>`` (the decode-and-measure step of a row)."""
+    calls = []
+    real = getattr(metrics, name)
+
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(metrics, name, counted)
+    return calls
+
+
+def test_byte_identical_empty_files_are_measured_once_per_run(tmp_path, monkeypatch):
+    """The empty predictions of a project are one file content: a run decodes it once, and
+    every row is the row of its own file measured alone."""
+    empty = cv2.imencode(".png", np.zeros((256, 341), np.uint8))[1].tobytes()
+    assert len(empty) <= metrics._MEMO_MAX_BYTES
+    images = _same_files(tmp_path / "skeletons", _NAMES[:4], empty, "_fake.png")
+    images.update(_make_dataset(tmp_path / "skeletons", "length", _NAMES[4:]))
+    expected = sorted((LENGTH.row(n, p) for n, p in images.items()), key=metrics._sort_key)
+    _serial_pool(monkeypatch)
+    calls = _counting(monkeypatch, "preprocess_image")
+
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"), project_root=str(tmp_path))
+    run.compute()
+
+    assert len(calls) == 1 + len(_NAMES[4:])  # the empty content once, each other file once
+    assert [{k: v for k, v in row.items() if k != "Source"} for row in run.rows] == expected
+    assert run._memo is None  # nothing kept on the run (a failed write keeps it for Retry)
+
+
+def test_the_memo_keeps_grey_levels_and_skips_large_files(tmp_path, monkeypatch):
+    """A grey-level mask that measures 0 keeps its private ``_non_binary`` key on every row;
+    a file above the size limit is decoded each time."""
+    grey = cv2.imencode(".png", np.full((48, 64), 100, np.uint8))[1].tobytes()
+    big = cv2.imencode(".png", np.zeros((256, 341), np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])[
+        1
+    ].tobytes()
+    assert len(grey) <= metrics._MEMO_MAX_BYTES < len(big)
+    images = _same_files(tmp_path / "mask", _NAMES[:3], grey, ".png")
+    images.update(_same_files(tmp_path / "mask", _NAMES[3:], big, ".png"))
+    _serial_pool(monkeypatch)
+    calls = _counting(monkeypatch, "_load_mask_and_grey_flag")
+
+    run = MeasureRun(AREA, images, str(tmp_path / "mask"), project_root=str(tmp_path))
+    run.compute()
+    csv_path = run.write()
+
+    assert len(calls) == 1 + len(_NAMES[3:])
+    assert sorted(r["Image"] for r in run.rows if r.get("_non_binary")) == sorted(_NAMES[:3])
+    record = json.loads(open(provenance.sidecar_path(csv_path), encoding="utf-8").read())
+    assert record["outputs"]["n_non_binary"] == 3
+    assert record["outputs"]["n_zero"] == len(_NAMES)
+
+
+def test_the_pool_threads_share_the_memo_and_give_the_same_rows(tmp_path, monkeypatch):
+    empty = cv2.imencode(".png", np.zeros((256, 341), np.uint8))[1].tobytes()
+    names = [f"img{i:03d}" for i in range(64)]
+    images = _same_files(tmp_path / "skeletons", names, empty, "_fake.png")
+    expected = sorted((LENGTH.row(n, p) for n, p in images.items()), key=metrics._sort_key)
+    calls = _counting(monkeypatch, "preprocess_image")
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"))
+    run.compute()
+    assert [{k: v for k, v in row.items() if k != "Source"} for row in run.rows] == expected
+    assert 1 <= len(calls) < len(names)
+
+
+def test_failures_are_not_kept_so_each_error_names_its_own_file(tmp_path):
+    images = _same_files(tmp_path / "skeletons", _NAMES[:3], b"not a png", "_fake.png")
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"), project_root=str(tmp_path))
+    run.compute()
+    errors = {row["Image"]: row["Error"] for row in run.rows}
+    assert errors == {name: f"Could not read image: {name}_fake.png" for name in _NAMES[:3]}
+
+
+def test_a_stopped_run_keeps_no_memo(tmp_path):
+    empty = cv2.imencode(".png", np.zeros((48, 64), np.uint8))[1].tobytes()
+    images = _same_files(tmp_path / "skeletons", _NAMES, empty, "_fake.png")
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"))
+    assert run.compute(should_stop=lambda: True) is None
+    assert run._memo is None and run.rows is None
+
+
+def test_rows_without_a_memo_are_the_same(tmp_path):
+    """``memo`` changes no row: the same bytes measured with and without it."""
+    empty = cv2.imencode(".png", np.zeros((48, 64), np.uint8))[1].tobytes()
+    for spec, suffix in ((LENGTH, "_fake.png"), (AREA, ".png")):
+        path = tmp_path / f"{spec.kind}{suffix}"
+        path.write_bytes(empty)
+        memo: dict = {}
+        plain = spec.row(_NAMES[0], str(path), data=empty)
+        assert spec.row(_NAMES[0], str(path), data=empty, memo=memo) == plain
+        assert len(memo) == 1
+        assert spec.row(_NAMES[1], str(path), data=empty, memo=memo) == spec.row(
+            _NAMES[1], str(path), data=empty
+        )

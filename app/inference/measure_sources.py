@@ -35,12 +35,13 @@ the decisions in that order. The default, the built-in ``map``, decides serially
 executor's ``map`` decides in parallel.
 
 The measuring mapper (how Measure uses it, :class:`app.inference.measure_run.MeasureRun`):
-the mapper runs one task per image on the Measure pool's worker threads; the task calls
-``decide(*args)``, measures the file the decision names (a used GT file from
+the mapper runs the images on the Measure pool's worker threads; for each image a worker
+calls ``decide(*args)``, measures the file the decision names (a used GT file from
 ``decision.data``, the bytes it validated, never read twice), and returns the decision with
 ``data`` dropped (``dataclasses.replace(decision, data=None)``). So the decisions and the
 measurements happen off the GUI thread, in one pass, and at most one image's bytes per
-worker are held at a time, never every image's.
+worker are held at a time, never every image's (besides the run's memo of the small files
+that measured 0, :func:`app.inference.metrics.length_row`).
 
 The inputs are ``stem -> path`` scans already split by image (one file per image:
 :func:`app.inference.input_split.split_inputs`); two files of one image raise
@@ -64,6 +65,7 @@ import numpy as np
 from app.editing.thinning import is_generated_as_opened
 from app.gt.files import SOURCE_GT, SOURCE_PREDICTION, image_size
 from app.inference.measure_inputs import Fingerprint, input_key
+from app.io_utils import imdecode_bytes
 from app.naming import stem_key
 from app.project_layout import ProjectLayout
 
@@ -79,6 +81,7 @@ __all__ = [
     "decide_area_source",
     "decide_length_source",
     "images_of",
+    "read_fingerprinted",
     "resolve_area_sources",
     "resolve_length_sources",
 ]
@@ -160,11 +163,7 @@ def decide_area_source(
     """The mask the area of image ``stem`` is measured from: the GT mask at ``gt`` when it
     decodes and is the size of the photo at ``photo``, else the prediction at ``prediction``
     (any may be ``None``)."""
-    if gt is None:
-        return _without_gt(stem, prediction)
-    read = _read(gt)
-    gray = None if read is None else _decode_gray(read[0])
-    return _decided(stem, prediction, gt, _size_reason(gray, photo), read)
+    return _decided(stem, prediction, gt, lambda gray: _size_reason(gray, photo))
 
 
 def decide_length_source(
@@ -173,11 +172,20 @@ def decide_length_source(
     """The skeleton the length of image ``stem`` is measured from: the GT skeleton at ``gt``
     when it is valid against the photo at ``photo``, else the prediction at ``prediction``
     (any may be ``None``)."""
-    if gt is None:
-        return _without_gt(stem, prediction)
-    read = _read(gt)
-    gray = None if read is None else _decode_gray(read[0])
-    return _decided(stem, prediction, gt, _skeleton_reason(gray, prediction, photo), read)
+    return _decided(stem, prediction, gt, lambda gray: _skeleton_reason(gray, prediction, photo))
+
+
+def read_fingerprinted(path: str) -> tuple[bytes, Fingerprint] | None:
+    """The bytes of the file at ``path``, read once, and their fingerprint ``(size, mtime_ns,
+    sha256)``: the size and time are the open file's, so they belong to the bytes read (R5).
+    ``None`` when the file cannot be opened or read."""
+    try:
+        with open(path, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            data = fh.read()
+    except OSError:
+        return None
+    return data, (st.st_size, st.st_mtime_ns, hashlib.sha256(data).hexdigest())
 
 
 def _size_reason(gray: np.ndarray | None, photo: str | None) -> str:
@@ -206,51 +214,27 @@ def _skeleton_reason(gray: np.ndarray | None, prediction: str | None, photo: str
     return ""
 
 
-def _read(path: str) -> tuple[bytes, int, int] | None:
-    """``(bytes, size, mtime_ns)`` of the file at ``path``, read once; ``None`` when it
-    cannot be read."""
-    try:
-        with open(path, "rb") as fh:
-            st = os.fstat(fh.fileno())
-            return fh.read(), st.st_size, st.st_mtime_ns
-    except OSError:
-        return None
-
-
-def _decode_gray(data: bytes) -> np.ndarray | None:
-    """``data`` decoded in grayscale (the decoder of :func:`app.io_utils.imread_unicode`),
-    ``None`` when it does not decode."""
-    if not data:
-        return None
-    try:
-        return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
-    except cv2.error:
-        return None
-
-
-def _without_gt(stem: str, prediction: str | None) -> SourceDecision:
-    source = None if prediction is None else MeasureSource(stem, prediction, PREDICTION)
-    return SourceDecision(stem, source)
-
-
 def _decided(
     stem: str,
     prediction: str | None,
-    gt: str,
-    reason: str,
-    read: tuple[bytes, int, int] | None,
+    gt: str | None,
+    reason_of: Callable[[np.ndarray | None], str],
 ) -> SourceDecision:
-    fingerprint = None
-    if read is not None:
-        data, size, mtime_ns = read
-        fingerprint = (size, mtime_ns, hashlib.sha256(data).hexdigest())
+    """One image decided: with no GT file, its prediction; else the GT file at ``gt``, read
+    once, decoded in grey and judged by ``reason_of`` (``""``: the GT file is used)."""
+    if gt is None:
+        source = None if prediction is None else MeasureSource(stem, prediction, PREDICTION)
+        return SourceDecision(stem, source)
+    read = read_fingerprinted(gt)
+    reason = reason_of(None if read is None else imdecode_bytes(read[0], cv2.IMREAD_GRAYSCALE))
+    fingerprint = None if read is None else read[1]
     if reason or read is None:
         reason = reason or UNREADABLE
         source = None
         if prediction is not None:
             source = MeasureSource(stem, prediction, PREDICTION, gt, reason)
         return SourceDecision(stem, source, reason, fingerprint)
-    return SourceDecision(stem, MeasureSource(stem, gt, GT, gt), "", fingerprint, data)
+    return SourceDecision(stem, MeasureSource(stem, gt, GT, gt), "", fingerprint, read[0])
 
 
 # ------------------------------------------------------------------ every image
@@ -274,16 +258,8 @@ def resolve_area_sources(
     """:func:`decide_area_source` for every image of ``predictions`` (``mask/``) and
     ``gt_files`` (``gt/mask/``), both ``stem -> path``, through ``mapper``; ``images``
     (stem -> photo) serves the size check. Returns ``(stem -> source, report)``."""
-    photo_of = _photo_finder(images)
-    found = _pair(predictions, gt_files)
-    columns = (
-        [i.stem for i in found],
-        [i.prediction for i in found],
-        [i.gt for i in found],
-        [photo_of(i.gt_stem) for i in found],
-    )
-    decided = mapper(decide_area_source, *columns) if found else ()
-    return _collect(layout, layout.gt_mask_dir, found, decided)
+    gt_dir = layout.gt_mask_dir
+    return _resolve(layout, gt_dir, decide_area_source, images, predictions, gt_files, mapper)
 
 
 def resolve_length_sources(
@@ -297,26 +273,20 @@ def resolve_length_sources(
     """:func:`decide_length_source` for every image of ``predictions`` (``skeletons/``) and
     ``gt_files`` (``gt/skeletons/``), both ``stem -> path``, through ``mapper``; ``images``
     (stem -> photo) serves the size check. Returns ``(stem -> source, report)``."""
-    photo_of = _photo_finder(images)
-    found = _pair(predictions, gt_files)
-    columns = (
-        [i.stem for i in found],
-        [i.prediction for i in found],
-        [i.gt for i in found],
-        [photo_of(i.gt_stem) for i in found],
-    )
-    decided = mapper(decide_length_source, *columns) if found else ()
-    return _collect(layout, layout.gt_skeletons_dir, found, decided)
+    gt_dir = layout.gt_skeletons_dir
+    return _resolve(layout, gt_dir, decide_length_source, images, predictions, gt_files, mapper)
 
 
 def images_of(predictions: Mapping[str, str], gt_files: Mapping[str, str]) -> dict[str, str]:
     """``stem -> path`` of every image of ``predictions`` and ``gt_files`` (the names the
-    rows get): its prediction, else its GT file. Nothing is read; two files of one image
-    raise ``ValueError`` (pass ``split_inputs`` kept scans)."""
-    return {
-        i.stem: i.prediction if i.prediction is not None else i.gt
-        for i in _pair(predictions, gt_files)
-    }
+    rows get), in no particular order: its prediction, else its GT file. Nothing is read;
+    two files of one image raise ``ValueError`` (pass ``split_inputs`` kept scans)."""
+    predicted = _by_key(predictions)
+    images = dict(predictions)
+    images.update(
+        (stem, gt_files[stem]) for key, stem in _by_key(gt_files).items() if key not in predicted
+    )
+    return images
 
 
 def _photo_finder(images: Mapping[str, str]) -> Callable[[str | None], str | None]:
@@ -337,7 +307,10 @@ def _photo_finder(images: Mapping[str, str]) -> Callable[[str | None], str | Non
 
 def _by_key(files: Mapping[str, str]) -> dict[str, str]:
     """``stem_key -> stem`` of ``files``; two stems of one key raise ``ValueError``."""
-    found: dict[str, str] = {}
+    found = dict(zip(map(stem_key, files), files, strict=True))
+    if len(found) == len(files):
+        return found
+    found = {}  # two stems share a key: name the first such pair, in order
     for stem in files:
         held = found.setdefault(stem_key(stem), stem)
         if held != stem:
@@ -373,18 +346,30 @@ def _pair(predictions: Mapping[str, str], gt_files: Mapping[str, str]) -> list[_
     return found
 
 
-def _collect(
+def _resolve(
     layout: ProjectLayout,
     gt_dir: str,
-    found: list[_Image],
-    decided: Iterable[SourceDecision],
+    decide: Callable[..., SourceDecision],
+    images: Mapping[str, str],
+    predictions: Mapping[str, str],
+    gt_files: Mapping[str, str],
+    mapper: Mapper,
 ) -> tuple[dict[str, MeasureSource], GtReport]:
-    """The rows and the report of ``found``; ``decided`` holds one decision per image, in
-    ``found``'s order."""
+    """``decide`` for every image of ``predictions`` and ``gt_files`` (one column per argument,
+    through ``mapper``); the rows and the report of the GT files in ``gt_dir``."""
+    photo_of = _photo_finder(images)
+    found = _pair(predictions, gt_files)
+    columns = (
+        [i.stem for i in found],
+        [i.prediction for i in found],
+        [i.gt for i in found],
+        [photo_of(i.gt_stem) for i in found],
+    )
+    decided = mapper(decide, *columns) if found else ()
     sources: dict[str, MeasureSource] = {}
     files: dict[str, str] = {}
     skipped: list[tuple[str, str]] = []
-    for image, decision in zip(found, decided, strict=True):
+    for image, decision in zip(found, decided, strict=True):  # one decision per image
         if decision.source is not None:
             sources[image.stem] = decision.source
         if decision.reason:

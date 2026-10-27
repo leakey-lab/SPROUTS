@@ -14,8 +14,10 @@ should be written through this module so that:
   ``cv2.imwrite`` silently fail (``Données``, ``José``, CJK folder names).
 
 ``durable=True`` (the default, for hand-made data and CSVs) also survives a
-power cut; bulk writers of regenerable outputs (46k generated masks) may pass
-``durable=False``: still never half-written, but skips the fsync, which costs
+power cut: the data is fsync'ed before the swap and, off Windows, the folder after it
+(a rename is on disk only once its folder is; on Windows the swap itself is not forced
+to disk). Bulk writers of regenerable outputs (46k generated masks) may pass
+``durable=False``: still never half-written, but skips the fsyncs, which cost
 0.6-4 ms per file on Windows.
 
 A process killed mid-write leaves its hidden temp file behind;
@@ -26,6 +28,7 @@ A process killed mid-write leaves its hidden temp file behind;
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -49,10 +52,12 @@ __all__ = [
     "atomic_write_bytes",
     "atomic_write_text",
     "file_stamp",
+    "imdecode_bytes",
     "imread_unicode",
     "imwrite_unicode",
     "path_key",
     "same_file",
+    "sha256_file",
     "sweep_stale_temp_files",
 ]
 
@@ -144,6 +149,19 @@ def file_stamp(path: str) -> tuple:
     return (path, st.st_mtime_ns, st.st_size)
 
 
+def sha256_file(path: str | os.PathLike[str]) -> str:
+    """SHA-256 hex digest of the file at ``path``, read in 1 MiB chunks.
+
+    Raises:
+        OSError: the file cannot be read.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _temp_path(target: str, platform: str | None = None) -> str:
     """A unique sibling of ``target`` that no image/CSV scanner will pick up.
 
@@ -192,6 +210,19 @@ def _is_lock(exc: OSError, target: str) -> bool:
     return not os.path.exists(target) or os.access(target, os.W_OK)
 
 
+def _sync_folder(folder: str) -> None:
+    """fsync ``folder``, so that a rename into it is on disk (Linux, macOS). Never raises:
+    some file systems refuse it (CIFS, FUSE), and the file is in place already."""
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def _replace(src: str, target: str) -> None:
     """``os.replace`` with a short retry on sharing violations."""
     for delay in (*REPLACE_RETRY_DELAYS, None):
@@ -216,7 +247,7 @@ def atomic_open(
     ``"wb"``; other keyword arguments go to :func:`open` (e.g. ``newline=""``
     for :mod:`csv`). On any exception the temp file is removed and the previous
     ``path`` is left untouched. The parent folder must exist. ``durable``
-    fsyncs the data before the swap.
+    fsyncs the data before the swap and, off Windows, the folder after it.
 
     Raises:
         FileLockedError: ``path`` is held open by another program.
@@ -246,6 +277,10 @@ def atomic_open(
             pass
         _remove_quietly(tmp)
         raise
+    # Outside the try: the file is saved, and a folder that cannot be synced must not turn
+    # the save into a failure or remove anything.
+    if durable and _current_platform() != "win32":
+        _sync_folder(os.path.dirname(os.path.abspath(target)))
 
 
 def atomic_write_bytes(
@@ -326,10 +361,23 @@ def imread_unicode(path: str | os.PathLike[str], flags: int | None = None) -> np
         data = np.fromfile(os.fspath(path), dtype=np.uint8)
     except (OSError, ValueError):
         return None
-    if data.size == 0:
+    return imdecode_bytes(data, cv2.IMREAD_COLOR if flags is None else flags)
+
+
+def imdecode_bytes(data: bytes | np.ndarray, flags: int) -> np.ndarray | None:
+    """The decode of :func:`imread_unicode`, on a file's bytes already read (``bytes`` or the
+    ``uint8`` array of ``np.fromfile``): the same ``cv2.imdecode`` with the same ``flags``, so
+    the same pixels. ``None`` for empty data or data that does not decode.
+
+    ``flags`` has no default: a grey reader must say ``cv2.IMREAD_GRAYSCALE``.
+    """
+    import cv2
+    import numpy as np
+
+    if len(data) == 0:  # not ``not data``: an array has no truth value
         return None
     try:
-        return cv2.imdecode(data, cv2.IMREAD_COLOR if flags is None else flags)
+        return cv2.imdecode(np.frombuffer(data, np.uint8), flags)
     except cv2.error:
         return None
 

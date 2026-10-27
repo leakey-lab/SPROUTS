@@ -100,3 +100,21 @@ def test_the_measured_length_is_unchanged(tmp_path):
         cv2.imwrite(path, image)
         before = metrics.root_length_mm(_pre_r6_preprocess_image(path))
         assert metrics.root_length_mm(metrics.preprocess_image(path)) == before
+
+
+@pytest.mark.parametrize("fill", [0, 77, 255])
+def test_an_image_without_foreground_is_not_thinned(tmp_path, monkeypatch, fill):
+    """No foreground after Otsu and the inversion: the empty skeleton comes back without
+    thinning, with the dtype, shape and layout thinning gives (most predictions are empty)."""
+    import skimage.morphology
+
+    def no_thinning(*_args, **_kwargs):
+        raise AssertionError("an image without foreground was thinned")
+
+    monkeypatch.setattr(skimage.morphology, "skeletonize", no_thinning)
+    path = str(tmp_path / f"empty_{fill}.png")
+    cv2.imencode(".png", np.full((256, 341), fill, np.uint8))[1].tofile(path)
+    skeleton = metrics.preprocess_image(path)
+    assert skeleton.dtype == np.uint8 and skeleton.shape == (256, 341)
+    assert skeleton.flags.c_contiguous and skeleton.flags.writeable and not skeleton.any()
+    assert metrics.root_length_mm(skeleton) == 0.0

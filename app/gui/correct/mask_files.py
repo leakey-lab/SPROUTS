@@ -19,8 +19,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from app.io_utils import file_stamp, imread_unicode
-from app.masks import MASK_THRESHOLD, MaskFileError, MaskStore
+from app.io_utils import file_stamp
+from app.masks import MaskFileError, MaskStore, read_mask_file
 from app.project_layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
@@ -165,15 +165,15 @@ def _read_prediction(
 
 
 def _read_gt(path: str, size: tuple[int, int]) -> tuple[np.ndarray | None, str]:
-    """``(plane at size, why not loaded)`` of the GT mask at ``path``: the grey decode
-    thresholded above :data:`~app.masks.MASK_THRESHOLD`, as ``MaskStore.read`` reads."""
-    grey = imread_unicode(path, cv2.IMREAD_GRAYSCALE)
-    if grey is None:
+    """``(plane at size, why not loaded)`` of the GT mask at ``path``, read as
+    ``MaskStore.read`` reads a prediction (:func:`~app.masks.read_mask_file`)."""
+    on = read_mask_file(path)
+    if on is None:
         logger.warning("Failed to load the GT mask %s", path)
         return None, "unreadable"
-    if _wrong_size(grey, size, path):
+    if _wrong_size(on, size, path):
         return None, "size"
-    return zero_one_plane(grey > MASK_THRESHOLD), ""
+    return zero_one_plane(on), ""
 
 
 def _wrong_size(on: np.ndarray, size: tuple[int, int], name: str) -> bool:

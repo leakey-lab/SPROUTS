@@ -705,7 +705,8 @@ def test_a_failed_provenance_write_removes_the_earlier_sidecar(gt_project, qapp,
     ids=["length", "area"],
 )
 def test_a_run_without_gt_inputs_records_the_prediction_rule(tmp_path, spec, words):
-    """The legacy shims measure predictions only: their provenance says so."""
+    """A run built without gt_files (scripts, tests) measures predictions only: its
+    provenance says so."""
     images = _make_dataset(tmp_path / "in", spec.kind)
     run = measure_run.MeasureRun(spec, images, str(tmp_path / "out"))
     run.compute()

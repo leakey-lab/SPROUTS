@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import os
 import shutil
 import sys
@@ -40,6 +39,7 @@ from app.design import tokens  # noqa: E402
 from app.inference import measure_inputs  # noqa: E402
 from app.inference.input_split import split_inputs  # noqa: E402
 from app.inference.measure_run import AREA, LENGTH, MeasureRun, scan_png_files  # noqa: E402
+from app.io_utils import sha256_file  # noqa: E402
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout  # noqa: E402
 
 EXAMPLES_DIR = os.path.join(REPO_ROOT, "docs", "examples")
@@ -60,11 +60,6 @@ FONT = "sans-serif"
 def input_files(stem: str) -> list[str]:
     """The three files of one example, relative to a project folder (``/`` separators)."""
     return [f"{stem}.jpg", f"mask/{stem}.png", f"skeletons/{stem}{SKELETON_SUFFIX}"]
-
-
-def sha256_of(path: str) -> str:
-    with open(path, "rb") as fh:
-        return hashlib.sha256(fh.read()).hexdigest()
 
 
 def copy_inputs(source: str, dest: str) -> list[str]:
@@ -224,7 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     dest = EXAMPLES_DIR
     if args.source:
         for relative in copy_inputs(args.source, dest):
-            digest = sha256_of(os.path.join(dest, *relative.split("/")))
+            digest = sha256_file(os.path.join(dest, *relative.split("/")))
             print(f"{digest}  {relative}")
     measure(dest)
     print(f"wrote {write_graph(dest)}")

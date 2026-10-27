@@ -434,3 +434,31 @@ def test_an_unreadable_image_folder_names_the_project_not_the_mask_folder(
     assert len(shown) == 1
     assert shown[0].splitlines()[1] == os.path.normpath(str(tmp_path))  # the project root
     assert mw.jobs.running_name() is None
+
+
+def test_the_status_lists_masks_and_gt_files_as_measure_lists_them(tmp_path):
+    """Measure Area lists ``*.png`` in any case and hidden names too (scan_png_files); the
+    status count used to skip hidden names, so a macOS ``._`` twin was measured but not
+    counted, and the count never read 'current' after a Measure run (C1-04)."""
+    for name in ("A.jpg", "._A.jpg"):  # the Library lists a hidden photo as an image
+        (tmp_path / name).write_bytes(b"x")
+    mask, gt = tmp_path / "mask", tmp_path / "gt" / "mask"
+    mask.mkdir()
+    gt.mkdir(parents=True)
+    for name in ("A.png", "._A.png", ".h.png", ".A.png.0123abcd.tmp"):
+        (mask / name).write_bytes(b"x")
+    (gt / "._A.png").write_bytes(b"x")
+    layout = ProjectLayout(str(tmp_path))
+    images = layout.scan_images()
+
+    listed, shadowed = measure_run.scan_png_files(layout.mask_dir)
+    split = split_inputs(listed, images, shadowed)
+    gt_listed, gt_shadowed = measure_run.scan_png_files(layout.gt_mask_dir)
+    gt_split = split_inputs(gt_listed, images, gt_shadowed)
+    fresh = input_freshness(
+        layout.mask_dir, ".png", None, images=images, gt_folder=layout.gt_mask_dir
+    )
+
+    assert sorted(split.kept) == ["._A", "A"] and split.without_image == [".h.png"]
+    assert sorted(gt_split.kept) == ["._A"]
+    assert fresh == Freshness(2, False, without_image=1, gt=1)

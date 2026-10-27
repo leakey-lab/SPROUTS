@@ -25,11 +25,11 @@ import pytest
 
 from app.data_processing.data_processor import DataProcessor
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel, vectorize_skeleton
-from app.inference.root_area_inference_handler import calculate_root_area
-from app.inference.root_length_inference_handler import (
+from app.inference.metrics import (
+    calculate_root_area,
     calculate_root_length,
+    length_row,
     parse_image_name,
-    process_single_image,
 )
 
 # --- Calibration (physical field of view). Metrics are now resolution-independent:
@@ -165,15 +165,15 @@ def test_undo_stack_is_bounded():
 # ---------------- CSV schema (length pipeline) ----------------
 
 
-def test_process_single_image_row_schema(tmp_path):
+def test_length_row_schema(tmp_path):
     import cv2
 
-    # process_single_image reads from disk; write a binary image it will threshold/skeletonize
+    # length_row reads from disk; write a binary image it will threshold/skeletonize
     img = np.zeros((20, 120), dtype=np.uint8)
     img[10, 0:40] = 255
     p = tmp_path / "x_T1_L2_2024.01.02_010203_fake.png"
     cv2.imwrite(str(p), img)
-    row = process_single_image(p.name, str(p))
+    row = length_row(p.name, str(p))
     assert set(row.keys()) >= {"Image", "Tube", "Position", "Date", "Time", "Length (mm)"}
     assert row["Tube"] == 1 and row["Position"] == 2
 

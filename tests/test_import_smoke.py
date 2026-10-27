@@ -19,8 +19,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 APP_MODULES = [
     "app.mask_model.model",
     "app.inference.skeleton_inference",
-    "app.inference.root_length_inference_handler",
-    "app.inference.root_area_inference_handler",
     "app.handlers.mask_generation_handler",
     "app.handlers.generate_skeleton_handler",
     "app.handlers.skeleton_handler",

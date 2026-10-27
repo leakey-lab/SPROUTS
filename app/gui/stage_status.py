@@ -2,11 +2,12 @@
 
 The Qt side of :mod:`app.gui.stage_summary`: :meth:`StageStatus.text` phrases the library
 state for the stage on screen, and :meth:`StageStatus.check` counts, in the thread pool,
-each metric's inputs and those changed since its CSV (one ``os.scandir`` per folder
-and one of the images,
-~60 ms at 46k files, never on the GUI thread; against the CSV's record of its inputs when
-there is one, R5); ``changed`` is emitted once that count is in. A newer check, or
-:meth:`StageStatus.reset` (another project), makes an older count void.
+each metric's inputs and those changed since its CSV (one ``os.scandir`` per folder and one
+of the images, about 0.5 s at 46k images, never on the GUI thread; against the CSV's record
+of its inputs when there is one, R5); ``changed`` is emitted once that count is in. One
+count runs at a time: a check asked for meanwhile runs when it ends, and only the newest
+count is shown (a count holds the GIL; two at once took longer and stalled the GUI more).
+:meth:`StageStatus.reset` (another project) makes a count on its way void.
 
 Generate's phrase walks every image name twice (~5 ms on the GUI thread at 46k images), and
 the status line asks for it on every idle refresh while Generate is on screen (V8). It is
@@ -44,7 +45,8 @@ class _Signals(QObject):
     """Carries a pool count back to the GUI thread (unparented and kept alive by the job's
     closure: a job that ends after its StageStatus is gone emits into nothing)."""
 
-    ready = pyqtSignal(object, object)  # (token, {"length": Freshness, "area": Freshness})
+    # (token, {"length": Freshness, "area": Freshness}, or None when the count failed)
+    ready = pyqtSignal(object, object)
 
 
 class StageStatus(QObject):
@@ -59,7 +61,8 @@ class StageStatus(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._freshness: dict[str, Freshness] | None = None
-        self._token: object | None = None
+        self._token: object | None = None  # the count in the pool, None when none runs
+        self._again: tuple | None = None  # the newest check asked for while it runs
         # Generate's phrase and what it was counted from: (images, masks, skeletons,
         # their sizes, text). The collections themselves are held, so none of them can be
         # freed and a new one take its id while the phrase is kept.
@@ -117,8 +120,8 @@ class StageStatus(QObject):
         return text
 
     def reset(self) -> None:
-        """Forget the counts (another project): an older count still on its way is void."""
-        self._freshness = self._token = self._generate = None
+        """Forget the counts (another project): a count still on its way is void."""
+        self._freshness = self._token = self._again = self._generate = None
 
     def check(self, index, layout, *, locate: bool = True) -> None:
         """Count each metric's inputs, and those changed since its CSV, in the thread pool.
@@ -131,6 +134,9 @@ class StageStatus(QObject):
         (``<csv>.inputs.json``) is read in the pool too; with one, content is compared.
         Each CSV's provenance is compared with the project's field of view there as well
         (``Freshness.method_note``, O3).
+
+        While a count runs, the check is kept (the newest only, with the CSVs and folders
+        found now) and counted when that one ends.
         """
         if index is None or layout is None:
             return
@@ -143,6 +149,15 @@ class StageStatus(QObject):
             area_dir = os.path.dirname(area_csv)
         else:
             area_dir = layout.resolve_masks_dir() or layout.mask_dir
+        job = (layout, length_csv, area_csv, length_dir, area_dir)
+        if self._token is not None:
+            self._again = job
+            return
+        self._start(job)
+
+    def _start(self, job: tuple) -> None:
+        """Count ``job`` (:meth:`check`'s CSVs and folders) in the thread pool."""
+        layout, length_csv, area_csv, length_dir, area_dir = job
         token = self._token = object()
         signals = self._signals
         root = layout.root
@@ -164,6 +179,7 @@ class StageStatus(QObject):
             return replace(counted, method_note=note) if note else counted
 
         def work() -> None:
+            result = None
             try:
                 images = layout.scan_images()  # inputs whose image is gone are skipped (O37)
                 current = load_project_calibration(root)  # O3: the project's field of view
@@ -181,9 +197,9 @@ class StageStatus(QObject):
                         "area", area_dir, ".png", area_csv, images, layout.gt_mask_dir, current
                     ),
                 }
-            except Exception:  # noqa: BLE001 - the idle text then keeps the plain counts
+            except BaseException:  # noqa: BLE001 - SystemExit too: it must report back
+                # the idle text keeps its counts; unreported, no count would run again
                 logger.exception("Could not count the Measure inputs")
-                return
             try:
                 signals.ready.emit(token, result)
             except RuntimeError:
@@ -193,6 +209,11 @@ class StageStatus(QObject):
 
     def _on_ready(self, token, result) -> None:
         if token is not self._token:
-            return  # an older count (another project, or a newer count is on its way)
-        self._freshness = result
-        self.changed.emit()
+            return  # a count made void by reset() (another project)
+        self._token = None
+        again, self._again = self._again, None
+        if again is not None:
+            self._start(again)  # a newer check was asked for: its count is the one shown
+        elif result is not None:
+            self._freshness = result
+            self.changed.emit()

@@ -69,7 +69,13 @@ def test_neutral_modules_do_not_import_gui_or_handlers(module: str) -> None:
     assert _upward(_app_imports(ROOT / "app" / module)) == []
 
 
-REMOVED_MODULES = ("app.handlers.worker_base", "app.gui.feedback", "app.handlers.window_feedback")
+REMOVED_MODULES = (
+    "app.handlers.worker_base",
+    "app.gui.feedback",
+    "app.handlers.window_feedback",
+    "app.inference.root_length_inference_handler",
+    "app.inference.root_area_inference_handler",
+)
 STAMP_HELPERS = frozenset({"_stamp", "_file_stamp", "file_stamp", "_same_file", "same_file"})
 
 

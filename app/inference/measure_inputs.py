@@ -13,20 +13,22 @@ and a repainted mask with an older time is changed. A record whose ``csv_sha256`
 the CSV on disk describes another CSV and is ignored (the caller falls back to file times).
 
 Hashes are kept for the session by ``(absolute path, size, mtime_ns)``: an unchanged file
-is hashed at most once. Never imports Qt or torch.
+is hashed at most once. A parsed record is shared while its CSV and record files keep their
+size and time (:func:`load_inputs_record`). Never imports Qt or torch.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import threading
-from collections.abc import Callable, Mapping
+import weakref
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
-from app.io_utils import atomic_write_text
+from app.io_utils import atomic_write_text, sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +40,12 @@ __all__ = [
     "Stamp",
     "content_sha256",
     "diff_inputs",
+    "file_key",
     "input_key",
     "inputs_record_path",
     "is_unchanged",
+    "key_prefix",
+    "keys_and_folders",
     "load_inputs_record",
     "remember_sha256",
     "scan_stamps",
@@ -57,6 +62,16 @@ Stamp = tuple[str, int, int]
 _CACHE_LIMIT = 1 << 18  # entries; ~46k inputs per metric in a large project
 _sha256_cache: dict[tuple[str, int, int], str] = {}
 _cache_lock = threading.Lock()
+
+_RECORDS_LIMIT = 64  # CSV paths
+#: normcase(abspath(csv)) -> (((CSV size, mtime_ns), (record size, mtime_ns)), a weak
+#: reference to the parsed record, or None when the record did not load).
+_records: dict[str, tuple[tuple[tuple[int, int], tuple[int, int]], weakref.ref | None]] = {}
+_records_lock = threading.Lock()
+
+#: Windows drops trailing dots and spaces from the last name of a path (GetFullPathNameW),
+#: so a folder or file name ending in one is keyed by :func:`input_key` itself.
+_TRAILING = (" ", ".")
 
 
 def inputs_record_path(csv_path: str) -> str:
@@ -76,13 +91,69 @@ def input_key(path: str, project_root: str) -> str:
     return rel.replace(os.sep, "/")
 
 
+def key_prefix(folder: str, project_root: str) -> str | None:
+    """What :func:`input_key` puts before the name of a file directly in ``folder``: ``""``
+    in the project folder, else the folder's key and ``/`` (``"mask/"``). One relpath per
+    folder instead of one per file (~10-30 us each on Windows).
+
+    ``None`` for a folder above the project folder: a file there can be named like the
+    next folder of the project's path, which changes its key, so each is keyed alone."""
+    key = input_key(folder, project_root)
+    if key == ".":
+        return ""
+    if set(key.split("/")) == {os.pardir}:
+        return None
+    # a drive or share root on another drive keeps its absolute key, which ends in "/"
+    return key if key.endswith("/") else key + "/"
+
+
+def _plain(head: str, name: str) -> bool:
+    """True when the path ``head``/``name`` (``os.path.split``) is ``name`` in the absolute
+    folder of ``head``: not when Windows path rules rewrite it (a name or a folder ending in
+    a dot or a space, a name ``.`` or ``..``)."""
+    return name not in ("", ".", "..") and name[-1] not in _TRAILING and head[-1:] not in _TRAILING
+
+
+def file_key(path: str, project_root: str, prefixes: dict[str, str | None]) -> str:
+    """``input_key(path, project_root)`` of the file ``path``, from the :func:`key_prefix`
+    of its folder, looked up in (or added to) ``prefixes`` (folder -> prefix).
+
+    A caller keeps ``prefixes`` for one batch of paths (a relative path's key follows the
+    working folder). Any thread: a race computes one prefix twice."""
+    head, name = os.path.split(path)
+    if not _plain(head, name):
+        return input_key(path, project_root)
+    try:
+        prefix = prefixes[head]
+    except KeyError:
+        prefix = prefixes[head] = key_prefix(head, project_root)
+    return input_key(path, project_root) if prefix is None else prefix + name
+
+
+def keys_and_folders(paths: Iterable[str], project_root: str) -> tuple[dict[str, str], set[str]]:
+    """``{path: input_key(path, project_root)}`` and the folders of the file ``paths``
+    (``os.path.dirname(os.path.abspath(path))`` of each), one relpath and one abspath per
+    folder rather than per file."""
+    keys: dict[str, str] = {}
+    folders: set[str] = set()
+    known: dict[str, tuple[str | None, str]] = {}  # folder -> (key prefix, absolute folder)
+    for path in paths:
+        head, name = os.path.split(path)
+        if _plain(head, name):
+            held = known.get(head)
+            if held is None:
+                held = known[head] = (key_prefix(head, project_root), os.path.abspath(head))
+                folders.add(held[1])
+            if held[0] is not None:
+                keys[path] = held[0] + name
+                continue
+        keys[path] = input_key(path, project_root)
+        folders.add(os.path.dirname(os.path.abspath(path)))
+    return keys, folders
+
+
 # ------------------------------------------------------------------ hashing
-def _hash_file(path: str) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+_hash_file = sha256_file  # looked up at call time (tests count the files hashed)
 
 
 def remember_sha256(path: str, size: int, mtime_ns: int, sha256: str) -> None:
@@ -141,6 +212,8 @@ def write_inputs_record(csv_path: str, inputs: Mapping[str, Fingerprint]) -> str
     }
     path = inputs_record_path(csv_path)
     atomic_write_text(path, json.dumps(record, sort_keys=True) + "\n")
+    with _records_lock:  # a rewrite within one tick of a coarse file clock keeps the stamps
+        _records.pop(_record_cache_key(csv_path), None)
     return path
 
 
@@ -158,28 +231,75 @@ def _fingerprint(value: object) -> Fingerprint | None:
     return size, mtime_ns, sha256
 
 
+def _record_cache_key(csv_path: str) -> str:
+    return os.path.normcase(os.path.abspath(csv_path))
+
+
+def _size_and_time(path: str) -> tuple[int, int]:
+    st = os.stat(path)
+    return st.st_size, st.st_mtime_ns
+
+
 def load_inputs_record(csv_path: str) -> InputsRecord | None:
     """The record of ``csv_path``'s inputs, or ``None`` when it is missing, unreadable,
-    malformed, or written for another CSV (its ``csv_sha256`` is not the CSV on disk)."""
+    malformed, or written for another CSV (its ``csv_sha256`` is not the CSV on disk).
+
+    One parse is shared while the CSV and the record keep their size and time, and while a
+    caller still holds it (a weak reference: the metrics bar's index keeps the record of
+    each loaded CSV), so the Measure status count and :meth:`MeasureRun.unchanged` reuse
+    it (a 46k-entry record is ~7.6 MB of JSON; parsing it holds the GIL ~50-90 ms). The
+    record is read-only. Nothing is kept without both files, nor when one of them could not
+    be read (a sharing violation, a file not downloaded yet): the next call reads again."""
+    try:
+        stamps = (_size_and_time(csv_path), _size_and_time(inputs_record_path(csv_path)))
+    except OSError:
+        return _read_inputs_record(csv_path)[0]
+    key = _record_cache_key(csv_path)
+    with _records_lock:
+        held = _records.get(key)
+    if held is not None and held[0] == stamps:
+        if held[1] is None:
+            return None
+        record = held[1]()
+        if record is not None:
+            return record
+    record, keep = _read_inputs_record(csv_path)
+    if keep:
+        with _records_lock:
+            if len(_records) >= _RECORDS_LIMIT and key not in _records:
+                _records.clear()
+            _records[key] = (stamps, None if record is None else weakref.ref(record))
+    return record
+
+
+def _read_inputs_record(csv_path: str) -> tuple[InputsRecord | None, bool]:
+    """:func:`load_inputs_record` without the shared parse, and whether that answer holds
+    while both files keep their size and time (False: the record or the CSV could not be
+    read, which may work next time)."""
     try:
         with open(inputs_record_path(csv_path), encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError, RecursionError):
-        return None
+    except OSError:
+        return None, False
+    except (ValueError, RecursionError):
+        return None, True
     if not isinstance(data, dict):
-        return None
+        return None, True
     csv_hash, raw = data.get("csv_sha256"), data.get("inputs")
     if not isinstance(csv_hash, str) or not isinstance(raw, dict):
-        return None
+        return None, True
     inputs: dict[str, Fingerprint] = {}
     for key, value in raw.items():
         fingerprint = _fingerprint(value)
         if fingerprint is None:
-            return None
+            return None, True
         inputs[key] = fingerprint
-    if _csv_sha256(csv_path) != csv_hash:
-        return None
-    return InputsRecord(inputs=inputs)
+    on_disk = _csv_sha256(csv_path)
+    if on_disk is None:
+        return None, False
+    if on_disk != csv_hash:
+        return None, True
+    return InputsRecord(inputs=MappingProxyType(inputs)), True
 
 
 # ------------------------------------------------------------------ comparing
@@ -188,25 +308,27 @@ def scan_stamps(
     suffix: str,
     project_root: str,
     *,
-    keep: Callable[[str], bool] | None = None,
+    stem_of: Callable[[str], str | None] | None = None,
 ) -> dict[str, Stamp]:
     """``input key -> (absolute path, size, mtime_ns)`` of the ``*suffix`` files of ``folder``.
 
     One ``os.scandir`` (the entry's stat, free on Windows). Hidden files (the
-    ``.<name>.tmp`` of a write in progress) are not inputs; ``suffix`` matches regardless
-    of case; ``keep(stem)`` (the name without ``suffix``) filters. Never raises: an
-    unreadable folder has no files.
+    ``.<name>.tmp`` of a write in progress) are not inputs and ``suffix`` matches
+    regardless of case, unless ``stem_of`` (a name's stem, ``None``: not an input, e.g.
+    :func:`~app.inference.input_split.png_stem`) decides instead, as Measure's own
+    listing does. Never raises: an unreadable folder has no files.
     """
     stamps: dict[str, Stamp] = {}
-    cut = len(suffix)
     folder = os.path.abspath(folder)
     try:
         with os.scandir(folder) as entries:
+            prefix = key_prefix(folder, project_root)  # the keys' folder part, once
             for entry in entries:
                 name = entry.name
-                if name.startswith(".") or not name.lower().endswith(suffix):
-                    continue
-                if keep is not None and not keep(name[: len(name) - cut]):
+                if stem_of is not None:
+                    if stem_of(name) is None:
+                        continue
+                elif name.startswith(".") or not name.lower().endswith(suffix):
                     continue
                 try:
                     if not entry.is_file():
@@ -214,8 +336,12 @@ def scan_stamps(
                     st = entry.stat()
                 except OSError:
                     continue
-                path = os.path.join(folder, name)
-                stamps[input_key(path, project_root)] = (path, st.st_size, st.st_mtime_ns)
+                path = entry.path  # os.path.join(folder, name)
+                if prefix is None or name[-1] in _TRAILING:
+                    key = input_key(path, project_root)
+                else:
+                    key = prefix + name
+                stamps[key] = (path, st.st_size, st.st_mtime_ns)
     except OSError:
         pass
     return stamps
