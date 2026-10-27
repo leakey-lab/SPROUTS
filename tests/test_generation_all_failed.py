@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 from app import config
 from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
+from app.handlers import generation_base
 from app.handlers import mask_generation_handler as mgh
 from app.handlers.generation_base import show_failure_report
 from app.inference import runtime
@@ -91,8 +92,7 @@ def project(tmp_path, qapp, monkeypatch):
         dialogs.append(("report", a))
         report_kwargs.append(k)
 
-    monkeypatch.setattr(mgh, "show_failure_report", report)
-    monkeypatch.setattr(gsh, "show_failure_report", report)
+    monkeypatch.setattr(generation_base, "show_failure_report", report)  # both handlers' reports
     monkeypatch.setattr(
         mgh, "ask_overwrite_policy", lambda *a, **k: pytest.fail("unexpected overwrite prompt")
     )

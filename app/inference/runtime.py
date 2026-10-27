@@ -20,7 +20,8 @@ Design rules (all enforced here so the two paths can never drift):
     throughput and picked different algorithms per session (masks differed by up
     to 5 px between sessions). Set ``SPROUTS_CUDNN_BENCHMARK=1`` to opt in for a
     GPU/model where autotuning measurably helps; the choice is recorded.
-  * channels_last and pin_memory are CUDA-only.
+  * channels_last and pin_memory are CUDA-only; so is one torch thread for the
+    decode / prefetch / save threads of a batch run (``batch_torch_threads``).
   * torch is imported lazily: importing this module (e.g. for the status line's
     ``describe_runtime()``) never loads torch or creates a CUDA context.
 
@@ -247,6 +248,17 @@ class RuntimeConfig:
     @property
     def is_cuda(self) -> bool:
         return self.device.type == "cuda"
+
+    @property
+    def batch_torch_threads(self) -> int | None:
+        """torch intra-op threads while a batch run lasts (``run_batches``' ``torch_threads``).
+
+        1 on CUDA: every decode, prefetch and save thread would otherwise start its own
+        OpenMP team of all the cores for its small tensor ops, and the busy teams keep
+        the next batch late and the GPU waiting. None (unchanged) on the CPU, where the
+        forward on the job thread needs the whole team. Outputs are the same either way.
+        """
+        return 1 if self.is_cuda else None
 
 
 # ---------------------------------------------------------------------------

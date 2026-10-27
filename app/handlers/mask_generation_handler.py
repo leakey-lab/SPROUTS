@@ -30,45 +30,29 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from app.feedback import UiFeedback
 from app.handlers.deps import SAVED_PATH_STATUS_MS, folder_label
-from app.handlers.generation_base import (
-    GenerationHandlerBase,
-    every_input_failed,
-    show_failure_report,
-)
+from app.handlers.generation_base import GenerationHandlerBase, GenerationThread, thread_slot
 from app.handlers.job_registry import JobRegistry
 from app.inference import runtime
-from app.inference.batch_pipeline import progress_percent
 from app.inference.mask_origin import OverwritePolicy, scan_existing_masks
 from app.project_layout import ProjectLayout
-from app.workers import GuardedThread, JobCancelled
 
 logger = logging.getLogger(__name__)
 
 ConfirmOverwrite = Callable[[int, int], "OverwritePolicy | None"]
 
 
-class MaskGenerationThread(GuardedThread):
+class MaskGenerationThread(GenerationThread):
     """Runs ``mask_inference.generate_masks`` off the GUI thread.
 
-    Signals (``progress``, ``finished`` and ``error`` keep their legacy payloads):
-        progress(int): percent done.
-        progress_counts(int, int): (done, total) inputs.
+    Signals besides :class:`GenerationThread`'s (``finished`` keeps its legacy payload):
         stage(str): "Loading mask model" / "Generating masks".
         finished(str, list): output folder and the names of failed inputs
             (emitted when the run ended without Cancel or an error, also when
             every input failed; see ``completed``).
-        error(str): user-facing message when the run failed (mirrors ``failed``).
-    ``report`` holds the ``BatchReport`` once the run ended (completed or cancelled);
-    ``completed`` turns True only when the run finished without cancel or error and
-    did not fail on every input it attempted (R6: such a run is a failure, so
-    nothing chains on it).
     """
 
-    progress = pyqtSignal(int)
-    progress_counts = pyqtSignal(int, int)
     stage = pyqtSignal(str)
     finished = pyqtSignal(str, list)
-    error = pyqtSignal(str)
 
     def __init__(
         self,
@@ -79,41 +63,26 @@ class MaskGenerationThread(GuardedThread):
         skip_stems: frozenset[str] = frozenset(),
         policy: str | None = None,
     ) -> None:
-        super().__init__()
-        self.input_dir = input_dir
-        self.output_dir = output_dir
+        super().__init__(input_dir, output_dir)
         self.model = model
         self.skip_stems = frozenset(skip_stems)
         self.policy = policy
-        self.report = None
-        self.completed = False
-        self.failed.connect(self.error)
 
     def work(self) -> None:
         from app.inference import mask_inference  # torch/torchvision load here, off the GUI
 
-        self.report = mask_inference.generate_masks(
+        report = mask_inference.generate_masks(
             self.input_dir,
             self.output_dir,
             skip_stems=self.skip_stems,
             model=self.model,
             policy=self.policy,
-            progress=self._report_progress,
+            progress=self.progress_counts.emit,
             should_stop=self.is_cancelled,
             on_stage=self.stage.emit,
         )
-        # A Cancel during the last batch leaves report.cancelled False (every
-        # image was done); it is still a cancel, so nothing chains (wf2 R1).
-        if self.report.cancelled or self.is_cancelled():
-            raise JobCancelled
-        # When every input failed (e.g. out of memory even on single images) nothing
-        # was written: ``finished`` still reports it, but nothing chains (R6).
-        self.completed = not every_input_failed(self.report)
-        self.finished.emit(self.output_dir, self.report.failed_names)
-
-    def _report_progress(self, done: int, total: int) -> None:
-        self.progress.emit(progress_percent(done, total))
-        self.progress_counts.emit(done, total)
+        self._conclude(report)  # raises JobCancelled after a Cancel
+        self.finished.emit(self.output_dir, report.failed_names)
 
 
 @contextmanager
@@ -177,6 +146,8 @@ class MaskGenerationHandler(GenerationHandlerBase):
     """
 
     job_label = "Generating masks"
+    title = "Mask generation"
+    noun = "masks"
 
     def __init__(
         self,
@@ -253,11 +224,11 @@ class MaskGenerationHandler(GenerationHandlerBase):
             skip_stems=policy.skip_stems(existing),
             policy=policy.value,
         )
-        thread.stage.connect(partial(self._on_stage, thread))
+        thread.stage.connect(thread_slot(self._on_stage, thread))
         thread.progress_counts.connect(self.feedback.task_progress)
-        thread.finished.connect(partial(self._on_finished, thread))
-        thread.failed.connect(partial(self._on_failed, thread))
-        thread.cancelled.connect(partial(self._on_cancelled, thread))
+        thread.finished.connect(thread_slot(self._on_finished, thread))
+        thread.failed.connect(thread_slot(self._on_failed, thread))
+        thread.cancelled.connect(thread_slot(self._on_cancelled, thread))
         self._started = thread
         if not self._start(thread, on_success):
             self._started = None
@@ -270,18 +241,7 @@ class MaskGenerationHandler(GenerationHandlerBase):
 
     def _on_finished(self, thread: MaskGenerationThread, output_dir: str, _failed: list) -> None:
         report = thread.report
-        if every_input_failed(report):  # a failure, not "Generated 0 masks" (R6)
-            failed = len(report.failed)
-            message = f"Mask generation failed: none of {failed:,} images could be processed"
-            logger.error(message)
-            self.feedback.task_failed(message)
-            self._report_box = show_failure_report(
-                self.parent_widget(),
-                "Mask generation",
-                output_dir,
-                report.failed,
-                nothing_written=True,
-            )
+        if self._ended_with_no_output(report, output_dir):  # not "Generated 0 masks" (R6)
             self.outputs_changed()
             return
         written, kept = len(report.written), len(report.skipped)
@@ -290,10 +250,7 @@ class MaskGenerationHandler(GenerationHandlerBase):
             message += f", kept {kept:,} existing predictions"
         self.feedback.task_finished(message)
         if report.failed:
-            self.feedback.notify(f"{len(report.failed):,} images could not be processed", "warn")
-            self._report_box = show_failure_report(
-                self.parent_widget(), "Mask generation", output_dir, report.failed
-            )
+            self._report_failures(output_dir, report.failed)
         else:
             # (W13) The folder's name in the toast, its full path in the status line.
             self.feedback.status(f"Saved to {output_dir}", SAVED_PATH_STATUS_MS)
@@ -305,13 +262,6 @@ class MaskGenerationHandler(GenerationHandlerBase):
         logger.error("Mask generation failed: %s", message)
         self.feedback.task_failed("Mask generation failed")
         QMessageBox.critical(self.parent_widget(), "Mask generation failed", message)
-        self.outputs_changed()
-
-    def _on_cancelled(self, thread: MaskGenerationThread) -> None:
-        report = thread.report
-        done = f" after {report.done:,} of {report.total:,} images" if report else ""
-        self.feedback.task_finished(f"Mask generation cancelled{done}")
-        self.feedback.notify(f"Mask generation cancelled{done}; finished masks were kept", "info")
         self.outputs_changed()
 
 

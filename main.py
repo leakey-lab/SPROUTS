@@ -3,13 +3,21 @@
 Start it with ``python main.py`` from any folder, or with the ``sprouts`` script
 that ``pip install .`` creates (``sprouts = "main:main"``).
 
-Import order matters: the Qt/Chromium environment flags must be set before Qt
-loads, logging before any other app module, and QtWebEngine before the
-QApplication is created.
+Import order matters: the OpenMP and Qt/Chromium environment flags must be set
+before torch and Qt load, logging before any other app module, and QtWebEngine
+before the QApplication is created.
 """
 
 import os
 import sys
+
+# Before anything imports torch (P3-01): idle workers of torch's OpenMP teams sleep at
+# once instead of spinning 200 ms after every parallel op. Every decode and prefetch
+# thread of a Generate run leads its own team, so on the CPU those spinning teams slowed
+# the forward. Intel OpenMP (Windows) and LLVM OpenMP (macOS) read it; GNU OpenMP
+# (Linux) ignores it and spins only briefly anyway. Outputs are unchanged; a value the
+# user set wins.
+os.environ.setdefault("KMP_BLOCKTIME", "0")
 
 # Qt / Chromium start-up flags per OS (D3D11 / ANGLE on Windows only); see
 # app/qt_environment.py. Qt reads them once, when it loads.

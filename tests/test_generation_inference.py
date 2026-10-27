@@ -5,6 +5,9 @@ PI-06: outputs byte-identical to the legacy serial loops.
 RB-01 / PI-04: skip_stems leaves existing masks untouched and never runs the model on them.
 FR-02 / PI-09: every run writes a provenance manifest next to its outputs.
 PI-13: the CUDA cache is released once per job.
+S12-01: only a GPU run limits the torch threads of its pool threads.
+S12-03: the real skeleton wrapper loads the checkpoint at ``runtime.skeleton_weights_path()``.
+C6-02: a run with failures ends with one bounded log line.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 
 import numpy as np
@@ -222,3 +226,86 @@ def test_run_inference_keeps_its_contract(tmp_path, cpu_runtime, monkeypatch):
     assert result == out
     assert sorted(_read_all(out)) == ["a_fake.png", "b_fake.png"]
     assert ticks[-1] == (2, 2)
+
+
+def _run(kind, src, out, model, **kwargs):
+    if kind == "mask":
+        return mask_inference.generate_masks(src, out, model=model, **kwargs)
+    return si.run_skeleton_generation(src, out, model=model, **kwargs)
+
+
+def _model(kind):
+    return _StubMaskModel().eval() if kind == "mask" else _StubSkeletonModel()
+
+
+@pytest.mark.parametrize("kind", ["mask", "skeleton"])
+@pytest.mark.parametrize(("device_type", "threads"), [("cpu", None), ("cuda", 1)])
+def test_a_run_passes_the_runtimes_torch_threads(tmp_path, monkeypatch, kind, device_type, threads):
+    rt = runtime.RuntimeConfig(
+        device=torch.device(device_type),
+        use_channels_last=False,
+        pin_memory=False,
+        io_threads=2,
+        cudnn_benchmark=False,
+        cudnn_deterministic=True,
+        precision="fp32",
+    )
+    monkeypatch.setattr(runtime, "get_runtime", lambda: rt)
+    seen = []
+
+    def fake_run_batches(paths, spec, **kwargs):
+        seen.append(kwargs["torch_threads"])
+        return kwargs["report"]
+
+    monkeypatch.setattr(mask_inference if kind == "mask" else si, "run_batches", fake_run_batches)
+    src = _images(str(tmp_path / "imgs"), ["a.jpg"])
+    _run(kind, src, str(tmp_path / "out"), _model(kind), batch_size=1, batch_policy="auto")
+    assert seen == [threads]
+
+
+@pytest.mark.parametrize(("kind", "label"), [("mask", "Mask"), ("skeleton", "Skeleton")])
+def test_a_run_with_failures_ends_with_one_bounded_line(tmp_path, cpu_runtime, caplog, kind, label):
+    bad = [f"bad{i:02d}.jpg" for i in range(8)]
+    src = _images(str(tmp_path / "imgs"), bad + ["good.jpg"], corrupt=set(bad))
+    out = str(tmp_path / "imgs" / "out")
+    with caplog.at_level(logging.WARNING):
+        report = _run(kind, src, out, _model(kind), batch_size=2)
+    assert report.failed_names == bad
+    [line] = [r.getMessage() for r in caplog.records if "input(s) failed" in r.getMessage()]
+    assert line.startswith(f"{label} generation: 8 input(s) failed: bad00.jpg: ")
+    assert "bad04.jpg" in line and "bad05.jpg" not in line and "; and 3 more; " in line
+    assert line.endswith(f"every one is listed in {provenance.run_manifest_path(out)}")
+
+
+def test_the_skeleton_model_loads_its_checkpoint_from_the_runtime_path(tmp_path, monkeypatch):
+    torch.manual_seed(0)
+    net = si.EnhancedResnetGenerator(
+        si.INPUT_NC,
+        si.OUTPUT_NC,
+        si.NGF,
+        norm_layer=si.get_norm_layer(norm_type=si.NORM),
+        use_dropout=si.USE_DROPOUT,
+        n_blocks=9,
+    )
+    saved = {key: value.clone() for key, value in net.state_dict().items()}
+    path = tmp_path / "latest_net_G.pth"
+    torch.save(net.state_dict(), path)
+    monkeypatch.setattr(runtime, "skeleton_weights_path", lambda: str(path))
+
+    model = si.SkeletonModel(gpu_ids=[])
+
+    loaded = model.netG.state_dict()
+    assert model.device == torch.device("cpu") and not model.netG.training
+    assert loaded.keys() == saved.keys()
+    assert all(torch.equal(loaded[key], saved[key]) for key in saved)
+    assert not any(t.is_meta for t in [*model.netG.parameters(), *model.netG.buffers()])
+    assert model.run_batch(torch.zeros(1, 3, 64, 64)).shape == (1, 3, 64, 64)
+
+
+def test_a_missing_skeleton_checkpoint_names_its_path(tmp_path, monkeypatch):
+    missing = str(tmp_path / "nope_net_G.pth")
+    monkeypatch.setattr(runtime, "skeleton_weights_path", lambda: missing)
+    with pytest.raises(
+        RuntimeError, match="Failed to load skeleton model weights from .*nope_net_G"
+    ):
+        si.SkeletonModel(gpu_ids=[])

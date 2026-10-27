@@ -2,7 +2,7 @@
 
 Windows pins the D3D11 RHI and the D3D11 ANGLE backend; Linux and macOS take Qt's
 own defaults (OpenGL and Metal), because a D3D11 backend there leaves the
-dashboards black.
+dashboards black. ``main`` also lets torch's idle OpenMP workers sleep (P3-01).
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from app import qt_environment as qe
 
@@ -72,18 +74,21 @@ def test_the_module_is_qt_free():
     assert "PyQt6" not in src and "torch" not in src
 
 
-def test_importing_main_sets_d3d11_only_on_windows(tmp_path):
+@pytest.fixture(scope="module")
+def env_after_importing_main(tmp_path_factory):
+    """``[QSG_RHI_BACKEND, KMP_BLOCKTIME]`` after ``import main`` in a fresh process."""
+    tmp_path = tmp_path_factory.mktemp("import_main")
     env = dict(
         os.environ,
         QT_QPA_PLATFORM="offscreen",
         PYTHONDONTWRITEBYTECODE="1",
         SPROUTS_LOG_DIR=str(tmp_path),
     )
-    env.pop("QSG_RHI_BACKEND", None)
-    env.pop("QTWEBENGINE_CHROMIUM_FLAGS", None)
+    for name in ("QSG_RHI_BACKEND", "QTWEBENGINE_CHROMIUM_FLAGS", "KMP_BLOCKTIME"):
+        env.pop(name, None)
     code = (
-        "import sys; sys.path.insert(0, sys.argv[1]); "
-        "import main, os; print(os.environ.get('QSG_RHI_BACKEND'))"
+        "import sys; sys.path.insert(0, sys.argv[1]); import main, os; "
+        "print(os.environ.get('QSG_RHI_BACKEND'), os.environ.get('KMP_BLOCKTIME'))"
     )
     proc = subprocess.run(
         [sys.executable, "-c", code, str(REPO_ROOT)],
@@ -94,5 +99,15 @@ def test_importing_main_sets_d3d11_only_on_windows(tmp_path):
         timeout=180,
     )
     assert proc.returncode == 0, proc.stderr
-    out = proc.stdout.strip().splitlines()[-1]
-    assert out == ("d3d11" if sys.platform == "win32" else "None")
+    return proc.stdout.strip().splitlines()[-1].split()
+
+
+def test_importing_main_sets_d3d11_only_on_windows(env_after_importing_main):
+    assert env_after_importing_main[0] == ("d3d11" if sys.platform == "win32" else "None")
+
+
+def test_importing_main_lets_idle_openmp_workers_sleep(env_after_importing_main):
+    """KMP_BLOCKTIME=0 unless the user set one, before anything can import torch (P3-01)."""
+    assert env_after_importing_main[1] == "0"
+    source = (REPO_ROOT / "main.py").read_text(encoding="utf-8")
+    assert source.index('os.environ.setdefault("KMP_BLOCKTIME", "0")') < source.index("from app")

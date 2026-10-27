@@ -25,25 +25,32 @@ One loop for both models, so their failure, memory and cancel policies cannot dr
   never saved. CUDA out-of-memory stops the run (``FixedBatchOutOfMemory``): no
   halving and no retry, because a retry can succeed on another cuDNN kernel and
   change outputs without an error (``research/o4-gpu-batch.md``, Exp 1c).
+* S12-01 -- ``run_batches(..., torch_threads=1)`` (GPU runs): the decode, prefetch and
+  save threads each run their small tensor ops on one torch thread instead of each
+  starting an OpenMP team of all the cores; the caller's count is back afterwards.
+* C6-02 -- per-input failures are logged for the first ``FAILURE_LOG_LIMIT`` inputs
+  of a kind, then counted; the report keeps every one.
 
 torch is imported lazily (only a running job needs it).
 """
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import logging
 import math
 import os
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.inference.batch_pipeline import (
     AsyncWriter,
+    LogLimiter,
     PrefetchIterator,
     default_io_threads,
     progress_percent,
@@ -52,6 +59,8 @@ from app.inference.batch_pipeline import (
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[int, int], None]
+
+_FAILED_SHOWN = 5  # (C6-02) failures named in a run's end-of-run log line
 
 
 @dataclass
@@ -121,6 +130,30 @@ class BatchReport:
             "failed": [{"input": name, "reason": reason} for name, reason in self.failed],
             "skipped": sorted(self.skipped),
         }
+
+
+def log_failed_inputs(
+    log: logging.Logger, label: str, report: BatchReport, manifest: str | None
+) -> None:
+    """One bounded warning for the inputs of a finished run that got no output (C6-02).
+
+    It names the first few with their reasons and counts the rest. ``manifest``, the run
+    record that lists every one, is named only when it was written. Nothing is logged
+    for a run without failures.
+    """
+    if not report.failed:
+        return
+    shown = "; ".join(f"{name}: {reason}" for name, reason in report.failed[:_FAILED_SHOWN])
+    more = len(report.failed) - _FAILED_SHOWN
+    log.warning(
+        "%s: %d input(s) failed: %s%s%s",
+        label,
+        len(report.failed),
+        shown,
+        f"; and {more} more" if more > 0 else "",
+        f"; every one is listed in {manifest}" if manifest else "",
+        stacklevel=2,
+    )
 
 
 @dataclass(frozen=True)
@@ -239,6 +272,8 @@ class OomBackoff:
         self.events: list[tuple[int, int, int]] = []  # (R1) (start index, from, to) per backoff
         self._is_oom = is_oom
         self._on_oom = on_oom
+        # (C6-02) A GPU too small for one image fails every image alone.
+        self.single_failures = LogLimiter(logger, "single images out of GPU memory")
 
     def run(self, step: Callable[[Any], Any], batch: Any) -> list[tuple[slice, Any]]:
         """``[(slice, result_or_exception), ...]`` covering ``batch`` in order.
@@ -274,7 +309,9 @@ class OomBackoff:
         # a retry inside it would run out of memory again at every size.
         self._on_oom()
         if stop - start == 1:
-            logger.error("Out of memory on a single image (index %d): %s", start, reason)
+            self.single_failures.log(
+                logging.ERROR, "Out of memory on a single image (index %d): %s", start, reason
+            )
             return [(slice(start, stop), ItemOutOfMemory(reason))]
         self._oom_len = min(self._oom_len, stop - start)  # (R5)
         self.events.append((start, stop - start, (stop - start + 1) // 2))
@@ -349,6 +386,28 @@ class _Progress:
                 self._callback_failed = True
 
 
+@contextlib.contextmanager
+def _torch_threads(n: int | None) -> Iterator[None]:
+    """torch's intra-op thread count at ``n`` inside the block, the previous one after (S12-01).
+
+    A thread takes the count at its first parallel torch op and keeps it, so the
+    run's pools must be created inside the block. ``None`` changes nothing, and so
+    does a build without OpenMP: torch's own thread pool is shared by every thread
+    (no per-thread teams), and its size cannot be changed once it has started.
+    """
+    import torch
+
+    if n is None or not torch.backends.openmp.is_available():
+        yield
+        return
+    previous = torch.get_num_threads()
+    torch.set_num_threads(n)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(previous)
+
+
 def run_batches(
     paths: Sequence[str],
     spec: BatchSpec,
@@ -356,6 +415,7 @@ def run_batches(
     batch_size: int,
     io_threads: int | None = None,
     pin_memory: bool = False,
+    torch_threads: int | None = None,
     progress: ProgressCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
     report: BatchReport | None = None,
@@ -367,6 +427,8 @@ def run_batches(
     has the partial outcome (the outputs on disk) when a step raises.
     ``fixed`` (R1, O4): every forward runs at exactly ``batch_size`` rows (the last
     batch zero-padded); out of GPU memory raises ``FixedBatchOutOfMemory``.
+    ``torch_threads`` (S12-01): torch's intra-op thread count while the run lasts
+    (``RuntimeConfig.batch_torch_threads``: 1 on CUDA); None leaves it alone.
     """
     started = time.perf_counter()
     if report is None:
@@ -382,6 +444,7 @@ def run_batches(
     ticks = _Progress(len(paths), progress)
     batches = [list(paths[i : i + batch_size]) for i in range(0, len(paths), batch_size)]
     backoff = OomBackoff(batch_size)
+    unreadable = LogLimiter(logger, "unreadable inputs")  # (C6-02)
     shapes: dict[int, int] = {}
     oom_events: list[dict[str, Any]] = []
     written: list[str] = []
@@ -418,13 +481,18 @@ def run_batches(
         report.failed.append((os.path.basename(path), reason))
         ticks.add()
 
-    with ThreadPoolExecutor(io, thread_name_prefix="decode") as decode_pool:
+    # (S12-01) The thread count is set before any pool thread exists and restored once
+    # every pool is joined (the decode pool's ``with`` exits first), also on a raise.
+    with (
+        _torch_threads(torch_threads),
+        ThreadPoolExecutor(io, thread_name_prefix="decode") as decode_pool,
+    ):
 
         def load_safe(path: str) -> tuple[Any, str | None]:
             try:
                 return spec.load(path), None
             except Exception as exc:  # noqa: BLE001 - any decode failure is per-image
-                logger.warning("Unreadable input %s: %s", path, exc)
+                unreadable.log(logging.WARNING, "Unreadable input %s: %s", path, exc)
                 return None, _describe(exc)
 
         def load_batch(batch_paths: list[str]) -> tuple[Any, dict[int, str]]:
@@ -487,6 +555,8 @@ def run_batches(
             report.oom_events = oom_events
             report.elapsed_s = time.perf_counter() - started
             report.cancelled = bool(should_stop and should_stop()) and report.done < report.total
+            unreadable.summary()
+            backoff.single_failures.summary()
     return report
 
 
@@ -501,5 +571,6 @@ __all__ = [
     "OomBackoff",
     "is_disk_full",
     "is_out_of_memory",
+    "log_failed_inputs",
     "run_batches",
 ]

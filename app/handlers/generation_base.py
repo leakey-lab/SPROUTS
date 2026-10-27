@@ -4,27 +4,31 @@
 ``JobRegistry``) from :class:`~app.handlers.deps.HandlerDependencies`, and owns
 the project folder lookup (``ImageManager.project_layout``), starting a
 worker as a named job (RB-07: refused politely while another job runs) and
-wiring its Cancel button (PI-08). ``show_failure_report`` lists the inputs that
+wiring its Cancel button (PI-08), and the outcomes both kinds share (every input
+failed, a partial failure, Cancel). ``show_failure_report`` lists the inputs that
 produced no output in ONE non-modal dialog, so a long unattended Generate
 (masks, then skeletons) never stalls on a modal box (UXS-02). A run in which
 every input failed (:func:`every_input_failed`) ends as a failure, so nothing
-chains on it (R6).
+chains on it (R6). Both workers build on :class:`GenerationThread`; the slots
+connected to a worker's signals hold it weakly (:func:`thread_slot`), so a finished
+worker and its report are freed as soon as the handler lets it go.
 """
 
 from __future__ import annotations
 
 import logging
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from PyQt6.QtCore import Qt, QThread, QTimer
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.feedback import UiFeedback
 from app.gui.image_manager import project_layout_of
 from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
-from app.workers import GuardedThread
+from app.workers import GuardedThread, JobCancelled
 
 if TYPE_CHECKING:
     from app.inference.batch_engine import BatchReport
@@ -34,14 +38,67 @@ logger = logging.getLogger(__name__)
 _REPORT_PREVIEW = 20  # failed names listed in the dialog text (all go to the details)
 
 
+class GenerationThread(GuardedThread):
+    """A generation run off the GUI thread; ``work()`` hands its report to :meth:`_conclude`.
+
+    Signals (each subclass declares its own ``finished``, with its legacy payload):
+        progress_counts(int, int): (done, total) inputs.
+    ``report`` holds the ``BatchReport`` once the run ended (completed or cancelled);
+    ``completed`` turns True only when the run finished without cancel or error and
+    did not fail on every input it attempted (R6: such a run is a failure, so
+    nothing chains on it).
+    """
+
+    progress_counts = pyqtSignal(int, int)
+
+    def __init__(self, input_dir: str, output_dir: str) -> None:
+        super().__init__()
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        self.report: BatchReport | None = None
+        self.completed = False
+
+    def _conclude(self, report: BatchReport) -> None:
+        """Keep ``report``; raise ``JobCancelled`` after a Cancel, else set ``completed``."""
+        self.report = report
+        # A Cancel during the last batch leaves report.cancelled False (every
+        # image was done); it is still a cancel, so nothing chains (wf2 R1).
+        if report.cancelled or self.is_cancelled():
+            raise JobCancelled
+        # When every input failed (e.g. out of memory even on single images) nothing
+        # was written: ``finished`` still reports it, but nothing chains (R6).
+        self.completed = not every_input_failed(report)
+
+
+def thread_slot(method: Callable[..., Any], thread: QThread) -> Callable[..., None]:
+    """A slot for ``thread``'s signals: ``method(thread, *args)`` while the thread lives.
+
+    ``partial(method, thread)`` would let the thread's own slot proxies hold it, a cycle
+    that only the cyclic GC breaks, and never once ``gc.freeze()`` has frozen it (C3-05,
+    as the loader thread of ``ImageManager``). With a weak reference, reference counting
+    frees a finished thread as soon as its handler lets it go.
+    """
+    ref = weakref.ref(thread)
+
+    def slot(*args: Any) -> None:
+        alive = ref()
+        if alive is not None:
+            method(alive, *args)
+
+    return slot
+
+
 class GenerationHandlerBase(HandlerDependencies):
     """Dependencies + job lifecycle for one kind of generation run.
 
-    Subclasses set ``job_label`` (the job's user-visible name) and keep the
-    running worker in ``self._thread`` via :meth:`_start`.
+    Subclasses set ``job_label`` (the job's user-visible name), ``title`` and ``noun``
+    (the run and what it writes, in its messages) and keep the running worker in
+    ``self._thread`` via :meth:`_start`.
     """
 
     job_label = "Generating"
+    title = "Generation"
+    noun = "outputs"
 
     def __init__(
         self,
@@ -114,19 +171,46 @@ class GenerationHandlerBase(HandlerDependencies):
         # already cleared the job when this queued slot runs.
         thread_finished = QThread.finished.__get__(thread, QThread)
 
-        def fire() -> None:
+        def fire(ended: GuardedThread) -> None:
             # ``completed`` stays False after any Cancel, including one that landed
             # during the last batch (the worker checks is_cancelled() itself; Qt
             # clears the interruption flag once the thread has finished), and after
             # a run in which every input failed (R6: every_input_failed).
-            if getattr(thread, "completed", False):
+            if getattr(ended, "completed", False):
                 QTimer.singleShot(0, on_success)
 
-        thread_finished.connect(fire)
+        thread_finished.connect(thread_slot(fire, thread))
 
     def begin_task(self, label: str, thread: GuardedThread) -> None:
         """Show ``label`` as the running task, with Cancel wired to the worker."""
         self.feedback.task_started(label, cancelable=True, on_cancel=thread.cancel)
+
+    # ------------------------------------------------------------------ outcomes
+    def _ended_with_no_output(self, report: BatchReport, output_dir: str) -> bool:
+        """True when every input failed (R6): the task has failed and the one report is shown."""
+        if not every_input_failed(report):
+            return False
+        message = f"{self.title} failed: none of {len(report.failed):,} images could be processed"
+        logging.getLogger(type(self).__module__).error(message)  # under the handler's own name
+        self.feedback.task_failed(message)
+        self._report_box = show_failure_report(
+            self.parent_widget(), self.title, output_dir, report.failed, nothing_written=True
+        )
+        return True
+
+    def _report_failures(self, output_dir: str, failed: list[tuple[str, str]]) -> None:
+        """A warning toast and the one non-modal report of the inputs that got no output."""
+        self.feedback.notify(f"{len(failed):,} images could not be processed", "warn")
+        self._report_box = show_failure_report(self.parent_widget(), self.title, output_dir, failed)
+
+    def _on_cancelled(self, thread: GenerationThread) -> None:
+        report = thread.report
+        done = f" after {report.done:,} of {report.total:,} images" if report else ""
+        self.feedback.task_finished(f"{self.title} cancelled{done}")
+        self.feedback.notify(
+            f"{self.title} cancelled{done}; finished {self.noun} were kept", "info"
+        )
+        self.outputs_changed()  # the kept outputs: badges, display and metrics follow
 
 
 def every_input_failed(report: BatchReport) -> bool:
@@ -180,4 +264,10 @@ def show_failure_report(
     return box
 
 
-__all__ = ["GenerationHandlerBase", "every_input_failed", "show_failure_report"]
+__all__ = [
+    "GenerationHandlerBase",
+    "GenerationThread",
+    "every_input_failed",
+    "show_failure_report",
+    "thread_slot",
+]

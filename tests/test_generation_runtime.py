@@ -5,6 +5,7 @@ CPU-only safe: every test runs on Linux CI with CPU torch.
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 import sys
 
@@ -102,6 +103,25 @@ def test_get_mask_model_reports_missing_weights(monkeypatch, tmp_path):
     with pytest.raises(runtime.ModelUnavailableError, match="nope.pth"):
         runtime.get_mask_model()
     runtime.get_mask_model.cache_clear()
+
+
+def test_only_a_gpu_run_gives_its_pool_threads_one_torch_thread():
+    """(S12-01) A property, not a field: the run records stay as they were."""
+    import torch
+
+    cpu = runtime.RuntimeConfig(
+        device=torch.device("cpu"),
+        use_channels_last=False,
+        pin_memory=False,
+        io_threads=2,
+        cudnn_benchmark=False,
+        cudnn_deterministic=True,
+        precision="fp32",
+    )
+    cuda = dataclasses.replace(cpu, device=torch.device("cuda"), use_channels_last=True)
+    assert cuda.batch_torch_threads == 1
+    assert cpu.batch_torch_threads is None
+    assert "batch_torch_threads" not in {f.name for f in dataclasses.fields(runtime.RuntimeConfig)}
 
 
 def test_release_cuda_cache_runs_once_and_only_with_cuda(monkeypatch):

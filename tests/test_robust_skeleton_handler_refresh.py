@@ -52,9 +52,10 @@ def test_a_cancelled_skeleton_run_refreshes_the_window(project, qapp, monkeypatc
 
     assert 1 <= len(_skeletons(project.folder)) < 3  # the first batch was kept
     fb = project.window.feedback
-    assert [c.args[0] for c in fb.calls if c.name == "task_finished"][-1].startswith(
-        "Skeleton generation cancelled after"
-    )
+    cancelled = [c.args[0] for c in fb.calls if c.name == "task_finished"][-1]
+    assert cancelled.startswith("Skeleton generation cancelled after")
+    toasts = [c.args for c in fb.calls if c.name == "notify"]
+    assert toasts[-1] == (f"{cancelled}; finished skeletons were kept", "info")
     assert project.window.outputs_changed == [True]  # badges / display follow the disk
     assert project.window.loaded == []  # no "Results loaded" for a cancelled run
 

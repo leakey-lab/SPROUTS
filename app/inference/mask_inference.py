@@ -24,7 +24,13 @@ from typing import Any
 
 from app import config
 from app.inference import runtime
-from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
+from app.inference.batch_engine import (
+    BatchReport,
+    BatchSpec,
+    ProgressCallback,
+    log_failed_inputs,
+    run_batches,
+)
 from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
 from app.naming import stem_key
@@ -165,8 +171,8 @@ def generate_masks(
     # (R7) Filled in place by run_batches, so a run that raises still knows what it wrote.
     report = BatchReport(batch_size=batch_size, effective_batch_size=batch_size, skipped=skipped)
 
-    def write_manifest() -> None:
-        write_run_manifest(
+    def write_manifest() -> str | None:
+        return write_run_manifest(
             RUN_KIND,
             input_dir=input_dir,
             output_dir=output_dir,
@@ -203,6 +209,7 @@ def generate_masks(
                 batch_size=batch_size,
                 io_threads=rt.io_threads,
                 pin_memory=rt.pin_memory,
+                torch_threads=rt.batch_torch_threads,
                 progress=progress,
                 should_stop=should_stop,
                 report=report,
@@ -213,9 +220,8 @@ def generate_masks(
         raise
     finally:
         runtime.release_cuda_cache()
-    write_manifest()
-    if report.failed:
-        logger.warning("Mask generation: %d input(s) failed: %s", len(report.failed), report.failed)
+    manifest = write_manifest()
+    log_failed_inputs(logger, "Mask generation", report, manifest)
     return report
 
 

@@ -8,6 +8,7 @@ Tasks that must still be running when the test acts are held on a
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 import subprocess
@@ -19,8 +20,9 @@ import pytest
 
 from app.inference import batch_pipeline
 from app.inference.batch_pipeline import (
+    FAILURE_LOG_LIMIT,
     AsyncWriter,
-    PercentThrottle,
+    LogLimiter,
     PrefetchIterator,
     default_io_threads,
 )
@@ -198,7 +200,7 @@ def test_writer_runs_every_task_with_args():
 
     with AsyncWriter(max_workers=3, max_pending=4) as writer:
         for i in range(20):
-            assert writer.submit(f"k{i}", write, f"k{i}", i, b=i * 2)
+            writer.submit(f"k{i}", write, f"k{i}", i, b=i * 2)
         writer.wait()
         assert sorted(out) == sorted(f"k{i}" for i in range(20))
     assert out["k7"][:2] == (7, 14)
@@ -238,78 +240,6 @@ def test_writer_bounds_pending_tasks():
     assert writer.errors() == []
 
 
-def test_writer_on_done_is_serialized_and_counts_up():
-    counts: list[int] = []
-    inside = threading.Lock()
-    overlaps = []
-
-    def on_done(completed: int) -> None:
-        if not inside.acquire(blocking=False):
-            overlaps.append(completed)
-            return
-        try:
-            time.sleep(0.001)
-            counts.append(completed)
-        finally:
-            inside.release()
-
-    with AsyncWriter(max_workers=4, on_done=on_done) as writer:
-        for i in range(30):
-            writer.submit(i, time.sleep, 0.001)
-    assert overlaps == []
-    assert counts == list(range(1, 31))
-
-
-def test_writer_survives_a_failing_on_done():
-    def on_done(completed):
-        raise RuntimeError("progress sink gone")
-
-    ran = []
-    with AsyncWriter(max_workers=2, on_done=on_done) as writer:
-        for i in range(5):
-            writer.submit(i, ran.append, i)
-    assert sorted(ran) == list(range(5))
-    assert writer.errors() == []
-
-
-def test_writer_should_stop_skips_queued_and_refuses_new_work():
-    stop = threading.Event()
-    gate = threading.Event()
-    ran = []
-
-    def write(i):
-        gate.wait(5)
-        ran.append(i)
-
-    writer = AsyncWriter(max_workers=1, max_pending=10, should_stop=stop.is_set)
-    for i in range(5):
-        assert writer.submit(i, write, i)
-    stop.set()
-    gate.set()
-    assert writer.submit(99, write, 99) is False
-    writer.wait()
-    writer.close()
-    assert 99 not in ran
-    assert len(ran) <= 1  # only the task already running when stop was set
-    assert writer.errors() == []
-
-
-def test_writer_blocked_submit_returns_false_when_stopped():
-    stop = threading.Event()
-    gate = threading.Event()
-    writer = AsyncWriter(max_workers=1, max_pending=1, should_stop=stop.is_set)
-    writer.submit("a", gate.wait, 5)
-    result: list[bool] = []
-    submitter = threading.Thread(target=lambda: result.append(writer.submit("b", lambda: None)))
-    submitter.start()
-    time.sleep(0.05)
-    stop.set()
-    submitter.join(5)
-    assert result == [False]
-    gate.set()
-    writer.close()
-
-
 def test_writer_rejects_submit_after_close():
     writer = AsyncWriter(max_workers=1)
     writer.close()
@@ -317,31 +247,43 @@ def test_writer_rejects_submit_after_close():
         writer.submit("late", lambda: None)
 
 
-# --- PercentThrottle ---------------------------------------------------------------
+def test_writer_logs_the_first_failures_then_a_count(caplog):
+    def write(i):
+        raise OSError(f"share gone at {i}")
+
+    with caplog.at_level(logging.WARNING, logger=batch_pipeline.logger.name):
+        writer = AsyncWriter(max_workers=2)
+        for i in range(FAILURE_LOG_LIMIT + 7):
+            writer.submit(f"img{i}", write, i)
+        writer.close()
+    assert len(writer.errors()) == FAILURE_LOG_LIMIT + 7  # every failure is still collected
+    logged = [r for r in caplog.records if "Write failed" in r.getMessage()]
+    assert len(logged) == FAILURE_LOG_LIMIT
+    assert sum(r.exc_info is not None for r in logged) == 1  # only the first has a traceback
+    [more] = [r for r in caplog.records if "more failed writes" in r.getMessage()]
+    assert more.getMessage().startswith("7 more")
 
 
-def test_throttle_emits_each_percent_once():
-    emitted: list[int] = []
-    throttle = PercentThrottle(200, emitted.append)
-    for done in range(1, 201):
-        throttle.update(done)
-    assert emitted == list(range(0, 101))
+# --- LogLimiter --------------------------------------------------------------------
 
 
-def test_throttle_small_total_and_empty_total():
-    emitted: list[int] = []
-    throttle = PercentThrottle(3, emitted.append)
-    for done in (1, 2, 3, 3):
-        throttle.update(done)
-    assert emitted == [33, 66, 100]
-    empty: list[int] = []
-    PercentThrottle(0, empty.append).update(0)
-    assert empty == [100]
-
-
-def test_throttle_never_goes_backwards():
-    emitted: list[int] = []
-    throttle = PercentThrottle(10, emitted.append)
-    for done in (5, 3, 6):
-        throttle.update(done)
-    assert emitted == [50, 60]
+def test_log_limiter_logs_the_first_records_then_one_count(caplog):
+    log = logging.getLogger("tests.limiter")
+    limiter = LogLimiter(log, "broken things", limit=3)
+    quiet = LogLimiter(log, "quiet things", limit=3)
+    with caplog.at_level(logging.INFO, logger=log.name):
+        for i in range(5):
+            limiter.log(logging.ERROR, "thing %d broke", i)
+        limiter.summary()
+        quiet.log(logging.WARNING, "only once")
+        quiet.summary()  # nothing held back: no count
+    assert [r.getMessage() for r in caplog.records] == [
+        "thing 0 broke",
+        "thing 1 broke",
+        "thing 2 broke",
+        "2 more broken things not logged one by one",
+        "only once",
+    ]
+    assert [r.levelno for r in caplog.records[:3]] == [logging.ERROR] * 3
+    passed_on = [caplog.records[i] for i in (0, 1, 2, 4)]  # the caller's line, not the limiter's
+    assert {os.path.basename(r.pathname) for r in passed_on} == {os.path.basename(__file__)}

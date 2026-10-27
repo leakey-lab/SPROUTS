@@ -35,8 +35,13 @@ import torchvision.transforms as transforms
 from PIL import Image
 
 from app import config
-from app.config import SKELETONIZER_DIR
-from app.inference.batch_engine import BatchReport, BatchSpec, ProgressCallback, run_batches
+from app.inference.batch_engine import (
+    BatchReport,
+    BatchSpec,
+    ProgressCallback,
+    log_failed_inputs,
+    run_batches,
+)
 from app.inference.run_record import record_failed_run, write_run_manifest
 from app.io_utils import atomic_write_bytes
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
@@ -47,8 +52,6 @@ logger = logging.getLogger(__name__)
 # CONSTANTS - Hardcoded configuration for skeletonizer model
 # =============================================================================
 
-# SKELETONIZER_DIR is resolved from app.config (F-005): absolute path relative to
-# the project root, so CWD no longer matters.
 RUN_KIND = "skeleton_generation"
 NORM = "batch"
 INPUT_NC = 3
@@ -58,7 +61,6 @@ LOAD_SIZE = 256
 CROP_SIZE = 256  # square generator output; with ASPECT_RATIO -> config.SKELETON_OUTPUT_SIZE
 ASPECT_RATIO = 3 / 4
 USE_DROPOUT = True  # no_dropout is False by default
-EPOCH = "latest"
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -158,22 +160,6 @@ def get_norm_layer(norm_type="instance"):
     else:
         raise NotImplementedError(f"normalization layer [{norm_type}] is not found")
     return norm_layer
-
-
-def move_net_to_device(net, gpu_ids=None):
-    """Move network to GPU without initializing weights (for loading from checkpoint).
-
-    DataParallel is only used for genuine multi-GPU runs; on a single GPU it is
-    pure scatter/gather overhead (and forces ``.module`` unwrap branches), so we
-    do a plain ``net.to(device)`` instead.
-    """
-    gpu_ids = gpu_ids or []
-    if len(gpu_ids) > 0:
-        assert torch.cuda.is_available()
-        net.to(gpu_ids[0])
-        if len(gpu_ids) > 1:
-            net = torch.nn.DataParallel(net, gpu_ids)
-    return net
 
 
 class ResnetBlock(nn.Module):
@@ -401,42 +387,23 @@ class SkeletonModel:
 
     def __init__(self, gpu_ids=None):
         gpu_ids = gpu_ids or []
-        self.gpu_ids = gpu_ids
         self.device = torch.device(f"cuda:{gpu_ids[0]}") if gpu_ids else torch.device("cpu")
-
-        # Create generator network
-        norm_layer = get_norm_layer(norm_type=NORM)
-        self.netG = EnhancedResnetGenerator(
-            INPUT_NC,
-            OUTPUT_NC,
-            NGF,
-            norm_layer=norm_layer,
-            use_dropout=USE_DROPOUT,
-            n_blocks=9,
-        )
-        # Move to GPU without initializing weights (weights will be loaded from checkpoint)
-        self.netG = move_net_to_device(self.netG, gpu_ids)
-
-        # Load pretrained weights from checkpoint
-        self._load_network()
-
+        self.netG = self._load_network()
         # Ensure the model is in eval mode (ML correctness: no BatchNorm train-mode noise)
         self.netG.eval()
 
-    def _load_network(self):
-        """Load pretrained weights.
+    def _load_network(self) -> EnhancedResnetGenerator:
+        """The generator with the weights at ``runtime.skeleton_weights_path()``, on the device.
 
         ML correctness: weights_only=True guards against arbitrary-code execution
-        via pickle (F-023 / SS-01).  SKELETONIZER_DIR from app.config provides an
-        absolute path independent of CWD (F-005).
+        via pickle (F-023 / SS-01). As for the mask model, the network is built on the
+        ``meta`` device (no random init) and takes the checkpoint's tensors as they are
+        (``assign=True``), loaded straight onto the device. The strict load leaves no
+        tensor on ``meta``: the network has no buffer the checkpoint does not carry.
         """
-        load_filename = f"{EPOCH}_net_G.pth"
-        load_path = os.path.join(SKELETONIZER_DIR, load_filename)
+        from app.inference import runtime  # local import, as in the module's other functions
 
-        net = self.netG
-        if isinstance(net, torch.nn.DataParallel):
-            net = net.module
-
+        load_path = runtime.skeleton_weights_path()
         logger.info("Loading skeleton model from %s", load_path)
         try:
             state_dict = torch.load(load_path, map_location=str(self.device), weights_only=True)
@@ -448,40 +415,18 @@ class SkeletonModel:
         if hasattr(state_dict, "_metadata"):
             del state_dict._metadata
 
-        # Patch InstanceNorm checkpoints
-        for key in list(state_dict.keys()):
-            self._patch_instance_norm_state_dict(state_dict, net, key.split("."))
-
-        net.load_state_dict(state_dict)
-
-    def _patch_instance_norm_state_dict(self, state_dict, module, keys, i=0):
-        """Fix InstanceNorm checkpoints incompatibility."""
-        key = keys[i]
-        if i + 1 == len(keys):
-            if module.__class__.__name__.startswith("InstanceNorm") and (
-                key == "running_mean" or key == "running_var"
-            ):
-                if getattr(module, key) is None:
-                    state_dict.pop(".".join(keys))
-            if module.__class__.__name__.startswith("InstanceNorm") and (
-                key == "num_batches_tracked"
-            ):
-                state_dict.pop(".".join(keys))
-        else:
-            self._patch_instance_norm_state_dict(state_dict, getattr(module, key), keys, i + 1)
-
-    def run(self, input_tensor):
-        """Run inference on input tensor.
-
-        fp32 tensors, NO autocast (see the module docstring on TF32): the pix2pix
-        EnhancedResnetGenerator (BatchNorm + Tanh) drifts visibly under fp16/bf16.
-        """
-        # non_blocking pairs with the engine's pinned host batches to overlap the
-        # H2D copy with compute (forward provides the sync point).
-        input_tensor = input_tensor.to(self.device, non_blocking=True)
-        with torch.inference_mode():
-            output = self.netG(input_tensor)
-        return output
+        with torch.device("meta"):
+            net = EnhancedResnetGenerator(
+                INPUT_NC,
+                OUTPUT_NC,
+                NGF,
+                norm_layer=get_norm_layer(norm_type=NORM),
+                use_dropout=USE_DROPOUT,
+                n_blocks=9,
+            )
+        net.load_state_dict(state_dict, assign=True)
+        # For a checkpoint without BatchNorm counters the loader makes them on the CPU.
+        return net.to(self.device)
 
     def run_batch(self, input_batch):
         """
@@ -585,8 +530,8 @@ def run_skeleton_generation(
     # (R7) Filled in place by run_batches, so a run that raises still knows what it wrote.
     report = BatchReport()
 
-    def write_manifest() -> None:
-        write_run_manifest(
+    def write_manifest() -> str | None:
+        return write_run_manifest(
             RUN_KIND,
             input_dir=input_dir,
             output_dir=output_dir,
@@ -626,6 +571,7 @@ def run_skeleton_generation(
                 batch_size=batch_size,
                 io_threads=rt.io_threads,
                 pin_memory=rt.pin_memory,
+                torch_threads=rt.batch_torch_threads,
                 progress=progress,
                 should_stop=should_stop,
                 report=report,
@@ -639,11 +585,8 @@ def run_skeleton_generation(
         raise
     finally:
         runtime.release_cuda_cache()
-    write_manifest()
-    if report.failed:
-        logger.warning(
-            "Skeleton generation: %d input(s) failed: %s", len(report.failed), report.failed
-        )
+    manifest = write_manifest()
+    log_failed_inputs(logger, "Skeleton generation", report, manifest)
     return report
 
 

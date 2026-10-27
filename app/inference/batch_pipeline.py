@@ -8,16 +8,22 @@ changing what is computed:
 * ``PrefetchIterator`` runs the next ``depth`` load tasks (decode, transform,
   collate, pin) on a thread pool while the consumer runs the model, and yields
   the results in exactly the submission order, so batch composition is unchanged;
-* ``AsyncWriter`` runs save tasks on a bounded pool, collects per-item errors
-  instead of aborting the run, and reports completions for progress;
-* ``PercentThrottle`` turns completion counts into one progress update per
-  percent.
+* ``AsyncWriter`` runs save tasks on a bounded pool and collects per-item errors
+  instead of aborting the run;
+* ``LogLimiter`` logs the first records of one kind of per-item failure and counts
+  the rest, so a run in which every input fails does not flood the log (C6-02).
 
 Threads, not ``DataLoader`` worker processes: PIL decoding and torch tensor ops
 release the GIL, and worker processes are unsafe to spawn from a ``QThread`` on
-Windows. Both classes honour a ``should_stop`` callable (e.g. a worker's
-``is_cancelled``) so a cancelled run stops scheduling new work promptly; a task
-that is already running is never interrupted, so no file is left half-written.
+Windows. Each thread that runs a torch CPU op starts its own OpenMP team, so a GPU
+run gives these threads one torch thread (``batch_engine.run_batches``'
+``torch_threads``, S12-01), and ``main.py`` sets ``KMP_BLOCKTIME=0`` so that idle team
+workers sleep instead of spinning against the forward (P3-01: the CPU fallback,
+whose forward needs every core). ``PrefetchIterator`` honours a ``should_stop`` callable
+(e.g. a worker's ``is_cancelled``) so a cancelled run stops scheduling new work
+promptly; a task that is already running is never interrupted, so no file is left
+half-written. ``AsyncWriter`` runs every save it was given (PI-08: a cancelled run
+keeps the outputs it computed).
 """
 
 from __future__ import annotations
@@ -38,8 +44,8 @@ T = TypeVar("T")
 #: Default bound on AsyncWriter tasks submitted but not yet finished.
 DEFAULT_MAX_PENDING = 256
 
-#: How often a blocked ``AsyncWriter.submit`` re-checks ``should_stop`` (seconds).
-_STOP_POLL_S = 0.05
+#: (C6-02) Records of one kind of per-item failure logged one by one in a run.
+FAILURE_LOG_LIMIT = 20
 
 
 def default_io_threads() -> int:
@@ -156,27 +162,50 @@ class PrefetchIterator(Iterator[T], Generic[T]):
             self._pending.append(self._pool.submit(task))
 
 
+class LogLimiter:
+    """Log the first ``limit`` records of one kind, then only count them (C6-02).
+
+    A run in which every input fails (a network share that dropped, a protected
+    output folder) would otherwise log one record per input and rotate the
+    session's history out of ``app.log``; the run record lists every failure
+    anyway. ``log`` keeps a record's level, message and source line (the
+    caller's); ``summary()`` logs how many were held back. Thread-safe; one per run.
+    """
+
+    def __init__(self, log: logging.Logger, what: str, limit: int = FAILURE_LOG_LIMIT) -> None:
+        self._log = log
+        self._what = what  # plural noun for the summary, e.g. "unreadable inputs"
+        self._limit = limit
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """``logger.log(level, msg, *args, **kwargs)`` for the first ``limit`` calls."""
+        with self._lock:
+            self._count += 1
+            if self._count > self._limit:
+                return
+        self._log.log(level, msg, *args, stacklevel=2, **kwargs)
+
+    def summary(self) -> None:
+        """One warning with the number of records held back, if any."""
+        with self._lock:
+            held_back = self._count - self._limit
+        if held_back > 0:
+            self._log.warning("%d more %s not logged one by one", held_back, self._what)
+
+
 class AsyncWriter:
     """Bounded background pool for save tasks, with per-item error collection.
 
     ``submit`` blocks while ``max_pending`` tasks are outstanding (back-pressure
-    keeps memory bounded when writes fall behind). A failing task is logged
-    (the first with its traceback) and recorded in ``errors()``; the others keep
-    running. ``on_done(completed)`` is called after every finished task with the
-    running count; calls are serialized and the counts increase by one, so it
-    can drive a progress bar directly (see ``PercentThrottle``). Once
-    ``should_stop()`` is true, ``submit`` refuses new work and queued tasks are
-    skipped; a running task always completes. Submit from one thread.
+    keeps memory bounded when writes fall behind). A failing task is recorded in
+    ``errors()``; the others keep running. The first ``FAILURE_LOG_LIMIT`` failures
+    are logged (the first with its traceback), and ``close()`` logs how many more
+    there were. Every submitted task runs. Submit from one thread.
     """
 
-    def __init__(
-        self,
-        max_workers: int | None = None,
-        max_pending: int | None = None,
-        *,
-        on_done: Callable[[int], None] | None = None,
-        should_stop: Callable[[], bool] | None = None,
-    ) -> None:
+    def __init__(self, max_workers: int | None = None, max_pending: int | None = None) -> None:
         workers = max_workers if max_workers is not None else default_io_threads()
         pending = max_pending if max_pending is not None else DEFAULT_MAX_PENDING
         if workers < 1 or pending < 1:
@@ -187,36 +216,26 @@ class AsyncWriter:
         self._idle = threading.Condition(self._lock)
         self._outstanding = 0
         self._errors: list[tuple[Hashable, BaseException]] = []
-        self._done_lock = threading.Lock()  # serializes on_done
-        self._completed = 0
-        self._on_done = on_done
-        self._should_stop = should_stop
+        self._failures = LogLimiter(logger, "failed writes")
         self._closed = False
 
-    def submit(self, key: Hashable, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> bool:
+    def submit(self, key: Hashable, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> None:
         """Queue ``fn(*args, **kwargs)``; ``key`` labels it in ``errors()``.
 
-        Returns:
-            True if queued; False if ``should_stop()`` is (or became) true.
+        Blocks while ``max_pending`` tasks are outstanding.
 
         Raises:
             RuntimeError: the writer was closed.
         """
         if self._closed:
             raise RuntimeError("AsyncWriter is closed")
-        while not self._slots.acquire(timeout=_STOP_POLL_S):
-            if self._stop_requested():
-                return False
-        if self._stop_requested():
-            self._slots.release()
-            return False
+        self._slots.acquire()
         with self._lock:
             self._outstanding += 1
         self._pool.submit(self._run, key, fn, args, kwargs)
-        return True
 
     def wait(self) -> None:
-        """Block until every submitted task has finished (or been skipped)."""
+        """Block until every submitted task has finished."""
         with self._idle:
             while self._outstanding:
                 self._idle.wait()
@@ -233,6 +252,7 @@ class AsyncWriter:
         self._closed = True
         self.wait()
         self._pool.shutdown(wait=True)
+        self._failures.summary()
 
     def __enter__(self) -> AsyncWriter:
         return self
@@ -240,57 +260,28 @@ class AsyncWriter:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _stop_requested(self) -> bool:
-        return self._should_stop is not None and bool(self._should_stop())
-
     def _run(
         self, key: Hashable, fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> None:
         try:
-            if not self._stop_requested():
-                fn(*args, **kwargs)
+            fn(*args, **kwargs)
         except Exception as exc:
             with self._lock:
                 self._errors.append((key, exc))
                 first = len(self._errors) == 1
-            logger.warning("Write failed for %s: %s", key, exc, exc_info=exc if first else None)
+            self._failures.log(
+                logging.WARNING,
+                "Write failed for %s: %s",
+                key,
+                exc,
+                exc_info=exc if first else None,
+            )
         finally:
             self._task_finished()
 
     def _task_finished(self) -> None:
-        with self._done_lock:
-            self._completed += 1
-            if self._on_done is not None:
-                try:
-                    self._on_done(self._completed)
-                except Exception:
-                    logger.exception("AsyncWriter on_done callback failed")
         self._slots.release()
         with self._idle:
             self._outstanding -= 1
             if not self._outstanding:
                 self._idle.notify_all()
-
-
-class PercentThrottle:
-    """Forward progress to ``emit(percent)`` only when the integer percent grows.
-
-    ``update(done)`` may be called for every finished item (e.g. as an
-    ``AsyncWriter`` ``on_done``); ``emit`` then runs at most 101 times per job
-    and never reports a lower percent than before. Thread-safe.
-    """
-
-    def __init__(self, total: int, emit: Callable[[int], None]) -> None:
-        self._total = total
-        self._emit = emit
-        self._last = -1
-        self._lock = threading.Lock()
-
-    def update(self, done: int) -> None:
-        """Report ``done`` finished items out of the total."""
-        pct = progress_percent(done, self._total)
-        with self._lock:
-            if pct <= self._last:
-                return
-            self._last = pct
-            self._emit(pct)

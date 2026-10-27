@@ -4,11 +4,14 @@ PI-03 / FR-05 / RB-10: unreadable inputs are recorded failures (never a made-up 
 PI-06: decode / forward / save overlap without changing batch composition or outputs.
 PI-07: CUDA out-of-memory halves the batch and retries (floor 1), never skips silently.
 PI-08: cooperative cancel keeps finished outputs and reports the partial run.
+S12-01: a GPU run gives its pool threads one torch thread, and restores the count after.
+C6-02: a run in which many inputs fail logs the first few, then one count.
 CPU-only stubs: no checkpoint, no GPU.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 
 import numpy as np
@@ -16,7 +19,19 @@ import pytest
 import torch
 from PIL import Image
 
-from app.inference.batch_engine import BatchReport, BatchSpec, OomBackoff, run_batches
+from app.inference.batch_engine import (
+    BatchReport,
+    BatchSpec,
+    OomBackoff,
+    log_failed_inputs,
+    run_batches,
+)
+from app.inference.batch_pipeline import FAILURE_LOG_LIMIT
+
+ENGINE_LOGGER = "app.inference.batch_engine"
+OPENMP_ONLY = pytest.mark.skipif(
+    not torch.backends.openmp.is_available(), reason="the per-thread count is OpenMP's"
+)
 
 
 def _make_images(folder, names, *, corrupt=()):
@@ -255,3 +270,111 @@ def test_save_errors_are_recorded_failures(tmp_path):
 def test_empty_input_is_an_empty_report(tmp_path):
     report = run_batches([], _spec(str(tmp_path / "out")), batch_size=4)
     assert report == BatchReport(total=0, batch_size=4, effective_batch_size=4)
+
+
+# --- S12-01: torch threads of a GPU run ----------------------------------------------
+
+
+def _thread_recording_spec(seen):
+    def load(path):
+        seen.add(("load", torch.get_num_threads()))
+        return _load(path)
+
+    def save(arr, path):
+        seen.add(("save", torch.get_num_threads()))
+
+    return BatchSpec(load=load, step=_step, save=save)
+
+
+@OPENMP_ONLY
+def test_torch_threads_hold_in_the_pool_threads_and_are_restored(tmp_path):
+    paths = _make_images(str(tmp_path / "in"), NAMES)
+    before = torch.get_num_threads()
+    seen: set[tuple[str, int]] = set()
+    report = run_batches(paths, _thread_recording_spec(seen), batch_size=3, torch_threads=1)
+    assert len(report.written) == 7
+    assert seen == {("load", 1), ("save", 1)}
+    assert torch.get_num_threads() == before
+
+
+def test_without_torch_threads_the_count_is_left_alone(tmp_path):
+    paths = _make_images(str(tmp_path / "in"), NAMES)
+    before = torch.get_num_threads()
+    seen: set[tuple[str, int]] = set()
+    run_batches(paths, _thread_recording_spec(seen), batch_size=3)
+    assert seen == {("load", before), ("save", before)}
+    assert torch.get_num_threads() == before
+
+
+@OPENMP_ONLY
+def test_torch_threads_are_restored_when_a_step_raises(tmp_path):
+    paths = _make_images(str(tmp_path / "in"), NAMES)
+    before = torch.get_num_threads()
+
+    def broken_step(x):
+        raise ValueError("model broke")
+
+    with pytest.raises(ValueError, match="model broke"):
+        run_batches(
+            paths, _spec(str(tmp_path / "out"), step=broken_step), batch_size=3, torch_threads=1
+        )
+    assert torch.get_num_threads() == before
+
+
+# --- C6-02: failures are logged a few at a time --------------------------------------
+
+
+def _messages(caplog, text):
+    return [r for r in caplog.records if text in r.getMessage()]
+
+
+def test_many_unreadable_inputs_log_the_first_few_then_a_count(tmp_path, caplog):
+    names = [f"bad{i:02d}.jpg" for i in range(FAILURE_LOG_LIMIT + 5)]
+    paths = _make_images(str(tmp_path / "in"), names, corrupt=set(names))
+    with caplog.at_level(logging.WARNING, logger=ENGINE_LOGGER):
+        report = run_batches(paths, _spec(str(tmp_path / "out")), batch_size=4)
+    assert len(report.failed) == len(names)  # every failure is still in the report
+    unreadable = _messages(caplog, "Unreadable input")
+    assert len(unreadable) == FAILURE_LOG_LIMIT
+    # level and source line as before: the engine's own line, not the limiter's
+    assert all(r.levelno == logging.WARNING for r in unreadable)
+    assert all(r.pathname.endswith("batch_engine.py") for r in unreadable)
+    [more] = _messages(caplog, "more unreadable inputs")
+    assert more.getMessage().startswith("5 more")
+
+
+def test_a_few_unreadable_inputs_are_all_logged_without_a_count(tmp_path, caplog):
+    paths = _make_images(str(tmp_path / "in"), NAMES + ["bad.jpg"], corrupt={"bad.jpg"})
+    with caplog.at_level(logging.WARNING, logger=ENGINE_LOGGER):
+        run_batches(paths, _spec(str(tmp_path / "out")), batch_size=3)
+    assert len(_messages(caplog, "Unreadable input")) == 1
+    assert _messages(caplog, " more ") == []
+
+
+def test_images_out_of_memory_alone_log_the_first_few_then_a_count(tmp_path, caplog):
+    paths = _make_images(str(tmp_path / "in"), [f"i{i:02d}.png" for i in range(25)])
+
+    def oom_step(x):
+        raise torch.cuda.OutOfMemoryError("CUDA out of memory (stub)")
+
+    with caplog.at_level(logging.WARNING, logger=ENGINE_LOGGER):
+        report = run_batches(paths, _spec(str(tmp_path / "out"), step=oom_step), batch_size=4)
+    assert len(report.failed) == 25 and report.written == []
+    assert len(_messages(caplog, "Out of memory on a single image")) == FAILURE_LOG_LIMIT
+    [more] = _messages(caplog, "more single images out of GPU memory")
+    assert more.getMessage().startswith("5 more")
+
+
+def test_the_end_of_run_line_names_the_first_failures_and_the_record(caplog):
+    log = logging.getLogger("tests.end_of_run")
+    report = BatchReport(failed=[(f"img{i}.jpg", "OSError: broken") for i in range(8)])
+    with caplog.at_level(logging.WARNING, logger=log.name):
+        log_failed_inputs(log, "Mask generation", report, "out/_sprouts_run.json")
+        log_failed_inputs(log, "Mask generation", report, None)
+        log_failed_inputs(log, "Mask generation", BatchReport(), "out/_sprouts_run.json")
+    first, second = (r.getMessage() for r in caplog.records)  # nothing for no failure
+    assert first.startswith("Mask generation: 8 input(s) failed: img0.jpg: OSError: broken; ")
+    assert "img4.jpg" in first and "img5.jpg" not in first and "and 3 more" in first
+    assert first.endswith("; every one is listed in out/_sprouts_run.json")
+    assert "listed in" not in second  # no record was written: it is not named
+    assert all(r.pathname.endswith("test_generation_batch_engine.py") for r in caplog.records)

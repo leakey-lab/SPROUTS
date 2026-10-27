@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 from app import config
 from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
+from app.handlers import generation_base
 from app.handlers import mask_generation_handler as mgh
 from app.inference import runtime
 from app.inference.mask_origin import OverwritePolicy
@@ -105,12 +106,14 @@ def project(tmp_path, qapp, monkeypatch):
         monkeypatch.setattr(
             QMessageBox, name, staticmethod(lambda *a, _n=name, **k: dialogs.append((_n, a)))
         )
-    monkeypatch.setattr(mgh, "show_failure_report", lambda *a, **k: dialogs.append(("report", a)))
+    # both handlers show their failure report through generation_base
+    monkeypatch.setattr(
+        generation_base, "show_failure_report", lambda *a, **k: dialogs.append(("report", a))
+    )
     # never block on the real modal prompt: tests that expect it inject confirm_overwrite
     monkeypatch.setattr(
         mgh, "ask_overwrite_policy", lambda *a, **k: pytest.fail("unexpected overwrite prompt")
     )
-    monkeypatch.setattr(gsh, "show_failure_report", lambda *a, **k: dialogs.append(("report", a)))
     yield SimpleNamespace(folder=folder, window=window, stub=stub, dialogs=dialogs)
     runtime.get_runtime.cache_clear()
     window.deleteLater()
@@ -319,6 +322,8 @@ def test_cancel_stops_the_run_and_keeps_finished_masks(project, qapp, monkeypatc
     fb = project.window.feedback
     finished_msgs = [c.args[0] for c in fb.calls if c.name == "task_finished"]
     assert finished_msgs[-1].startswith("Mask generation cancelled after")
+    toasts = [c.args for c in fb.calls if c.name == "notify"]
+    assert toasts[-1] == (f"{finished_msgs[-1]}; finished masks were kept", "info")
     assert not fb.busy
 
 
