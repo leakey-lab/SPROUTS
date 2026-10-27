@@ -7,32 +7,13 @@ blank under the progress bar.
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtWidgets import QApplication, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QPoint, QRect, QSettings, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui.loading_overlay import LoadingOverlay  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
-    yield
-    flush_deleted()
+from app.gui.loading_overlay import LoadingOverlay
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window, quiet_window
 
 
 def test_empty_detail_lines_take_no_room(app):
@@ -81,20 +62,12 @@ def test_the_detail_lines_sit_in_the_card_under_the_bar(app):
 
 
 @pytest.fixture
-def window(app, tmp_path, monkeypatch):
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    mw = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    mw.resize(1280, 800)
-    mw.show()
-    yield mw
-    mw.loading_overlay.hide()
-    mw.close()
-    mw.deleteLater()
-    del mw
-    flush_deleted()
+def window(app, tmp_path, no_prompts):
+    made = [build_window(tmp_path / "s.ini", show=False)]
+    made[0].show()
+    yield made[0]
+    made[0].loading_overlay.hide()
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

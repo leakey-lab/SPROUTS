@@ -16,49 +16,28 @@ from collections import Counter
 
 import numpy as np
 import pytest
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QStyleOptionViewItem, QTreeWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QIcon  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
-    QFileDialog,
-    QMessageBox,
-    QStyleOptionViewItem,
-    QTreeWidget,
-)
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.library_index import (  # noqa: E402
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.library_index import (
     LibraryIndex,
     _badge_pixmap,
     build_hierarchy,
     status_text,
 )
-from app.gui.widgets import tokens  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import H, W, draw_line, paint, qapp, write_mask  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
-    STEMS,
-    enter,
-    new_project,
-    open_project,
-    select,
-    settle,
-)
+from app.gui.widgets import tokens
+from app.project_layout import ProjectLayout
+from tests.correct_support import H, W, draw_line, paint, write_mask
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.qt_wait import settle
+from tests.test_correct_main_window import STEMS, enter, new_project, open_project, select
+from tests.window_support import build_window, quiet_window
 
 STEM = "24EFCAM1_T001_L011_2024.07.18_111530_001_SMM"
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
+pytestmark = pytest.mark.usefixtures("window_guards")
 
 
 # ============================================================================ the pixmap
@@ -212,35 +191,11 @@ def test_the_delegate_draws_the_state_the_providers_report(index_with_providers)
 
 
 # ========================================================================== in the window
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-
-
 @pytest.fixture
 def window(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
-    made.show()
-    settle()
-    yield made
-    for editor in made._editors().values():
-        editor.maybe_save_changes = lambda: True
-    made.correct_editor.layers[SKELETON].cancel_scheduled_render()
-    made.close()
-    made.deleteLater()
-    del made, editor
-    flush_deleted()
+    made = [build_window(tmp_path / "s.ini")]
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

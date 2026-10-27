@@ -11,16 +11,10 @@ the cancelling text. Both now keep the cancelling state until the job ends. The 
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.task_progress import TaskProgressWidget  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.task_progress import TaskProgressWidget
+from tests.qt_teardown import flush_deleted
 
 
 class _Worker:
@@ -29,11 +23,6 @@ class _Worker:
 
     def cancel(self) -> None:
         self.cancels += 1
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

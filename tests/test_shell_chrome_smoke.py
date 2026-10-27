@@ -4,30 +4,14 @@ Runs under an offscreen QApplication. Covers the Welcome screen, the loading
 overlay, the shell chrome, and (T4.15) the MainWindow connect-map contract.
 """
 
-import os
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QPushButton
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-# QtWebEngine (imported transitively by the visualization modules that
-# MainWindow pulls in) requires either an early QtWebEngineWidgets import or
-# AA_ShareOpenGLContexts set before the QApplication exists. Do that here so the
-# MainWindow contract test (T4.15) can construct the window offscreen.
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
-
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
+from app.gui.panels import Panel
+from tests.qt_teardown import delete_widgets
 
 
 def test_welcome_widget_imports(app):
@@ -150,9 +134,7 @@ def test_main_window_contract(app):
         # FIX2: the dialog-free loader entry point exists for recent rows.
         assert callable(getattr(mw, "open_path", None))
     finally:
-        mw.close()
-        mw.deleteLater()
-        flush_deleted()
+        delete_widgets([mw])
 
 
 # --------------------------------------------------------------------------- #
@@ -162,14 +144,11 @@ def test_main_window_contract(app):
 def main_window(app, monkeypatch):
     from app.gui.main_window import MainWindow
 
-    mw = MainWindow()
+    made = [MainWindow()]
     # No editor prompt may block a headless run.
-    monkeypatch.setattr(mw.correct_editor, "maybe_save_changes", lambda: None)
-    yield mw
-    mw.close()
-    mw.deleteLater()
-    del mw
-    flush_deleted()
+    monkeypatch.setattr(made[0].correct_editor, "maybe_save_changes", lambda: None)
+    yield made[0]
+    delete_widgets(made)
 
 
 def test_navigate_image_moves_tree_selection(main_window, monkeypatch):

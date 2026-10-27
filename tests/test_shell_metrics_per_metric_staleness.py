@@ -13,42 +13,17 @@ from __future__ import annotations
 import os
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS  # noqa: E402
-from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
-from app.inference.metrics import write_metric_csv  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS
+from app.data_processing.measurement_index import MeasurementIndex
+from app.inference.metrics import write_metric_csv
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window, open_folder, quiet_window, write_photos
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
-    yield
-    flush_deleted()
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 
 def _row(stem: str, column: str, value) -> dict:
@@ -176,24 +151,16 @@ def test_one_stale_flag_still_flags_both_values(app):
 # ------------------------------------------------------------------------ MainWindow
 @pytest.fixture
 def window(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    yield made
-    made.close()
-    made.deleteLater()
-    del made
-    flush_deleted()
+    made = [build_window(tmp_path / "s.ini", size=None, show=False)]
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 
 def _open(window, folder) -> None:
     import time
 
-    window.open_path(str(folder))
-    end = time.monotonic() + 5
-    while time.monotonic() < end and not window._image_leaves():
-        QApplication.processEvents()
+    open_folder(window, folder, 1)
     item = window.library_index.item_for(STEM)
     window.file_list.setCurrentItem(item)
     window.on_image_selected(item)
@@ -204,19 +171,11 @@ def _open(window, folder) -> None:
         QApplication.processEvents()
 
 
-def _write_jpg(path) -> None:
-    from PyQt6.QtGui import QColor, QImage
-
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(path))
-
-
 def test_a_saved_mask_flags_area_not_length_in_the_window(window, tmp_path):
     folder = tmp_path / "proj"
     folder.mkdir()
     mask, _skeleton, _lengths, _areas = _measured_project(folder)
-    _write_jpg(folder / f"{STEM}.jpg")
+    write_photos(folder, [STEM])
     _shift(mask, 120)  # Ctrl+S in Correct rewrote the mask after the Measure run
 
     _open(window, folder)
@@ -235,7 +194,7 @@ def test_a_gt_skeleton_saved_after_the_measurement_outdates_the_length(window, t
     folder = tmp_path / "proj"
     folder.mkdir()
     _measured_project(folder)
-    _write_jpg(folder / f"{STEM}.jpg")
+    write_photos(folder, [STEM])
     gt_skeletons = folder / "gt" / "skeletons"
     gt_skeletons.mkdir(parents=True)
     (gt_skeletons / f"{STEM}.png").write_bytes(b"c")

@@ -15,27 +15,21 @@ glyphs without a font directory, so pixels cannot tell).
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QPaintDevice, QPaintEngine, QPainter, QRegion
+from PyQt6.QtWidgets import QApplication, QHeaderView, QTreeWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPaintDevice, QPaintEngine, QPainter, QRegion  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QHeaderView, QTreeWidget  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import file_tree_manager  # noqa: E402
-from app.gui.library_index import (  # noqa: E402
+from app.gui import file_tree_manager
+from app.gui.library_index import (
     LibraryIndex,
     LibraryItemDelegate,
     index_names,
     label_forms,
 )
-from app.gui.ui_panels import library_tree_qss  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
+from app.gui.ui_panels import library_tree_qss
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window, open_folder, quiet_window, write_photos
 
 EIGHT = [f"24EFCAM1_T001_L{p:03d}_2024.07.18_1115{p:02d}_001_SMM" for p in range(44, 52)]
 MANY = [f"24EFCAM1_T002_L{p:03d}_2024.07.19_10{p % 60:02d}30_001_SMM" for p in range(1, 129)]
@@ -153,11 +147,6 @@ def drawn_as(tree: QTreeWidget, index: LibraryIndex, item, text: str) -> str:
 
 
 # ------------------------------------------------------------------------ the tree
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def library(app):
     """The library tree as the window builds it (its stylesheet, indentation, header)."""
@@ -250,41 +239,18 @@ def test_a_selected_row_shows_the_same_form_as_an_unselected_one(library):
 
 # ----------------------------------------------------------- the window's default
 @pytest.fixture
-def window(app, tmp_path, monkeypatch):
-    from app.gui import image_manager
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
-    made.show()
+def window(app, tmp_path, no_temp_sweep):
+    made = [build_window(tmp_path / "s.ini", show=False)]
+    made[0].show()
     QApplication.processEvents()
-    yield made
-    made.close()
-    made.deleteLater()
-    del made
-    flush_deleted()
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
 
 
 def test_the_default_library_draws_every_date_row_whole(window, tmp_path):
     """The 240 px library of a 1280x800 window: no date row is cut (the walkthrough saw
     '2024.07.18 · 8 ima…' on every one)."""
-    import time
-
-    project = tmp_path / "project"
-    project.mkdir()
-    photo = QImage(32, 24, QImage.Format.Format_RGB32)
-    photo.fill(QColor(90, 60, 30))
-    for stem in EIGHT:
-        assert photo.save(str(project / f"{stem}.jpg"))
-    window.open_path(str(project))
-    end = time.monotonic() + 10
-    while time.monotonic() < end and not window._image_leaves():
-        QApplication.processEvents()
-        time.sleep(0.01)
+    open_folder(window, write_photos(tmp_path / "project", EIGHT), len(EIGHT), timeout=10.0)
     tree = window.file_list
     tree.expandAll()
     QApplication.processEvents()

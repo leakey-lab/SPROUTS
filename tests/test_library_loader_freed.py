@@ -24,28 +24,16 @@ import time
 import weakref
 
 import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QCoreApplication, QEvent  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import image_manager as im  # noqa: E402
+from app.gui import image_manager as im
+from tests.window_support import write_photos
 
 A_STEMS = ["plot_T1_L1_2024.01.01_120000", "plot_T1_L2_2024.01.01_120000"]
 B_STEMS = ["plot_T2_L1_2024.01.01_120000"]
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    """No stale-temp sweep 2 s after a load (an untracked timer firing in a later test)."""
-    monkeypatch.setattr(im.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None))
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 
 @pytest.fixture
@@ -60,12 +48,7 @@ def no_gc():
 
 
 def _project(folder, stems) -> str:
-    folder.mkdir(parents=True)
-    image = QImage(8, 6, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    for stem in stems:
-        assert image.save(str(folder / f"{stem}.png"))
-    return str(folder)
+    return str(write_photos(folder, stems, size=(8, 6), suffix=".png"))
 
 
 def _pump(until, timeout: float = 10.0) -> bool:

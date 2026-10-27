@@ -12,15 +12,11 @@ tooltip. The item texts themselves (search, accessibility, tests) are unchanged.
 from __future__ import annotations
 
 import math
-import os
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, Qt  # noqa: E402
-from PyQt6.QtGui import QFontMetricsF, QHelpEvent  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtGui import QFontMetricsF, QHelpEvent
+from PyQt6.QtWidgets import (
     QApplication,
     QStyle,
     QStyleOptionViewItem,
@@ -28,29 +24,16 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QTreeWidget,
 )
 
-from app.gui.library_index import (  # noqa: E402
+from app.gui.library_index import (
     LibraryIndex,
     fit_label,
     index_names,
     label_forms,
     stem_forms,
 )
-from app.gui.metrics_bar import MetricsBar  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.metrics_bar import MetricsBar
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
-    yield
-    flush_deleted()
 
 
 # ------------------------------------------------------------------ Qt-free forms

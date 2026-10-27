@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.task_progress import EtaEstimator, TaskProgressWidget, format_eta  # noqa: E402
+from app.gui.task_progress import EtaEstimator, TaskProgressWidget, format_eta
 
 
 class _Clock:
@@ -19,11 +13,6 @@ class _Clock:
 
     def __call__(self) -> float:
         return self.t
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 # --------------------------------------------------------------------------- #

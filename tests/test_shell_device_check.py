@@ -11,51 +11,26 @@ The runtime is faked (``sys.modules["app.inference.runtime"]``), so torch is nev
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
-import time
 import types
 
 import pytest
+from PyQt6.QtCore import QThreadPool
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt, QThreadPool  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import device_check, shell_chrome  # noqa: E402
-from app.gui.shell_chrome import DEVICE_CHECK_FAILED, DEVICE_CHECKING, runtime_status  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
+from app.gui import device_check, shell_chrome
+from app.gui.shell_chrome import DEVICE_CHECK_FAILED, DEVICE_CHECKING, runtime_status
+from app.gui.widgets import tokens
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.qt_wait import wait_until as wait
+from tests.window_support import build_window, quiet_window
 
 RUNTIME = "app.inference.runtime"
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
-    yield
-    flush_deleted()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    hooked = []
-    monkeypatch.setattr(sys, "excepthook", lambda *exc: hooked.append(exc))
-    yield
-    assert hooked == []
+pytestmark = pytest.mark.usefixtures("no_prompts", "slot_errors")
 
 
 class FakeRuntime:
@@ -90,36 +65,19 @@ def runtime(monkeypatch):
     return fake
 
 
-def settle() -> None:
-    for _ in range(3):
-        QApplication.processEvents()
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
-
-
 @pytest.fixture
 def make_window(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
+    """``make(**kwargs)``: a MainWindow on its own INI settings, neither resized nor shown."""
     made = []
 
     def make(**kwargs):
         path = tmp_path / f"settings_{len(made)}.ini"
-        window = MainWindow(settings=QSettings(str(path), QSettings.Format.IniFormat), **kwargs)
-        made.append(window)
-        return window
+        made.append(build_window(path, size=None, show=False, **kwargs))
+        return made[-1]
 
     yield make
     assert QThreadPool.globalInstance().waitForDone(5000)
-    delete_widgets(made)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

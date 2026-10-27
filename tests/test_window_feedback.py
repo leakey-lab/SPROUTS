@@ -22,56 +22,21 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.config import ROOT_LENGTHS_CSV
+from app.gui.correct.layer import CLASSES
+from app.gui.panels import Panel
+from app.gui.window import stages
+from app.handlers.deps import SAVED_PATH_STATUS_MS
+from tests.correct_support import drag, paint
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.qt_wait import wait_until as wait
+from tests.test_correct_main_window import STEMS, enter, new_project, open_project, select
+from tests.window_support import build_window, quiet_window
 
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.config import ROOT_LENGTHS_CSV  # noqa: E402
-from app.gui import canvas_gl, image_manager  # noqa: E402
-from app.gui.correct.layer import CLASSES, SKELETON  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from app.gui.window import stages  # noqa: E402
-from app.handlers.deps import SAVED_PATH_STATUS_MS  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import drag, paint, qapp  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
-    STEMS,
-    enter,
-    new_project,
-    open_project,
-    select,
-    settle,
-    wait,
-)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    """No prompt or file dialog, no GL, the user's config untouched, no delayed sweeps."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-
-
-def _quiet(window) -> None:
-    for editor in window._editors().values():
-        editor.maybe_save_changes = lambda: True
-    window.correct_editor.layers[SKELETON].cancel_scheduled_render()
-
+pytestmark = pytest.mark.usefixtures("window_guards")
 
 #: Toast lifetime in these tests: no toast expires while a test runs on a busy machine
 #: (an expired toast would read as dropped, or a re-created one as stacked).
@@ -82,22 +47,19 @@ LONG_TOAST_MS = 120_000
 def window(app, tmp_path):
     """A shown 1280x800 window on ``tmp_path/project`` (``window.project``); its toasts
     keep their keys and stacking but last :data:`LONG_TOAST_MS`."""
-    from app.gui.main_window import MainWindow
-
-    made = [MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))]
+    made = [build_window(tmp_path / "s.ini", show=False)]
     shown = made[0]
     real_show = shown.toasts.show
     shown.toasts.show = lambda message, kind="success", timeout=None, *, key=None: real_show(
         message, kind, LONG_TOAST_MS, key=key
     )
-    shown.resize(1280, 800)
     shown.show()
     settle()
     shown.project = new_project(tmp_path)
     open_project(shown, shown.project)
     del shown
     yield made[0]
-    delete_widgets(made, prepare=_quiet)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

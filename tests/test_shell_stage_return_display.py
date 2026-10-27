@@ -10,73 +10,30 @@ saved meanwhile shows too).
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.correct.layer import SKELETON  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import qapp  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
-    STEMS,
-    enter,
-    new_project,
-    open_project,
-    same_path,
-    select,
-    settle,
-)
+from app.gui.panels import Panel
+from tests.correct_support import same_path
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.test_correct_main_window import STEMS, enter, new_project, open_project, select
+from tests.window_support import build_window, quiet_window
 
 USER = Qt.ItemDataRole.UserRole
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+pytestmark = pytest.mark.usefixtures("window_guards")
 
 
 @pytest.fixture
 def window(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
-    made.show()
-    settle()
+    made = [build_window(tmp_path / "s.ini")]
     project = new_project(tmp_path)
-    open_project(made, project)
-    made.project = project
-    yield made
-    for editor in made._editors().values():
-        editor.maybe_save_changes = lambda: True
-    made.correct_editor.layers[SKELETON].cancel_scheduled_render()
-    made.close()
-    made.deleteLater()
-    del made, editor
-    flush_deleted()
+    open_project(made[0], project)
+    made[0].project = project
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

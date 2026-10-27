@@ -12,25 +12,17 @@ The request is a stub here; the main window's own tests cover the wiring.
 
 from __future__ import annotations
 
-import os
 import time
 
 import pytest
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import warmup  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import warmup
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import wait_until as wait
 
 POLICY = {"Generate": ("torch", "models"), "Measure": ("dashboards",)}
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication(["test"])
 
 
 @pytest.fixture
@@ -40,16 +32,6 @@ def made(app):
     yield objects
     QApplication.processEvents()
     delete_widgets(objects, close=False)
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
 
 
 class Asked:

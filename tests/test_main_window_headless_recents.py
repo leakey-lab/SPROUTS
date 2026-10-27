@@ -6,23 +6,8 @@ recent-projects list, unlike the window state and the layer preferences.
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import pytest  # noqa: E402
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.recent_projects import MemorySettings  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.recent_projects import MemorySettings
+from tests.qt_teardown import delete_widgets
 
 
 def test_headless_window_keeps_recent_projects_in_memory(app, tmp_path):

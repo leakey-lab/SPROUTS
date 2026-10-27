@@ -10,32 +10,20 @@ or cleared in an editor (the mask dict changes size in place).
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import stage_status  # noqa: E402
-from app.gui.stage_status import StageStatus  # noqa: E402
-from app.gui.stage_summary import generate_text  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui import stage_status
+from app.gui.stage_status import StageStatus
+from app.gui.stage_summary import generate_text
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.window_support import build_window, open_folder, quiet_window, write_photos
 
 NAMES = [
     f"24EFCAM1_T{t:03d}_L{p:03d}_2024.07.18_111530_001_SMM" for t in range(1, 5) for p in (1, 2)
 ]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
@@ -127,40 +115,18 @@ def test_other_stages_and_an_empty_library_never_count(status, counted):
 
 # ------------------------------------------------------------------------ the window
 @pytest.fixture
-def window(app, tmp_path, monkeypatch):
-    from app.gui import image_manager
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
-    made.show()
+def window(app, tmp_path, no_temp_sweep):
+    made = [build_window(tmp_path / "s.ini", show=False)]
+    made[0].show()
     QApplication.processEvents()
-    yield made
-    made.close()
-    made.deleteLater()
-    del made
-    flush_deleted()
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
 
 
 def test_the_generate_text_follows_a_mask_saved_in_an_editor(window, tmp_path, counted):
-    import time
-
-    project = tmp_path / "project"
-    (project / "mask").mkdir(parents=True)
-    photo = QImage(32, 24, QImage.Format.Format_RGB32)
-    photo.fill(QColor(90, 60, 30))
-    for name in NAMES[:4]:
-        assert photo.save(str(project / f"{name}.jpg"))
-    assert photo.save(str(project / "mask" / f"{NAMES[0]}.png"))
-    window.open_path(str(project))
-    end = time.monotonic() + 10
-    while time.monotonic() < end and len(window._image_leaves()) < 4:
-        QApplication.processEvents()
-        time.sleep(0.01)
+    project = write_photos(tmp_path / "project", NAMES[:4])
+    write_photos(project / "mask", NAMES[:1], suffix=".png")
+    open_folder(window, project, 4, timeout=10.0)
     window.ribbon_buttons["Generate"].click()
     QApplication.processEvents()
     line = window.statusline_message

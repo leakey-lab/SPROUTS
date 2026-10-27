@@ -13,40 +13,28 @@ suite frees Qt wrappers with gc.collect()).
 
 from __future__ import annotations
 
-import os
-import sys
 import threading
 import time
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtCore import QPointF, QThreadPool
+from PyQt6.QtGui import QEnterEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPointF, QSettings, QThreadPool  # noqa: E402
-from PyQt6.QtGui import QEnterEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
-
-from app import gc_policy  # noqa: E402
-from app.gui import (  # noqa: E402
-    canvas_gl,
-    main_window,
-    shell_chrome,
-    warmup,
-)
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app import gc_policy
+from app.gui import main_window, shell_chrome, warmup
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import wait_until as wait
+from tests.window_support import build_window, open_folder, quiet_window
 
 STEMS = tuple(f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (31, 32, 33))
 #: The stage dwell here (warmup.STAGE_DWELL_MS, read when the window is built).
 DWELL_MS = 150
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication(["test"])
+pytestmark = pytest.mark.usefixtures("no_prompts", "no_file_dialogs", "gl_off", "slot_errors")
 
 
 class Warmups:
@@ -82,55 +70,18 @@ def warmups(monkeypatch):
     return stub
 
 
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    hooked = []
-    monkeypatch.setattr(sys, "excepthook", lambda *exc: hooked.append(exc))
-    yield
-    assert hooked == []
-
-
 @pytest.fixture
 def make_window(app, tmp_path):
     made: list = []
 
     def make(**kwargs):
-        settings = QSettings(
-            str(tmp_path / f"settings_{len(made)}.ini"), QSettings.Format.IniFormat
-        )
-        window = main_window.MainWindow(settings=settings, **kwargs)
-        made.append(window)
-        window.resize(1280, 800)
-        window.show()
-        settle()
-        return window
+        made.append(build_window(tmp_path / f"settings_{len(made)}.ini", **kwargs))
+        return made[-1]
 
     yield make
     assert QThreadPool.globalInstance().waitForDone(10_000)
-    for window in made:
-        for editor in window._editors().values():
-            editor.maybe_save_changes = lambda: True
-    delete_widgets(made)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
-
-
-def settle() -> None:
-    for _ in range(3):
-        QApplication.processEvents()
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
 
 
 def new_project(root) -> str:
@@ -143,9 +94,9 @@ def new_project(root) -> str:
 
 
 def open_project(window, folder: str) -> float:
-    """Open ``folder``; returns when the library is built (perf_counter)."""
-    window.open_path(folder)
-    assert wait(lambda: len(window.image_manager.images) == len(STEMS) and window._image_leaves())
+    """Open ``folder``; returns when the load has ended and the library is built
+    (perf_counter)."""
+    open_folder(window, folder, len(STEMS))
     return time.perf_counter()
 
 

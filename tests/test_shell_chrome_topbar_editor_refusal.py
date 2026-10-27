@@ -10,19 +10,10 @@ F2 - the topbar density does not depend on which action page is current:
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+from app.gui.panels import Panel
+from tests.qt_teardown import flush_deleted
 
 STAGES = [
     "Library",
@@ -31,11 +22,6 @@ STAGES = [
     "Measure",
     "Visualize",
 ]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(scope="module")

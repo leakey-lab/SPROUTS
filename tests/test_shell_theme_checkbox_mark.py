@@ -13,28 +13,19 @@ import os
 import re
 from pathlib import Path
 
-import pytest
+from PyQt6.QtCore import QDir
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QCheckBox, QStyle, QStyleOptionButton
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QDir  # noqa: E402
-from PyQt6.QtGui import QColor  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QCheckBox, QStyle, QStyleOptionButton  # noqa: E402
-
-import app.design.tokens as tokens  # noqa: E402
-from app.gui.widgets import icons  # noqa: E402  (registers the theme search path)
-from tests.qt_teardown import flush_deleted  # noqa: E402
+import app.design.tokens as tokens
+from app.gui.widgets import icons  # registers the theme search path
+from tests.qt_teardown import flush_deleted
 
 ROOT = Path(__file__).resolve().parents[1]
 QSS_PATH = ROOT / "resources" / "themes" / "dark_theme.qss"
 _COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 _URL = re.compile(r"url\(\s*([^)\s]+)\s*\)")
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _qss() -> str:

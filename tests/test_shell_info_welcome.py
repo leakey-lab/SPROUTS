@@ -5,16 +5,12 @@ from __future__ import annotations
 import json
 import os
 
-import pytest
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
+from PyQt6.QtGui import QDropEvent
+from PyQt6.QtWidgets import QLabel, QScrollArea
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl  # noqa: E402
-from PyQt6.QtGui import QDropEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QScrollArea  # noqa: E402
-
-from app.gui.recent_projects import RecentProjectsStore  # noqa: E402
-from app.gui.welcome_screen import WelcomeWidget  # noqa: E402
+from app.gui.recent_projects import RecentProjectsStore
+from app.gui.welcome_screen import WelcomeWidget
 
 
 class _FakeSettings:
@@ -26,11 +22,6 @@ class _FakeSettings:
 
     def setValue(self, key, value):  # noqa: N802
         self.data[key] = value
-
-
-@pytest.fixture(scope="module")
-def app():
-    yield QApplication.instance() or QApplication([])
 
 
 def _store(paths):

@@ -7,15 +7,12 @@ shrink below 1058 px.
 
 from __future__ import annotations
 
-import os
+import pytest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from app.gui.metrics_bar import MetricsBar, _ElidedLabel
 
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.metrics_bar import MetricsBar, _ElidedLabel  # noqa: E402
-
-_APP = QApplication.instance() or QApplication([])  # keep a reference
+pytestmark = pytest.mark.usefixtures("app")
 
 LONG_NAME = "24EFCAM1_T001_L011_2024.07.18_111618_001_SMM_with_a_very_long_suffix_rep2"
 

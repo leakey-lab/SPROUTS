@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import time
 from types import SimpleNamespace
 
-import pytest
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
-
-from app import __version__, provenance  # noqa: E402
-from app.gui import about_dialog  # noqa: E402
-from app.models import ModelStatus  # noqa: E402
+from app import __version__, provenance
+from app.gui import about_dialog
+from app.models import ModelStatus
 
 CFF = """\
 cff-version: 1.2.0
@@ -30,11 +25,6 @@ version: "3.0.0"
 date-released: 2026-10-01
 doi: 10.5281/zenodo.123
 """
-
-
-@pytest.fixture(scope="module")
-def app():
-    yield QApplication.instance() or QApplication([])
 
 
 def _texts(dlg) -> str:

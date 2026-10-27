@@ -10,25 +10,15 @@ shown is still the newest count's.
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import stage_status  # noqa: E402
-from app.gui.stage_status import StageStatus  # noqa: E402
-from app.gui.stage_summary import Freshness  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui import stage_status
+from app.gui.stage_status import StageStatus
+from app.gui.stage_summary import Freshness
+from app.project_layout import ProjectLayout
+from tests.qt_teardown import flush_deleted
 
 
 class _Pool:

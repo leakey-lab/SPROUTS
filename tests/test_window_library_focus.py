@@ -17,39 +17,24 @@ from __future__ import annotations
 import os
 
 import pytest
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt, pyqtSignal  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
-    QFileDialog,
-    QMainWindow,
-    QMessageBox,
-    QVBoxLayout,
-    QWidget,
-)
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV  # noqa: E402
-from app.gui import canvas_gl, image_manager  # noqa: E402
-from app.gui import visualization_manager as vm  # noqa: E402
-from app.gui.correct.layer import SKELETON  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import qapp  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
+from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
+from app.gui import visualization_manager as vm
+from app.gui.panels import Panel
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.test_correct_main_window import (
     STAGE_NAMES,
     activate,
     leaf,
     new_project,
     open_project,
     select,
-    settle,
 )
+from tests.window_support import build_window, quiet_window
 
 ALT = Qt.KeyboardModifier.AltModifier
 #: The dashboard classes the controller builds, resolved on ``visualization_manager``.
@@ -87,25 +72,11 @@ class LoadedStubDashboard(StubDashboard):
     VIEW_FOCUS = Qt.FocusPolicy.StrongFocus
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
 @pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    """No prompt, message box or file dialog, no GL, no delayed temp sweep, and stand-in
-    dashboards (set on the module itself: a monkeypatch would import the Dash stack to
-    read the old value)."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    for name in ("information", "warning", "critical", "question"):
-        monkeypatch.setattr(QMessageBox, name, lambda *a, n=name: pytest.fail(f"box {n}: {a}"))
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+def guards(window_guards):
+    """The window guards (no prompt, message box or file dialog, no GL, no delayed temp
+    sweep) and stand-in dashboards (set on the module itself: a monkeypatch would import the
+    Dash stack to read the old value)."""
     saved = {name: vm.__dict__.get(name, _UNSET) for name in DASHBOARD_CLASSES}
     for name in DASHBOARD_CLASSES:
         setattr(vm, name, StubDashboard)
@@ -117,23 +88,12 @@ def guards(monkeypatch, tmp_path):
             setattr(vm, name, value)
 
 
-def _quiet(window) -> None:
-    for editor in window._editors().values():
-        editor.maybe_save_changes = lambda: True
-    window.correct_editor.layers[SKELETON].cancel_scheduled_render()
-
-
 @pytest.fixture
 def window(app, tmp_path):
     """A shown, active 1280x800 window on a project with both CSVs, image 1 selected by a
     click and the library tree focused."""
-    from app.gui.main_window import MainWindow
-
-    made = [MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))]
+    made = [build_window(tmp_path / "s.ini")]
     shown = made[0]
-    shown.resize(1280, 800)
-    shown.show()
-    settle()
     project = new_project(tmp_path)
     for folder, name in (("skeletons", ROOT_LENGTHS_CSV), ("mask", ROOT_AREAS_CSV)):
         with open(os.path.join(project.folder, folder, name), "w", encoding="utf-8") as fh:
@@ -146,7 +106,7 @@ def window(app, tmp_path):
     assert QApplication.focusWidget() is shown.file_list
     del shown
     yield made[0]
-    delete_widgets(made, prepare=_quiet)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

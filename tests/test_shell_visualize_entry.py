@@ -14,70 +14,38 @@ Offscreen; the dashboards themselves are replaced by recorders (building one nee
 from __future__ import annotations
 
 import csv
-import os
-import time
 
 import pytest
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app import config  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app import config
+from app.gui.panels import Panel
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle as _settle
+from tests.window_support import build_window, open_folder, quiet_window
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch):
-    """No message box (the empty state replaces it) and no delayed temp sweeps."""
-    from app.gui import image_manager
-
-    for name in ("information", "warning", "critical", "question"):
-        monkeypatch.setattr(
-            QMessageBox, name, lambda *a, n=name, **k: pytest.fail(f"QMessageBox.{n}: {a[2:]}")
-        )
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+# No message box (the empty state replaces it) and no delayed temp sweeps.
+pytestmark = pytest.mark.usefixtures("no_prompts", "no_temp_sweep")
 
 
 @pytest.fixture
 def window(app, tmp_path, monkeypatch):
     """A shown window whose dashboards are recorders: ``window.shown`` lists the kinds."""
-    from app.gui.main_window import MainWindow
-
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
-    made.shown = []
+    made = [build_window(tmp_path / "s.ini", show=False)]
+    window = made[0]
+    window.shown = []
     for kind in ("length", "area"):
         monkeypatch.setattr(
-            made, f"show_root_{kind}_visualization", lambda k=kind: made.shown.append(k)
+            window, f"show_root_{kind}_visualization", lambda k=kind: window.shown.append(k)
         )
-    made.show()
+    window.show()
     _settle()
-    yield made
-    made.close()
-    made.deleteLater()
-    flush_deleted()
+    yield window
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
-
-
-def _settle():
-    for _ in range(3):
-        QApplication.processEvents()
 
 
 def _project(root, *, lengths=False, areas=False, skeletons=False, masks=False):
@@ -109,11 +77,7 @@ def _project(root, *, lengths=False, areas=False, skeletons=False, masks=False):
 
 
 def _open(window, folder) -> None:
-    window.open_path(str(folder))
-    end = time.monotonic() + 5
-    while time.monotonic() < end and not window._image_leaves():
-        QApplication.processEvents()
-    assert window._image_leaves()
+    open_folder(window, folder, len(STEMS))
     _settle()
 
 

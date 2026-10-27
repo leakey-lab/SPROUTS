@@ -12,32 +12,19 @@ The resolver is a stub: torch is never loaded here.
 
 from __future__ import annotations
 
-import os
 import time
+from functools import partial
 
 import pytest
+from PyQt6.QtCore import QEvent, QPointF, Qt
+from PyQt6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-from app.gui import device_check  # noqa: E402
-from app.gui.device_check import DeviceCheck, device_check_enabled  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    yield
-    flush_deleted()
+from app.gui import device_check
+from app.gui.device_check import DeviceCheck, device_check_enabled
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.qt_wait import wait_until
 
 
 class Line:
@@ -92,14 +79,8 @@ def pump(ms: int) -> None:
     QTest.qWait(ms)
 
 
-def wait(predicate, timeout: float = 3.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
+#: ``wait_until`` with a 3 s timeout.
+wait = partial(wait_until, timeout=3.0)
 
 
 def move(target: QWidget, i: int = 0) -> None:

@@ -6,26 +6,7 @@ asserts the metrics bar mounts in the right panel without disturbing the
 display-page stack / right-panel indices.
 """
 
-import os
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-# Allow the MainWindow mount test to construct the window offscreen (MainWindow
-# transitively imports QtWebEngine via the visualization modules).
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui.metrics_bar import MetricsBar  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
+from app.gui.metrics_bar import MetricsBar
 
 
 def test_metrics_bar_instantiates(app):

@@ -2,22 +2,12 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtWidgets import QStatusBar
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QStatusBar  # noqa: E402
-
-from app.feedback import UiFeedback  # noqa: E402
-from app.gui.task_progress import TaskProgressWidget  # noqa: E402
-from app.gui.ui_feedback import QtUiFeedback  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.feedback import UiFeedback
+from app.gui.task_progress import TaskProgressWidget
+from app.gui.ui_feedback import QtUiFeedback
 
 
 @pytest.fixture

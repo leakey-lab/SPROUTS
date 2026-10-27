@@ -9,31 +9,15 @@ window's minimum width then followed. Both now elide the middle; the tooltip kee
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtWidgets import QApplication, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-from app.gui.empty_state import EmptyStateWidget  # noqa: E402
-from app.gui.loading_overlay import LoadingOverlay  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.empty_state import EmptyStateWidget
+from app.gui.loading_overlay import LoadingOverlay
+from tests.qt_teardown import flush_deleted
 
 LONG = "Minirhizotron_EnergyFarm_2024_all_tubes_T001-T096_raw_exports_CI600"
 HUGE = "x" * 40 + "_" + "y" * 120
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    yield
-    flush_deleted()
 
 
 @pytest.fixture

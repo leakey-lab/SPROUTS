@@ -20,80 +20,40 @@ from __future__ import annotations
 import os
 
 import pytest
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtGui import QKeyEvent, QKeySequence, QShortcut, QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QKeyEvent, QKeySequence, QShortcut, QWheelEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import canvas_gl, shortcuts  # noqa: E402
-from app.gui.correct.layer import CLASSES, MASK, SKELETON  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import paint, plane, qapp  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
-    STEMS,
-    activate,
-    enter,
-    leaf,
-    new_project,
-    open_project,
-    same_path,
-    settle,
-    wait,
-)
+from app.gui import shortcuts
+from app.gui.correct.layer import CLASSES, MASK, SKELETON
+from app.gui.panels import Panel
+from tests.correct_support import paint, plane, same_path
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.qt_wait import wait_until as wait
+from tests.test_correct_main_window import STEMS, activate, enter, leaf, new_project, open_project
+from tests.window_support import build_window, quiet_window
 
 CTRL = Qt.KeyboardModifier.ControlModifier
+ALT = Qt.KeyboardModifier.AltModifier
+META = Qt.KeyboardModifier.MetaModifier  # the Control key on macOS
 NO_MOD = Qt.KeyboardModifier.NoModifier
 PRESS, RELEASE = QEvent.Type.KeyPress, QEvent.Type.KeyRelease
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    """No prompt or file dialog, no GL, the user's config untouched, no delayed sweeps."""
-    from app.gui import image_manager
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+pytestmark = pytest.mark.usefixtures("window_guards")
 
 
 @pytest.fixture
 def window(app, tmp_path):
     """A shown 1280x800 window with the project open and image 0 shown in the Library."""
-    from app.gui.main_window import MainWindow
-
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    made = MainWindow(settings=settings)
-    made.resize(1280, 800)
-    made.show()
-    settle()
+    made = [build_window(tmp_path / "settings.ini")]
     project = new_project(tmp_path)
-    open_project(made, project)
-    made.project = project
-    click_row(made, 0)
-    yield made
-    for editor in made._editors().values():
-        editor.maybe_save_changes = lambda: True
-    made.correct_editor.layers[SKELETON].cancel_scheduled_render()
-    made.close()
-    made.deleteLater()
-    del made, editor
-    flush_deleted()
+    open_project(made[0], project)
+    made[0].project = project
+    click_row(made[0], 0)
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 
@@ -446,6 +406,47 @@ def test_a_hold_released_on_another_stage_has_ended_when_correct_is_back(window,
     zoom = view.target_zoom
     ctrl_wheel(view)
     assert view.target_zoom != pytest.approx(zoom)  # the wheel zooms, it sizes no brush
+
+
+def test_b_and_space_held_both_end_on_the_first_release_off_screen(window):
+    """B and Space held from the tree, then a stage switch: the first release ends both
+    holds, and the second key, forgotten by then, goes to the tree."""
+    editor = in_stage(window, "Correct")
+    tree, view = window.file_list, editor.graphics_view
+    key(tree, Qt.Key.Key_E)
+    send(tree, PRESS, Qt.Key.Key_B, text="b")
+    send(tree, PRESS, Qt.Key.Key_Space, text=" ")
+    assert editor.router.b_held and view.space_pan
+
+    enter(window, "Library")
+    send(tree, RELEASE, Qt.Key.Key_B, text="b")
+    assert not editor.router.b_held and not view.space_pan
+    send(tree, RELEASE, Qt.Key.Key_Space, text=" ")
+    enter(window, "Correct")
+
+    assert QApplication.focusWidget() is view
+    assert not editor.router.b_held and not view.space_pan
+    assert editor.layers[MASK].current_tool == "eraser"  # a lost hold is not a B tap
+    zoom = view.target_zoom
+    ctrl_wheel(view)
+    assert view.target_zoom != pytest.approx(zoom)
+
+
+def test_a_relayed_space_released_with_alt_or_meta_ends_the_pan(window):
+    """As with Ctrl: Space from the tree, then Alt or Meta, then Space up first ends the
+    pan."""
+    editor = in_stage(window, "Correct")
+    tree, view = window.file_list, editor.graphics_view
+    for modifier_key, modifier in ((Qt.Key.Key_Alt, ALT), (Qt.Key.Key_Meta, META)):
+        send(tree, PRESS, Qt.Key.Key_Space, text=" ")
+        send(tree, PRESS, modifier_key, modifier)
+        assert view.space_pan
+
+        send(tree, RELEASE, Qt.Key.Key_Space, modifier, " ")
+        send(tree, RELEASE, modifier_key)
+
+        assert not view.space_pan, modifier
+        assert tree.hasFocus()
 
 
 def test_a_b_tap_reaches_the_class_labels_from_the_tree(window):

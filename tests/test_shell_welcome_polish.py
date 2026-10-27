@@ -13,20 +13,16 @@ buttons but do nothing. It is now one line of plain text.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QLabel
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
-
-from app.gui import welcome_screen  # noqa: E402
-from app.gui.recent_projects import RecentProjectsStore  # noqa: E402
-from app.gui.welcome_screen import RecentRow, WelcomeWidget  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import welcome_screen
+from app.gui.recent_projects import RecentProjectsStore
+from app.gui.welcome_screen import RecentRow, WelcomeWidget
+from tests.qt_teardown import delete_widgets
 
 STAGES = ["Library", "Generate", "Correct", "Measure", "Visualize"]
 QSS_PATH = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
@@ -41,11 +37,6 @@ class _Settings:
 
     def setValue(self, key, value):  # noqa: N802
         self.data[key] = value
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -22,23 +22,16 @@ import types
 from pathlib import Path
 
 import pytest
+from PyQt6.QtCore import QEvent, QPointF, Qt, QThreadPool
+from PyQt6.QtGui import QEnterEvent, QFocusEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QPointF, Qt, QThreadPool  # noqa: E402
-from PyQt6.QtGui import QEnterEvent, QFocusEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QPushButton, QWidget  # noqa: E402
-
-from app import gc_policy  # noqa: E402
-from app.gui import warmup  # noqa: E402
-from app.gui.warmup import HoverIntent, WarmupQueue  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication(["test"])
+from app import gc_policy
+from app.gui import warmup
+from app.gui.warmup import HoverIntent, WarmupQueue
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import wait_until as wait
 
 
 @pytest.fixture
@@ -76,16 +69,6 @@ def unfrozen():
         gc.collect()
         if frozen:
             gc.freeze()
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
 
 
 class Job:

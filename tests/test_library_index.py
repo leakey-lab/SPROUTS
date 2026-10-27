@@ -7,12 +7,9 @@ import os
 import time
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QLabel,
     QLineEdit,
@@ -21,7 +18,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QTreeWidgetItem,
 )
 
-from app.gui.library_index import (  # noqa: E402
+from app.gui.library_index import (
     LibraryIndex,
     LibrarySearchController,
     build_hierarchy,
@@ -30,11 +27,6 @@ from app.gui.library_index import (  # noqa: E402
 )
 
 USER = Qt.ItemDataRole.UserRole
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _name(tube, depth, date="2024.07.18", hhmmss="111530", field="24EFCAM1"):

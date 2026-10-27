@@ -7,28 +7,7 @@ before its first visible cell.
 
 from __future__ import annotations
 
-import os
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.metrics_bar import MetricsBar  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
-    yield
-    flush_deleted()
+from app.gui.metrics_bar import MetricsBar
 
 
 def _separated(bar: MetricsBar) -> list[str]:

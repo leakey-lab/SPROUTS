@@ -7,42 +7,18 @@ ZOOM cell now (with the zoom keys in its tooltip), shown while an image is selec
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.metrics_bar import MetricsBar  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import qapp  # noqa: E402
-from tests.test_correct_main_window import new_project, open_project, select, settle  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
+from app.gui.key_text import platform_keys
+from app.gui.metrics_bar import MetricsBar
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.test_correct_main_window import new_project, open_project, select
+from tests.window_support import build_window
 
 
 @pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+def guards(window_guards):
+    """The window guards, and the widgets a test deleteLater()s go before they are undone."""
     yield
     flush_deleted()
 
@@ -88,13 +64,8 @@ def test_the_zoom_cell_never_widens_the_window_and_goes_first_when_narrow(app):
 
 
 def test_the_library_zoom_is_on_the_metrics_bar(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    window = build_window(tmp_path / "s.ini")
     try:
-        window.resize(1280, 800)
-        window.show()
-        settle()
         open_project(window, new_project(tmp_path))
         select(window, 1)
         view = window.display_controller.magnifying_view
@@ -105,6 +76,4 @@ def test_the_library_zoom_is_on_the_metrics_bar(app, tmp_path):
         view.set_zoom(1.0)
         assert bar._zoom_value.text() == "100 %"
     finally:
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window])

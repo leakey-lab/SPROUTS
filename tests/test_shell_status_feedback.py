@@ -13,51 +13,18 @@ Before (1280 x 800, offscreen screenshots):
 
 from __future__ import annotations
 
-import os
-import time
-
 import pytest
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QMainWindow, QStatusBar
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.gui import task_progress
+from app.gui.shell_chrome import WORKING_TEXT, StatusLine
+from app.gui.task_progress import TaskProgressWidget
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import wait_until as _wait
+from tests.window_support import build_window, write_photos
 
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStatusBar  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import task_progress  # noqa: E402
-from app.gui.shell_chrome import WORKING_TEXT, StatusLine  # noqa: E402
-from app.gui.task_progress import TaskProgressWidget  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    """A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer;
-    here it is a no-op, so a window of this test never sweeps inside a later test."""
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-
-
-def _wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 
 def _line(idle=None):
@@ -123,42 +90,24 @@ def test_refresh_idle_rereads_the_provider_without_a_message(app):
 
 # ------------------------------------------------------------------ the window
 def _folder(root, name: str, count: int) -> str:
-    folder = root / name
-    folder.mkdir()
-    img = QImage(32, 24, QImage.Format.Format_RGB32)
-    img.fill(QColor(90, 60, 30))
-    for i in range(count):
-        stem = f"24EFCAM1_T001_L0{10 + i}_2024.07.18_1115{10 + i}_001_SMM"
-        assert img.save(str(folder / f"{stem}.jpg"))
-    return str(folder)
+    stems = [f"24EFCAM1_T001_L0{10 + i}_2024.07.18_1115{10 + i}_001_SMM" for i in range(count)]
+    return str(write_photos(root / name, stems))
 
 
-def test_the_window_title_names_the_app_and_the_project(app, tmp_path, monkeypatch):
+def test_the_window_title_names_the_app_and_the_project(app, tmp_path, no_prompts):
     """The title bar said "Root Viewer" (the app's old name) whatever was open."""
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    settings = QSettings(str(tmp_path / "t.ini"), QSettings.Format.IniFormat)
-    window = MainWindow(settings=settings)
+    window = build_window(tmp_path / "t.ini", size=None, show=False)
     try:
         assert window.windowTitle() == "SPROUTS[*]"
         window.open_path(_folder(tmp_path, "trial_B", 2))
         assert _wait(lambda: len(window.library_index.leaves()) == 2)
         assert window.windowTitle() == "trial_B — SPROUTS[*]"
     finally:
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window])
 
 
-def test_the_idle_text_follows_the_loaded_folder(app, tmp_path, monkeypatch):
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
-    window = MainWindow(settings=settings)
+def test_the_idle_text_follows_the_loaded_folder(app, tmp_path, no_prompts):
+    window = build_window(tmp_path / "s.ini", size=None, show=False)
     try:
         window.show()
         window.open_path(_folder(tmp_path, "a", 3))
@@ -169,6 +118,4 @@ def test_the_idle_text_follows_the_loaded_folder(app, tmp_path, monkeypatch):
         assert _wait(lambda: len(window.library_index.leaves()) == 5)
         assert _wait(lambda: window.statusline_message.text() == "Ready · 5 images")
     finally:
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window])

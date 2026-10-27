@@ -11,26 +11,20 @@ reports to the window on the GUI thread, and reaches nothing once the window is 
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import threading
 import time
 from types import SimpleNamespace
 
 import pytest
+from PyQt6 import sip
+from PyQt6.QtCore import QEvent, QThreadPool
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6 import sip  # noqa: E402
-from PyQt6.QtCore import QEvent, QSettings, QThreadPool  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-from app.data_processing.measurement_index import Measurement  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.main_window import MainWindow  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from app.gui.window import (  # noqa: E402
+from app.data_processing.measurement_index import Measurement
+from app.gui.key_text import platform_keys
+from app.gui.panels import Panel
+from app.gui.window import (
     editors,
     lifecycle,
     metrics,
@@ -38,13 +32,9 @@ from app.gui.window import (  # noqa: E402
     project_loader,
     stages,
 )
-from app.gui.window.metrics import MetricsController  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.window.metrics import MetricsController
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.window_support import build_window, quiet_window
 
 
 class Event:
@@ -492,13 +482,12 @@ def make_window(app, tmp_path):
     made: list = []
 
     def make():
-        settings = QSettings(str(tmp_path / f"s{len(made)}.ini"), QSettings.Format.IniFormat)
-        made.append(MainWindow(settings=settings))
+        made.append(build_window(tmp_path / f"s{len(made)}.ini", size=None, show=False))
         return made[-1]
 
     yield make
     QThreadPool.globalInstance().waitForDone(10_000)
-    delete_widgets(made)
+    delete_widgets(made, prepare=quiet_window)
 
 
 def wait(predicate, timeout: float = 5.0) -> bool:
@@ -530,7 +519,7 @@ def test_a_parse_that_ends_after_the_window_is_gone_reaches_nothing(app, tmp_pat
     reached, hooked = [], []
     monkeypatch.setattr(MetricsController, "on_ready", lambda self, index: reached.append(index))
     monkeypatch.setattr(sys, "excepthook", lambda *exc: hooked.append(exc))
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    window = build_window(tmp_path / "s.ini", size=None, show=False)
     signals = window.metrics.signals  # the worker's closure keeps it, as in prewarm()
     window.close()
     window.deleteLater()

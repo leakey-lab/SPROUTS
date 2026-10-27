@@ -4,23 +4,22 @@ Offscreen; every project is a tmp_path folder of tiny synthetic JPGs.
 """
 
 import os
-import time
 
 import pytest
+from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtGui import QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt, QThread  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+from tests import guards
+from tests.qt_teardown import flush_deleted
+from tests.qt_wait import wait_until as _wait
+from tests.window_support import open_folder, write_photos
 
 USER = Qt.ItemDataRole.UserRole
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13, 14, 15)]
+
+# _wait, app, mw and no_delayed_temp_sweep: test_stem_case_and_formats imports them.
 
 
 @pytest.fixture(scope="module")
@@ -30,13 +29,8 @@ def app():
 
 @pytest.fixture(autouse=True)
 def no_delayed_temp_sweep(monkeypatch):
-    """A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer;
-    here it is a no-op, so a window of this test never sweeps inside a later test."""
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+    """A loaded project's delayed stale-temp sweep does nothing (``guards.skip_temp_sweep``)."""
+    guards.skip_temp_sweep(monkeypatch)
 
 
 @pytest.fixture
@@ -56,28 +50,9 @@ def mw(app, monkeypatch):
     flush_deleted()
 
 
-def _project(folder, stems=STEMS):
-    folder.mkdir(parents=True, exist_ok=True)
-    img = QImage(32, 24, QImage.Format.Format_RGB32)
-    img.fill(QColor(90, 60, 30))
-    for stem in stems:
-        assert img.save(str(folder / f"{stem}.jpg"))
-    return folder
-
-
-def _wait(predicate, timeout=5.0):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
-
-
 def _open(mw, folder):
-    mw.open_path(str(folder))
-    assert _wait(lambda: mw.image_manager.images and mw.library_index.leaves())
+    """Open ``folder`` (all of STEMS) and wait until the load has ended."""
+    open_folder(mw, folder, len(STEMS))
     return folder
 
 
@@ -90,7 +65,7 @@ def _select(mw, stem):
 
 # ------------------------------------------------------------------ PG-01 outputs
 def test_load_results_accepts_the_skeletons_folder(mw, tmp_path, monkeypatch):
-    folder = _open(mw, _project(tmp_path / "p"))
+    folder = _open(mw, write_photos(tmp_path / "p", STEMS))
     _select(mw, STEMS[0])
     errors = []
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: errors.append(a))
@@ -107,7 +82,7 @@ def test_load_results_accepts_the_skeletons_folder(mw, tmp_path, monkeypatch):
 
 
 def test_load_results_keeps_the_legacy_images_layout(mw, tmp_path, monkeypatch):
-    _open(mw, _project(tmp_path / "p"))
+    _open(mw, write_photos(tmp_path / "p", STEMS))
     errors = []
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: errors.append(a))
     legacy = tmp_path / "p" / "out" / "images"
@@ -124,7 +99,7 @@ def test_load_results_reports_a_missing_folder(mw, tmp_path, monkeypatch):
 
 
 def test_on_outputs_changed_picks_up_generated_masks(mw, tmp_path):
-    folder = _open(mw, _project(tmp_path / "p"))
+    folder = _open(mw, write_photos(tmp_path / "p", STEMS))
     _select(mw, STEMS[1])
     assert mw.metrics_bar._status_value.text() == "No mask · No skeleton · No classes"
     (folder / "mask").mkdir()
@@ -136,7 +111,7 @@ def test_on_outputs_changed_picks_up_generated_masks(mw, tmp_path):
 
 # ------------------------------------------------------------------ PG-09 / PG-08
 def test_saved_mask_counts_and_survives_stage_switches_without_stats(mw, tmp_path, monkeypatch):
-    folder = _open(mw, _project(tmp_path / "p"))
+    folder = _open(mw, write_photos(tmp_path / "p", STEMS))
     _select(mw, STEMS[2])
     image_path = str(folder / f"{STEMS[2]}.jpg")
     mw.toggle_correct()
@@ -163,7 +138,7 @@ def test_saved_mask_counts_and_survives_stage_switches_without_stats(mw, tmp_pat
 def test_view_mode_switch_keeps_tree_selection_and_filter(mw, tmp_path, monkeypatch):
     import app.gui.file_tree_manager as ftm
 
-    _open(mw, _project(tmp_path / "p"))
+    _open(mw, write_photos(tmp_path / "p", STEMS))
     leaf = _select(mw, STEMS[3])
     mw.file_list.expandAll()
     calls = []
@@ -177,7 +152,7 @@ def test_view_mode_switch_keeps_tree_selection_and_filter(mw, tmp_path, monkeypa
 
 # ------------------------------------------------------------------ PG-10
 def test_down_arrow_in_library_shows_next_image(mw, tmp_path):
-    _open(mw, _project(tmp_path / "p"))
+    _open(mw, write_photos(tmp_path / "p", STEMS))
     mw.show()
     mw.file_list.expandAll()
     _select(mw, STEMS[0])
@@ -188,7 +163,7 @@ def test_down_arrow_in_library_shows_next_image(mw, tmp_path):
 
 
 def test_pgdn_in_correct_opens_next_image(mw, tmp_path, monkeypatch):
-    folder = _open(mw, _project(tmp_path / "p"))
+    folder = _open(mw, write_photos(tmp_path / "p", STEMS))
     loaded = []
     monkeypatch.setattr(
         mw.correct_editor, "load_image", lambda path, images_base_folder=None: loaded.append(path)
@@ -209,7 +184,7 @@ def test_pgdn_in_correct_opens_next_image(mw, tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------ PG-11 / UXS-05
 def test_missing_folder_keeps_the_library(mw, tmp_path, monkeypatch):
-    _open(mw, _project(tmp_path / "p"))
+    _open(mw, write_photos(tmp_path / "p", STEMS))
     loads = []
     monkeypatch.setattr(mw.image_manager, "load_images", loads.append)
     mw.open_path(str(tmp_path / "moved"))
@@ -219,7 +194,7 @@ def test_missing_folder_keeps_the_library(mw, tmp_path, monkeypatch):
 
 
 def test_image_less_folder_warns_and_keeps_the_library(mw, tmp_path):
-    _open(mw, _project(tmp_path / "p"))
+    _open(mw, write_photos(tmp_path / "p", STEMS))
     empty = tmp_path / "empty"
     empty.mkdir()
     mw.open_path(str(empty))
@@ -240,14 +215,14 @@ def test_image_less_first_folder_returns_to_welcome(mw, tmp_path):
 
 
 def test_load_success_is_one_formatted_message(mw, tmp_path):
-    _open(mw, _project(tmp_path / "p"))
+    _open(mw, write_photos(tmp_path / "p", STEMS))
     assert [m for k, m in mw.toasts_seen if k == "success"] == ["Loaded 5 images"]
 
 
 # ------------------------------------------------------------------ PG-15
 def test_reopening_never_terminates_and_drops_the_stale_scan(mw, tmp_path, monkeypatch):
-    a = _project(tmp_path / "a", STEMS[:2])
-    b = _project(tmp_path / "b", STEMS[2:])
+    a = write_photos(tmp_path / "a", STEMS[:2])
+    b = write_photos(tmp_path / "b", STEMS[2:])
     monkeypatch.setattr(QThread, "terminate", lambda self: pytest.fail("terminate() called"))
     finished = []
     real = mw.on_loading_finished
@@ -296,14 +271,14 @@ def test_skeleton_tooltips_do_not_claim_masks_are_the_input(mw):
 
 # ------------------------------------------------------------------ R7 / O15
 def test_open_path_is_refused_while_a_job_runs(mw, tmp_path, monkeypatch):
-    _open(mw, _project(tmp_path / "a"))
+    _open(mw, write_photos(tmp_path / "a", STEMS))
     # The busy registry is undone before the fixture closes the window: closing with a
     # job running asks, in a modal box, whether to stop it.
     with monkeypatch.context() as patch:
         patch.setattr(mw.jobs, "is_busy", lambda: True)
         patch.setattr(mw.jobs, "running_name", lambda: "Generating masks")
         mw.task_progress.start("Generating masks", on_cancel=lambda: None)
-        mw.open_path(str(_project(tmp_path / "b", STEMS[:2])))
+        mw.open_path(str(write_photos(tmp_path / "b", STEMS[:2])))
         QTest.qWait(50)
     assert (
         "warn",

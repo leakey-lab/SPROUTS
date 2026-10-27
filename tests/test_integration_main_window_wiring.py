@@ -7,23 +7,21 @@ its own INI QSettings, so the user's real settings are never read or written.
 
 import csv
 import os
-import time
 
 import pytest
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+from tests import guards
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import wait_until as _wait
+from tests.window_support import build_window, open_folder, quiet_window, write_photos
 
 USER = Qt.ItemDataRole.UserRole
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
+
+# app, make_window, mw, no_delayed_temp_sweep and settings: test_wording_guards and
+# test_startup_qt_warnings import them.
 
 
 @pytest.fixture(scope="module")
@@ -33,13 +31,8 @@ def app():
 
 @pytest.fixture(autouse=True)
 def no_delayed_temp_sweep(monkeypatch):
-    """A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer;
-    here it is a no-op, so a window of this test never sweeps inside a later test."""
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+    """A loaded project's delayed stale-temp sweep does nothing (``guards.skip_temp_sweep``)."""
+    guards.skip_temp_sweep(monkeypatch)
 
 
 @pytest.fixture
@@ -49,53 +42,24 @@ def settings(tmp_path):
 
 @pytest.fixture
 def make_window(app, settings):
-    from app.gui.main_window import MainWindow
-
+    """``make(settings=...)``: a MainWindow on the test's INI settings (or on the given ones),
+    neither resized nor shown; every window made is closed without prompts afterwards."""
     windows = []
 
     def make(**kwargs):
-        w = MainWindow(settings=kwargs.pop("settings", settings))
-        windows.append(w)
-        return w
+        windows.append(
+            build_window(settings=kwargs.pop("settings", settings), size=None, show=False)
+        )
+        return windows[-1]
 
     yield make
-    delete_widgets(windows, prepare=_no_save_prompts)
+    delete_widgets(windows, prepare=quiet_window)
     QApplication.processEvents()
-
-
-def _no_save_prompts(window) -> None:
-    """No editor asks to save when ``window`` closes."""
-    for editor in window._editors().values():
-        editor.maybe_save_changes = lambda: True
 
 
 @pytest.fixture
 def mw(make_window):
     return make_window()
-
-
-def _project(folder, stems=STEMS):
-    folder.mkdir(parents=True, exist_ok=True)
-    img = QImage(32, 24, QImage.Format.Format_RGB32)
-    img.fill(QColor(90, 60, 30))
-    for stem in stems:
-        assert img.save(str(folder / f"{stem}.jpg"))
-    return folder
-
-
-def _wait(predicate, timeout=5.0):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
-
-
-def _load(mw, folder):
-    mw.open_path(str(folder))
-    assert _wait(lambda: len(mw.image_manager.images) == len(STEMS) and mw._image_leaves())
 
 
 # --------------------------------------------------------------------------- #
@@ -126,10 +90,10 @@ def test_toasts_stay_above_the_statusline(mw, app):
 #  Window state + recents (UXS-04 step 5, UXS-14)
 # --------------------------------------------------------------------------- #
 def test_window_state_and_last_folder_round_trip(make_window, settings, tmp_path):
-    folder = _project(tmp_path / "proj")
+    folder = write_photos(tmp_path / "proj", STEMS)
     first = make_window()
     first.resize(790, 700)
-    _load(first, folder)
+    open_folder(first, folder, len(STEMS))
     first.close()
     assert settings.value("window/geometry") is not None
     assert os.path.normpath(first.window_state.last_folder()) == os.path.normpath(str(folder))
@@ -139,8 +103,8 @@ def test_window_state_and_last_folder_round_trip(make_window, settings, tmp_path
 
 
 def test_loading_records_a_recent_project(mw, tmp_path):
-    folder = _project(tmp_path / "proj")
-    _load(mw, folder)
+    folder = write_photos(tmp_path / "proj", STEMS)
+    open_folder(mw, folder, len(STEMS))
     entries = mw.recent_projects.entries()
     assert entries and os.path.normpath(entries[0].path) == os.path.normpath(str(folder))
     assert entries[0].count == len(STEMS)
@@ -170,7 +134,7 @@ def test_leaving_an_editor_that_refuses_stays_put(mw):
 
 
 def test_open_is_cancelled_by_an_editor_that_keeps_its_edits(mw, tmp_path):
-    folder = _project(tmp_path / "proj")
+    folder = write_photos(tmp_path / "proj", STEMS)
     calls = []
     mw.image_manager.load_images = calls.append
     mw.correct_editor.maybe_save_changes = lambda: False
@@ -198,8 +162,8 @@ def test_correct_editor_notices_become_toasts(mw):
 
 
 def test_selection_follows_an_editor_that_kept_its_image(mw, tmp_path):
-    folder = _project(tmp_path / "proj")
-    _load(mw, folder)
+    folder = write_photos(tmp_path / "proj", STEMS)
+    open_folder(mw, folder, len(STEMS))
     leaves = mw._image_leaves()
     kept = mw.image_manager.get_image_path(leaves[0].data(0, USER))
     editor = mw.correct_editor
@@ -295,7 +259,7 @@ def test_stage_shortcut_needs_a_loaded_folder(mw, tmp_path):
     slot = mw._global_shortcuts["go_to_stage"][measure]
     slot.activated.emit()
     assert not mw.ribbon_buttons["Measure"].isChecked()  # Welcome: nothing happens
-    _load(mw, _project(tmp_path / "proj"))
+    open_folder(mw, write_photos(tmp_path / "proj", STEMS), len(STEMS))
     slot.activated.emit()
     assert mw.ribbon_buttons["Measure"].isChecked()
 
@@ -346,7 +310,7 @@ def test_about_and_shortcut_sheet_close_with_the_real_exec(mw):
 def test_metrics_bar_shows_the_measured_csv_values(mw, tmp_path):
     from app import config
 
-    folder = _project(tmp_path / "proj")
+    folder = write_photos(tmp_path / "proj", STEMS)
     (folder / "skeletons").mkdir()
     with open(folder / "skeletons" / "root_lengths.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -355,7 +319,7 @@ def test_metrics_bar_shows_the_measured_csv_values(mw, tmp_path):
     calls = []
     real = mw.metrics_bar.set_metrics
     mw.metrics_bar.set_metrics = lambda *a, **k: calls.append(k) or real(*a, **k)
-    _load(mw, folder)
+    open_folder(mw, folder, len(STEMS))
     item = mw.library_index.item_for(STEMS[1])
     mw.file_list.setCurrentItem(item)
     mw.on_image_selected(item)

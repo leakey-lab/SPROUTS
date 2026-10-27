@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from app.gui.shell_chrome import _idle_text_for  # noqa: E402
+from app.gui.shell_chrome import _idle_text_for
 
 
 def _text(count: int) -> str:

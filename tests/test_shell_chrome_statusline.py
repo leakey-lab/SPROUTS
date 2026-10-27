@@ -2,31 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import types
 
-import pytest
+from PyQt6.QtWidgets import QMainWindow, QStatusBar
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMainWindow, QStatusBar  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.shell_chrome import StatusLine, runtime_label  # noqa: E402
-from app.gui.task_progress import TaskProgressWidget  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.shell_chrome import StatusLine, runtime_label
+from app.gui.task_progress import TaskProgressWidget
+from tests.qt_teardown import delete_widgets
 
 RUNTIME = "app.inference.runtime"
 CANVAS = "OpenGL · Fake GPU"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _window(idle=None):
@@ -173,6 +160,4 @@ def test_main_window_uses_one_status_surface(app, monkeypatch):
         assert tip[-1] == f"Canvas: {CANVAS}"
         assert mw.statusline.height() == 28
     finally:
-        mw.close()
-        mw.deleteLater()
-        flush_deleted()
+        delete_widgets([mw])

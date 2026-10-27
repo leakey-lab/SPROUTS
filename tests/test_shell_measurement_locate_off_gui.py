@@ -14,31 +14,27 @@ reports.
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtCore import QThread, QThreadPool
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSettings, Qt, QThread, QThreadPool  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app import project_layout  # noqa: E402
-from app.config import LENGTH_CSV_HEADERS  # noqa: E402
-from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
-from app.inference.metrics import write_metric_csv  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
+from app import project_layout
+from app.config import LENGTH_CSV_HEADERS
+from app.data_processing.measurement_index import MeasurementIndex
+from app.inference.metrics import write_metric_csv
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window, open_folder, write_photos
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 LEGACY = ("skeletonizer", "test_latest", "images")
 #: Where Measure writes for a test_latest folder that only the walk finds.
 WALKED = ("results", "run1", "test_latest", "images")
+
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 
 @pytest.fixture
@@ -133,27 +129,11 @@ def test_a_csv_measure_writes_later_is_found_without_a_walk(tmp_path, walks):
 
 
 # ------------------------------------------------------------------------ the window
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-
-
 def test_the_bar_never_waits_for_a_csv_the_pool_is_parsing(app, tmp_path):
     """needs_load() takes the CSV lock, which the pool's parse holds (about 50 ms at 46k
     rows here): while a parse runs, a selection must not ask it (the parse's ready signal
     refreshes the bar)."""
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    window = build_window(tmp_path / "s.ini", size=None, show=False)
     try:
         index = MeasurementIndex(str(tmp_path))
         asked = []
@@ -165,26 +145,15 @@ def test_the_bar_never_waits_for_a_csv_the_pool_is_parsing(app, tmp_path):
 
         assert asked == []
     finally:
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window])
 
 
 def test_a_legacy_csv_reaches_the_metrics_bar(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
-    root = tmp_path / "proj"
-    root.mkdir()
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(root / f"{STEM}.jpg"))
+    root = write_photos(tmp_path / "proj", [STEM])
     _legacy_lengths(root)
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    window = build_window(tmp_path / "s.ini", size=None, show=False)
     try:
-        window.open_path(str(root))
-        end = time.monotonic() + 5
-        while time.monotonic() < end and not window._image_leaves():
-            QApplication.processEvents()
+        open_folder(window, root, 1)
         item = window.library_index.item_for(STEM)
         window.file_list.setCurrentItem(item)
         window.on_image_selected(item)
@@ -193,9 +162,7 @@ def test_a_legacy_csv_reaches_the_metrics_bar(app, tmp_path):
             QApplication.processEvents()
         assert window.metrics_bar._length_value.text() == "9.25 mm"
     finally:
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window])
 
 
 # ------------------------------------------------------------------ after a batch job
@@ -228,19 +195,12 @@ def _end_job(window, name: str) -> None:
 def _legacy_window(made: list, tmp_path, *, csv: bool = True) -> None:
     """A window on a project whose length CSV is (or will be) in a legacy folder only, its
     image selected; with ``csv`` it waits until the bar shows the CSV's value."""
-    from app.gui.main_window import MainWindow
-
-    root = tmp_path / "proj"
-    root.mkdir()
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(root / f"{STEM}.jpg"))
+    root = write_photos(tmp_path / "proj", [STEM])
     if csv:
         _legacy_lengths(root)
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    window = build_window(tmp_path / "s.ini", size=None, show=False)
     made.append(window)
-    window.open_path(str(root))
-    assert _until(lambda: window._image_leaves())
+    open_folder(window, root, 1)
     item = window.library_index.item_for(STEM)
     window.file_list.setCurrentItem(item)
     window.on_image_selected(item)

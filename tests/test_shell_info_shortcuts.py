@@ -2,23 +2,13 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtGui import QKeySequence, QShortcut  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
-
-from app.gui import shortcuts as sc  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    yield QApplication.instance() or QApplication([])
+from app.gui import shortcuts as sc
+from app.gui.key_text import platform_keys
+from tests.qt_teardown import flush_deleted
 
 
 def _portable(key: str) -> str:
@@ -31,6 +21,12 @@ def _live_keys(widget: QWidget) -> set[str]:
         for s in widget.findChildren(QShortcut)
         if s.parent() is widget
     }
+
+
+def _top_level_labels() -> int:
+    """How many labels are windows of their own (a label made without a parent and never
+    put into a layout is one)."""
+    return sum(isinstance(widget, QLabel) for widget in QApplication.topLevelWidgets())
 
 
 # ------------------------------------------------------------------ Qt-free core
@@ -200,6 +196,7 @@ def test_shortcuts_dialog_keeps_its_focus_chain_and_row_order(app):
     from app.gui.empty_state import ShortcutsDialog
     from tests.qt_teardown import delete_widgets
 
+    strays = _top_level_labels()
     dlg = ShortcutsDialog(current_scope=sc.LIBRARY, on_about=lambda: None)
     try:
         close = dlg.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Close)
@@ -214,7 +211,7 @@ def test_shortcuts_dialog_keeps_its_focus_chain_and_row_order(app):
         assert dlg.section_titles() == order
         rows = [label.text() for label in dlg.findChildren(QLabel, "shortcutKeys")]
         assert rows == [spec.label for scope in order for spec in sc.specs_for(scope)]
-        assert all(label.window() is dlg for label in dlg.findChildren(QLabel))
+        assert _top_level_labels() == strays  # no label was left out of the sheet
     finally:
         delete_widgets([dlg])
 

@@ -8,19 +8,12 @@ PV-04 / UI-05 / RB-14 (Visualize is a selector, not a toggle), RB-01 step 5
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QPushButton
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QIcon  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
-
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+from tests.qt_teardown import flush_deleted
 
 STAGES = [
     "Library",
@@ -29,11 +22,6 @@ STAGES = [
     "Measure",
     "Visualize",
 ]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(scope="module")

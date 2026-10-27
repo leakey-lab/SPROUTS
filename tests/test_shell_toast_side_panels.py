@@ -11,28 +11,17 @@ Unit level: a host widget with stand-in chrome at the 1024 x 640 Trace GT geomet
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtWidgets import QApplication, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QPoint, QRect, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui.toast_clearance import FLOATING_GAP, ToastClearance  # noqa: E402
-from app.gui.widgets.toasts import ToastManager  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.toast_clearance import FLOATING_GAP, ToastClearance
+from app.gui.widgets.toasts import ToastManager
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.qt_wait import settle
+from tests.window_support import build_window, open_folder, quiet_window, write_photos
 
 LONG = "Could not save mask for 24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg: disk full"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 class Scene:
@@ -68,11 +57,6 @@ class Scene:
         self.host.close()
         self.host.deleteLater()
         flush_deleted()
-
-
-def settle() -> None:
-    for _ in range(3):
-        QApplication.processEvents()
 
 
 @pytest.fixture
@@ -149,41 +133,24 @@ def test_without_side_chrome_nothing_changes(app):
 
 # ------------------------------------------------------ the main window (once wired)
 @pytest.mark.parametrize("layer", ["mask", "classes"])
-def test_the_main_window_keeps_toasts_off_the_editor_side_panels(app, tmp_path, monkeypatch, layer):
+def test_the_main_window_keeps_toasts_off_the_editor_side_panels(
+    app, tmp_path, no_prompts, no_temp_sweep, layer
+):
     """Runs once MainWindow passes ``side=`` (see the R-SHELL-B cross-package request).
     On the Correct page the side card holds the Layers panel, and the class panel below it
     while the class labels are edited (WG-T5): the toasts keep clear of both."""
-    import time
-
-    from PyQt6.QtCore import QSettings
-    from PyQt6.QtGui import QColor, QImage
     from PyQt6.QtTest import QTest
-    from PyQt6.QtWidgets import QMessageBox
 
-    from app.gui import image_manager
     from app.gui.main_window import MainWindow
 
     if not hasattr(MainWindow, "_side_chrome"):
         pytest.skip("MainWindow does not pass its editors' side panels to ToastClearance yet")
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    folder = tmp_path / "project"
-    folder.mkdir()
-    img = QImage(640, 480, QImage.Format.Format_RGB32)
-    img.fill(QColor(90, 60, 30))
-    for d in (11, 12, 13):
-        assert img.save(str(folder / f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM.jpg"))
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    stems = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
+    folder = write_photos(tmp_path / "project", stems, size=(640, 480))
+    window = build_window(tmp_path / "s.ini", size=(1024, 640), show=False)
     try:
-        window.resize(1024, 640)
         window.show()
-        window.open_path(str(folder))
-        end = time.monotonic() + 5
-        while len(window.library_index.leaves()) < 3 and time.monotonic() < end:
-            QTest.qWait(10)
+        open_folder(window, folder, len(stems))
         item = window.library_index.leaves()[0]
         window.file_list.setCurrentItem(item)
         window.on_tree_item_clicked(item, 0)
@@ -206,9 +173,5 @@ def test_the_main_window_keeps_toasts_off_the_editor_side_panels(app, tmp_path, 
             for panel_box in boxes:
                 assert not toast.geometry().intersects(panel_box), toast.message()
     finally:
-        for editor in window._editors().values():
-            editor.maybe_save_changes = lambda: True
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window], prepare=quiet_window)
         QApplication.processEvents()

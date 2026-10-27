@@ -13,19 +13,15 @@ path stored twice showed twice. Reading now keeps the newest ``max_entries`` dis
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, Qt  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.recent_projects import RecentProjectsStore  # noqa: E402
-from app.gui.welcome_screen import WelcomeWidget  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui.recent_projects import RecentProjectsStore
+from app.gui.welcome_screen import WelcomeWidget
+from tests.qt_teardown import delete_widgets
 
 
 class _Settings:
@@ -44,11 +40,6 @@ def _entries(n: int, prefix: str = "p") -> list[dict]:
         {"name": f"{prefix}{i}", "path": f"D:/x/{prefix}{i}", "count": 5, "ts": "2026-09-20T10:00"}
         for i in range(n)
     ]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

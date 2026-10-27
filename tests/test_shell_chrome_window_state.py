@@ -2,21 +2,11 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QRect, QSettings, QSize, Qt
+from PyQt6.QtWidgets import QLabel, QMainWindow, QSplitter
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRect, QSettings, QSize, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter  # noqa: E402
-
-from app.gui.window_state import WindowStateStore, initial_geometry  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.window_state import WindowStateStore, initial_geometry
 
 
 @pytest.fixture

@@ -12,24 +12,22 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import time
 import types
 
 import pytest
+from PyQt6.QtCore import QThreadPool
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSettings, QThreadPool  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
-
-from app.gui import canvas_gl, device_check, shell_chrome  # noqa: E402
-from app.gui.device_check import DeviceCheck  # noqa: E402
-from app.gui.shell_chrome import DEVICE_CHECK_FAILED, DEVICE_CHECKING  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from app.inference import device_probe  # noqa: E402
-from app.inference.device_probe import DeviceGuess  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
+from app.gui import canvas_gl, device_check, shell_chrome
+from app.gui.device_check import DeviceCheck
+from app.gui.shell_chrome import DEVICE_CHECK_FAILED, DEVICE_CHECKING
+from app.gui.widgets import tokens
+from app.inference import device_probe
+from app.inference.device_probe import DeviceGuess
+from tests.qt_teardown import delete_widgets, flush_deleted
+from tests.qt_wait import wait_until as wait
+from tests.window_support import build_window
 
 RUNTIME = "app.inference.runtime"
 GPU = DeviceGuess(
@@ -38,20 +36,12 @@ GPU = DeviceGuess(
 CPU = DeviceGuess("CPU", note="PyTorch 2.8.0+cpu is a CPU-only build: inference runs on the CPU.")
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication(["test"])
-
-
 @pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    hooked = []
-    monkeypatch.setattr(sys, "excepthook", lambda *exc: hooked.append(exc))
+def guards(no_prompts, slot_errors):
+    """No prompt and no exception in a Qt slot; the widgets a test deleteLater()s go first,
+    so the slot check sees what their deletion raises."""
     yield
     flush_deleted()
-    assert hooked == []
 
 
 class FakeRuntime:
@@ -106,16 +96,6 @@ def line(app):
 def shown(line) -> str:
     """The chip's full text (the label itself is elided to INFO_MAX_WIDTH)."""
     return line.info.toolTip().splitlines()[0].removeprefix("Inference runtime: ")
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
 
 
 # ------------------------------------------------------------------ the chip
@@ -266,11 +246,8 @@ def test_a_cancelled_check_never_starts(app, widget):
 
 
 def test_the_window_chip_shows_the_driver_guess(app, runtime, monkeypatch, tmp_path):
-    from app.gui.main_window import MainWindow
-
     monkeypatch.setattr(device_probe, "probe_device", lambda: GPU)
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    made = [MainWindow(settings=settings, detect_device=True)]
+    made = [build_window(tmp_path / "settings.ini", size=None, show=False, detect_device=True)]
     window = made[0]
     try:
         assert window.statusline_info.text() == DEVICE_CHECKING

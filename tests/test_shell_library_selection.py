@@ -10,25 +10,21 @@ pixmap, so selecting a row changes its background and bar only.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSize  # noqa: E402
-from PyQt6.QtGui import QColor, QIcon, QImage, QPalette  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QColor, QIcon, QImage, QPalette
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QStyle,
     QStyleOptionViewItem,
     QTreeWidget,
 )
 
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.widgets import tokens
+from tests.qt_teardown import flush_deleted
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]

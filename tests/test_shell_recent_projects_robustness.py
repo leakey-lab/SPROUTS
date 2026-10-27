@@ -17,21 +17,15 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from PyQt6.QtCore import QSettings
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui.recent_projects import SETTINGS_KEY, RecentProjectsStore  # noqa: E402
-from app.gui.welcome_screen import WelcomeWidget  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.recent_projects import SETTINGS_KEY, RecentProjectsStore
+from app.gui.welcome_screen import WelcomeWidget
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window
 
 
 class Settings(dict):
@@ -40,18 +34,6 @@ class Settings(dict):
 
     def setValue(self, key, value):  # noqa: N802 - Qt API name
         self[key] = value
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def flush_deleted_widgets():
-    """Widgets a test deleteLater()s are destroyed before the next test (never at exit)."""
-    yield
-    flush_deleted()
 
 
 def _store(raw: str) -> RecentProjectsStore:
@@ -111,21 +93,16 @@ def test_rows_count_images_like_the_library(app):
     widget.deleteLater()
 
 
-def test_the_window_starts_with_such_a_list(app, tmp_path, monkeypatch):
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
+def test_the_window_starts_with_such_a_list(app, tmp_path):
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     settings.setValue(
         SETTINGS_KEY,
         '[{"path": "C:/a", "count": NaN, "ts": "2026-09-30T10:00:00+00:00"},'
         ' {"path": "C:/b", "count": 5, "ts": "2026-09-30T10:00:00+02:00"}]',
     )
-    window = MainWindow(settings=settings)
+    window = build_window(settings=settings, size=None, show=False)
     try:
         assert len(window.welcome.recent_rows()) == 2
         assert not any(math.isnan(e.count) for e in window.recent_projects.entries() if e.count)
     finally:
-        window.close()
-        window.deleteLater()
-        flush_deleted()
+        delete_widgets([window])

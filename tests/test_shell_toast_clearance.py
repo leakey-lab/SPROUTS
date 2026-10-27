@@ -11,105 +11,41 @@ Offscreen; a tmp_path project of small photos; every window has its own INI sett
 
 from __future__ import annotations
 
-import os
-import time
-
 import pytest
+from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QPoint, QRect, QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui.panels import Panel
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.window_support import build_window, open_folder, quiet_window, write_photos
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13)]
 LONG = "Mask saved for 24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
 SIZES = [(1280, 800), (1366, 768), (1024, 640)]
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    """A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer;
-    here it is a no-op, so a window of this test never sweeps inside a later test."""
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
+pytestmark = pytest.mark.usefixtures("no_prompts", "no_temp_sweep")
 
 
 @pytest.fixture
 def make_window(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
     made = []
 
     def make(width: int, height: int):
-        path = tmp_path / f"settings_{len(made)}.ini"
-        window = MainWindow(settings=QSettings(str(path), QSettings.Format.IniFormat))
-        made.append(window)
-        window.resize(width, height)
-        window.show()
-        settle()
-        return window
+        made.append(build_window(tmp_path / f"settings_{len(made)}.ini", size=(width, height)))
+        return made[-1]
 
     yield make
-    delete_widgets(made, prepare=_no_save_prompts)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 
-def _no_save_prompts(window) -> None:
-    """No editor asks to save when ``window`` closes."""
-    for editor in window._editors().values():
-        editor.maybe_save_changes = lambda: True
-
-
-def settle() -> None:
-    for _ in range(3):
-        QApplication.processEvents()
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
-
-
 def project(root) -> str:
-    folder = root / "project"
-    folder.mkdir(parents=True)
-    img = QImage(64, 48, QImage.Format.Format_RGB32)
-    img.fill(QColor(90, 60, 30))
-    for stem in STEMS:
-        assert img.save(str(folder / f"{stem}.jpg"))
-    return str(folder)
+    return str(write_photos(root / "project", STEMS, size=(64, 48)))
 
 
 def load(window, folder: str) -> None:
-    window.open_path(folder)
-    assert wait(lambda: len(window.library_index.leaves()) == len(STEMS))
+    open_folder(window, folder, len(STEMS))
     settle()
 
 

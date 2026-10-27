@@ -11,25 +11,22 @@ import os
 import time
 
 import pytest
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app import config  # noqa: E402
-from app.gui.stage_summary import (  # noqa: E402
+from app import config
+from app.gui.stage_summary import (
     Freshness,
     generate_text,
     input_freshness,
     measure_text,
 )
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window, open_folder, quiet_window
 
 STEMS = [f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (11, 12, 13, 14)]
+
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 
 # ------------------------------------------------------------------------ the phrases
@@ -77,32 +74,12 @@ def test_input_freshness_counts_inputs_written_after_the_csv(tmp_path):
 
 
 # ------------------------------------------------------------------------ the window
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-
-
 @pytest.fixture
 def window(app, tmp_path):
-    from app.gui.main_window import MainWindow
-
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
-    made.show()
-    yield made
-    made.close()
-    made.deleteLater()
-    del made
-    flush_deleted()
+    made = [build_window(tmp_path / "s.ini", show=False)]
+    made[0].show()
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 
@@ -137,18 +114,13 @@ def _wait(predicate, timeout=5.0):
     return predicate()
 
 
-def _open(window, folder) -> None:
-    window.open_path(str(folder))
-    assert _wait(lambda: len(window._image_leaves()) == len(STEMS))
-
-
 def _enter(window, stage: str) -> None:
     window.ribbon_buttons[stage].click()
     QApplication.processEvents()
 
 
 def test_the_generate_stage_says_what_is_missing(window, tmp_path):
-    _open(window, _project(tmp_path / "p"))
+    open_folder(window, _project(tmp_path / "p"), len(STEMS))
 
     _enter(window, "Generate")
 
@@ -160,7 +132,7 @@ def test_the_generate_stage_says_what_is_missing(window, tmp_path):
 
 
 def test_the_measure_stage_says_whether_each_csv_is_current(window, tmp_path):
-    _open(window, _project(tmp_path / "p"))
+    open_folder(window, _project(tmp_path / "p"), len(STEMS))
 
     _enter(window, "Measure")
 

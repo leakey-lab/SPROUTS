@@ -8,23 +8,13 @@ property are the same as before.
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtWidgets import QLabel
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
-
-from app.gui import metrics_bar  # noqa: E402
-from app.gui.metrics_bar import MetricsBar  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui import metrics_bar
+from app.gui.metrics_bar import MetricsBar
+from app.gui.widgets import tokens
+from tests.qt_teardown import delete_widgets
 
 
 @pytest.fixture
