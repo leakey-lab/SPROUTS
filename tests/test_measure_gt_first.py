@@ -20,31 +20,26 @@ import time
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
-
-from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS  # noqa: E402
-from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
-from app.gui.stage_summary import Freshness, input_freshness, measure_text  # noqa: E402
-from app.inference import measure_run, measure_sources, metrics  # noqa: E402
-from app.inference.measure_inputs import input_key, load_inputs_record  # noqa: E402
-from app.io_utils import imread_unicode  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from app.provenance import file_sha256  # noqa: E402
-from tests.correct_goldens_support import (  # noqa: E402
+from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS
+from app.data_processing.measurement_index import MeasurementIndex
+from app.gui.stage_summary import Freshness, input_freshness, measure_text
+from app.inference import measure_run, measure_sources, metrics
+from app.inference.measure_inputs import input_key, load_inputs_record
+from app.io_utils import imread_unicode
+from app.project_layout import ProjectLayout
+from app.provenance import file_sha256
+from tests.correct_goldens_support import (
     SYNTH_STEM,
     describe_skeleton_file,
     load_goldens,
     make_synth_project,
 )
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_measure_core import _legacy_csv, _make_dataset  # noqa: E402
-from tests.test_measure_handler import _handler, _wait_idle  # noqa: E402
-from tests.test_measure_sources import (  # noqa: E402
+from tests.qt_teardown import delete_widgets
+from tests.test_measure_core import _legacy_csv, _make_dataset
+from tests.test_measure_handler import _handler, _wait_idle
+from tests.test_measure_sources import (
     PHOTO_SIZE,
     STEMS,
     _write_png,
@@ -54,24 +49,17 @@ from tests.test_measure_sources import (  # noqa: E402
     write_gt_skeleton,
     write_photo,
 )
+from tests.window_support import build_window, open_folder, quiet_window
 
 LENGTH_COL, AREA_COL = LENGTH_CSV_HEADERS[5], AREA_CSV_HEADERS[5]
 GOLDENS = load_goldens()
 
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture
 def gt_project(tmp_path) -> tuple[ProjectLayout, dict[str, str]]:
     return make_gt_project(str(tmp_path))
-
-
-@pytest.fixture(autouse=True)
-def _no_message_boxes(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
 
 
 def _csv_path(layout: ProjectLayout, kind: str) -> str:
@@ -488,32 +476,20 @@ def test_a_project_with_gt_files_and_no_predictions_is_measured_into_the_predict
 
 
 @pytest.fixture
-def measured_window(qapp, tmp_path, monkeypatch):
+def measured_window(qapp, tmp_path, gl_off, no_temp_sweep):
     """A window on the measured ``gt_project``; ``calls`` records what the bar was given."""
-    from app.gui import canvas_gl, image_manager
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
     layout, _ = make_gt_project(str(tmp_path / "proj"))
     _run(layout, qapp, "length")
     _run(layout, qapp, "area")
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    window.open_path(layout.root)
-    end = time.monotonic() + 10
-    while time.monotonic() < end and len(window._image_leaves()) < len(STEMS):
-        QApplication.processEvents()
+    made = [build_window(tmp_path / "s.ini", size=None, show=False)]
+    window = made[0]
+    open_folder(window, layout.root, len(STEMS), timeout=10)
     calls: list[dict] = []
     real = window.metrics_bar.set_metrics
     window.metrics_bar.set_metrics = lambda *a, **k: calls.append(k) or real(*a, **k)
     yield window, calls
-    window.close()
-    window.deleteLater()
     del window
-    flush_deleted()
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QApplication, QPushButton
 
 from app.handlers import mask_generation_handler as mgh
 from app.inference.mask_origin import OverwritePolicy
-from tests.test_generation_handlers import _save_traced, _wait, project, qapp  # noqa: F401
+from tests.test_generation_handlers import _save_traced, _wait, project  # noqa: F401
 
 
 def _cursor_shape():

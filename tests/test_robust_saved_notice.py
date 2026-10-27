@@ -16,8 +16,6 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
-import pytest
-from PyQt6.QtWidgets import QApplication
 
 from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
@@ -26,11 +24,6 @@ from app.handlers.deps import folder_label
 from app.handlers.job_registry import JobRegistry
 from app.handlers.skeleton_handler import SkeletonHandler
 from app.inference.batch_engine import BatchReport
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 class _IdleGeneration:

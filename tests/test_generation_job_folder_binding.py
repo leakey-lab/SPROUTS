@@ -21,7 +21,7 @@ from app.handlers import mask_generation_handler as mgh
 from app.handlers.job_registry import JobRegistry
 from app.handlers.skeleton_handler import SkeletonHandler
 from app.inference.measure_run import LENGTH, MeasureRun
-from tests.test_generation_handlers import _wait, project, qapp  # noqa: F401
+from tests.test_generation_handlers import _wait, project  # noqa: F401
 
 LOADING = ("A folder is loading. Try again when it has loaded.", "warn")
 

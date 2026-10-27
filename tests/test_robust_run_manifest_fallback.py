@@ -30,7 +30,6 @@ from tests.test_generation_failed_run_manifest import (
     _model,
     _pngs,
     _run,
-    cpu_runtime,  # noqa: F401 - fixture
 )
 from tests.test_generation_inference import _images
 
@@ -61,7 +60,7 @@ def _run_kind(kind):
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_record_that_cannot_be_built_is_replaced_by_a_minimal_one(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     monkeypatch,
     caplog,
     kind,
@@ -88,7 +87,7 @@ def test_a_record_that_cannot_be_built_is_replaced_by_a_minimal_one(
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_failed_run_whose_record_cannot_be_built_still_says_it_failed(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     monkeypatch,
     kind,
 ):
@@ -109,7 +108,7 @@ def test_a_failed_run_whose_record_cannot_be_built_still_says_it_failed(
 @pytest.mark.parametrize("kind", KINDS)
 def test_when_no_record_can_be_written_the_outdated_one_is_removed(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     monkeypatch,
     caplog,
     kind,

@@ -25,7 +25,7 @@ from app.handlers import generation_base
 from app.handlers import mask_generation_handler as mgh
 from app.inference.mask_origin import OverwritePolicy
 from app.workers import GuardedThread
-from tests.test_generation_handlers import _wait, project, qapp  # noqa: F401
+from tests.test_generation_handlers import _wait, project  # noqa: F401
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def _collect_the_first_imports() -> None:
 
 def test_a_finished_mask_run_frees_its_thread_once_the_next_run_starts(
     project,  # noqa: F811
-    qapp,  # noqa: F811
+    qapp,
     no_gc,
 ):
     project.window.feedback = NullFeedback()
@@ -72,7 +72,7 @@ def test_a_finished_mask_run_frees_its_thread_once_the_next_run_starts(
 
 def test_a_finished_skeleton_run_frees_its_thread_once_the_next_run_starts(
     project,  # noqa: F811
-    qapp,  # noqa: F811
+    qapp,
     no_gc,
 ):
     project.window.feedback = NullFeedback()
@@ -91,7 +91,7 @@ def test_a_finished_skeleton_run_frees_its_thread_once_the_next_run_starts(
     assert len(project.window.loaded) == 2
 
 
-def test_a_thread_slot_calls_with_its_thread_and_holds_no_reference_to_it(qapp):  # noqa: F811
+def test_a_thread_slot_calls_with_its_thread_and_holds_no_reference_to_it(qapp):
     calls = []
     thread = GuardedThread()
     ref = weakref.ref(thread)

@@ -331,14 +331,6 @@ def test_measure_text_names_changed_new_and_removed():
     assert measure_text(0, 0, area=current).endswith("12 masks: measured, current")
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PyQt6.QtWidgets import QApplication
-
-    a = QApplication.instance() or QApplication([])
-    yield a
-
-
 def test_the_metrics_bar_says_when_the_comparison_is_by_file_time(app):
     from app.gui.metrics_bar import MetricsBar
 

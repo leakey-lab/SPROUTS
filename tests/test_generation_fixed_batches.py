@@ -31,18 +31,9 @@ from app.inference.batch_engine import (
     run_batches,
 )
 from tests.test_generation_batch_engine import NAMES, _make_images, _outputs, _spec, _step
-from tests.test_generation_handlers import qapp  # noqa: F401 - fixture
 from tests.test_generation_inference import _images, _StubMaskModel, _StubSkeletonModel
 
 GIB = 1024**3
-
-
-@pytest.fixture
-def cpu_runtime(monkeypatch):
-    runtime.get_runtime.cache_clear()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    yield runtime.get_runtime()
-    runtime.get_runtime.cache_clear()
 
 
 def _recording(sizes, step=_step):
@@ -455,7 +446,7 @@ def test_a_fixed_memory_stop_is_shown_as_its_sentence(exc, caplog):
     assert describe_error(exc) == str(exc)  # no "FixedBatchOutOfMemory: " prefix
 
 
-def test_a_fixed_memory_stop_logs_no_traceback(qapp, caplog):  # noqa: F811
+def test_a_fixed_memory_stop_logs_no_traceback(qapp, caplog):
     from app.workers import LOGGER_NAME, GuardedThread
 
     class _Thread(GuardedThread):

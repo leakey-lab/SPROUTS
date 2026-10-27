@@ -5,116 +5,32 @@ yet the run ended with task_finished "Generated 0 masks" and Generate chained th
 skeleton pass. Such a run now ends with task_failed; the one non-modal failure report
 still lists every input (UXS-02: no modal box); nothing chains; skeleton results are
 not loaded. A partial failure and a run with nothing to do keep their behaviour.
-Offscreen Qt, CPU stub models, no checkpoints (fixtures as in test_generation_handlers).
+Offscreen Qt, CPU stub models, no checkpoints (fixtures of tests/generation_support.py).
 """
 
 from __future__ import annotations
 
 import os
-import time
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
-import torch
 from PIL import Image
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
+from PyQt6.QtWidgets import QWidget
 
-from app import config
-from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
-from app.handlers import generation_base
 from app.handlers import mask_generation_handler as mgh
 from app.handlers.generation_base import show_failure_report
-from app.inference import runtime
 from app.inference.mask_origin import OverwritePolicy
+from tests.generation_support import generation_project
+from tests.generation_support import wait_for_thread as _wait
 from tests.qt_teardown import flush_deleted
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-class _StubMaskModel(torch.nn.Module):
-    """1x1-conv mask model; with ``oom`` set, every forward runs out of GPU memory."""
-
-    def __init__(self):
-        super().__init__()
-        torch.manual_seed(0)
-        self.conv = torch.nn.Conv2d(3, 1, 1)
-        self.oom = False
-
-    def forward(self, x):
-        if self.oom:
-            raise torch.cuda.OutOfMemoryError("CUDA out of memory (stub)")
-        return torch.sigmoid(self.conv(x))
-
-
-class _StubSkeletonModel:
-    def run_batch(self, x):
-        return torch.tanh(x)
 
 
 @pytest.fixture
 def project(tmp_path, qapp, monkeypatch):
-    """A folder of 3 images, CPU runtime, stub models and a fake main window."""
-    runtime.get_runtime.cache_clear()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    weights = tmp_path / "weights.pth"
-    weights.write_bytes(b"w")
-    monkeypatch.setattr(runtime, "mask_weights_path", lambda: str(weights))
-    stub = _StubMaskModel().eval()
-    monkeypatch.setattr(runtime, "get_mask_model", lambda device=None: stub)
-    monkeypatch.setattr(runtime, "get_skeleton_model", lambda device=None: _StubSkeletonModel())
-    monkeypatch.setattr(config, "get_skeleton_batch_size", lambda refresh=False: 2)
-    rng = np.random.default_rng(0)
-    folder = tmp_path / "imgs"
-    folder.mkdir()
-    for stem in ("a", "b", "c"):
-        image = Image.fromarray(rng.integers(0, 255, (48, 64, 3), dtype=np.uint8))
-        image.save(folder / f"{stem}.jpg")
-    window = QWidget()
-    window.image_manager = SimpleNamespace(images={}, original_folder=str(folder))
-    window.feedback = RecordingFeedback()
-    window.loaded = []
-    window.outputs_changed = []
-    window.load_results = window.loaded.append
-    window.on_outputs_changed = lambda: window.outputs_changed.append(True)
-    dialogs = []
-    for name in ("information", "warning", "critical"):
-        monkeypatch.setattr(
-            QMessageBox, name, staticmethod(lambda *a, _n=name, **k: dialogs.append((_n, a)))
-        )
-    report_kwargs = []  # keyword arguments of each failure report (nothing_written)
-
-    def report(*a, **k):
-        dialogs.append(("report", a))
-        report_kwargs.append(k)
-
-    monkeypatch.setattr(generation_base, "show_failure_report", report)  # both handlers' reports
-    monkeypatch.setattr(
-        mgh, "ask_overwrite_policy", lambda *a, **k: pytest.fail("unexpected overwrite prompt")
-    )
-    yield SimpleNamespace(
-        folder=folder, window=window, stub=stub, dialogs=dialogs, report_kwargs=report_kwargs
-    )
-    runtime.get_runtime.cache_clear()
-    window.deleteLater()
-    flush_deleted()
-
-
-def _wait(thread, qapp, timeout=30.0):
-    """Wait for ``thread``, then deliver its queued signals and any chained callback."""
-    assert thread is not None
-    deadline = time.monotonic() + timeout
-    while (thread.isRunning() or not thread.isFinished()) and time.monotonic() < deadline:
-        qapp.processEvents()
-        time.sleep(0.01)
-    for _ in range(40):
-        qapp.processEvents()
-        time.sleep(0.005)
-    assert thread.isFinished()
+    """A folder of 3 images the image manager does not list, CPU runtime, stub models and a
+    fake main window."""
+    yield from generation_project(tmp_path, monkeypatch, list_images=False)
 
 
 def _messages(feedback, name):

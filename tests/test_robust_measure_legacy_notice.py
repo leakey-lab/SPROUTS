@@ -14,10 +14,10 @@ import os
 import cv2
 import numpy as np
 
-from tests.test_measure_handler import _handler, _project, _wait_idle, qapp  # noqa: F401
+from tests.test_measure_handler import _handler, _project, _wait_idle
 
 
-def test_measuring_an_older_mask_folder_next_to_mask_warns(tmp_path, qapp):  # noqa: F811
+def test_measuring_an_older_mask_folder_next_to_mask_warns(tmp_path, qapp):
     _project(tmp_path, skeletons=False)  # mask/: where Generate and Correct save
     legacy = tmp_path / "output" / "mask"
     legacy.mkdir(parents=True)
@@ -36,7 +36,7 @@ def test_measuring_an_older_mask_folder_next_to_mask_warns(tmp_path, qapp):  # n
     assert not os.path.exists(tmp_path / "mask" / "root_areas.csv")
 
 
-def test_a_project_with_only_mask_gets_no_warning(tmp_path, qapp):  # noqa: F811
+def test_a_project_with_only_mask_gets_no_warning(tmp_path, qapp):
     _project(tmp_path, skeletons=False)
     handler, mw = _handler(tmp_path, qapp)
 

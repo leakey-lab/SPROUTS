@@ -24,7 +24,7 @@ from app.handlers import skeleton_handler
 from app.inference import measure_run
 from app.inference.input_split import split_by_image, split_inputs
 from app.project_layout import SKELETON_SUFFIX, ProjectLayout
-from tests.test_measure_handler import _handler, _project, _wait_idle, qapp  # noqa: F401
+from tests.test_measure_handler import _handler, _project, _wait_idle
 
 ORPHAN = "orphan_T9_L2_2024.01.02_010209_001"
 
@@ -81,7 +81,7 @@ def test_split_inputs_names_every_file_of_an_image_that_is_gone():
 
 
 # ------------------------------------------------------------------ the handler
-def test_area_skips_a_mask_without_an_image(tmp_path, qapp):  # noqa: F811
+def test_area_skips_a_mask_without_an_image(tmp_path, qapp):
     _project(tmp_path, n=4, skeletons=False)
     orphan = tmp_path / "mask" / f"{ORPHAN}.png"
     kept_bytes = _write_png(orphan, 7)
@@ -103,7 +103,7 @@ def test_area_skips_a_mask_without_an_image(tmp_path, qapp):  # noqa: F811
     ) in _notices(mw)
 
 
-def test_length_skips_a_skeleton_without_an_image(tmp_path, qapp):  # noqa: F811
+def test_length_skips_a_skeleton_without_an_image(tmp_path, qapp):
     _project(tmp_path, n=4, masks=False)
     orphan = tmp_path / "skeletons" / f"{ORPHAN}_fake.png"
     kept_bytes = _write_png(orphan, 7)
@@ -125,7 +125,7 @@ def test_length_skips_a_skeleton_without_an_image(tmp_path, qapp):  # noqa: F811
     ) in _notices(mw)
 
 
-def test_a_project_where_every_input_has_its_image_records_none(tmp_path, qapp):  # noqa: F811
+def test_a_project_where_every_input_has_its_image_records_none(tmp_path, qapp):
     _project(tmp_path, n=3)
     handler, mw = _handler(tmp_path, qapp)
 
@@ -138,7 +138,7 @@ def test_a_project_where_every_input_has_its_image_records_none(tmp_path, qapp):
     assert not [m for m, kind in _notices(mw) if "skipped" in m]
 
 
-def test_a_case_variant_stem_is_not_skipped(tmp_path, qapp):  # noqa: F811
+def test_a_case_variant_stem_is_not_skipped(tmp_path, qapp):
     _write_png(tmp_path / "x_T1_L2_2024.01.02_010200_001.jpg")
     (tmp_path / "mask").mkdir()
     _write_png(tmp_path / "mask" / "X_T1_L2_2024.01.02_010200_001.png")
@@ -153,7 +153,7 @@ def test_a_case_variant_stem_is_not_skipped(tmp_path, qapp):  # noqa: F811
     assert not [m for m, kind in _notices(mw) if "skipped" in m]
 
 
-def test_only_orphans_starts_no_job(tmp_path, qapp):  # noqa: F811
+def test_only_orphans_starts_no_job(tmp_path, qapp):
     (tmp_path / "mask").mkdir()
     for i in range(2):
         _write_png(tmp_path / "mask" / f"{ORPHAN[:-1]}{i}.png", i)
@@ -171,7 +171,7 @@ def test_only_orphans_starts_no_job(tmp_path, qapp):  # noqa: F811
     ]
 
 
-def test_one_orphan_alone_says_has(tmp_path, qapp):  # noqa: F811
+def test_one_orphan_alone_says_has(tmp_path, qapp):
     (tmp_path / "skeletons").mkdir()
     _write_png(tmp_path / "skeletons" / f"{ORPHAN}_fake.png")
     handler, mw = _handler(tmp_path, qapp)
@@ -188,7 +188,7 @@ def test_one_orphan_alone_says_has(tmp_path, qapp):  # noqa: F811
     ]
 
 
-def test_several_files_for_one_image_are_measured_once(tmp_path, qapp, monkeypatch):  # noqa: F811
+def test_several_files_for_one_image_are_measured_once(tmp_path, qapp, monkeypatch):
     """A case-sensitive disk, simulated: the scan lists A_fake.png and a_fake.png."""
     _project(tmp_path, n=1, masks=False)
     skeletons = tmp_path / "skeletons"
@@ -359,7 +359,7 @@ def test_files_sharing_a_whole_stem_are_all_accounted_for(tmp_path, monkeypatch)
     assert split.duplicates == [] and split.without_image == ["a.PNG", "a.png"]
 
 
-def test_a_shadowed_mask_is_recorded_as_a_duplicate(tmp_path, qapp, monkeypatch):  # noqa: F811
+def test_a_shadowed_mask_is_recorded_as_a_duplicate(tmp_path, qapp, monkeypatch):
     _project(tmp_path, n=1, skeletons=False)
     mask = tmp_path / "mask" / "x_T1_L2_2024.01.02_010200_001.png"
     twin = tmp_path / "x_T1_L2_2024.01.02_010200_001.PNG.copy"
@@ -414,7 +414,7 @@ def test_gt_files_without_an_image_are_counted_in_the_status_line(tmp_path):
 
 def test_an_unreadable_image_folder_names_the_project_not_the_mask_folder(
     tmp_path,
-    qapp,  # noqa: F811
+    qapp,
     monkeypatch,
 ):
     _project(tmp_path, n=1, skeletons=False)

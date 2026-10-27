@@ -25,7 +25,6 @@ from tests.test_generation_failed_run_manifest import (
     _model,
     _pngs,
     _run,
-    cpu_runtime,  # noqa: F401 - fixture
 )
 from tests.test_generation_inference import _images
 
@@ -60,7 +59,7 @@ def test_release_cuda_cache_logs_a_failure_instead_of_raising(monkeypatch, caplo
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_failing_cache_release_never_replaces_the_run_error(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     monkeypatch,
     kind,
 ):
@@ -81,7 +80,7 @@ def test_a_failing_cache_release_never_replaces_the_run_error(
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_failing_cache_release_never_fails_a_finished_run(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     monkeypatch,
     kind,
 ):

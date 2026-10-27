@@ -16,7 +16,7 @@ import torch
 
 from app.handlers import generate_skeleton_handler as gsh
 from app.inference import runtime
-from tests.test_generation_handlers import _wait, project, qapp  # noqa: F401
+from tests.test_generation_handlers import _wait, project  # noqa: F401
 
 
 class _Model:

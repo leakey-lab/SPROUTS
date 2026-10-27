@@ -21,18 +21,13 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 from app import config
 from app.gui.main_window import MainWindow  # before any QApplication (QtWebEngine)
 from app.handlers.job_registry import JobRegistry
 from app.inference import runtime
 from app.workers import GuardedThread
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 def _spin(qapp, predicate, timeout=5.0):

@@ -16,7 +16,6 @@ import logging
 import os
 
 import pytest
-import torch
 
 from app import provenance
 from app.inference import mask_inference, runtime
@@ -28,14 +27,6 @@ from tests.test_generation_inference import _images, _StubMaskModel, _StubSkelet
 STALE = b'{"kind": "an older run into this folder"}\n'
 ERROR_TEXT = "cuDNN error: CUDNN_STATUS_INTERNAL_ERROR (simulated)"
 KINDS = ["mask", "skeleton"]
-
-
-@pytest.fixture
-def cpu_runtime(monkeypatch):
-    runtime.get_runtime.cache_clear()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    yield runtime.get_runtime()
-    runtime.get_runtime.cache_clear()
 
 
 class _MaskModel(_StubMaskModel):

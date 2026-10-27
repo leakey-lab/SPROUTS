@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pytest
 from PyQt6 import sip
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 from app import provenance
 from app.feedback import RecordingFeedback
@@ -24,11 +24,6 @@ from app.handlers.job_registry import JobRegistry
 from app.handlers.skeleton_handler import SkeletonHandler
 from app.inference import measure_run
 from app.io_utils import FileLockedError
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 class _IdleGeneration:

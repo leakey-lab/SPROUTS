@@ -13,49 +13,20 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import time
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
-import torch
 from PIL import Image
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
+from PyQt6.QtWidgets import QApplication
 
 from app import config
-from app.feedback import RecordingFeedback
 from app.handlers import generate_skeleton_handler as gsh
-from app.handlers import generation_base
 from app.handlers import mask_generation_handler as mgh
 from app.inference import runtime
 from app.inference.mask_origin import OverwritePolicy
-from tests.qt_teardown import flush_deleted
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-class _StubMaskModel(torch.nn.Module):
-    def __init__(self, on_forward=None):
-        super().__init__()
-        torch.manual_seed(0)
-        self.conv = torch.nn.Conv2d(3, 1, 1)
-        self.on_forward = on_forward
-        self.items = 0
-
-    def forward(self, x):
-        self.items += x.shape[0]
-        if self.on_forward:
-            self.on_forward()
-        return torch.sigmoid(self.conv(x))
-
-
-class _StubSkeletonModel:
-    def run_batch(self, x):
-        return torch.tanh(x)
+from tests.generation_support import generation_project
+from tests.generation_support import wait_for_thread as _wait
 
 
 class _Jobs:
@@ -77,59 +48,7 @@ class _Jobs:
 @pytest.fixture
 def project(tmp_path, qapp, monkeypatch):
     """A folder of 3 images, CPU runtime, stub models and a fake main window."""
-    runtime.get_runtime.cache_clear()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    weights = tmp_path / "weights.pth"
-    weights.write_bytes(b"w")
-    monkeypatch.setattr(runtime, "mask_weights_path", lambda: str(weights))
-    stub = _StubMaskModel().eval()
-    monkeypatch.setattr(runtime, "get_mask_model", lambda device=None: stub)
-    monkeypatch.setattr(runtime, "get_skeleton_model", lambda device=None: _StubSkeletonModel())
-    monkeypatch.setattr(config, "get_skeleton_batch_size", lambda refresh=False: 2)
-    rng = np.random.default_rng(0)
-    folder = tmp_path / "imgs"
-    folder.mkdir()
-    images = {}
-    for stem in ("a", "b", "c"):
-        path = folder / f"{stem}.jpg"
-        Image.fromarray(rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)).save(path)
-        images[f"{stem}.jpg"] = str(path)
-    window = QWidget()
-    window.image_manager = SimpleNamespace(images=images, original_folder=str(folder))
-    window.feedback = RecordingFeedback()
-    window.loaded = []
-    window.outputs_changed = []
-    window.load_results = window.loaded.append
-    window.on_outputs_changed = lambda: window.outputs_changed.append(True)
-    dialogs = []
-    for name in ("information", "warning", "critical"):
-        monkeypatch.setattr(
-            QMessageBox, name, staticmethod(lambda *a, _n=name, **k: dialogs.append((_n, a)))
-        )
-    # both handlers show their failure report through generation_base
-    monkeypatch.setattr(
-        generation_base, "show_failure_report", lambda *a, **k: dialogs.append(("report", a))
-    )
-    # never block on the real modal prompt: tests that expect it inject confirm_overwrite
-    monkeypatch.setattr(
-        mgh, "ask_overwrite_policy", lambda *a, **k: pytest.fail("unexpected overwrite prompt")
-    )
-    yield SimpleNamespace(folder=folder, window=window, stub=stub, dialogs=dialogs)
-    runtime.get_runtime.cache_clear()
-    window.deleteLater()
-    flush_deleted()
-
-
-def _wait(thread, qapp, timeout=30.0):
-    assert thread is not None
-    deadline = time.monotonic() + timeout
-    while (thread.isRunning() or not thread.isFinished()) and time.monotonic() < deadline:
-        qapp.processEvents()
-        time.sleep(0.01)
-    for _ in range(20):  # deliver the queued finished/failed/cancelled signals
-        qapp.processEvents()
-        time.sleep(0.005)
-    assert thread.isFinished()
+    yield from generation_project(tmp_path, monkeypatch)
 
 
 def _save_traced(path):
