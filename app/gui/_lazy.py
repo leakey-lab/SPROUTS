@@ -37,7 +37,6 @@ _NAME_TO_MODULE: dict[str, str] = {
     # The Correct stage's editor (the mask and the skeleton of an image on one canvas)
     "CorrectEditor": "correct.editor",
     # Image normalization
-    "ImageNormalization": "image_normalization_interface",
     "NormalizationControls": "image_normalization_interface",
     # Submodules re-exported as modules
     "ui_panels": "ui_panels",

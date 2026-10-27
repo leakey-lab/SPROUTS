@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime
 
-from app.gui.recent_projects import RecentProject, RecentProjectsStore
+from app.gui.recent_projects import MemorySettings, RecentProject, RecentProjectsStore
 
 
 class _FakeSettings:
@@ -84,3 +84,20 @@ def test_default_store_uses_the_app_qsettings_scope():
         ORGANIZATION_NAME,
         APP_NAME,
     )
+
+
+def test_memory_settings_keep_the_list_for_this_object_only(tmp_path):
+    """What a headless window without settings records (C5-04): never the user's list."""
+    settings = MemorySettings()
+    store = RecentProjectsStore(settings)
+    assert store.settings is settings and store.entries() == []
+    store.add(str(tmp_path / "a"), 3)
+    store.add(str(tmp_path / "b"), 4)
+    assert [e.name for e in store.entries()] == ["b", "a"]
+    assert RecentProjectsStore(settings).entries() == store.entries()  # the same object
+    assert RecentProjectsStore(MemorySettings()).entries() == []  # nothing shared or saved
+    store.remove(str(tmp_path / "b"))
+    assert [e.name for e in store.entries()] == ["a"]
+    store.clear()
+    assert store.entries() == [] and settings.value("recent_projects") == "[]"
+    assert settings.value("missing", "fallback") == "fallback"

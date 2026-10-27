@@ -161,28 +161,31 @@ class ShortcutsDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        heading = QLabel("Keyboard shortcuts")
+        # Every widget is created under its final parent: under the app style sheet each
+        # reparent of a built subtree restyles all of it again (about 3x slower to open).
+        heading = QLabel("Keyboard shortcuts", self)
         heading.setStyleSheet(f"color: {tokens.ACCENT}; font-size: 12pt; font-weight: bold;")
         layout.addWidget(heading)
 
-        intro = QLabel("Global keys work everywhere; editor keys work while that editor is open.")
+        intro = QLabel(
+            "Global keys work everywhere; editor keys work while that editor is open.", self
+        )
         intro.setWordWrap(True)
         intro.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 9pt;")
         layout.addWidget(intro)
 
-        body = QWidget()
-        body_col = QVBoxLayout(body)
-        body_col.setContentsMargins(0, 0, 4, 0)
-        body_col.setSpacing(12)
-        for scope in self._ordered_scopes(current_scope):
-            body_col.addWidget(self._build_section(scope, scope == current_scope))
-        body_col.addStretch(1)
-
-        scroll = QScrollArea()
+        scroll = QScrollArea(self)
         scroll.setObjectName("shortcutScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget(scroll.viewport())  # setWidget below then needs no reparent
+        body_col = QVBoxLayout(body)
+        body_col.setContentsMargins(0, 0, 4, 0)
+        body_col.setSpacing(12)
+        for scope in self._ordered_scopes(current_scope):
+            body_col.addWidget(self._build_section(body, scope, scope == current_scope))
+        body_col.addStretch(1)
         scroll.setWidget(body)
         layout.addWidget(scroll, 1)
 
@@ -212,14 +215,14 @@ class ShortcutsDialog(QDialog):
         """Section headings in display order."""
         return list(self._section_titles)
 
-    def _build_section(self, scope: str, current: bool) -> QWidget:
+    def _build_section(self, body: QWidget, scope: str, current: bool) -> QWidget:
         self._section_titles.append(scope)
-        wrap = QWidget()
+        wrap = QWidget(body)
         col = QVBoxLayout(wrap)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(6)
 
-        title = QLabel(f"{scope}  ·  current" if current else scope)
+        title = QLabel(f"{scope}  ·  current" if current else scope, wrap)
         title.setAccessibleName(scope)
         title.setStyleSheet(
             f"color: {tokens.ACCENT if current else tokens.TEXT}; "
@@ -227,7 +230,7 @@ class ShortcutsDialog(QDialog):
         )
         col.addWidget(title)
 
-        frame = QFrame()
+        frame = QFrame(wrap)
         frame.setObjectName("shortcutSection")
         frame.setStyleSheet(_SECTION_QSS + _KEYCAP_QSS)
         grid = QGridLayout(frame)
@@ -236,12 +239,12 @@ class ShortcutsDialog(QDialog):
         grid.setVerticalSpacing(7)
         grid.setColumnStretch(1, 1)
         for row, spec in enumerate(shortcuts.specs_for(scope)):
-            keys = QLabel(spec.label)
+            keys = QLabel(spec.label, frame)
             keys.setObjectName("shortcutKeys")
             keys.setAlignment(Qt.AlignmentFlag.AlignCenter)
             keys.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             hint = _KIND_HINT.get(spec.kind, "")
-            desc = QLabel(f"{spec.description}  ({hint})" if hint else spec.description)
+            desc = QLabel(f"{spec.description}  ({hint})" if hint else spec.description, frame)
             desc.setWordWrap(True)
             desc.setStyleSheet(f"color: {tokens.TEXT}; font-size: 9pt; border: none;")
             grid.addWidget(keys, row, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)

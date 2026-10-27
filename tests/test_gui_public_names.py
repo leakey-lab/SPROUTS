@@ -15,13 +15,16 @@ import pytest
 
 import app.gui as gui
 
-#: The mask editor's public names, deleted with it when the Correct stage replaced it.
+#: Public names deleted from app.gui (clean breaks, no aliases): the mask editor's, deleted with
+#: it when the Correct stage replaced it, and the static Enhance facade (ImageNormalization)
+#: that lost its callers with those editors.
 REMOVED = (
     "MaskTracingInterface",
     "MaskTracingGraphicsView",
     "MaskDrawingMixin",
     "create_brush_cursor",
     "create_panning_cursor",
+    "ImageNormalization",
 )
 
 

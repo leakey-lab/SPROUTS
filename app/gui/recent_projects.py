@@ -8,7 +8,8 @@ existing lists keep working.
 
 The store itself is Qt-free: ``settings`` is anything with ``value(key,
 default)`` / ``setValue(key, value)``; only the default constructs a
-``QSettings`` (lazily).
+``QSettings`` (lazily). :class:`MemorySettings` keeps a list for the process only
+(a headless window without settings must not write the user's list).
 """
 
 from __future__ import annotations
@@ -25,7 +26,13 @@ from app.io_utils import same_file
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["RecentProject", "RecentProjectsStore", "SETTINGS_KEY", "MAX_ENTRIES"]
+__all__ = [
+    "MemorySettings",
+    "RecentProject",
+    "RecentProjectsStore",
+    "SETTINGS_KEY",
+    "MAX_ENTRIES",
+]
 
 SETTINGS_KEY = "recent_projects"
 MAX_ENTRIES = 8
@@ -35,6 +42,20 @@ class _Settings(Protocol):
     def value(self, key: str, default: Any = None) -> Any: ...
 
     def setValue(self, key: str, value: Any) -> None: ...  # noqa: N802 - Qt API name
+
+
+class MemorySettings:
+    """``value`` / ``setValue`` over a dict that lives as long as this object: nothing is
+    persisted."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, Any] = {}
+
+    def value(self, key: str, default: Any = None) -> Any:
+        return self._values.get(key, default)
+
+    def setValue(self, key: str, value: Any) -> None:  # noqa: N802 - Qt API name
+        self._values[key] = value
 
 
 @dataclass(frozen=True)

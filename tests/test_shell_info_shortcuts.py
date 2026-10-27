@@ -192,6 +192,33 @@ def test_shortcuts_dialog_offers_about_when_wired(app):
     assert not [b for b in plain.findChildren(QPushButton) if "About" in b.text()]
 
 
+def test_shortcuts_dialog_keeps_its_focus_chain_and_row_order(app):
+    """The sheet is built parent-first (S09-02): Tab order and rows stay the registry's."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QDialogButtonBox
+
+    from app.gui.empty_state import ShortcutsDialog
+    from tests.qt_teardown import delete_widgets
+
+    dlg = ShortcutsDialog(current_scope=sc.LIBRARY, on_about=lambda: None)
+    try:
+        close = dlg.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Close)
+        focusable, widget = [], dlg.nextInFocusChain()
+        while widget is not dlg:
+            if widget.focusPolicy() != Qt.FocusPolicy.NoFocus:
+                focusable.append(widget.text() if isinstance(widget, QPushButton) else widget)
+            widget = widget.nextInFocusChain()
+        scroll = dlg.findChild(QWidget, "shortcutScroll")
+        assert focusable == [scroll, "About SPROUTS…", close.text()]
+        order = [sc.LIBRARY, sc.GLOBAL, sc.CORRECT]
+        assert dlg.section_titles() == order
+        rows = [label.text() for label in dlg.findChildren(QLabel, "shortcutKeys")]
+        assert rows == [spec.label for scope in order for spec in sc.specs_for(scope)]
+        assert all(label.window() is dlg for label in dlg.findChildren(QLabel))
+    finally:
+        delete_widgets([dlg])
+
+
 def test_shortcuts_dialog_is_deleted_on_close(app):
     """F1 used to leak one hidden dialog child per press."""
     from PyQt6.QtCore import Qt

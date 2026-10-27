@@ -361,6 +361,112 @@ def test_deblock_setting_defaults_off_loads_from_an_old_file_and_round_trips():
     assert kept.deblock is True
 
 
+def _reference_deblock(img, threshold=14.0):
+    """The first O22 deblock (index arrays, boolean write-back), kept verbatim as the golden
+    of the faster strided-view / masked-copy version (audit S09-01)."""
+    if img.dtype != np.uint8 or not (img.ndim == 2 or (img.ndim == 3 and img.shape[2] == 3)):
+        return img.copy()
+    if img.ndim == 2:
+        luma = img.astype(np.float32)
+        _reference_deblock_axis(luma, 8, threshold)
+        _reference_deblock_axis(luma.T, 8, threshold)
+        return np.clip(luma + 0.5, 0, 255).astype(np.uint8)
+    base = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+    ycc = base.astype(np.float32)
+    for c, block in ((0, 8), (1, 16), (2, 16)):
+        ch = ycc[:, :, c]
+        _reference_deblock_axis(ch, block, threshold)
+        _reference_deblock_axis(ch.T, block, threshold)
+    new = np.clip(ycc + 0.5, 0, 255).astype(np.uint8)
+    changed = (new != base).any(axis=2)
+    out = img.copy()
+    if changed.any():
+        out[changed] = cv2.cvtColor(new, cv2.COLOR_YCrCb2BGR)[changed]
+    return out
+
+
+def _reference_deblock_axis(ch, block, t):
+    xs = np.arange(block, ch.shape[1] - 2, block)  # q0 columns
+    if xs.size == 0:
+        return
+    p2, p1, p0 = ch[:, xs - 3], ch[:, xs - 2], ch[:, xs - 1]
+    q0, q1, q2 = ch[:, xs], ch[:, xs + 1], ch[:, xs + 2]
+    d = q0 - p0
+    m = (np.abs(d) < t) & (np.abs(p1 - p0) < t / 2) & (np.abs(q1 - q0) < t / 2)
+    d = np.where(m, d, np.float32(0))
+    ch[:, xs - 3] = p2 + d / 8
+    ch[:, xs - 2] = p1 + d / 4
+    ch[:, xs - 1] = p0 + 3 * d / 8
+    ch[:, xs] = q0 - 3 * d / 8
+    ch[:, xs + 1] = q1 - d / 4
+    ch[:, xs + 2] = q2 - d / 8
+
+
+def _deblock_content(kind, h, w, rng):
+    if kind == "flat":
+        return np.full((h, w, 3), 97, np.uint8)
+    img = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+    if kind == "noise":
+        return img
+    if min(h, w) >= 3:
+        img = cv2.GaussianBlur(img, (0, 0), 2.5)
+    if kind == "blocky":  # 8 x 8 steps below the threshold: the filter's main case
+        off = rng.integers(-7, 8, (-(-h // 8), -(-w // 8), 3)).astype(np.int16)
+        off = np.repeat(np.repeat(off, 8, 0), 8, 1)[:h, :w]
+        img = np.clip(img.astype(np.int16) + off, 0, 255).astype(np.uint8)
+    elif kind == "jpeg":
+        _ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 30])
+        img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    return img
+
+
+def _deblock_layouts(img):
+    """The same pixels as C, read-only (what SourceImageCache hands out), Fortran and strided."""
+    read_only = img.copy()
+    read_only.flags.writeable = False
+    yield "C", img
+    yield "read-only", read_only
+    yield "fortran", np.asfortranarray(img)
+    yield "strided", img[::-1, ::2]
+
+
+def _assert_deblock_matches_reference(img, threshold, case):
+    before = img.copy()
+    out = enh.deblock(img, threshold)
+    ref = _reference_deblock(img, threshold)
+    assert out.dtype == ref.dtype and out.shape == ref.shape, case
+    assert np.array_equal(out, ref), case
+    assert out.flags.c_contiguous == ref.flags.c_contiguous and out.flags.writeable, case
+    assert not np.shares_memory(out, img), case
+    assert np.array_equal(img, before), case  # the input is never modified
+
+
+@pytest.mark.parametrize("kind", ["noise", "smooth", "blocky", "jpeg", "flat"])
+def test_deblock_is_bit_exact_with_the_reference(kind):
+    rng = np.random.default_rng(22)
+    sides = (10, 11, 18, 19)  # block + 2 / + 3 for both grids: the first boundary just fits
+    small = [(1, 1)] + [(h, w) for h in sides for w in sides]
+    for h, w in small + [(480, 640)]:
+        thresholds = (6.0, 14.0, 30.0, 0.0, float("inf")) if (h, w) in small else (14.0,)
+        bgr = _deblock_content(kind, h, w, rng)
+        for colour, img in (("bgr", bgr), ("gray", np.ascontiguousarray(bgr[..., 1]))):
+            for layout, arr in _deblock_layouts(img):
+                for threshold in thresholds:
+                    case = (kind, h, w, colour, layout, threshold)
+                    _assert_deblock_matches_reference(arr, threshold, case)
+
+
+def test_deblock_is_bit_exact_with_the_reference_on_the_example_photos():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    examples = os.path.join(root, "docs", "examples")
+    names = sorted(f for f in os.listdir(examples) if f.lower().endswith(".jpg"))
+    assert names, "docs/examples has no photos"
+    for name in names:
+        img = enh.SourceImageCache().get(os.path.join(examples, name))
+        for threshold in (6.0, 14.0, 30.0):
+            _assert_deblock_matches_reference(img, threshold, (name, threshold))
+
+
 def test_deblock_core_imports_no_torch_or_qt():
     import subprocess
     import sys

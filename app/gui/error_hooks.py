@@ -31,6 +31,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import IO
 
+from PyQt6 import sip
 from PyQt6.QtCore import (
     QCoreApplication,
     QObject,
@@ -186,6 +187,9 @@ class CrashDialogPresenter(QObject):
         if self._muted:
             return
         try:
+            if self._dialog is not None and sip.isdeleted(self._dialog):
+                # It went with the window it was parented to (no finished()): it is closed.
+                self._dialog = None
             if self._dialog is not None:
                 self._extra += 1
                 self._dialog.setInformativeText(self._informative_text())

@@ -262,29 +262,30 @@ def deblock(img: np.ndarray, threshold: float = 14.0) -> np.ndarray:
         _deblock_axis(ch, block, threshold)
         _deblock_axis(ch.T, block, threshold)
     new = np.clip(ycc + 0.5, 0, 255).astype(np.uint8)
-    changed = (new != base).any(axis=2)
-    out = img.copy()
-    if changed.any():
-        out[changed] = cv2.cvtColor(new, cv2.COLOR_YCrCb2BGR)[changed]
-    return out
+    # A pixel changed when its largest channel difference is nonzero; OpenCV's masked copy is
+    # several times faster than a boolean mask and fancy indexing (audit S09-01).
+    d0, d1, d2 = cv2.split(cv2.absdiff(new, base))
+    changed = cv2.max(cv2.max(d0, d1), d2)
+    return cv2.copyTo(cv2.cvtColor(new, cv2.COLOR_YCrCb2BGR), changed, img.copy())
 
 
 def _deblock_axis(ch: np.ndarray, block: int, t: float) -> None:
     """Filter the boundaries between columns ``block`` apart of ``ch`` in place (float32)."""
-    xs = np.arange(block, ch.shape[1] - 2, block)  # q0 columns
-    if xs.size == 0:
+    width = ch.shape[1]
+    if width - 2 <= block:  # no q0 column (q0 sits at block, 2 * block, ... < width - 2)
         return
-    p2, p1, p0 = ch[:, xs - 3], ch[:, xs - 2], ch[:, xs - 1]
-    q0, q1, q2 = ch[:, xs], ch[:, xs + 1], ch[:, xs + 2]
+    # Strided views of the six columns around every boundary. They never overlap (block >= 8),
+    # and d and m are computed before the first write, so updating them in place is exact.
+    p2, p1, p0, q0, q1, q2 = (ch[:, block + o : width - 2 + o : block] for o in range(-3, 3))
     d = q0 - p0
     m = (np.abs(d) < t) & (np.abs(p1 - p0) < t / 2) & (np.abs(q1 - q0) < t / 2)
     d = np.where(m, d, np.float32(0))
-    ch[:, xs - 3] = p2 + d / 8
-    ch[:, xs - 2] = p1 + d / 4
-    ch[:, xs - 1] = p0 + 3 * d / 8
-    ch[:, xs] = q0 - 3 * d / 8
-    ch[:, xs + 1] = q1 - d / 4
-    ch[:, xs + 2] = q2 - d / 8
+    p2 += d / 8
+    p1 += d / 4
+    p0 += 3 * d / 8
+    q0 -= 3 * d / 8
+    q1 -= d / 4
+    q2 -= d / 8
 
 
 def enhance(img: np.ndarray, settings: EnhanceSettings, *, tone: bool = True) -> np.ndarray:

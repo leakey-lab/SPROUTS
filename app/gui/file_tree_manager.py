@@ -7,10 +7,9 @@ Thin, name-stable wrappers over the window's :class:`~app.gui.library_index.Libr
 updates that state and repaints one row.
 """
 
-import os
-
 from app.gui import library_index
 from app.gui.library_index import LibraryIndex
+from app.naming import image_stem
 
 
 def natural_sort_key(text):
@@ -57,18 +56,14 @@ def update_file_list_mask_status(main_window):
     library_index_for(main_window).refresh_status()
 
 
-def _stem(image_path):
-    return os.path.splitext(os.path.basename(os.path.normpath(image_path)))[0]
-
-
 def highlight_saved_mask(main_window, image_path):
     """Record the saved GT mask of ``image_path`` and repaint its row (its prediction in
     ``mask/`` is not touched by a save)."""
     main_window.image_manager.set_gt(image_path, "mask", True)
-    library_index_for(main_window).refresh_status(_stem(image_path))
+    library_index_for(main_window).refresh_status(image_stem(image_path))
 
 
 def unhighlight_cleared_mask(main_window, image_path):
     """Record that ``image_path`` has no GT mask any more and repaint its row."""
     main_window.image_manager.set_gt(image_path, "mask", False)
-    library_index_for(main_window).refresh_status(_stem(image_path))
+    library_index_for(main_window).refresh_status(image_stem(image_path))

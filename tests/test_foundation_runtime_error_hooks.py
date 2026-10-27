@@ -23,8 +23,9 @@ import threading
 import time
 
 import pytest
-from PyQt6.QtCore import QCoreApplication, QEventLoop, qInstallMessageHandler, qWarning
-from PyQt6.QtWidgets import QApplication
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEventLoop, QTimer, qInstallMessageHandler, qWarning
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.gui import error_hooks
 from app.gui.error_hooks import (
@@ -33,6 +34,7 @@ from app.gui.error_hooks import (
     install_exception_hooks,
     install_qt_message_handler,
 )
+from tests.qt_teardown import delete_widgets
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -261,6 +263,73 @@ def test_dont_show_again_mutes_the_presenter(qapp):
     _pump()
     assert presenter.muted is True
     assert presenter.dialog is None
+
+
+def test_a_dialog_deleted_with_its_parent_counts_as_closed(qapp, monkeypatch):
+    """The box is parented to the active window. Closing that dialog (WA_DeleteOnClose, or
+    deleteLater after exec) deletes the box without finished(): the next error must show a
+    new box, not mute every later dialog (S10-01)."""
+    parent = QDialog()  # the prompt or sheet that is the active window when the error comes
+    parent.show()
+    monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: parent))
+    presenter = CrashDialogPresenter(log_file=None)
+    try:
+        presenter.report("ValueError: first", "tb1")
+        _pump()
+        first = presenter.dialog
+        assert first is not None and first.parent() is parent
+        delete_widgets([parent])  # the crash box goes with it
+        assert sip.isdeleted(first)
+        monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: None))
+        presenter.report("OSError: second", "tb2")
+        _pump()
+        assert presenter.muted is False
+        shown = presenter.dialog
+        assert shown is not None and not sip.isdeleted(shown) and shown.isVisible()
+        assert "OSError: second" in shown.text()
+        assert "more" not in shown.informativeText()
+    finally:
+        if presenter.dialog is not None and not sip.isdeleted(presenter.dialog):
+            presenter.dialog.close()
+        _pump()
+
+
+def test_an_error_queued_while_the_box_closes_keeps_one_dialog(qapp, monkeypatch):
+    """A report queued before the user's OK builds the next box before the first one's
+    deferred delete runs; that delete must not orphan it (at most one dialog)."""
+    monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: None))
+    presenter = CrashDialogPresenter(log_file=None)
+    try:
+        presenter.report("ValueError: first", "tb1")
+        _pump()
+        first = presenter.dialog
+        assert first is not None
+
+        def queue_then_ok():
+            presenter.report("OSError: second", "tb2")  # posted before the deferred delete
+            first.button(QMessageBox.StandardButton.Ok).click()
+
+        loop = QEventLoop()
+        QTimer.singleShot(0, queue_then_ok)
+        QTimer.singleShot(300, loop.quit)
+        loop.exec()
+        assert sip.isdeleted(first)
+        second = presenter.dialog
+        assert second is not None and not sip.isdeleted(second) and second.isVisible()
+        presenter.report("KeyError: third", "tb3")
+        _pump()
+        title = second.windowTitle()
+        visible = [
+            w
+            for w in QApplication.topLevelWidgets()
+            if isinstance(w, QMessageBox) and w.isVisible() and w.windowTitle() == title
+        ]
+        assert visible == [second]
+        assert "1 more error" in second.informativeText()
+    finally:
+        if presenter.dialog is not None and not sip.isdeleted(presenter.dialog):
+            presenter.dialog.close()
+        _pump()
 
 
 def test_dialog_names_the_log_file(qapp, tmp_path):

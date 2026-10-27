@@ -37,7 +37,7 @@ from .device_check import DeviceCheck
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
 from .image_manager import ImageManager, project_layout_of
-from .recent_projects import RecentProjectsStore
+from .recent_projects import MemorySettings, RecentProjectsStore
 from .stage_status import StageStatus
 from .window import (
     _common,
@@ -103,7 +103,8 @@ class MainWindow(QMainWindow):
         ``settings`` (optional) is where window geometry, the last folder and the
         recent projects persist; by default the app's own QSettings. Headless
         (``offscreen``) runs without explicit settings neither restore nor save
-        the window geometry / last folder, so test runs never touch the user's.
+        the window geometry / last folder and keep the recent projects in memory,
+        so test runs never touch the user's.
 
         ``detect_device``: name the inference device in the thread pool once the
         window first shows, for the status line's device chip (see
@@ -119,9 +120,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME}[*]")  # "<project> — SPROUTS" once a folder loads
 
         self.window_state = WindowStateStore(settings)
-        self.recent_projects = RecentProjectsStore(settings)
         self._persist_window_state = (
             settings is not None or QApplication.platformName() != "offscreen"
+        )
+        # Headless without settings: the recent projects live in memory, never the user's.
+        self.recent_projects = RecentProjectsStore(
+            settings if self._persist_window_state else MemorySettings()
         )
         # The metrics bar and the measurement CSVs behind it. Its pool job reports to the
         # window's slot: on the GUI thread, and to nothing once the window is destroyed.

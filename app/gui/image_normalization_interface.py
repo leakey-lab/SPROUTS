@@ -1,5 +1,4 @@
-"""Enhance popover content (:class:`NormalizationControls`) and the legacy
-:class:`ImageNormalization` facade.
+"""Enhance popover content (:class:`NormalizationControls`).
 
 The math, settings validation, decoded-source cache and saved-defaults store live in the
 Qt-free :mod:`app.enhancement`; this module is the thin Qt adapter the editors use:
@@ -43,8 +42,6 @@ from app.enhancement import (
     EnhanceDefaultsStore,
     EnhanceSettings,
     SourceImageCache,
-    clahe,
-    contrast_stretch,
     enhance,
     is_jpeg_path,
 )
@@ -53,29 +50,10 @@ from .widgets.buttons import ghost_button, primary_button
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ImageNormalization", "NormalizationControls", "bgr_to_qpixmap"]
+__all__ = ["NormalizationControls", "bgr_to_qpixmap"]
 
 PREVIEW_DELAY_MS = 80
 _SAVED_FEEDBACK_MS = 1500
-
-
-class ImageNormalization:
-    """Static facade kept for existing callers; see :mod:`app.enhancement`."""
-
-    @staticmethod
-    def apply_clahe(img, clip_limit=2.0, tile_size=(8, 8)):
-        """CLAHE (Contrast Limited Adaptive Histogram Equalization) on the L channel."""
-        return clahe(img, clip_limit, tile_size)
-
-    @staticmethod
-    def apply_contrast_stretching(img, lower_percentile=2, upper_percentile=98):
-        """Per-channel percentile contrast stretch (flat channels are left unchanged)."""
-        return contrast_stretch(img, lower_percentile, upper_percentile)
-
-    @staticmethod
-    def apply(img: np.ndarray, settings: EnhanceSettings) -> np.ndarray:
-        """``img`` enhanced with ``settings``."""
-        return enhance(img, settings)
 
 
 def bgr_to_qpixmap(img: np.ndarray) -> QPixmap:
