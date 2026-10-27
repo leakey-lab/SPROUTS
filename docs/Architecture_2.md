@@ -80,12 +80,15 @@ flowchart TB
 - **Layers** implement one contract, `EditLayer` (`app/gui/correct/layer.py`): open, save
   and revert, their own undo stack, gestures, tools, visibility and opacity. The layer ids
   are `MASK`, `SKELETON` and `CLASSES`. `MaskLayer` and `ClassesLayer` are both
-  `RasterLayer`s (`raster_layer.py`: canvas, Brush / Eraser / Fill, history replay) over
-  their own Qt-free document; `SkeletonLayer` has its own tools (`app/gui/skeleton_tools.py`).
+  `RasterLayer`s (`raster_layer.py`: canvas, Brush / Eraser / Fill, history replay, the
+  document members) over their own Qt-free document (their shared half: `PlaneDocument` in
+  `app/editing/planes.py`, whose `SavedPlane` and `planes_equal` the skeleton model uses
+  too); `SkeletonLayer` has its own tools (`app/gui/skeleton_tools.py`).
 - **The session** (`CorrectSession`) opens the layers, aggregates the unsaved state, saves
   (the unsaved layers; with nothing unsaved, nothing is written), asks the one Save /
   Discard / Cancel question (`app/gui/editor_prompts.py`) and keeps one undo timeline:
-  `EditJournal` records which layer acted, each layer keeps its own stack. `save_gate.py`
+  `EditJournal` records which layer acted (each layer's newest 100 actions), each layer
+  keeps its own stack. `save_gate.py`
   asks before a save would replace a file the layer could not load, and `stamps.py` notices
   files that changed on disk.
 - **What each layer reads and writes**: the mask opens `gt/mask/<stem>.png`, else the
@@ -96,7 +99,9 @@ flowchart TB
 - **Paging**: after each open, `paging.Neighbours` asks the library for the next and
   previous images and the Qt-free `read_ahead.ReadAhead` reads them on one worker thread
   (photo, mask plane, thinned skeleton; at most 3 images and 256 MiB; used only while the
-  files' stamps still match). `read_back.py` hands the image just left back to the read-ahead.
+  files' stamps still match). Its bounded cache, `app/read_ahead_cache.ReadAheadCache`, is
+  shared with the Library's `display_read_ahead.DisplayReadAhead`. `read_back.py` hands the
+  image just left back to the read-ahead.
 - **Small parts**: `keys.py` (the page's shortcut table), `chip.py` (the status chip),
   `layer_prefs.py` (layer opacity and visibility in QSettings), `actions.py` (Load skeleton
   file, Load prediction, Classes, Remove GT).
@@ -109,7 +114,9 @@ flowchart TB
 ## Data flow
 
 1. The GUI process starts a job: `app/handlers/*` build a `GuardedThread` (error boundary
-   and cancel, `app/workers.py`) and `JobRegistry` runs one batch job at a time.
+   and cancel, `app/workers.py`) and `JobRegistry` runs one batch job at a time. The window
+   imports the handlers, and `app.handlers` imports nothing from `app.gui`: a handler gets
+   the project's layout from `project_layout_of` in `app/project_layout.py`.
 2. `app/inference/batch_engine.py` runs the batches for both models: decode on a thread
    pool, the GPU forward on the job's thread, PNG writes on an async writer. Fixed batch
    shapes keep outputs identical from run to run; `runtime.py` picks device and precision.
@@ -138,9 +145,10 @@ Root-Mask-and-Skeletons/
 │   ├── project_layout.py, naming.py, io_utils.py, provenance.py, models.py, user_paths.py
 │   ├── enhancement.py, feedback.py, workers.py, gc_policy.py, logging_config.py
 │   ├── qt_environment.py         # Qt / Chromium start-up flags per OS (Qt-free)
+│   ├── read_ahead_cache.py       # Bounded cache of the Library and Correct read-aheads (Qt-free)
 │   ├── design/tokens.py          # SPROUTS design tokens
-│   ├── editing/                  # Undo history, journal, geometry, thinning
-│   ├── imaging/pyramid.py        # Image pyramid of smooth zoom
+│   ├── editing/                  # Undo history, journal, geometry, thinning, planes (Qt-free)
+│   ├── imaging/                  # Image pyramid of smooth zoom, skeleton vector links (Qt-free)
 │   ├── masks/store.py            # Mask store
 │   ├── gt/                       # Class labels: registry, store, files, dataset export
 │   ├── mask_model/model.py       # Mask segmentation network

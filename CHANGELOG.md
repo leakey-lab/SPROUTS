@@ -11,8 +11,19 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
-Five passes, not yet released:
+Six passes, not yet released:
 
+- **Redundancy and speed pass** (branch `feat/unified-correct-editor`, audit 2026-10-26,
+  built 2026-10-27 in `89965f5`..`9ad0d96`): a read-only audit for repeated code, dead
+  code, bugs and speed, each finding checked by adversarial verifiers, then built in lanes
+  with disjoint files, each lane reviewed and committed on its own. Entries carry the
+  finding ID (for example S01-06); `docs/KNOWN_ISSUES.md` resolves the IDs the code cites.
+  Nothing visible changed without the owner: the fixes restore documented behaviour, and
+  the owner questions are not built. A science harness compared every generated mask and
+  skeleton (GPU and CPU), every CSV row, provenance and inputs record and every GT-first
+  decision with `f392a85`: identical after every lane. Timings are min / median of
+  interleaved runs on a machine shared with other agents, offscreen unless stated; 46k is
+  the owner's 46,178-image project or a synthetic project of its layout.
 - **Owner-decisions build** (branch `feat/unified-correct-editor`, 2026-10-25; plan
   `docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`): the owner's answers
   to the 2026-10-12 decision sheet (O1-O38) and the follow-up answers, built task by task,
@@ -38,6 +49,83 @@ Five passes, not yet released:
   a 161-finding audit implemented by per-area packages, then integrated and reviewed.
 
 ### Fixed
+- **Redundancy and speed pass (2026-10-26).** None of these changes a CSV value or an
+  output pixel, except one corner case under *Scientific output changes* (S01-06).
+  - Correct: undo across layers keeps each layer's newest 100 actions on the one timeline,
+    so a busy layer no longer pushes another layer's steps out of reach (300 skeleton
+    actions after 50 mask strokes had left none of the strokes undoable, and the Undo button
+    turned off while the mask still held steps) (C4-01).
+  - Canvas keys: a `Space` pan ends when `Space` is released with `Ctrl`, `Shift`, `Alt` or
+    `Meta` down (`Space`, then `Ctrl` for a Ctrl+wheel zoom, then `Space` up first: left
+    drags kept panning). `B` pressed with the keyboard on the library tree and released with
+    `Ctrl` down ends its hold as on the canvas. `B` or `Space` pressed in the tree and
+    released on another stage has ended when Correct is back (the wheel kept sizing the
+    brush, or left drags kept panning) (S05-02).
+  - Status chip: with the polyline prompt up, a zoom or a fit no longer narrows a chip placed
+    below the prompt to the room beside it (name elided to `…T012…`, hint wrapped over the
+    tool rail) (S05-01).
+  - A mask prediction whose name differs from the image's only in case is pinned like any
+    other. On a case-sensitive disk, a prediction named `mask/IMG.png` or `mask/img.Png` for
+    `img.png` is stamped when *Correct* reads it: a rewrite of it by another program is seen
+    by Discard (*Mask reloaded: the file changed on disk*), by the same image opened again
+    and by the read-ahead and hand-back, and a save of a plane equal to the prediction as
+    opened writes the GT mask instead of removing it (S01-06).
+  - Class labels that Pillow refuses (a broken PNG chunk, or a header over its size limit)
+    open empty in *Correct* with the usual unreadable-labels notice; *Correct* raised in the
+    middle of the open and left the previous image's photo and labels on screen. The
+    dataset export lists such a file in `errors.txt` and carries on; a broken chunk stopped
+    it with *Export failed* (S17-04).
+  - The Measure status line counts the files Measure reads: masks in `mask/` and GT files in
+    `gt/mask/` and `gt/skeletons/` by Measure's own name rule (`.png` in any case, hidden
+    names such as `._a.png` included), and the predicted skeletons in `skeletons/` by
+    Measure Length's (`*_fake.png` with exactly that suffix, hidden names included: a
+    `B_fake.PNG` is no longer counted, a `._a_fake.png` is). The count can change in
+    projects with such names; the wording is the same (C1-04).
+  - Measure clicked while a folder loads gives the loading refusal at once; it named the
+    previous project's missing outputs, or listed its folders first (S11-01).
+  - Durable saves survive a power cut on Linux and macOS: after the swap, a durable save (GT
+    files, CSVs, records, sidecars) also syncs its folder (about 6 ms per file); a folder
+    that cannot be synced (CIFS, FUSE) never fails the save. Windows is unchanged (S16-09).
+  - Metrics bar: a `root_lengths.csv` found in a legacy layout stays on the bar when a job
+    ends (S06-01, C1-03); a legacy project opened while the previous project's CSV parse
+    still ran shows its own length values (S06-04); a prediction whose name differs from the
+    image's in case (O7) is no longer shown outdated right after Measure, and its tooltip
+    names the measured file (C1-02).
+  - The length CSV of a legacy layout is found where Measure writes it. In a project whose
+    skeletons sit in a `test_latest/images` folder found by the folder search, Measure
+    Length wrote `root_lengths.csv` into that `images/` folder, but the dashboard, the
+    metrics bar and the status line looked only in `test_latest/` and said there was no
+    length data; the `images/` CSV is found now, ahead of a CSV an older version wrote into
+    `test_latest/` (S16-02).
+  - Visualize, root area: the dashboard draws its Totals by Tube chart when it opens; its
+    first figure request was taken for a *Toggle Legend* press and left the chart empty
+    (P4-01). Totals by Tube drew a tube's later dates from 0 after a date the tube was not
+    measured on, so its bars overlapped and its total was drawn too short (162 of 170 tubes
+    on the 2024 EF trial); both dashboards now draw the chart with one builder that sends a
+    missed date as null, which plotly.js leaves out of the stack. Values, hover and exports
+    are unchanged (S14-02).
+  - Visualize: a wide tube span in *Add Range* or the typed tube list (for example
+    `1-100000000`) no longer freezes the app for seconds or exhausts memory: the span is
+    matched against the trial's tubes, and the selection is the same (S14-01, S15-02).
+  - A dashboard build or a dataset export ended by `SystemExit`, `KeyboardInterrupt` or
+    another `BaseException` reports a failure (the page stayed at *Loading data…*, and the
+    export's modal dialog could not be closed), and an unexpected export error is logged
+    with its traceback (S10-02, S17-06).
+  - A crash dialog closed together with the dialog it sat on no longer mutes every later
+    error dialog of the session: the next error shows a new one (S10-01).
+  - A window started without a screen (tests, scripts) and without explicit settings keeps
+    its recent projects in memory; it wrote every folder it opened into the user's list
+    (C5-04).
+  - Raster canvases (the macOS default; Windows or Linux without OpenGL, or while a
+    dashboard lives): the translucent skeleton's joints no longer flicker brighter or darker
+    under the brush or eraser ring, because a partial repaint draws the full frame's lines
+    (X2-06; the skeleton's share of such a repaint at 200 % and above 0.15 -> 0.55 ms). At
+    125-175 % display scaling the skeleton's pixel tiles sit on the mask layer's device
+    pixels (no 1 px drift at .5 ties; S04-03). At zooms where the endpoint markers are now
+    drawn directly, they no longer shift by a device pixel after some pans, nor drift at
+    125-175 % (X2-03).
+  - Tests: the oracle of `tests/test_gt_export_count_traced.py` uses the O7 case rule on
+    every OS; it failed on the Linux and macOS CI legs (S17-01).
 - **GT files of an image found, saved and removed as its own (2026-10-26, final review D1,
   C1, C2, D5).**
   - An image whose name ends in two extensions (`X.png.jpg`, stem `X.png`): *Correct* opens
@@ -272,6 +360,89 @@ Five passes, not yet released:
     ... has been deleted", and the Measure Retry prompt is freed once answered.
 
 ### Performance
+- **Redundancy and speed pass (2026-10-26).** Outputs are unchanged by all of these.
+  - Whole app (the pass's perf harness, `f392a85` against `ea205a9`, three interleaved runs
+    each, medians): opening the 46k project 1222 -> 903 ms (GUI thread 359 -> 290 ms);
+    Measure on the harness project 26 % (area) and 27 % (length) faster; entering Correct
+    21.1 -> 16.9 ms, `PgDn` 13.7 -> 11.3 ms, a 200-point brush stroke 103 -> 79 ms;
+    `import main` (the app's modules) 354 -> 249 ms; the length dashboard build 92 -> 82 ms.
+  - Generate on the GPU: the decode, prefetch and save threads run their tensor ops on one
+    torch thread while a CUDA run lasts (each had started a 16-thread OpenMP team): 409 masks
+    median 15.0 -> 7.2 s, 1227 skeletons 19.3 -> 7.0 s, process CPU about 25x lower
+    (S12-01). `main.py` sets `KMP_BLOCKTIME=0` before torch loads, unless the user set it,
+    so idle OpenMP workers sleep at once (Linux's GNU OpenMP ignores it): on the CPU
+    fallback 300 skeletons 64 -> 51 s with about 40 % less CPU time (P3-01). The skeleton
+    model loads its checkpoint without a random init (0.12 -> 0.05 s on the GPU,
+    0.35 -> 0.05 s on the CPU; S12-03).
+  - Generate: a finished mask or skeleton run (its thread and report, about 5 MB at 46k
+    images) is freed as soon as the next run of its kind starts; a heap freeze while it was
+    alive kept it for the rest of the session (C3-05). A run in which many inputs fail logs
+    the first 20 of each kind, one count and one bounded end-of-run line (5000 unreadable
+    inputs: 2.7 MB -> 8 KB of `app.log`; C6-02).
+  - Measure at 46k (synthetic, no GT; min): length 46.1 -> 25.5 s, area 32.6 -> 23.7 s. An
+    empty prediction is not thinned, a run decodes each repeated empty file once, the pool
+    runs images in tasks of several, and an image that fails stops the run at once (S13-02,
+    S13-03, S13-04, P3-03); Cancel is heard as quickly as before (about 30 ms). Input keys
+    are made once per folder: on a synthetic 46k project seven folders deep the status
+    count takes 0.46 s instead of 3.9 s and the "nothing changed" check 0.29 s instead of
+    3.1 s (S06-06). One parse of an inputs record serves the metrics bar, the status line and
+    the Measure click (C3-02); a run keeps no session SHA-256 entries (about 25 MiB per
+    metric at 46k; S13-05); the click no longer pairs its inputs on the GUI thread
+    (0.2-0.5 -> 0.15-0.3 s at 46k; S11-05). The status line runs one count at a time, and
+    once after a Measure run on the Measure stage instead of twice (S06-05). A run whose
+    inputs cannot be read logs its first 20 rows with an Error and one count (5000
+    unreadable skeletons: 1.6 -> 0.65 s, 1 MiB -> 4 KiB of `app.log`; C6-02); the rows and
+    their `Error` column are unchanged.
+  - Metrics bar and Visualize: the end of a Generate pass no longer blanks LENGTH / AREA and
+    re-parses both 46k-row CSVs (its slot 5.3 -> 1.5 ms, no 174-253 ms pool parse; S06-02).
+    Before a project's first Measure Length, a Visualize entry, a Length click and the
+    job-end retry no longer walk the project folders on the GUI thread for a legacy
+    `test_latest` folder (about 100 ms at 46k, 280 ms on the retry -> under 1 ms): they use
+    the search the project open ran in the background (S08-01). A Library click stats about
+    10 files instead of 24 and refreshes the bar in 0.95 instead of 1.56 ms (4.6 -> 3.9 ms
+    median per click under a profiler).
+  - Library on case-sensitive disks (Linux): a repeated miss of an exact name costs one
+    `os.stat` instead of listing a 46k-file folder, about 150-220 ms less per Correct open
+    of an image without a prediction (P2-01; Windows and default macOS: no change). Project
+    open: the tree index takes the names it has just set (about 45-55 ms less GUI-thread
+    time; S06-07); the scan builds its winners map only when a stem collides, and the remaps
+    build no stem-key table when every name already is a Library stem (46k scan
+    261 -> 98 ms on Windows, its five remaps 75 -> 9 ms; S06-08, S16-01).
+  - Correct: a page refresh no longer scans the whole skeleton (2048 x 1536 1.6 -> 0.25 ms,
+    6000 x 4000 12.4 -> 1.8 ms; S02-03); a skeleton save thins once (2048 x 1536
+    35-37 -> 23 ms; S03-05); a skeleton edit below 100 % patches the cached zoom levels
+    (6000 px: 17.3 -> 0.08 ms; S04-07); the skeleton files are looked up once per open, save
+    and read-ahead plan, and the plan lists nothing on the GUI thread (on a case-sensitive
+    disk 227 -> 0.2 ms; S01-05, C1-06); a blank class-labels layer that is not edited is not
+    painted, tiled or warmed (about 1 ms less per frame at 640 x 480, 25 MiB less at
+    2048 x 1536; S05-04); GT masks take the exact fast decode (640 x 480 2.2 -> 1.3 ms;
+    S01-07); a case-variant prediction is looked up once per read (37 -> 19 ms on a
+    case-sensitive folder of 20k masks), and the skeleton model keeps its saved copy in one
+    buffer (2048 x 1536: an open 0.41 -> 0.07 ms, an edit and save 0.6 -> 0.26 ms). Zooms
+    and fits take the overlay insets from the applied layout plan (73 -> 7 µs; S05-01).
+  - Raster canvases (the macOS default; Windows or Linux without OpenGL, or while a
+    dashboard lives): blank mask and label tiles are not drawn and partly empty ones are
+    clipped to their content (at DPR 2 a frame with edited blank class labels 1.5-10 ms
+    faster; X2-02); the endpoint markers are drawn directly where Qt would rebuild a
+    viewport-size piece of their cache on every pan step (pan and zoom-step frames at DPR 2
+    about 9-11 ms faster, 19-25 -> 8-14 ms at 400 %; X2-03); the Correct viewport is opaque,
+    so the window is no longer painted under it (about 2-3 ms per frame at DPR 2; X2-04).
+  - *Smooth JPEG blocks* (deblock) is 2.4-2.9x faster on 640 x 480 JPEGs (12-15 -> 5-6 ms
+    per Correct open, `PgDn` and Enhance re-render while the box is ticked), with
+    bit-identical pixels (S09-01). The F1 sheet's first paint takes 18 instead of 48 ms: its
+    widgets are created under their final parents (S09-02).
+  - Dataset export: images without labels cost no file check, the ids are remapped with one
+    table and the counts take one histogram: 46k images with 300 labelled 3.8 -> 1.0 s,
+    byte-identical output (S17-02, S17-03).
+  - Dashboards: each figure is serialised once per revision (a repeated 170-tube time view
+    14.6 -> 1.8 ms per callback; S14-04); built figures skip plotly's validation (that view's
+    first build 29.5 -> 7.9 ms; P4-03); the Depth Profile Grid is laid out without
+    `make_subplots` (the first six picks 249 -> 88 ms; P4-02); Export CSV of Growth Over Time
+    builds one frame (26 -> 3.4 ms; S15-05); each dashboard after the first skips Dash's scan
+    of every installed package's entry points (5.5 -> 1.9 ms), and the data load copies no
+    text column. A released dashboard is collected (Python heap held 10.2 -> 0.03 MiB;
+    S15-01), and a dashboard keeps only the columns it charts (7.7 -> 1.5 MiB at 46k;
+    S15-04).
 - **Fix pass (2026-10-02).** Outputs are unchanged by all of these.
   - The Library read-ahead counts a decoded photo against its 192 MiB as soon as the
     decode finishes and enforces the bounds then (before, an unshown decode counted
@@ -442,6 +613,42 @@ Five passes, not yet released:
   app version, commit, model SHA-256, calibration and runtime precision.
 
 ### Changed
+- **Redundancy and speed pass (2026-10-26).** Code structure, interfaces and log records; no
+  CSV value, output pixel or visible behaviour changes.
+  - New Qt-free modules: `app/editing/planes.py` (`PlaneDocument`, `SavedPlane`,
+    `planes_equal`: the saved state and the one plane compare that `MaskDocument`,
+    `ClassesDocument` and the skeleton model share, while `RasterLayer` holds the layer
+    members both raster layers repeated; S01-01, S01-02, C4-02, S03-08),
+    `app/imaging/skeleton_vectors.py` (the skeleton's vector links, moved verbatim out of the
+    skeleton layer item; S04-06) and `app/read_ahead_cache.py` (`ReadAheadCache`, the
+    bounded cache the Library and Correct read-aheads share, with their limits, thread names
+    and public methods unchanged; S07-04).
+  - `app.handlers` imports nothing from `app.gui`: `project_layout_of` lives in
+    `app/project_layout.py` (still importable from `app.gui.image_manager`), pinned by
+    `tests/test_layering_contract.py` (X7-01).
+  - One copy of each repeated rule: the generation threads and their outcome slots
+    (`GenerationThread`, `thread_slot` in `app/handlers/generation_base.py`; S11-03), the
+    grey decoder and the file hash (`io_utils.imdecode_bytes`, `sha256_file`; S13-07,
+    S16-08), the GT mask read (`app.masks.read_mask_file`; S01-07), the GT-first resolvers
+    (S13-08), the bounded failure log (`LogLimiter`; C6-02), the class histogram
+    (`app.gt.store.histogram`; S17-03), the elided label and the first form that fits
+    (`text_fit.ElidedLabel`, `fit_forms`; S09-05, S10-03), the device-pixel tile snapper and
+    the pyramid level rule (S04-03, S04-05), the Totals by Tube builder and the dashboards'
+    tube, legend and error helpers (S14-02, S14-03), Measure Length's name rule
+    (`project_layout.skeleton_stem`; C1-04) and the prompts' `join_nouns` (S02-06).
+  - Interfaces: `metrics.length_row` and `area_row` take keyword-only `memo=None` and
+    `log=None` (compatible); `MaskStore.read` takes a keyword-only `path=`; `GuardedThread`
+    has a `describe(exc)` hook and `DashInitWorker` is a `GuardedThread`; `CanvasViewMixin`
+    emits `viewport_changed`.
+  - Log records: a failed dashboard build is logged as "DashInitWorker failed" by
+    `app.handlers.worker_base` (it was "Dashboard initialisation failed" by
+    `app.visualization.viz_window`); a failed Correct read-ahead job by
+    `app.read_ahead_cache`; an unexpected dataset-export error with its traceback.
+  - Tests: `tests/conftest.py` owns one session `QApplication`, a fresh config folder per
+    test (no test reads or writes the user's Enhance defaults), `KMP_BLOCKTIME=0` and opt-in
+    guard fixtures, with shared helpers in `tests/guards.py`, `tests/qt_wait.py`,
+    `tests/window_support.py`, `tests/correct_support.py` and `tests/generation_support.py`
+    (T1-01, T1-04 to T1-09).
 - **Owner-decisions build (2026-10-25).** Display and wording; no CSV value or output pixel
   changes.
   - Dashboard views have one set of names (Totals by Tube, Growth Over Time, Depth Profile,
@@ -742,6 +949,35 @@ Five passes, not yet released:
   fallback; the mask model used to fail to load.
 
 ### Removed
+- **Redundancy and speed pass (2026-10-26).** Code with no caller in the app, the scripts or
+  the documents (the tests that only covered it went with it):
+  - `app.inference.root_length_inference_handler` and `root_area_inference_handler`
+    (`RootLengthCalculatorThread`, `RootAreaCalculatorThread`, `process_single_image`,
+    `process_single_mask`): use `MetricCalculatorThread(MeasureRun(LENGTH or AREA, images,
+    folder))` and `app.inference.metrics` (S11-06).
+  - `MaskStore.write` and `MaskStore.remove`: GT masks are written by
+    `app.masks.write_mask_file`, and `MaskStore` keeps `find` and `read` (S16-05).
+  - `app.gui.ImageNormalization` (`apply_clahe`, `apply_contrast_stretching`, `apply`), the
+    facade over `app.enhancement` that lost its callers with the two editors the Correct
+    stage replaced: use `app.enhancement.clahe`, `contrast_stretch` and `enhance` (S09-06).
+  - Library and widgets: `ImageManager.parse_image_name`, `get_image_names`, its folder
+    dialog and `has_fake_real_pairs` (S07-06); `ui_panels.create_icon_button` and
+    `create_section_label` (S08-02); the seven XML icons of `app/utils` and their lookup
+    branch (S08-03); `IconButton.set_icon_name`, `CanvasViewMixin.set_pan_mode`,
+    `update_cursor` and `_scene_pixel`, and the `TypeError` fallback of
+    `shell_chrome._stage_icon` (C5-05, S05-05); `Calibration.mean_mm_per_px` (S16-10); the
+    `Toast` / `ToastManager` re-export of `app.gui.widgets.overlays` (S10-04).
+  - Generate: `SkeletonModel.run` and its DataParallel and InstanceNorm-patch paths
+    (S12-03); `PercentThrottle` and the `on_done` / `should_stop` options of `AsyncWriter`
+    (S12-04); the generation threads' unconnected `progress` and `error` signals (C3-07).
+  - Visualize: `prewarm_dashboards` and `viz_window.prewarm_web_engine` (S11-04, S15-08);
+    the busy fallbacks `DashboardSpec.calculator_attr` and `SkeletonHandler._generation_busy`
+    (S11-08); the light template `sprouts_light` (the documented light print build no longer
+    worked: the figures use the dark tokens), `theme.style()`, `FONT_MONO`,
+    `DashApp.run_server` and `get_encoded_image`, and `DashAppArea.run_server` (S14-07,
+    S15-07); `DataProcessor.get_unique_treatments` and `get_unique_genotypes` (S13-09).
+  - Correct: the skeleton model's legacy history paths for whole-array steps (S03-03),
+    `read_back.mask_read_back` and the lazy re-export of `app.gui.canvas_layers` (S04-04).
 - **Owner-decisions build (2026-10-25).** The Trace GT editor (WG-T11):
   `GtTracingInterface` (`app/gui/gt_tracing_interface.py`) and its base
   `RasterEditorBase` (`app/gui/raster_editor_base.py`), `MainWindow.gt_tracing_interface` /
@@ -785,6 +1021,19 @@ Five passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **Redundancy and speed pass (2026-10-26): one corner case, otherwise none.** The pass's
+  science harness found every generated mask and skeleton (GPU and CPU), every CSV row,
+  provenance and inputs record and every GT-first decision identical to `f392a85` (80
+  generated outputs, 6 CSVs with 572 rows, 357 estimator entries); the saved-pixel goldens,
+  the GT export (an identity run over 2,136 images, case-sensitive folders included) and the
+  dashboards' values and CSV exports are unchanged. The corner case (S01-06): on a
+  case-sensitive disk, a mask prediction whose name differs from the image's only in case
+  (`mask/IMG.png` for `img.png`) and that another program rewrote while *Correct* held it.
+  A save of a plane equal to the prediction as opened now writes `gt/mask/<stem>.png`, as
+  for an exactly named prediction, and Measure measures the plane saved (`Source` = `gt`);
+  before, the save removed the GT file and Measure measured the rewritten prediction. One
+  interaction change alters what the same keys can do: undo across layers reaches each
+  layer's newest 100 actions (C4-01, under *Fixed*).
 - **GT files of an image found as its own (2026-10-26, final review D1, C2).** Root length
   / area of an image whose stem ends in an image extension (`X.png.jpg`): a skeleton
   corrected in *Correct* is saved as that image's GT (`gt/skeletons/X.png.png`) and measured
