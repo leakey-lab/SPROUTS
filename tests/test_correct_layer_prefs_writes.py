@@ -9,30 +9,16 @@ settings are flushed only after a write. Every test uses its own INI file.
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QEvent, QSettings
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.gui.correct.editor import CorrectEditor
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.layer_prefs import LayerPrefs
+from tests.correct_support import settle
 
-from PyQt6.QtCore import QEvent, QSettings  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.layer_prefs import LayerPrefs  # noqa: E402
-from tests.test_correct_editor import install_guards, qapp, settle  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 class Layer:

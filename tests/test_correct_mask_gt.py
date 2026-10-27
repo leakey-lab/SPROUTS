@@ -17,57 +17,32 @@ import cv2
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from app.config import AREA_VALUE_COLUMN  # noqa: E402
-from app.gt import files as gt_files  # noqa: E402
-from app.gui.correct import mask_document  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON, LayerStatus  # noqa: E402
-from app.gui.correct.mask_document import MaskDocument  # noqa: E402
-from app.inference import metrics  # noqa: E402
-from app.io_utils import imread_unicode  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.correct_goldens_support import describe_mask_file, png_colour_type  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.config import AREA_VALUE_COLUMN
+from app.gt import files as gt_files
+from app.gui.correct import mask_document
+from app.gui.correct.layer import MASK, SKELETON, LayerStatus
+from app.gui.correct.mask_document import MaskDocument
+from app.inference import metrics
+from app.io_utils import imread_unicode
+from app.masks import write_mask_file
+from app.project_layout import ProjectLayout
+from tests.correct_goldens_support import describe_mask_file, png_colour_type
+from tests.correct_support import (
     CANCEL,
     H,
     W,
     answer_prompts,
     box_plane,
     bump,
-    editor_factory,
-    install_guards,
-    new_project,
     paint,
     plane,
-    qapp,
     record,
     write_image,
     write_mask,
 )
-from tests.test_correct_editor_paging import read_ahead_done, ring  # noqa: E402
+from tests.test_correct_editor_paging import read_ahead_done, ring
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def gt_mask(project, name: str = "a") -> str:

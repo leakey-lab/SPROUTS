@@ -19,44 +19,22 @@ from concurrent.futures import Future
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import QEvent
+from PyQt6.QtWidgets import QApplication, QComboBox, QStatusBar, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QComboBox, QStatusBar, QWidget  # noqa: E402
-
-import app.enhancement as enhancement  # noqa: E402
-import app.gui.display_controller as display_module  # noqa: E402
-from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.display_read_ahead import DisplayReadAhead  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.io_utils import file_stamp  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    bump,
-    editor_factory,
-    install_guards,
-    qapp,
-    write_image,
-)
-from tests.test_correct_editor_paging import key, read_ahead_done, ring  # noqa: E402
+import app.enhancement as enhancement
+import app.gui.display_controller as display_module
+from app.gui.display_controller import DisplayController
+from app.gui.display_read_ahead import DisplayReadAhead
+from app.gui.image_manager import ImageManager
+from app.io_utils import file_stamp
+from tests.correct_support import bump, write_image
+from tests.test_correct_editor_paging import key, read_ahead_done, ring
 
 VALUES = {"A": 90, "B": 60, "C": 30}
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 class _Window:

@@ -6,48 +6,39 @@ copy; Save asks before overwriting it (Overwrite / Reload (lose my edits) / Canc
 default); a file rewritten with the same pixels asks nothing; a clean Ctrl+S writes nothing
 (O2) and the image reloads when opened again; PgDn never asks. A Generate run, which
 rewrites only the generated skeleton, never makes the skeleton save ask. Driven on the real
-page, with the helpers of ``test_correct_editor.py``.
+page, with the helpers of ``tests/correct_support.py``.
 """
 
 from __future__ import annotations
 
 import os
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtWidgets import QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtWidgets import QMessageBox  # noqa: E402
-
-from app.gui import editor_prompts  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui import editor_prompts
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.key_text import platform_keys
+from tests.correct_support import (
     CANCEL,
     DISCARD,
     SAVE,
     H,
     W,
-    answer_prompts,
     box_plane,
     bump,
     draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
     paint,
     plane,
-    qapp,
     raster,
     record,
     write_image,
     write_mask,
     write_skeleton,
 )
-from tests.test_editor_prompts import ESCAPE, Answer  # noqa: E402
+from tests.test_editor_prompts import ESCAPE, Answer
 
 PROMPT = ("Mask changed on disk", "gt/mask/a.png changed on disk after you opened it.")
 INFO = "Overwrite it with your edits, reload it from disk (your edits are lost), or cancel."
@@ -63,29 +54,7 @@ CANCELLED = ("Mask not saved: gt/mask/a.png changed on disk", "info")
 NOUNS = {MASK: "Mask", SKELETON: "Skeleton"}
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
-
-
-@pytest.fixture
-def answers(monkeypatch):
-    return answer_prompts(monkeypatch)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def reloaded(noun: str) -> tuple[str, str]:

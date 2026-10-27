@@ -20,37 +20,26 @@ import logging
 import os
 import sys
 import threading
-import time
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint, QRect, Qt, QThreadPool
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QPushButton
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPoint, QRect, QSettings, Qt, QThreadPool  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import (  # noqa: E402
-    canvas_gl,
-    image_manager,
+from app.gui import (
     shell_chrome,
     shortcuts,
     skeleton_graph_model,
 )
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from app.gui.skeleton_graph_model import SkeletonCorrectionModel  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.key_text import platform_keys
+from app.gui.panels import Panel
+from app.gui.skeleton_graph_model import SkeletonCorrectionModel
+from tests.correct_support import (
     CANCEL,
     DISCARD,
     SAVE,
@@ -72,11 +61,16 @@ from tests.test_correct_editor import (  # noqa: E402
     write_mask,
     write_skeleton,
 )
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.qt_wait import wait_until as wait
+from tests.test_correct_editor_paging import read_ahead_done
+from tests.window_support import build_window, open_folder, quiet_window
 
 STEMS = tuple(f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (21, 22, 23, 24))
 STAGE_NAMES = ["Library", "Generate", "Correct", "Measure", "Visualize"]
 #: The code under test: an exception it raises inside a Qt slot fails the test.
-UNDER_TEST = tuple(
+SLOT_ERRORS_FROM = tuple(
     os.path.normcase(os.path.join("app", "gui", *part))
     for part in (
         ("main_window.py",),
@@ -138,27 +132,10 @@ def new_project(root) -> Project:
     return project
 
 
-def settle() -> None:
-    """Let posted events and zero timers run."""
-    for _ in range(3):
-        QApplication.processEvents()
-
-
-def wait(predicate, timeout: float = 5.0) -> bool:
-    """Run the event loop until ``predicate()`` holds (or ``timeout`` seconds pass)."""
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
-
-
 def open_project(window, project: Project) -> None:
-    """Open ``project`` in ``window`` (the folder scan runs in a thread) and expand the tree."""
-    window.open_path(project.folder)
-    assert wait(lambda: len(window.image_manager.images) == len(STEMS) and window._image_leaves())
+    """Open ``project`` in ``window`` (the folder scan runs in a thread), wait until that
+    load has ended, and expand the tree."""
+    open_folder(window, project.folder, len(STEMS))
     window.file_list.expandAll()
     settle()
 
@@ -203,69 +180,29 @@ def app():
     return qapp()
 
 
-def _no_dialog(*_args, **_kwargs):
-    pytest.fail("a file dialog was opened")
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    """No unexpected prompt or file dialog, no GL, the user's config untouched, and no
-    exception of the code under test hidden in a Qt slot (PyQt hands those to
-    ``sys.excepthook``)."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", _no_dialog)
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", _no_dialog)
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    # A loaded project schedules its stale-temp sweep 2 s later (R8) on an untracked timer:
-    # a no-op here, so a window of this test never sweeps inside a later test.
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    errors = []
-
-    def hook(kind, value, tb):
-        files = [os.path.normcase(frame.filename) for frame in traceback.extract_tb(tb)]
-        if any(name.endswith(part) for name in files for part in UNDER_TEST):
-            errors.append(value)
-        else:
-            sys.__excepthook__(kind, value, tb)
-
-    monkeypatch.setattr(sys, "excepthook", hook)
-    yield
-    assert errors == []
+# No unexpected prompt or file dialog, no GL, no delayed stale-temp sweep (R8: a window of
+# this test never sweeps inside a later test), and no exception of the code under test
+# hidden in a Qt slot (PyQt hands those to ``sys.excepthook``).
+pytestmark = pytest.mark.usefixtures("window_guards", "slot_errors")
 
 
 @pytest.fixture
 def make_window(app, tmp_path):
     """``make(*, show=True)`` builds a MainWindow (1280x800) with its own INI settings;
     every window made is closed without prompts and deleted afterwards."""
-    from app.gui.main_window import MainWindow
-
     made = []
 
     def make(*, show: bool = True):
-        path = tmp_path / f"settings_{len(made)}.ini"
-        window = MainWindow(settings=QSettings(str(path), QSettings.Format.IniFormat))
+        window = build_window(tmp_path / f"settings_{len(made)}.ini", show=False)
         made.append(window)
-        window.resize(1280, 800)
         if show:
             window.show()
             settle()
         return window
 
     yield make
-    delete_widgets(made, prepare=_quiet_window)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
-
-
-def _quiet_window(window) -> None:
-    """No save prompt and no scheduled skeleton render when ``window`` closes."""
-    for editor in getattr(window, "_editors", dict)().values():
-        editor.maybe_save_changes = lambda: True
-    correct = getattr(window, "correct_editor", None)
-    if correct is not None:
-        correct.layers[SKELETON].cancel_scheduled_render()
 
 
 def in_correct(make_window, tmp_path, image: int = 0, project: Project | None = None):
@@ -580,6 +517,7 @@ def test_a_mask_save_badges_the_image_and_refreshes_the_metrics_without_stat_per
 ):
     window, project = in_correct(make_window, tmp_path, 1)  # image 1 has no mask
     editor = window.correct_editor
+    read_ahead_done(editor)  # the neighbours' read-ahead (60 ms after the open) ends first
     assert window.metrics_bar._status_value.text() == "No mask · No skeleton · No classes"
     paint(editor, (20, 100), (60, 100))
     toasts = record_toasts(window)

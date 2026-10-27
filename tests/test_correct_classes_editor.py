@@ -20,22 +20,17 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 import types
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
+import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QImage, QKeySequence  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QEvent, QSettings, Qt
+from PyQt6.QtGui import QImage, QKeySequence
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QMessageBox,
@@ -43,8 +38,8 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-import app.gt as gt_package  # noqa: E402
-from app.gt import (  # noqa: E402
+import app.gt as gt_package
+from app.gt import (
     Registry,
     Tracing,
     default_registry,
@@ -54,18 +49,17 @@ from app.gt import (  # noqa: E402
     save_registry,
     write_tracing,
 )
-from app.gui import editor_prompts, image_manager, shortcuts  # noqa: E402
-from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
-from app.gui.class_panel import ClassPanel  # noqa: E402
-from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import CLASSES, MASK, SKELETON  # noqa: E402
-from app.gui.correct.side_panels import SidePanels  # noqa: E402
-from app.gui.editor_prompts import CANCEL, DISCARD, SAVE  # noqa: E402
-from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
-from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui import editor_prompts, shortcuts
+from app.gui.class_editor_dialog import ClassEditorDialog
+from app.gui.class_panel import ClassPanel
+from app.gui.correct.editor import CorrectEditor
+from app.gui.correct.layer import CLASSES, MASK, SKELETON
+from app.gui.correct.side_panels import SidePanels
+from app.gui.editor_prompts import CANCEL, DISCARD, SAVE
+from app.gui.export_dataset_dialog import ExportDatasetDialog
+from app.gui.paint_canvas import pixmap_to_argb_array
+from app.project_layout import ProjectLayout
+from tests.correct_support import (
     NO_MODS,
     H,
     W,
@@ -73,12 +67,13 @@ from tests.test_correct_editor import (  # noqa: E402
     drag,
     draw_line,
     editor_factory,
-    install_guards,
     new_project,
-    qapp,
     record,
     settle,
 )
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import wait_until as _spin_until
+from tests.window_support import build_window, open_folder, quiet_window
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_QSS = ROOT / "resources" / "themes" / "dark_theme.qss"
@@ -229,14 +224,7 @@ class Confirm:
 
 
 # ============================================================================= fixtures
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture
@@ -272,12 +260,6 @@ def make_editor(app, signals, notices):
     yield make
     for _ in factory:  # its teardown deletes every page made
         pass
-
-
-@pytest.fixture
-def project(tmp_path):
-    """Photos a.png (a model mask and a generated skeleton) and b.png, 200 x 150."""
-    return new_project(tmp_path)
 
 
 @pytest.fixture
@@ -349,45 +331,19 @@ def made(app):
 
 
 # ------------------------------------------------------------------- the main window
-def _wait(predicate, timeout: float = 5.0) -> bool:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
-
-
-def _quiet(window) -> None:
-    for editor in window._editors().values():
-        editor.maybe_save_changes = lambda: True
-    window.correct_editor.layers[SKELETON].cancel_scheduled_render()
-
-
 @pytest.fixture
 def confirm() -> Confirm:
     return Confirm()
 
 
 @pytest.fixture
-def window_with_project(app, tmp_path, monkeypatch, confirm):
+def window_with_project(app, tmp_path, no_temp_sweep, confirm):
     """A shown MainWindow on ``project`` with image a open in the Correct stage; the
     Remove GT box is ``confirm``."""
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
     project = new_project(tmp_path)
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    window = MainWindow(settings=settings)
+    window = build_window(tmp_path / "settings.ini")
     made = [window]
-    window.resize(1280, 800)
-    window.show()
-    settle()
-    window.open_path(project.folder)
-    assert _wait(lambda: len(window.image_manager.images) == 2 and window._image_leaves())
+    open_folder(window, project.folder, 2)
     window.file_list.expandAll()
     item = window.library_index.item_for("a")
     window.file_list.setCurrentItem(item)
@@ -397,7 +353,7 @@ def window_with_project(app, tmp_path, monkeypatch, confirm):
     settle()
     window.correct_editor.actions.confirm_remove = confirm
     yield SimpleNamespace(window=window, project=project, editor=window.correct_editor)
-    delete_widgets(made, prepare=_quiet)
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 
@@ -1438,7 +1394,7 @@ def test_reselecting_the_clean_open_image_keeps_labels_history_and_view(page, pr
 
 
 def test_a_labels_file_changed_on_disk_reloads_in_the_same_view(page, project, layout, reads):
-    from tests.test_correct_editor import bump
+    from tests.correct_support import bump
 
     paint(page, (10, 10), (40, 10))
     assert page.save()
@@ -1507,16 +1463,6 @@ def test_one_undo_timeline_runs_through_the_three_layers(make_editor, project, n
     assert not editor.has_unsaved_changes()
     editor.redo()
     assert editor.layers[MASK].is_dirty() and not editor.layers[CLASSES].is_dirty()
-
-
-def _spin_until(predicate, seconds: float = 5.0) -> bool:
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        QTest.qWait(10)
-    return predicate()
 
 
 def test_the_class_labels_are_read_ahead_and_handed_back(make_editor, project, monkeypatch):

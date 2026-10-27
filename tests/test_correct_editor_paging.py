@@ -10,45 +10,15 @@ import time
 
 import numpy as np
 import pytest
+from PyQt6.QtTest import QTest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+import app.enhancement as enhancement
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.paging import Neighbours
+from app.io_utils import path_key
+from tests.correct_support import bump, plane, write_image
 
-from PyQt6.QtTest import QTest  # noqa: E402
-
-import app.enhancement as enhancement  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.paging import Neighbours  # noqa: E402
-from app.io_utils import path_key  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    bump,
-    editor_factory,
-    install_guards,
-    new_project,
-    plane,
-    qapp,
-    write_image,
-)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def ring(*paths):
@@ -264,7 +234,7 @@ def test_the_enhance_render_uses_the_photo_the_page_opened(make_editor, project,
 
 
 def test_a_read_ahead_image_the_user_did_not_leave_for_is_kept(make_editor, project, monkeypatch):
-    from tests.test_correct_editor import CANCEL, answer_prompts, paint
+    from tests.correct_support import CANCEL, answer_prompts, paint
 
     editor = make_editor()
     editor.set_neighbour_provider(ring(project.a, project.b))

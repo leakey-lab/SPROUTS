@@ -18,52 +18,27 @@ import threading
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import app.gui.correct.paging as paging  # noqa: E402
-import app.gui.correct.skeleton_document as skeleton_document  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.mask_document import MaskDocument  # noqa: E402
-from app.gui.correct.read_ahead import ReadAhead  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+import app.gui.correct.paging as paging
+import app.gui.correct.skeleton_document as skeleton_document
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.mask_document import MaskDocument
+from app.gui.correct.read_ahead import ReadAhead
+from tests.correct_support import (
     DISCARD,
     answer_prompts,
     box_plane,
     bump,
     draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
     paint,
     plane,
-    qapp,
     raster,
     record,
     write_image,
     write_mask,
 )
-from tests.test_correct_editor_paging import GuiDecodes, key, read_ahead_done, ring  # noqa: E402
+from tests.test_correct_editor_paging import GuiDecodes, key, read_ahead_done, ring
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture

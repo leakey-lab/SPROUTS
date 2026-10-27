@@ -14,32 +14,25 @@ import os
 import re
 
 import pytest
+from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtGui import QKeySequence, QShortcut, QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QKeySequence, QShortcut, QWheelEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import shortcuts  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
-from app.gui.correct.skeleton_layer import DraftState  # noqa: E402
-from tests.correct_goldens_support import png_colour_type  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui import shortcuts
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.mask_layer import MaskLayer
+from app.gui.correct.skeleton_layer import DraftState
+from tests.correct_goldens_support import png_colour_type
+from tests.correct_support import (
     NO_MODS,
     Mouse,
     activate,
     box_plane,
     click,
     draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
     paint,
     plane,
-    qapp,
     raster,
     record,
 )
@@ -48,24 +41,7 @@ CTRL, SHIFT = Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.ShiftModi
 Key = Qt.Key
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture

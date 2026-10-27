@@ -4,32 +4,18 @@ shares the chip's row, and middle elision dropped the L-number and the date."""
 
 from __future__ import annotations
 
-import math
-import os
-
 import pytest
+from PyQt6.QtWidgets import QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtGui import QFontMetricsF  # noqa: E402
-from PyQt6.QtWidgets import QWidget  # noqa: E402
-
-from app.gui.widgets.overlays import StatusChip, name_forms  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-)
+from app.gui.widgets.overlays import StatusChip, name_forms
+from app.gui.widgets.text_fit import label_advance
+from tests.correct_support import new_project
+from tests.qt_teardown import flush_deleted
 
 CAMERA = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
 CORE = "T001_L044_2024.07.18"
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture
@@ -92,11 +78,9 @@ def budget(chip: StatusChip, name_px: int, position: str = "") -> int:
 
 
 def advance(chip: StatusChip, text: str) -> int:
-    """The width the label gives ``text``: its fractional advance rounded up (a font with
-    fractional advances, DejaVu on Linux, makes ``horizontalAdvance`` round to the nearest
-    pixel, which is below the label's width when the fraction is under .5)."""
+    """The width the label gives ``text``, measured as the chip measures it."""
     chip.file_label.ensurePolished()
-    return math.ceil(QFontMetricsF(chip.file_label.font()).horizontalAdvance(text))
+    return label_advance(chip.file_label.fontMetrics(), text)
 
 
 def test_a_chip_with_room_shows_the_whole_name(host):
@@ -180,16 +164,6 @@ def test_a_narrow_chip_shortens_then_hides_the_position_before_the_name_loses_it
 
 
 # ------------------------------------------------------------------ the page
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
 def test_the_page_shows_the_library_position_its_provider_gives(make_editor, tmp_path):
     project = new_project(tmp_path)
     editor = make_editor()

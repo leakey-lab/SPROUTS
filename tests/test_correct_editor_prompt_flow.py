@@ -8,51 +8,20 @@ import os
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui.correct.layer import MASK, SKELETON
+from tests.correct_support import (
     DISCARD,
     SAVE,
-    answer_prompts,
     bump,
     count_opens,
     draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
     paint,
     plane,
-    qapp,
     raster,
     write_mask,
 )
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
-
-
-@pytest.fixture
-def answers(monkeypatch):
-    return answer_prompts(monkeypatch)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def edit_both(editor) -> tuple[np.ndarray, np.ndarray]:
@@ -170,7 +139,7 @@ def test_losing_the_keyboard_while_b_is_held_ends_the_hold(make_editor, project)
     from PyQt6.QtCore import Qt
     from PyQt6.QtTest import QTest
 
-    from tests.test_correct_editor import record
+    from tests.correct_support import record
 
     editor = make_editor(project.a, project.folder)
     editor.request_tool(MASK, "eraser")

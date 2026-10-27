@@ -21,19 +21,15 @@ import statistics
 import time
 from types import SimpleNamespace
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QGraphicsScene
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPoint, Qt  # noqa: E402
-from PyQt6.QtGui import QColor  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
-
-from app.editing import planes  # noqa: E402
-from app.gt import (  # noqa: E402
+from app.editing import planes
+from app.gt import (
     Registry,
     Tracing,
     default_registry,
@@ -43,10 +39,10 @@ from app.gt import (  # noqa: E402
     save_registry,
     write_tracing,
 )
-from app.gui.correct import classes_document  # noqa: E402
-from app.gui.correct.classes_document import ClassesDocument, ClassesRead  # noqa: E402
-from app.gui.correct.classes_layer import ClassesLayer  # noqa: E402
-from app.gui.correct.layer import (  # noqa: E402
+from app.gui.correct import classes_document
+from app.gui.correct.classes_document import ClassesDocument, ClassesRead
+from app.gui.correct.classes_layer import ClassesLayer
+from app.gui.correct.layer import (
     DiskGuardedLayer,
     GuardedSaveLayer,
     LayerStatus,
@@ -54,13 +50,13 @@ from app.gui.correct.layer import (  # noqa: E402
     SaveOutcome,
     missing_members,
 )
-from app.gui.correct.mask_tools import MaskToolHost  # noqa: E402
-from app.gui.correct.session import CorrectSession, SaveReport  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.correct_fakes import FakeHost, FakeLayer, FakePrompts  # noqa: E402
-from tests.gt_goldens_support import make_gt_project  # noqa: E402
+from app.gui.correct.mask_tools import MaskToolHost
+from app.gui.correct.session import CorrectSession, SaveReport
+from app.gui.key_text import platform_keys
+from app.gui.paint_canvas import pixmap_to_argb_array
+from app.gui.widgets import tokens
+from tests.correct_fakes import FakeHost, FakeLayer, FakePrompts
+from tests.gt_goldens_support import make_gt_project
 
 H, W = 60, 80  # the ported tests' photo
 NO_MODIFIER = Qt.KeyboardModifier.NoModifier
@@ -69,14 +65,7 @@ STRICT = os.environ.get("SPROUTS_PERF_TESTS") == "1"
 strict = pytest.mark.skipif(not STRICT, reason="wall-clock budget: set SPROUTS_PERF_TESTS=1")
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_modal(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture

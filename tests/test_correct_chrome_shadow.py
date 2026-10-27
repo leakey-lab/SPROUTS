@@ -11,17 +11,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect, QWidget  # noqa: E402
-
-from app.gui.widgets import effects  # noqa: E402
-from app.gui.widgets.effects import CachedDropShadow, pop_shadow  # noqa: E402
-from app.gui.widgets.overlays import FloatingDock, ProgressOverlay, ToolRail  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.widgets import effects
+from app.gui.widgets.effects import CachedDropShadow, pop_shadow
+from app.gui.widgets.overlays import FloatingDock, ProgressOverlay, ToolRail
+from tests.qt_teardown import flush_deleted
 
 _APP = None
 

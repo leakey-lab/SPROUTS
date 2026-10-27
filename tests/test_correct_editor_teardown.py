@@ -14,41 +14,24 @@ parent would).
 
 from __future__ import annotations
 
-import os
 import weakref
 
+import cv2
+import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-from app.gt import default_registry  # noqa: E402
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
-from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import CLASSES, MASK  # noqa: E402
-from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import drag  # noqa: E402
+from app.gt import default_registry
+from app.gui.class_editor_dialog import ClassEditorDialog
+from app.gui.correct.editor import CorrectEditor
+from app.gui.correct.layer import CLASSES, MASK
+from app.gui.export_dataset_dialog import ExportDatasetDialog
+from tests.correct_support import drag
+from tests.qt_teardown import flush_deleted
 
 H, W = 60, 80
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _guards(monkeypatch, tmp_path):
-    """No modal prompt, no GL probing, no write to the real user config."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
+pytestmark = pytest.mark.usefixtures("no_prompts", "gl_off")  # no modal prompt, no GL probing
 
 
 def _image(tmp_path) -> str:

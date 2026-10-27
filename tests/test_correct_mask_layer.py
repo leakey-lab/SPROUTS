@@ -12,14 +12,11 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import (  # noqa: E402
+import cv2
+import numpy as np
+import pytest
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PyQt6.QtGui import (
     QColor,
     QImage,
     QKeyEvent,
@@ -27,12 +24,12 @@ from PyQt6.QtGui import (  # noqa: E402
     QPainter,
     QWheelEvent,
 )
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
-from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
-from app.gui.correct import mask_tools  # noqa: E402
-from app.gui.correct.layer import (  # noqa: E402
+from app.gui.canvas_layers.raster import RasterLayerItem
+from app.gui.correct import mask_tools
+from app.gui.correct.layer import (
     LayerStatus,
     LayerTool,
     Notice,
@@ -40,16 +37,16 @@ from app.gui.correct.layer import (  # noqa: E402
     ToolSpec,
     missing_members,
 )
-from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
-from app.gui.correct.tool_router import ToolRouter  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.paint_canvas import PaintCanvas, pixmap_to_argb_array  # noqa: E402
-from app.gui.patch_history import PatchHistory  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from app.io_utils import imread_unicode, imwrite_unicode  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from tests.correct_fakes import FakeHost, FakeLayer  # noqa: E402
+from app.gui.correct.mask_layer import MaskLayer
+from app.gui.correct.tool_router import ToolRouter
+from app.gui.editor_canvas import EditorCanvasView
+from app.gui.key_text import platform_keys
+from app.gui.paint_canvas import PaintCanvas, pixmap_to_argb_array
+from app.gui.patch_history import PatchHistory
+from app.gui.widgets import tokens
+from app.io_utils import imread_unicode, imwrite_unicode
+from app.masks import write_mask_file
+from tests.correct_fakes import FakeHost, FakeLayer
 
 STEM = "plot_T001_L001_2024.07.18_111530_001_SMM"
 W, H = 160, 120
@@ -62,14 +59,7 @@ NOT_SHOWN_SIZE_TEXT = (
 )
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_modal(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture

@@ -4,38 +4,24 @@ A model prediction of another size opens stretched to the photo (O8, W3-T4). A 2
 photo with a 640 x 480 GT mask ``gt/mask/a.png`` (or an undecodable one) opens
 with the mask not shown and says so. ``Ctrl+S`` with nothing painted writes nothing (O2), a
 save after painting asks before replacing it ("Replace" / "Keep it"), and ``PgDn`` stays on
-the image with a warning. Driven on the real page, with the helpers of ``test_correct_editor.py``.
+the image with a warning. Driven on the real page, with the helpers of ``tests/correct_support.py``.
 """
 
 from __future__ import annotations
 
 import os
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtWidgets import QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtWidgets import QMessageBox  # noqa: E402
-
-from app.gui import editor_prompts  # noqa: E402
-from app.gui.correct.layer import MASK, LayerStatus  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    CANCEL,
-    SAVE,
-    answer_prompts,
-    editor_factory,
-    install_guards,
-    paint,
-    qapp,
-    record,
-    write_image,
-)
-from tests.test_editor_prompts import ESCAPE, Answer  # noqa: E402
+from app.gui import editor_prompts
+from app.gui.correct.layer import MASK, LayerStatus
+from app.gui.key_text import platform_keys
+from app.masks import write_mask_file
+from tests.correct_support import CANCEL, SAVE, paint, record, write_image
+from tests.test_editor_prompts import ESCAPE, Answer
 
 NOT_SHOWN_SIZE = (
     "Saved mask size does not match the image: it is not shown and is kept unless you save over it"
@@ -50,24 +36,7 @@ NOTHING_UNSAVED = ("Nothing unsaved", "info")
 PROMPT = ("Replace the saved mask?", "gt/mask/a.png exists but could not be shown. Replace it?")
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def answers(monkeypatch):
-    return answer_prompts(monkeypatch)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def read_bytes(path: str) -> bytes:

@@ -17,31 +17,10 @@ import os
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from tests.correct_support import write_image
+from tests.test_correct_editor_paging import key, read_ahead_done
 
-from tests.test_correct_editor import (  # noqa: E402
-    editor_factory,
-    install_guards,
-    qapp,
-    write_image,
-)
-from tests.test_correct_editor_paging import key, read_ahead_done  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 class Library:

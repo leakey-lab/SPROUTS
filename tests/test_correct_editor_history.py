@@ -16,24 +16,20 @@ from __future__ import annotations
 
 import os
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtCore import QEvent, QPoint, Qt
+from PyQt6.QtTest import QTest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, Qt  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-
-from app.gui import skeleton_graph_model  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.mask_tools import mask_lut  # noqa: E402
-from app.gui.correct.skeleton_layer import DraftState  # noqa: E402
-from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
-from app.io_utils import imread_unicode  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui import skeleton_graph_model
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.mask_tools import mask_lut
+from app.gui.correct.skeleton_layer import DraftState
+from app.gui.paint_canvas import pixmap_to_argb_array
+from app.io_utils import imread_unicode
+from app.masks import write_mask_file
+from tests.correct_support import (
     LEFT,
     NO_BUTTON,
     SAVE,
@@ -44,13 +40,9 @@ from tests.test_correct_editor import (  # noqa: E402
     click,
     drag,
     draw_line,
-    editor_factory,
-    install_guards,
     mouse,
-    new_project,
     paint,
     plane,
-    qapp,
     raster,
     record,
     stroke_plane,
@@ -62,24 +54,7 @@ CTRL = Qt.KeyboardModifier.ControlModifier
 Key = Qt.Key
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def press(editor, key, modifiers=Qt.KeyboardModifier.NoModifier) -> None:

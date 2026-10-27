@@ -18,36 +18,30 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QKeyEvent, QPainter, QPainterPath, QTransform  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QKeyEvent, QPainter, QPainterPath, QTransform
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
     QGraphicsView,
-    QMessageBox,
     QStyleOptionGraphicsItem,
 )
-from skimage.morphology import skeletonize  # noqa: E402
+from skimage.morphology import skeletonize
 
-from app.gui import skeleton_tools  # noqa: E402
-from app.gui.canvas_layers.skeleton import SkeletonLayerItem  # noqa: E402
-from app.gui.correct.layer import (  # noqa: E402
+from app.gui import skeleton_tools
+from app.gui.canvas_layers.skeleton import SkeletonLayerItem
+from app.gui.correct.layer import (
     LayerStatus,
     Notice,
     SaveOutcome,
     ToolSpec,
     missing_members,
 )
-from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.correct_fakes import FakeHost  # noqa: E402
+from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer
+from app.gui.key_text import platform_keys
+from app.gui.widgets import tokens
+from tests.correct_fakes import FakeHost
 
 ROOT = Path(__file__).resolve().parents[1]
 NO_MOD = Qt.KeyboardModifier.NoModifier
@@ -62,17 +56,7 @@ EMPTY_HINT = (
 
 
 # ---------------------------------------------------------------------------- fixtures
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_message_boxes(monkeypatch):
-    def refuse(box):
-        raise AssertionError(f"unexpected message box: {box.text()}")
-
-    monkeypatch.setattr(QMessageBox, "exec", refuse)
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture()

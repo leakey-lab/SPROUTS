@@ -17,46 +17,40 @@ from __future__ import annotations
 import os
 import sys
 import time
-import traceback
 from collections import Counter
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QPoint, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QPoint, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsScene,
     QLabel,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
-from app.enhancement import EnhanceDefaultsStore  # noqa: E402
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.correct.controls import CorrectControls  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON, LayerStatus  # noqa: E402
-from app.gui.correct.layer_panel import LayerPanel  # noqa: E402
-from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
-from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from app.gui.editor_chrome import EditorChrome  # noqa: E402
-from app.gui.image_normalization_interface import NormalizationControls  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from app.gui.widgets.icons import load_icon  # noqa: E402
-from app.gui.widgets.overlay_geometry import LayoutMetrics  # noqa: E402
-from tests.correct_fakes import FakeHost, FakeLayer  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.enhancement import EnhanceDefaultsStore
+from app.gui.correct.controls import CorrectControls
+from app.gui.correct.layer import MASK, SKELETON, LayerStatus
+from app.gui.correct.layer_panel import LayerPanel
+from app.gui.correct.mask_layer import MaskLayer
+from app.gui.correct.skeleton_layer import DraftState, SkeletonLayer
+from app.gui.editor_canvas import EditorCanvasView
+from app.gui.editor_chrome import EditorChrome
+from app.gui.image_normalization_interface import NormalizationControls
+from app.gui.key_text import platform_keys
+from app.gui.widgets import tokens
+from app.gui.widgets.icons import load_icon
+from app.gui.widgets.overlay_geometry import LayoutMetrics
+from tests.correct_fakes import FakeHost, FakeLayer
+from tests.qt_teardown import delete_widgets
 
 M = LayoutMetrics()
-UNDER_TEST = (
+#: The code under test: an exception it raises in a Qt slot fails the test (``slot_errors``).
+SLOT_ERRORS_FROM = (
     os.path.join("correct", "controls.py"),
     os.path.join("correct", "layer_panel.py"),
     "test_correct_controls.py",
@@ -96,25 +90,8 @@ def app():
     return _APP
 
 
-@pytest.fixture(autouse=True)
-def _guards(monkeypatch, tmp_path):
-    """No prompt, no GL, no write to the real user config, and no exception of the code under
-    test hidden in a slot (PyQt hands those to sys.excepthook)."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    errors = []
-
-    def hook(kind, value, tb):
-        files = [os.path.normcase(frame.filename) for frame in traceback.extract_tb(tb)]
-        if any(f.endswith(os.path.normcase(name)) for f in files for name in UNDER_TEST):
-            errors.append(value)
-        else:
-            sys.__excepthook__(kind, value, tb)
-
-    monkeypatch.setattr(sys, "excepthook", hook)
-    yield
-    assert errors == []
+# No prompt, no GL, and no exception of the code under test hidden in a slot.
+pytestmark = pytest.mark.usefixtures("no_prompts", "gl_off", "slot_errors")
 
 
 class Page(QWidget):

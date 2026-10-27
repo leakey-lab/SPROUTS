@@ -4,30 +4,16 @@ never read or written."""
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QSettings
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.gui.correct.editor import CorrectEditor
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.layer_prefs import LayerPrefs
+from tests.correct_support import new_project, settle
+from tests.qt_teardown import delete_widgets
 
-from PyQt6.QtCore import QSettings  # noqa: E402
-
-from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.layer_prefs import LayerPrefs  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import install_guards, new_project, qapp, settle  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture

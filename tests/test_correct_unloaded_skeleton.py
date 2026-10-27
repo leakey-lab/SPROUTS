@@ -6,35 +6,20 @@ open) opens as an empty skeleton with the status "Skeleton not shown". ``Ctrl+S`
 nothing drawn writes nothing (O2); a save after drawing, or after Load prediction (whose save
 removes the GT file), asks before it replaces or removes that file ("Replace" / "Keep it");
 ``PgDn`` stays on the image with a warning. The mask's rules (``test_correct_unloaded_mask``),
-driven on the real page with the helpers of ``test_correct_editor.py``.
+driven on the real page with the helpers of ``tests/correct_support.py``.
 """
 
 from __future__ import annotations
 
 import os
 
+import cv2
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-
-from app.gui.correct.layer import SKELETON, LayerStatus  # noqa: E402
-from app.gui.correct.save_gate import unloaded_label_of  # noqa: E402
-from app.gui.key_text import platform_keys  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    CANCEL,
-    SAVE,
-    answer_prompts,
-    draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-    raster,
-    record,
-)
+from app.gui.correct.layer import SKELETON, LayerStatus
+from app.gui.correct.save_gate import unloaded_label_of
+from app.gui.key_text import platform_keys
+from tests.correct_support import CANCEL, SAVE, draw_line, new_project, raster, record
 
 NOT_SHOWN = "Saved skeleton could not be read: it is not shown and is kept unless you save over it"
 UNREADABLE = ("Could not read skeleton a.png", "danger")
@@ -51,24 +36,7 @@ PAGING = (
 TRUNCATED = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"  # a PNG cut short by a copy tool
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def answers(monkeypatch):
-    return answer_prompts(monkeypatch)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture

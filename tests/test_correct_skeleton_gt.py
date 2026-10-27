@@ -17,86 +17,38 @@ import cv2
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from app.gui.correct.layer import SKELETON, LayerStatus  # noqa: E402
-from app.gui.skeleton_document import GT, PREDICTION, SkeletonFiles  # noqa: E402
-from app.io_utils import imread_unicode  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    H,
-    W,
-    click,
-    draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-    raster,
-    record,
-    write_skeleton,
-)
-from tests.test_correct_main_window import (  # noqa: E402
+from app.gui.correct.layer import SKELETON, LayerStatus
+from app.gui.skeleton_document import GT, PREDICTION, SkeletonFiles
+from app.io_utils import imread_unicode
+from app.project_layout import ProjectLayout
+from tests.correct_support import H, W, click, draw_line, raster, record, write_skeleton
+from tests.test_correct_main_window import (
     STEMS,
     enter,
     open_project,
     select,
     settle,
 )
-from tests.test_correct_main_window import new_project as new_window_project  # noqa: E402
+from tests.test_correct_main_window import new_project as new_window_project
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    from app.gui import image_manager
-
-    # A loaded project schedules its stale-temp sweep 2 s later (R8): a no-op here.
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+# The Correct page's guards; a loaded project's stale-temp sweep 2 s later (R8) is a no-op.
+pytestmark = pytest.mark.usefixtures("correct_guards", "no_temp_sweep")
 
 
 @pytest.fixture
 def window_with_project(app, tmp_path):
     """A MainWindow (own INI settings) with a project of four photos open; image 0 has a
     model mask and a generated skeleton."""
-    from PyQt6.QtCore import QSettings
     from PyQt6.QtWidgets import QApplication
 
-    from app.gui.main_window import MainWindow
-    from tests.qt_teardown import flush_deleted
+    from tests.qt_teardown import delete_widgets
+    from tests.window_support import build_window, quiet_window
 
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    window.resize(1280, 800)
-    window.show()
-    settle()
+    made = [build_window(tmp_path / "s.ini")]
     project = new_window_project(tmp_path)
-    open_project(window, project)
-    yield window, project
-    for editor in window._editors().values():
-        editor.maybe_save_changes = lambda: True
-    window.correct_editor.layers[SKELETON].cancel_scheduled_render()
-    window.close()
-    window.deleteLater()
-    del window
-    flush_deleted()
+    open_project(made[0], project)
+    yield made[0], project
+    delete_widgets(made, prepare=quiet_window)
     QApplication.processEvents()
 
 

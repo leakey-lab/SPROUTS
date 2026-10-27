@@ -17,54 +17,14 @@ import os
 
 import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+import app.gui.correct.skeleton_document as skeleton_document
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.correct.skeleton_layer import SkeletonLayer
+from tests.correct_support import DISCARD, Mouse, click, paint, plane, raster, record
 
-from PyQt6.QtCore import QPoint  # noqa: E402
-
-import app.gui.correct.skeleton_document as skeleton_document  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.correct.skeleton_layer import SkeletonLayer  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    DISCARD,
-    Mouse,
-    answer_prompts,
-    click,
-    editor_factory,
-    install_guards,
-    new_project,
-    paint,
-    plane,
-    qapp,
-    raster,
-    record,
-)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
-
-
-@pytest.fixture
-def answers(monkeypatch):
-    return answer_prompts(monkeypatch)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def pick(editor) -> None:

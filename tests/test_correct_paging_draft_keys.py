@@ -9,48 +9,17 @@ skeleton becomes the edited layer, shown if it was hidden), so the keys it names
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtGui import QKeyEvent
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QEvent, Qt  # noqa: E402
-from PyQt6.QtGui import QKeyEvent  # noqa: E402
-
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    click,
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-    raster,
-    record,
-)
+from app.gui.correct.layer import MASK, SKELETON
+from tests.correct_support import click, raster, record
 
 NO_MODS = Qt.KeyboardModifier.NoModifier
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def draft(editor, *points) -> None:

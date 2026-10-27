@@ -13,40 +13,30 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+import cv2
+import numpy as np
+import pytest
+from PyQt6.QtCore import QPoint, QRectF, Qt
+from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtWidgets import QGraphicsScene
 
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PyQt6.QtCore import QPoint, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QImage, QPainter  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
-
-from app.gui.correct.classes_layer import ClassesLayer  # noqa: E402
-from app.gui.correct.layer import (  # noqa: E402
+from app.gui.correct.classes_layer import ClassesLayer
+from app.gui.correct.layer import (
     DiskGuardedLayer,
     ReadAheadLayer,
     missing_members,
 )
-from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
-from app.gui.correct.raster_layer import RasterLayer  # noqa: E402
-from app.gui.paint_canvas import pixmap_to_argb_array  # noqa: E402
-from tests.correct_fakes import FakeHost  # noqa: E402
+from app.gui.correct.mask_layer import MaskLayer
+from app.gui.correct.raster_layer import RasterLayer
+from app.gui.paint_canvas import pixmap_to_argb_array
+from tests.correct_fakes import FakeHost
 
 ROOT = Path(__file__).resolve().parents[1]
 W, H = 640, 480
 NO_MODS = Qt.KeyboardModifier.NoModifier
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_modal(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture

@@ -9,45 +9,20 @@ eye shows or hides it, and the page's keys keep working from there.
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtGui import QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    activate,
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-    settle,
-)
+from app.gui.correct.layer import MASK, SKELETON
+from tests.correct_support import activate, new_project, settle
 
 Focus = Qt.FocusPolicy
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 @pytest.fixture

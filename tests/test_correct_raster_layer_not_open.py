@@ -4,20 +4,15 @@ class-label layers before they shared ``RasterLayer.save``)."""
 
 from __future__ import annotations
 
-import os
+import cv2
+import numpy as np
+import pytest
+from PyQt6.QtWidgets import QGraphicsScene
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
-
-from app.gui.correct.classes_layer import ClassesLayer  # noqa: E402
-from app.gui.correct.layer import CLASSES, MASK, SaveOutcome  # noqa: E402
-from app.gui.correct.mask_layer import MaskLayer  # noqa: E402
-from tests.correct_fakes import FakeHost  # noqa: E402
+from app.gui.correct.classes_layer import ClassesLayer
+from app.gui.correct.layer import CLASSES, MASK, SaveOutcome
+from app.gui.correct.mask_layer import MaskLayer
+from tests.correct_fakes import FakeHost
 
 W, H = 64, 48
 CLOSED = {
@@ -26,14 +21,7 @@ CLOSED = {
 }
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_modal(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture

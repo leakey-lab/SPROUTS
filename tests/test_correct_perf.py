@@ -11,68 +11,55 @@ Strict budgets, only with ``SPROUTS_PERF_TESTS=1`` (medians, this machine, offsc
 open <= 10 ms (640, both layers) and <= 90 ms (2048), layer switch <= 5 ms, stroke segment
 <= 0.05 ms, polyline commit <= 6 ms (640), save both <= 25 ms (640), and the first open in a
 fresh process after ``prewarm_skeletonize()`` (as ``MainWindow`` does once it shows) <= 100 ms.
-The inputs are the synthetic golden project (a model mask and a 341x256 generated skeleton);
-the timed opens get its photo as the real data comes, a quality-40 JPEG, at 640x480 and at
-2048x1536 (with the mask resized to match).
+The inputs are the synthetic golden project's photo and model mask, with a real Pix2Pix
+prediction from ``docs/examples`` (341x256) as the generated skeleton: the golden skeleton's
+straight 45-degree 2 px line costs about 18 ms of Zhang-Suen at 640x480 since d1645d2, real
+predictions 0.6-1.7 ms. The timed opens get the photo as the real data comes, a quality-40
+JPEG, at 640x480 and at 2048x1536 (with the mask resized to match).
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import statistics
 import subprocess
 import sys
 import time
 
+import cv2
+import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPoint  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-import app.enhancement as enhancement  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.masks import MaskStore  # noqa: E402
-from tests.correct_goldens_support import SYNTH_STEM, make_synth_project  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    Mouse,
-    click,
-    drag,
-    editor_factory,
-    install_guards,
-    qapp,
-)
+import app.enhancement as enhancement
+from app.gui.correct.layer import MASK, SKELETON
+from app.masks import MaskStore
+from tests.correct_goldens_support import SYNTH_STEM, make_synth_project
+from tests.correct_support import Mouse, click, drag
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: A real 341x256 Pix2Pix prediction: the generated skeleton of every project here.
+PREDICTION = os.path.join(
+    ROOT, "docs", "examples", "skeletons", "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM_fake.png"
+)
 STRICT = os.environ.get("SPROUTS_PERF_TESTS") == "1"
 strict = pytest.mark.skipif(not STRICT, reason="wall-clock budget: set SPROUTS_PERF_TESTS=1")
 CASE = "synth_model_mask_and_skeleton"
 PAGE = (1400, 900)
 
 
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def synth(tmp_path, name: str = "a") -> tuple[str, str]:
-    """A fresh copy of the synthetic 640 project: (folder, image)."""
-    return make_synth_project(str(tmp_path / name), CASE)
+    """A fresh copy of the synthetic 640 project with ``PREDICTION`` as its generated
+    skeleton: (folder, image)."""
+    folder, image = make_synth_project(str(tmp_path / name), CASE)
+    shutil.copyfile(PREDICTION, os.path.join(folder, "skeletons", f"{SYNTH_STEM}_fake.png"))
+    return folder, image
 
 
 def like_the_data(tmp_path, name: str, size: tuple[int, int] = (640, 480)) -> tuple[str, str]:

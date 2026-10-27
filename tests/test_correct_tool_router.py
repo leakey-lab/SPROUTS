@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt
 from PyQt6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent
-from PyQt6.QtWidgets import QApplication
 
 from app.gui.correct.layer import MASK, SKELETON
 from app.gui.correct.tool_router import ToolRouter
@@ -19,10 +18,7 @@ CTRL = Qt.KeyboardModifier.ControlModifier
 KEYPAD = Qt.KeyboardModifier.KeypadModifier
 
 
-@pytest.fixture(scope="module", autouse=True)
-def qapp():
-    """One QApplication for the module, kept referenced."""
-    return QApplication.instance() or QApplication([])
+pytestmark = pytest.mark.usefixtures("qapp")  # no test asks for it; the Qt objects need it
 
 
 class _Rig:
