@@ -50,7 +50,8 @@ Viewport
     One OpenGL policy (:mod:`app.gui.canvas_gl`); a GL viewport requests
     ``canvas_gl.gl_samples()`` MSAA samples. After every viewport swap the
     update mode (Full for OpenGL, Smart for the raster viewport), mouse tracking
-    and cursor are applied again.
+    and cursor are applied again. ``viewport_changed`` reports a new viewport size
+    or device pixel ratio.
 
 Each subclass calls :meth:`_init_canvas` and then
 ``configure_canvas_background(self)`` in ``__init__``, and receives tool input
@@ -151,6 +152,7 @@ class CanvasViewMixin:
 
     zoom_changed = pyqtSignal(float)
     pixel_grid_changed = pyqtSignal(bool)
+    viewport_changed = pyqtSignal()  # the viewport's size or device pixel ratio changed
 
     MIN_ZOOM = 0.1  # set_zoom's floor (lower only as far as a huge image's fit needs)
     MAX_ZOOM = 20.0
@@ -497,9 +499,11 @@ class CanvasViewMixin:
         self.zoom_changed.emit(self.zoom_factor)
 
     def resizeEvent(self, event) -> None:
+        # A view's resizeEvent is its viewport's (QAbstractScrollArea), sized already.
         super().resizeEvent(event)
         if self._auto_fit:
             self._fit(self._auto_fit_insets)
+        self.viewport_changed.emit()
 
     # ------------------------------------------------------------- pixel grid
     def pixel_grid(self) -> bool:
@@ -559,8 +563,11 @@ class CanvasViewMixin:
     # ---------------------------------------------------------------- gestures
     def viewportEvent(self, event: QEvent) -> bool:
         """Native trackpad gestures (macOS, Linux), then the view's own handling."""
-        if event.type() == QEvent.Type.NativeGesture and self._native_gesture(event):
+        kind = event.type()
+        if kind == QEvent.Type.NativeGesture and self._native_gesture(event):
             return True
+        if kind == QEvent.Type.DevicePixelRatioChange:  # another screen, same logical size
+            self.viewport_changed.emit()
         return super().viewportEvent(event)
 
     def _native_gesture(self, event: QNativeGestureEvent) -> bool:

@@ -650,6 +650,42 @@ def test_nearest_tier_tiles_leave_no_gap_in_a_line_crossing_their_border(app, zo
     assert skel.any(axis=1)[: int(519 * zoom)].all()  # every device row shows the column
 
 
+@pytest.mark.parametrize(
+    "scale, offset", [(1.5, 1.5), (1.5, 2.5), (1.5, 0.5), (1.5, 0.0), (1.25, 0.5), (1.75, 0.5)]
+)
+def test_nearest_tier_tiles_sit_on_the_device_pixels_of_the_mask_layer_tiles(app, scale, offset):
+    """At a .5 tie of the device mapping (common at 125-175 % display scaling) the skeleton's
+    pixel tiles meet on the same device columns and rows as the mask layer's tiles: both
+    layers show the same pixels identically."""
+    from app.gui.canvas_layers.raster import RasterLayerItem
+    from app.gui.canvas_layers.skeleton import _argb
+
+    mask = np.zeros((300, 600), np.uint8)
+    mask[:, [254, 255, 256, 257, 511, 512]] = 255  # lines on both sides of the tile borders
+    mask[[255, 256], :] = 255
+    item = SkeletonLayerItem(halo=False)
+    item.set_mask(mask)
+    canvas = _argb(overlay_indices(mask), item._table)  # the same pixels as a mask canvas
+    layer = RasterLayerItem(lambda: canvas)
+
+    def paint(target) -> np.ndarray:
+        size = (int(600 * scale + offset) + 2, int(300 * scale + offset) + 2)
+        img = QImage(*size, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(GREY)
+        painter = QPainter(img)
+        painter.translate(offset, offset)
+        painter.scale(scale, scale)
+        option = QStyleOptionGraphicsItem()
+        option.exposedRect = target.boundingRect()
+        target.paint(painter, option, None)
+        painter.end()
+        return _rgb(img)
+
+    skeleton = paint(item)
+    assert item.mode_painted() == "raster"
+    assert np.array_equal(skeleton, paint(layer))
+
+
 # ------------------------------------------------------- step 4: lazy tiles, O(box) updates
 def _busy_mask(w: int = 1024, h: int = 768) -> np.ndarray:
     """Lines in every 256 px tile, some crossing tile borders."""
@@ -779,8 +815,8 @@ def test_a_frame_sized_box_drops_the_cached_levels_instead_of_patching_them(app,
     for zoom in zooms:
         _render(item, zoom, (int(1001 * zoom), int(777 * zoom)))
     assert set(item._level_images) == {1, 3}
-    words, patched = module._image_words, []
-    monkeypatch.setattr(module, "_image_words", lambda image: patched.append(image) or words(image))
+    words, patched = module.pixel_words, []
+    monkeypatch.setattr(module, "pixel_words", lambda image: patched.append(image) or words(image))
 
     for content in (0, full):  # Clear, then its undo
         mask[:] = content

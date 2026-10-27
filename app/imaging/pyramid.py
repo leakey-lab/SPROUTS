@@ -99,6 +99,17 @@ def max_half(img: np.ndarray) -> np.ndarray:
     return _halve(img, _max_even)
 
 
+def level_sizes(width: int, height: int, min_side: int) -> tuple[tuple[int, int], ...]:
+    """``(width, height)`` of each level, level 0 first: halved (ceil) until the longer side
+    is at most ``min_side`` (at least 1). What :class:`ImagePyramid` builds, without an image."""
+    sizes = [(width, height)]
+    limit = max(1, int(min_side))
+    while max(width, height) > limit:
+        width, height = (width + 1) // 2, (height + 1) // 2
+        sizes.append((width, height))
+    return tuple(sizes)
+
+
 def _union(a: Rect, b: Rect) -> Rect:
     x0, y0 = min(a[0], b[0]), min(a[1], b[1])
     x1, y1 = max(a[0] + a[2], b[0] + b[2]), max(a[1] + a[3], b[1] + b[3])
@@ -112,15 +123,16 @@ def _touch(a: Rect, b: Rect) -> bool:
     )
 
 
-def _add_rect(pending: list[Rect], rect: Rect) -> None:
-    """Add ``rect`` to ``pending``, merging it with the rects it touches."""
+def add_rect(pending: list[Rect], rect: Rect, limit: int = _MAX_PENDING) -> None:
+    """Add the dirty ``rect`` to ``pending``, merging it with the rects it touches; past
+    ``limit`` rects they are all merged into their union."""
     for i, other in enumerate(pending):
         if _touch(other, rect):
             rect = _union(pending.pop(i), rect)
-            _add_rect(pending, rect)  # the grown rect may touch others now
+            add_rect(pending, rect, limit)  # the grown rect may touch others now
             return
     pending.append(rect)
-    if len(pending) > _MAX_PENDING:
+    if len(pending) > limit:
         merged = pending[0]
         for other in pending[1:]:
             merged = _union(merged, other)
@@ -147,16 +159,10 @@ class ImagePyramid:
         if image.ndim < 2 or image.shape[0] < 1 or image.shape[1] < 1:
             raise ValueError(f"ImagePyramid needs a non-empty image, got shape {image.shape}")
         self._reducer = reducer
-        h, w = image.shape[:2]
-        sizes = [(w, h)]
-        limit = max(1, int(min_side))
-        while max(w, h) > limit:
-            w, h = (w + 1) // 2, (h + 1) // 2
-            sizes.append((w, h))
-        self._sizes: tuple[tuple[int, int], ...] = tuple(sizes)
-        self._levels: list[np.ndarray | None] = [image] + [None] * (len(sizes) - 1)
+        self._sizes = level_sizes(image.shape[1], image.shape[0], min_side)
+        self._levels: list[np.ndarray | None] = [image] + [None] * (len(self._sizes) - 1)
         # Per built level: level-0 rects changed since that level was last brought up to date.
-        self._pending: list[list[Rect]] = [[] for _ in sizes]
+        self._pending: list[list[Rect]] = [[] for _ in self._sizes]
 
     @property
     def count(self) -> int:
@@ -200,7 +206,7 @@ class ImagePyramid:
         clipped = (x0, y0, x1 - x0, y1 - y0)
         for k in range(1, self.count):
             if self._levels[k] is not None:
-                _add_rect(self._pending[k], clipped)
+                add_rect(self._pending[k], clipped)
 
     def _patch(self, k: int, rect: Rect) -> None:
         """Recompute the blocks of level ``k`` under the level-0 ``rect`` from level ``k - 1``."""
@@ -216,15 +222,18 @@ class ImagePyramid:
         self._levels[k][y0 // 2 : y0 // 2 + out.shape[0], x0 // 2 : x0 // 2 + out.shape[1]] = out
 
     @staticmethod
-    def level_for_scale(device_scale: float, count: int) -> int:
+    def level_for_scale(device_scale: float, count: int, *, nearest: bool = False) -> int:
         """The level to draw at ``device_scale`` device pixels per level-0 pixel.
 
         ``floor(-log2 s)`` for ``s < 1`` (the level is then minified by less than 2x),
-        else 0; clamped to ``0 .. count - 1``.
+        else 0. ``nearest=True`` gives ``ceil(-log2 s)`` instead: the finest level with at
+        least one device pixel per level pixel (a nearest draw that minifies drops rows).
+        Clamped to ``0 .. count - 1``.
         """
         if count <= 1 or not device_scale < 1.0:
             return 0
         if device_scale <= 0.0:
             return count - 1
-        k = math.floor(-math.log2(device_scale) + _LEVEL_EPS)
+        x = -math.log2(device_scale)
+        k = math.ceil(x - _LEVEL_EPS) if nearest else math.floor(x + _LEVEL_EPS)
         return max(0, min(k, count - 1))

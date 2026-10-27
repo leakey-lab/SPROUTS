@@ -8,7 +8,9 @@ it draws the exposed rect only:
   nearest; a stroke drops only the tiles it touched (on GL only those textures are
   uploaded again). Tile edges are snapped to the device pixels where a global nearest
   mapping switches image pixels, so tiles meet without gaps or blended seams, and every
-  image pixel shows as a block of ``floor(s)`` or ``ceil(s)`` device pixels.
+  image pixel shows as a block of ``floor(s)`` or ``ceil(s)`` device pixels. A fully
+  transparent tile is not drawn, and on the raster engine a tile is cut after its content
+  (each tile's content box is read from the canvas once, then grown by every edit).
 * **Device scale < 1: area coverage,** drawn bilinear: above 0.5 the canvas itself,
   below a premultiplied area-averaged pyramid of it (:mod:`app.imaging.pyramid`, patched
   lazily by dirty rect), so a 1 px stroke fades instead of vanishing. The coverage of
@@ -35,26 +37,33 @@ import math
 import time
 from collections.abc import Callable
 
+import cv2
 import numpy as np
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QPointF, QRect, QRectF, QSizeF, Qt, QTimer
-from PyQt6.QtGui import QImage, QPainter, QPixmap
+from PyQt6.QtGui import QImage, QPainter, QPixmap, QTransform
 from PyQt6.QtWidgets import QGraphicsItem, QStyleOptionGraphicsItem, QWidget
 
-from app.imaging.pyramid import ImagePyramid, area_half
+from app.imaging.pyramid import ImagePyramid, add_rect, area_half, level_sizes
 
 from . import device_scale
 from .photo import TiledLevels, _is_gl
 
 ImageSource = Callable[[], "QImage | None"]
 Rect = tuple[int, int, int, int]
+Box = tuple[int, int, int, int]  # (x0, y0, x1, y1) in tile px, ends exclusive
 
 _SMOOTH = QPainter.RenderHint.SmoothPixmapTransform
 _ANTIALIAS = QPainter.RenderHint.Antialiasing
 _PREMULTIPLIED = QImage.Format.Format_ARGB32_Premultiplied
-_MAX_PENDING = 32  # coverage rects kept apart before they are merged into their union
+_TRANSLATE = QTransform.TransformationType.TxTranslate.value  # up to here: an unscaled blit
+_MAX_PENDING = 32  # disjoint coverage rects kept apart before they are merged into their union
 _EXACT = -1  # a warm-up entry of exact-pixel tiles (coverage entries are levels 0, 1, ...)
 _ACTUAL_MARGIN = 2  # canvas px around the actual-pixels view planned (its anchor rounds)
+_CUT_MARGIN = 2  # tile px kept after a tile's content when it is cut (rounding slack)
+_CUT_MIN_PX = 8192  # device px a cut must leave out to pay for its clip
+_UNKNOWN = object()  # a tile without a content box on record
+_FILLED = (0, 0, 1 << 30, 1 << 30)  # a tile with content whose extent was not read (no cut)
 
 
 def _bgra_view(image: QImage, rect: QRect) -> np.ndarray:
@@ -83,33 +92,68 @@ def _array_pixmap(arr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(QImage(arr.data, w, h, w * 4, _PREMULTIPLIED).copy())
 
 
-def _union(rects: list[Rect]) -> Rect:
-    x0 = min(r[0] for r in rects)
-    y0 = min(r[1] for r in rects)
-    x1 = max(r[0] + r[2] for r in rects)
-    y1 = max(r[1] + r[3] for r in rects)
-    return x0, y0, x1 - x0, y1 - y0
-
-
 def _coverage_count(width: int, height: int, min_side: int) -> int:
     """Coverage levels of a ``width`` x ``height`` canvas, level 0 included, without building
-    them: level 1 is the half-size canvas, then halving (ceil) until the longer side is at
-    most ``min_side`` (what ``1 + ImagePyramid(level 1, min_side).count`` gives)."""
-    w, h = (width + 1) // 2, (height + 1) // 2
-    count, limit = 2, max(1, int(min_side))
-    while max(w, h) > limit:
-        w, h = (w + 1) // 2, (h + 1) // 2
-        count += 1
-    return count
+    them: the canvas, then the levels of an ``ImagePyramid`` over its half size (ceil)."""
+    return 1 + len(level_sizes((width + 1) // 2, (height + 1) // 2, min_side))
 
 
-def _snapped_rect(x: int, y: int, w: int, h: int, dev) -> QRectF:
-    """The item rect whose device edges are where a global nearest mapping of ``dev``
-    (scale + translate) enters image pixels ``x``, ``x + w`` (and ``y``, ``y + h``)."""
+def snapped_rect(x: float, y: float, w: float, h: float, dev: QTransform) -> QRectF:
+    """The item rect ``(x, y, w, h)`` with its edges moved onto the device pixels where a
+    global nearest mapping of ``dev`` enters image pixels ``x``, ``x + w`` (and ``y``,
+    ``y + h``): adjacent tiles then share exact device edges (the raster engine rounds a
+    scaled image's device x and width separately, which would leave 1 px gaps or overlaps).
+    Unchanged unless ``dev`` is a positive scale + translate (every canvas view)."""
     sx, sy, dx, dy = dev.m11(), dev.m22(), dev.dx(), dev.dy()
+    if not (sx > 0 and sy > 0) or dev.m12() or dev.m21():
+        return QRectF(x, y, w, h)
     left, right = math.ceil(x * sx + dx - 0.5), math.ceil((x + w) * sx + dx - 0.5)
     top, bottom = math.ceil(y * sy + dy - 0.5), math.ceil((y + h) * sy + dy - 0.5)
     return QRectF((left - dx) / sx, (top - dy) / sy, (right - left) / sx, (bottom - top) / sy)
+
+
+def _content_box(image: QImage, x: int, y: int, size: int, extent: bool) -> Box | None:
+    """The bounds of the pixels that are not fully transparent in the ``size`` px tile at
+    ``(x, y)`` of ``image``, relative to the tile; None when there are none. Read from a
+    premultiplied canvas (a transparent pixel is four zero bytes); any other format fills
+    the tile. Without ``extent`` only "blank or not" is read: ``_FILLED`` when not."""
+    if image.format() != _PREMULTIPLIED:
+        return 0, 0, size, size
+    w, h = min(size, image.width() - x), min(size, image.height() - y)
+    block = _bgra_view(image, QRect(x, y, w, h)).reshape(h, 4 * w)  # a view: no copy
+    if not cv2.hasNonZero(block):
+        return None
+    if not extent:
+        return _FILLED
+    bx, by, bw, bh = cv2.boundingRect(block)  # of the nonzero bytes
+    return bx // 4, by, (bx + bw + 3) // 4, by + bh
+
+
+def _cut(
+    edges: tuple[float, float, float, float],
+    dev: QTransform,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    box: Box,
+    target: QRectF,
+) -> QRectF | None:
+    """The clip that cuts the ``w`` x ``h`` tile at item px ``(x, y)``, drawn at ``target``,
+    after its content ``box`` (plus ``_CUT_MARGIN``); None when that leaves out less than
+    ``_CUT_MIN_PX`` device px (through ``dev``) of its part inside ``edges`` (the exposed
+    rect's left, top, right, bottom). The clip's left and top lie 8 px outside: Qt steps a
+    scaled blit's source position from the first device column and row it draws, so those
+    must not move."""
+    right, bottom = min(w, box[2] + _CUT_MARGIN), min(h, box[3] + _CUT_MARGIN)  # tile px
+    x0, y0 = max(edges[0], x), max(edges[1], y)  # the part drawn, item px
+    x1, y1 = min(edges[2], x + w), min(edges[3], y + h)
+    kept = max(0.0, min(x1, x + right) - x0) * max(0.0, min(y1, y + bottom) - y0)
+    if ((x1 - x0) * (y1 - y0) - kept) * abs(dev.m11() * dev.m22()) < _CUT_MIN_PX:
+        return None
+    fx, fy = target.width() / w, target.height() / h
+    left, top = target.left() - 8 * fx, target.top() - 8 * fy
+    return QRectF(left, top, target.left() + right * fx - left, target.top() + bottom * fy - top)
 
 
 class _Coverage:
@@ -136,11 +180,8 @@ class _Coverage:
 
     def changed(self, rect: Rect) -> None:
         """Canvas pixels in ``rect`` changed (folded in when a level is next read)."""
-        if self._levels is None:
-            return
-        self._pending.append(rect)
-        if len(self._pending) > _MAX_PENDING:
-            self._pending[:] = [_union(self._pending)]
+        if self._levels is not None:
+            add_rect(self._pending, rect, _MAX_PENDING)
 
     def level(self, canvas: QImage, level: int) -> np.ndarray:
         """Coverage ``level`` (>= 1) of ``canvas``, up to date (its size: the canvas halved,
@@ -216,6 +257,9 @@ class RasterLayerItem(QGraphicsItem):
         self._skip = skip
         self._tiles: dict[tuple[int, int], QPixmap] = {}
         self._undrawn: set[tuple[int, int]] = set()  # exact tiles made ahead, not drawn yet
+        # Content box of each exact tile (None: fully transparent): a superset of its pixels
+        # that are not transparent, read from the canvas once, then grown by each edit.
+        self._boxes: dict[tuple[int, int], Box | None] = {}
         self._coverage = _Coverage()
         self._cover: TiledLevels | None = None  # coverage tiles: level drawn + levels planned
         # The coverage level last drawn: its tiles stay while exact pixels are shown (freeing
@@ -235,8 +279,8 @@ class RasterLayerItem(QGraphicsItem):
     # ------------------------------------------------------------------ API
     def canvas_changed(self, rect: QRect) -> None:
         """Pixels inside ``rect`` (image pixels) were painted: drop the tiles it touches
-        (made-ahead ones and every coverage level's too), mark the coverage stale there
-        and repaint that part."""
+        (made-ahead ones and every coverage level's too), grow their content boxes over it,
+        mark the coverage stale there and repaint that part."""
         rect = rect.intersected(QRect(0, 0, int(self._size.width()), int(self._size.height())))
         if rect.isEmpty():
             return
@@ -245,6 +289,7 @@ class RasterLayerItem(QGraphicsItem):
             for tx in range(rect.left() // t, rect.right() // t + 1):
                 self._tiles.pop((tx, ty), None)
                 self._undrawn.discard((tx, ty))
+                self._grow_box(tx, ty, rect)
         box = (rect.x(), rect.y(), rect.width(), rect.height())
         self._coverage.changed(box)
         if self._cover is not None:
@@ -256,6 +301,7 @@ class RasterLayerItem(QGraphicsItem):
         """The canvas was replaced, resized or changed wholesale: rebuild and repaint all."""
         self._tiles.clear()
         self._undrawn.clear()
+        self._boxes.clear()
         self._coverage.reset()
         self._cover, self._cover_drawn = None, None
         self._cover_keep = self._cover_kept = frozenset()
@@ -391,20 +437,54 @@ class RasterLayerItem(QGraphicsItem):
             self._tiles[(tx, ty)] = pixmap
         return pixmap
 
+    def _grow_box(self, tx: int, ty: int, rect: QRect) -> None:
+        """Canvas pixels in ``rect`` changed: tile ``(tx, ty)``'s box on record grows over
+        them (erased pixels stay inside it until the canvas is replaced)."""
+        box = self._boxes.get((tx, ty), _UNKNOWN)
+        if box is _UNKNOWN or box is _FILLED:
+            return  # read from the canvas when the tile is next drawn; filled stays filled
+        t = self.TILE
+        x0, y0 = max(rect.left() - tx * t, 0), max(rect.top() - ty * t, 0)
+        x1, y1 = min(rect.right() + 1 - tx * t, t), min(rect.bottom() + 1 - ty * t, t)
+        if box is not None:
+            x0, y0, x1, y1 = min(x0, box[0]), min(y0, box[1]), max(x1, box[2]), max(y1, box[3])
+        self._boxes[(tx, ty)] = (x0, y0, x1, y1)
+
     def _paint_tiles(self, painter: QPainter, image: QImage, exposed: QRectF) -> None:
-        """Whole tiles (the clip keeps them to the exposed rect), nearest."""
+        """Whole tiles (the clip keeps them to the exposed rect), nearest. A fully
+        transparent tile is skipped and, when the raster engine scales the tiles, a tile is
+        cut after its content where that leaves out enough: transparent pixels drawn over
+        the frame change nothing (SourceOver). The GPU blends them for free, and an unscaled
+        blit is so cheap that the clip costs about what it saves."""
         t = self.TILE
         area = exposed.toAlignedRect()
         dev = painter.deviceTransform()
-        # Scale + translate (every canvas view): snap tile edges to device pixels.
-        snap = dev.m11() > 0 and dev.m22() > 0 and dev.m12() == 0 and dev.m21() == 0
+        cut = dev.type().value > _TRANSLATE and not _is_gl(painter)
+        edges = (exposed.left(), exposed.top(), exposed.right(), exposed.bottom())
+        boxes = self._boxes
         for ty in range(area.top() // t, area.bottom() // t + 1):
             for tx in range(area.left() // t, area.right() // t + 1):
-                pixmap = self._tile(image, tx, ty)
+                pixmap = self._tile(image, tx, ty)  # made even when blank, like the warm-up
                 self._undrawn.discard((tx, ty))
+                box = boxes.get((tx, ty), _UNKNOWN)
+                if box is _UNKNOWN or (cut and box is _FILLED):  # a cut needs the extent
+                    box = boxes[(tx, ty)] = _content_box(image, tx * t, ty * t, t, cut)
+                if box is None:
+                    continue
                 x, y, w, h = tx * t, ty * t, pixmap.width(), pixmap.height()
-                target = _snapped_rect(x, y, w, h, dev) if snap else QRectF(x, y, w, h)
-                painter.drawPixmap(target, pixmap, QRectF(0, 0, w, h))
+                target, source = snapped_rect(x, y, w, h, dev), QRectF(0, 0, w, h)
+                clip = None
+                # Only when the part drawn reaches past the content (never for a stroke's
+                # repaint: its tiles' boxes grew over it).
+                if cut and (edges[2] > x + box[2] or edges[3] > y + box[3]):
+                    clip = _cut(edges, dev, x, y, w, h, box, target)
+                if clip is None:
+                    painter.drawPixmap(target, pixmap, source)
+                    continue
+                painter.save()
+                painter.setClipRect(clip, Qt.ClipOperation.IntersectClip)
+                painter.drawPixmap(target, pixmap, source)
+                painter.restore()
 
     def _paint_coverage(
         self, painter: QPainter, image: QImage, exposed: QRectF, scale: float

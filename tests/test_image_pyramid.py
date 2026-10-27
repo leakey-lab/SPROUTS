@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.imaging.pyramid import ImagePyramid, area_half, max_half
+from app.imaging.pyramid import ImagePyramid, area_half, level_sizes, max_half
 from tests.render_metrics import ring_std, zone_plate
 
 RNG_SEED = 20260929
@@ -66,6 +66,17 @@ def test_levels_are_ceil_halves_down_to_min_side():
 )
 def test_count_stops_at_the_first_level_within_min_side(shape, min_side, count):
     assert ImagePyramid(np.zeros(shape, np.uint8), min_side=min_side).count == count
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "min_side"),
+    [(641, 481, 32), (640, 480, 100), (32, 32, 32), (1, 33, 32), (6000, 4000, 32), (5, 3, 0)],
+)
+def test_level_sizes_are_the_pyramid_sizes_without_building_it(width, height, min_side):
+    pyramid = ImagePyramid(np.zeros((height, width), np.uint8), min_side=min_side)
+    sizes = tuple(pyramid.level_size(k) for k in range(pyramid.count))
+    assert level_sizes(width, height, min_side) == sizes
+    assert level_sizes(0, 0, 32) == ((0, 0),)  # no image: one empty level
 
 
 def test_level_outside_the_pyramid_raises():
@@ -168,6 +179,29 @@ def test_premultiplied_blocks_average_to_valid_premultiplied_pixels():
 )
 def test_level_for_scale(scale, count, level):
     assert ImagePyramid.level_for_scale(scale, count) == level
+
+
+@pytest.mark.parametrize(
+    ("scale", "count", "level"),
+    [
+        (1.0, 6, 0),
+        (2.0, 6, 0),
+        (float("inf"), 6, 0),
+        (0.999, 6, 1),  # any minification: the next level (a nearest draw would drop rows)
+        (0.75, 6, 1),
+        (0.5, 6, 1),  # an exact power of two: that level, drawn at one device px per pixel
+        (0.5 * (1 + 1e-12), 6, 1),
+        (0.499, 6, 2),
+        (0.25, 6, 2),
+        (0.1, 6, 4),
+        (0.01, 6, 5),  # clamped to count - 1
+        (0.0, 6, 5),
+        (-1.0, 6, 5),
+        (0.1, 1, 0),
+    ],
+)
+def test_nearest_level_for_scale_has_a_device_pixel_per_level_pixel(scale, count, level):
+    assert ImagePyramid.level_for_scale(scale, count, nearest=True) == level
 
 
 # ------------------------------------------------------------------------- invalidate

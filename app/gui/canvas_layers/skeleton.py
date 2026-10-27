@@ -32,6 +32,8 @@ from PyQt6.QtGui import QColor, QImage, QPaintEngine, QPainter, QPainterPath, QP
 from PyQt6.QtWidgets import QGraphicsItem, QStyleOptionGraphicsItem, QWidget
 
 from app.gui.canvas_layers import device_scale
+from app.gui.canvas_layers.raster import snapped_rect
+from app.gui.paint_canvas import pixel_words
 from app.gui.skeleton_overlay import HALO_ALPHA, HALO_INDEX, LINE_INDEX, overlay_indices
 from app.gui.widgets import tokens
 from app.imaging.pyramid import ImagePyramid, max_half
@@ -41,7 +43,6 @@ Edges = tuple[float, float, float, float]  # (left, top, right, bottom) in skele
 TileKey = tuple[int, int]  # (tx, ty)
 
 _GL_ENGINES = (QPaintEngine.Type.OpenGL, QPaintEngine.Type.OpenGL2)
-_LOD_EPS = 1e-6  # absorbs float noise at exact powers of two (0.5, 0.25, ...)
 _PEN_REACH = 3.0  # device px a vector pen reaches beyond a segment (halo half-width + AA)
 _LEVEL_PATCH_SHARE = 0.5  # a larger stale part of a LOD level image: rebuilt, not patched
 
@@ -259,7 +260,7 @@ class SkeletonLayerItem(QGraphicsItem):
         """
         if self._pyramid is None:  # down to 1 px: small skeletons need levels too (lazy)
             self._pyramid = ImagePyramid(self._mask, reducer=max_half, min_side=1)
-        k = _lod_level(scale, self._pyramid.count)
+        k = ImagePyramid.level_for_scale(scale, self._pyramid.count, nearest=True)
         image = self._level_image(k)
         f = float(1 << k)
         w, h = float(self._width), float(self._height)
@@ -287,7 +288,7 @@ class SkeletonLayerItem(QGraphicsItem):
                 fresh = overlay_indices(self._pyramid.level(k)[iy0:iy1, ix0:ix1])
                 indices = fresh[y0 - iy0 : y1 - iy0, x0 - ix0 : x1 - ix0]
             patch = _argb(indices, self._table)  # Qt's conversion: the words of a rebuild
-            _image_words(image)[y0:y1, x0:x1] = _image_words(patch)
+            pixel_words(image)[y0:y1, x0:x1] = pixel_words(patch)
         return image
 
     def _paint_smooth(self, painter: QPainter) -> None:
@@ -298,11 +299,13 @@ class SkeletonLayerItem(QGraphicsItem):
         painter.drawImage(self.boundingRect(), self._full_image)
 
     def _paint_tiles(self, painter: QPainter, keys: list[TileKey]) -> None:
-        """Level-0 overlay tiles, nearest, with edges on device pixels (no seams)."""
+        """Level-0 overlay tiles, nearest, with edges on device pixels (no seams), where the
+        mask layer's tiles put theirs."""
         transform = painter.deviceTransform()
         for key in keys:
             x0, y0, x1, y1 = self._tile_bounds(key)
-            painter.drawImage(_snapped(transform, x0, y0, x1, y1), self._tile_image(key))
+            target = snapped_rect(x0, y0, x1 - x0, y1 - y0, transform)
+            painter.drawImage(target, self._tile_image(key))
 
     def _paint_vectors(self, painter: QPainter, exposed: QRectF, seen: QRectF, scale: float) -> str:
         """Vector links within the paint engine's budget; returns the tier painted.
@@ -606,30 +609,6 @@ def _edges(rect: QRectF, grow: float = 0.0) -> Edges:
     return (rect.left() - grow, rect.top() - grow, rect.right() + grow, rect.bottom() + grow)
 
 
-def _lod_level(scale: float, count: int) -> int:
-    """The finest max-pool level with at least one device px per level px:
-    ``ceil(-log2 s)`` (a nearest draw that minifies would drop rows)."""
-    if count <= 1 or scale >= 1.0:
-        return 0
-    if scale <= 0.0:
-        return count - 1
-    return max(0, min(math.ceil(-math.log2(scale) - _LOD_EPS), count - 1))
-
-
-def _snapped(transform: QTransform, x0: float, y0: float, x1: float, y1: float) -> QRectF:
-    """The item rect ``[x0, x1) x [y0, y1)`` with its edges moved onto device-pixel edges.
-
-    Adjacent tiles then share an exact device edge: the raster engine rounds a scaled
-    image's device x and width separately, which would leave 1 px gaps or overlaps.
-    """
-    if transform.type().value > QTransform.TransformationType.TxScale.value:
-        return QRectF(x0, y0, x1 - x0, y1 - y0)
-    sx, sy, dx, dy = transform.m11(), transform.m22(), transform.dx(), transform.dy()
-    left, right = round(sx * x0 + dx), round(sx * x1 + dx)
-    top, bottom = round(sy * y0 + dy), round(sy * y1 + dy)
-    return QRectF((left - dx) / sx, (top - dy) / sy, (right - left) / sx, (bottom - top) / sy)
-
-
 def _extent(lines: np.ndarray, dots: np.ndarray, grow: float) -> QRectF:
     """The rect holding every line ``(n, 4)`` and dot ``(m, 2)`` (item px), grown by ``grow``."""
     xs = np.concatenate((lines[:, 0], lines[:, 2], dots[:, 0]))
@@ -661,14 +640,6 @@ def _argb(indices: np.ndarray, table: list[int]) -> QImage:
     image = QImage(data.data, w, h, w, QImage.Format.Format_Indexed8)
     image.setColorTable(table)
     return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-
-
-def _image_words(image: QImage) -> np.ndarray:
-    """The pixels of a 32-bit ``image`` as a writable ``(h, w)`` uint32 array, no copy
-    (``bits()`` copies only a shared image; 32-bit rows carry no padding)."""
-    ptr = image.bits()
-    ptr.setsize(image.sizeInBytes())
-    return np.frombuffer(ptr, np.uint32).reshape(image.height(), image.width())
 
 
 def _color_table(line: QColor, halo: QColor | None) -> list[int]:

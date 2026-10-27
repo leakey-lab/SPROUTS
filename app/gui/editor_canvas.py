@@ -21,6 +21,10 @@ positions already floored to an image pixel and clamped to the image:
 
 The view antialiases what the items draw as vectors (brush rings, previews, decorations);
 pixmap smoothing is left to each item (the photo is smooth, edit layers stay exact).
+
+The raster viewport is opaque while the view has a scene: the view paints every pixel of
+each repaint itself (:meth:`EditorCanvasView.drawBackground`), so Qt no longer paints the
+window's background under the canvas first. Never the OpenGL viewport.
 """
 
 from __future__ import annotations
@@ -28,9 +32,9 @@ from __future__ import annotations
 import math
 from typing import Protocol
 
-from PyQt6.QtCore import QPoint, QPointF, QSize, Qt
-from PyQt6.QtGui import QKeyEvent, QMouseEvent, QPainter, QWheelEvent
-from PyQt6.QtWidgets import QFrame, QGraphicsView, QWidget
+from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import QKeyEvent, QMouseEvent, QPainter, QTransform, QWheelEvent
+from PyQt6.QtWidgets import QFrame, QGraphicsScene, QGraphicsView, QWidget
 
 from .canvas_background import configure_canvas_background
 from .canvas_view import CanvasViewMixin
@@ -88,6 +92,9 @@ class InputSink(Protocol):
 class EditorCanvasView(CanvasViewMixin, QGraphicsView):
     """The canvas of the editor (Correct): zoom/pan/fit from the mixin, tool input to an
     InputSink."""
+
+    OPAQUE_RASTER_VIEWPORT = True  # see drawBackground
+    _opaque_viewport = False  # the raster viewport is opaque now
 
     def __init__(self, sink: InputSink | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -255,11 +262,55 @@ class EditorCanvasView(CanvasViewMixin, QGraphicsView):
         self.refresh_cursor()
         super().enterEvent(event)
 
+    # ------------------------------------------------------------------ the opaque viewport
+    def setScene(self, scene: QGraphicsScene | None) -> None:
+        """Show ``scene``; the raster viewport is opaque only while there is one."""
+        super().setScene(scene)
+        self._sync_opaque_viewport()
+
+    def _configure_viewport(self) -> None:
+        super()._configure_viewport()
+        self._sync_opaque_viewport()  # after every viewport swap
+
+    def _sync_opaque_viewport(self) -> None:
+        if self._opengl_viewport_enabled:  # a QOpenGLWidget's attributes are never touched
+            self._opaque_viewport = False
+            return
+        # Without a scene the view paints nothing: the window's background must show.
+        opaque = self.OPAQUE_RASTER_VIEWPORT and self.scene() is not None
+        self._opaque_viewport = opaque
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, opaque)
+
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+        """The canvas colour under the items; on the opaque viewport, on every pixel painted.
+
+        The theme's transparent widget backgrounds would make Qt paint the window under the
+        whole canvas on every frame before this fill (1.7-3.1 ms of a frame at devicePixelRatio
+        2), hence the opaque raster viewport, which must cover each device pixel of a repaint
+        itself. The fill is made in viewport pixels: QGraphicsView's own, in scene coordinates,
+        can lose the device pixel straddling a .5 edge at 125-175 % scaling (it would keep the
+        previous frame's pixel).
+        """
+        if not self._opaque_viewport or painter.device() is not self.viewport():
+            super().drawBackground(painter, rect)  # also QGraphicsView.render() onto another device
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setWorldTransform(QTransform())
+        painter.fillRect(self.viewport().rect().adjusted(-1, -1, 1, 1), self.backgroundBrush())
+        painter.restore()
+
     # ------------------------------------------------------------------ no scrolling mid-drag
     def scrollContentsBy(self, dx: int, dy: int) -> None:
-        """Scroll, except during a drag (the stroke would smear)."""
+        """Scroll, except during a drag (the stroke would smear).
+
+        A scroll repaints the whole canvas, as for a viewport that is not opaque: Qt would
+        otherwise move an opaque viewport's pixels when nothing floats over it.
+        """
         if not self.drawing:
             super().scrollContentsBy(dx, dy)
+            if self._opaque_viewport:
+                self.viewport().update()
 
     def ensureVisible(self, *args, **kwargs) -> None:
         """Scroll to show a region, except during a drag."""

@@ -31,7 +31,7 @@ from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 
 from .patch_history import Patch, PatchHistory, Rect
 
-__all__ = ["PaintCanvas", "Rect", "argb_array_to_image", "pixmap_to_argb_array"]
+__all__ = ["PaintCanvas", "Rect", "argb_array_to_image", "pixel_words", "pixmap_to_argb_array"]
 
 # Extra pixels around a segment's pen box (round caps, rasterization slack).
 _DIRTY_PAD = 2
@@ -70,11 +70,11 @@ def _premultiplied_words(lut: np.ndarray) -> np.ndarray:
     return np.frombuffer(ptr, np.int32)[:256].copy()
 
 
-def _pixel_words(image: QImage) -> np.ndarray:
+def pixel_words(image: QImage) -> np.ndarray:
     """The pixels of a 32-bit ``image`` as a writable ``(h, w)`` int32 array (no copy).
 
-    ``bits()`` copies the image only when it is shared; a canvas never is, so writes land in
-    the canvas itself. 32-bit rows carry no padding.
+    ``bits()`` copies the image only when it is shared; a canvas (or any image only its
+    owner holds) never is, so writes land in the image itself. 32-bit rows carry no padding.
     """
     ptr = image.bits()
     ptr.setsize(image.sizeInBytes())
@@ -93,7 +93,7 @@ def _plane_image(plane: np.ndarray, lut: np.ndarray) -> QImage:
     image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
     if image.isNull():
         return image
-    cv2.LUT(plane, _premultiplied_words(lut), dst=_pixel_words(image))
+    cv2.LUT(plane, _premultiplied_words(lut), dst=pixel_words(image))
     return image
 
 
@@ -165,7 +165,7 @@ class PaintCanvas:
             self.image = None
         elif image is not None and (image.height(), image.width()) == plane.shape:
             words = _premultiplied_words(self._lut())
-            cv2.LUT(np.ascontiguousarray(plane, dtype=np.uint8), words, dst=_pixel_words(image))
+            cv2.LUT(np.ascontiguousarray(plane, dtype=np.uint8), words, dst=pixel_words(image))
         else:
             self.image = _plane_image(plane, self._lut())
         # A plane of 0s only, 0 transparent: 2 us at 640 x 480 (it stops at a nonzero pixel).
@@ -183,7 +183,7 @@ class PaintCanvas:
         x, y, w, h = self.history.clip(rect)
         if not (w and h and self.image is not None):
             return
-        box = _pixel_words(self.image)[y : y + h, x : x + w]
+        box = pixel_words(self.image)[y : y + h, x : x + w]
         cv2.LUT(
             self.history.plane[y : y + h, x : x + w], _premultiplied_words(self._lut()), dst=box
         )

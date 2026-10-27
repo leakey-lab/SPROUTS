@@ -11,6 +11,8 @@
   with the image up to 100 % and keep that screen size above it (:class:`DotsItem`), so a
   marker never hides the line it marks at 1600 %. Decorations sit on pixel centres, like
   the skeleton line at high zoom: a pixel ``(x, y)`` is drawn at ``(x + 0.5, y + 0.5)``.
+  The markers are device-cached, except where Qt would keep only a viewport-size piece of
+  that cache (:func:`partial_device_cache`) and direct drawing gives the same pixels.
 
 Colours come from :mod:`app.gui.widgets.tokens`.
 """
@@ -38,6 +40,7 @@ from PyQt6.QtWidgets import (
     QGraphicsLineItem,
     QGraphicsPathItem,
     QGraphicsScene,
+    QGraphicsView,
     QStyleOptionGraphicsItem,
     QWidget,
 )
@@ -56,6 +59,7 @@ CENTRE = 0.5  # a pixel (x, y) is drawn around (x + 0.5, y + 0.5), where the lin
 _REACH_PX = 2.5  # device px a dot's outline, antialiasing and rounding reach past its radius
 _PARTIAL_MAX = 256  # more changed dots than this repaint the whole item
 _SPRITES_MAX = 8  # dot sprites kept per item (one per zoom band / pixel ratio)
+_SPACING_PASSES = 64  # passes of the spacing sweep before dots count as touching
 
 
 def overlay_indices(mask: np.ndarray) -> np.ndarray:
@@ -112,6 +116,50 @@ def _changed_rows(old: np.ndarray, new: np.ndarray) -> np.ndarray:
     return np.concatenate((old[~np.isin(a, b)], new[~np.isin(b, a)]))
 
 
+def _min_spacing(xy: np.ndarray) -> float:
+    """The smallest distance between two of the points ``xy`` (inf below two points).
+
+    A sweep over the points sorted by x: pass ``k`` compares each point with its k-th
+    successor while their x gap is below the best distance so far, so a few vectorised passes
+    settle it (no all-pairs matrix). Points crowded into one narrow column would need a pass
+    per point: past ``_SPACING_PASSES`` passes the answer is 0, as if two of them touched.
+    """
+    count = len(xy)
+    if count < 2:
+        return math.inf
+    order = np.argsort(xy[:, 0], kind="stable")
+    x, y = xy[order, 0], xy[order, 1]
+    best = math.inf
+    live = np.arange(count - 1)  # the points still compared with a successor
+    for k in range(1, count):
+        live = live[live + k < count]
+        gap = x[live + k] - x[live]
+        near = gap < best
+        live = live[near]
+        if not len(live):
+            break
+        if k > _SPACING_PASSES:
+            return 0.0
+        best = min(best, float(np.hypot(gap[near], y[live + k] - y[live]).min()))
+    return best
+
+
+def partial_device_cache(item: QGraphicsItem, view: QGraphicsView) -> bool:
+    """True when Qt keeps only a viewport-size piece of ``item``'s device cache in ``view``.
+
+    Qt 6's rule (QGraphicsScenePrivate::drawItemHelper): the item's bounds in viewport pixels,
+    rounded and grown by one pixel, are not inside the viewport and are more than 1.2 x as wide
+    or as tall as it. Qt then reallocates and copies that piece on every scroll step and
+    rebuilds it on every zoom: about 10 ms of a 400 % pan or zoom frame at devicePixelRatio 2.
+    """
+    world = item.sceneTransform() * view.viewportTransform()
+    device = world.mapRect(item.boundingRect()).toRect().adjusted(-1, -1, 1, 1)
+    area = view.viewport().rect()
+    return not area.contains(device) and (
+        area.width() * 1.2 < device.width() or area.height() * 1.2 < device.height()
+    )
+
+
 class DotsItem(QGraphicsPathItem):
     """Dots of ``radius`` image px up to 100 % zoom, of ``radius`` screen px above it.
 
@@ -136,6 +184,7 @@ class DotsItem(QGraphicsPathItem):
         self._xy = np.zeros((0, 2), np.float64)  # dot centres, image px
         self._bounds = QRectF()
         self._full: QPainterPath | None = None  # path(), built on demand
+        self._spacing: float | None = None  # min_spacing(), found on demand
         self._sprites: dict[tuple, tuple[QPixmap, float]] = {}
 
     # ------------------------------------------------------------------ data
@@ -146,6 +195,7 @@ class DotsItem(QGraphicsPathItem):
         xy = np.asarray(points, dtype=np.float64).reshape(-1, 2)
         old, self._xy, self._full = self._xy, xy, None
         if not len(xy):
+            self._spacing = None
             if len(old) or not self._bounds.isNull():
                 self.prepareGeometryChange()
                 self._bounds = QRectF()
@@ -154,6 +204,7 @@ class DotsItem(QGraphicsPathItem):
         changed = _changed_rows(old, xy)
         if not len(changed):
             return
+        self._spacing = None
         lo, hi = xy.min(axis=0), xy.max(axis=0)
         pad = self._radius + 1.0
         needed = QRectF(lo[0] - pad, lo[1] - pad, hi[0] - lo[0] + 2 * pad, hi[1] - lo[1] + 2 * pad)
@@ -175,6 +226,36 @@ class DotsItem(QGraphicsPathItem):
         zoom = min((math.hypot(v.transform().m11(), v.transform().m12()) for v in views), default=1)
         zoom = max(zoom, 1e-3)
         return (self._radius * min(zoom, 1.0) + _REACH_PX) / zoom
+
+    def min_spacing(self) -> float:
+        """The smallest distance between two dot centres, image px (inf below two dots)."""
+        if self._spacing is None:
+            self._spacing = _min_spacing(self._xy)
+        return self._spacing
+
+    def skip_device_cache(self, view: QGraphicsView) -> bool:
+        """True when ``view`` should draw the dots directly rather than from a device cache.
+
+        Only where Qt would keep just a viewport-size piece of the cache
+        (:func:`partial_device_cache`), and only where direct sprites give the same pixels:
+        no two sprites can overlap (overlapping ones composite with other rounding), or the
+        devicePixelRatio is fractional, where that piece drifts half a device pixel per odd
+        scroll step and the direct sprites are the ones on the dots' pixels.
+        """
+        world = self.sceneTransform() * view.viewportTransform()
+        zoom = abs(world.determinant()) ** 0.5  # as paint() reads it
+        rotated = world.type().value > QTransform.TransformationType.TxScale.value
+        if rotated or zoom <= 0.0 or not partial_device_cache(self, view):
+            return False
+        ratio = view.viewport().devicePixelRatioF()
+        if not float(ratio).is_integer():
+            return True
+        # A sprite (see _sprite) holds its antialiased dot with room to spare and its corner
+        # rounds to a whole device pixel: dots whose centres are more than a sprite side and a
+        # device pixel apart never share a pixel.
+        half = math.ceil(self._radius * min(zoom, 1.0) + self.pen().widthF() + 1.0)
+        side = max(1, math.ceil(2 * half * ratio))
+        return self.min_spacing() * zoom * ratio > side + 1
 
     # ------------------------------------------------------------------ QGraphicsItem
     def boundingRect(self) -> QRectF:
@@ -288,8 +369,13 @@ class SkeletonDecorations:
         self.endpoints_item = self._path_item(
             _cosmetic_pen(tokens.BG_0, 1), QBrush(QColor(tokens.SKEL)), z=3, dots=ENDPOINT_RADIUS
         )
-        # Hundreds of markers: drawn once per zoom, then each frame is a blit.
+        # Hundreds of markers: drawn once per zoom, then each frame is a blit (but see
+        # _fit_marker_cache). The canvas views report their zoom and viewport changes.
         self.endpoints_item.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+        self._views = tuple(v for v in scene.views() if hasattr(v, "viewport_changed"))
+        for view in self._views:
+            view.zoom_changed.connect(self._fit_marker_cache)
+            view.viewport_changed.connect(self._fit_marker_cache)
         self.highlight_item = self._path_item(
             _cosmetic_pen(tokens.BG_0, 1),
             QBrush(QColor(tokens.SEL)),
@@ -330,9 +416,24 @@ class SkeletonDecorations:
         """Markers on the pixels ``points`` (an ``(n, 2)`` array or ``(x, y)`` pairs); only
         the markers that changed are repainted."""
         self.endpoints_item.set_points(_centred(points))
+        self._fit_marker_cache()
 
     def set_endpoints_visible(self, visible: bool) -> None:
         self.endpoints_item.setVisible(visible)
+
+    def _fit_marker_cache(self, *_signal_args) -> None:
+        """The markers' device cache, off where every view would only rebuild a piece of it.
+
+        Decided when the zoom, a viewport or the markers change, never while painting. Any
+        view that does not report its changes keeps the cache.
+        """
+        markers, views, cache = self.endpoints_item, self._scene.views(), QGraphicsItem.CacheMode
+        direct = bool(views) and all(
+            view in self._views and markers.skip_device_cache(view) for view in views
+        )
+        mode = cache.NoCache if direct else cache.DeviceCoordinateCache
+        if markers.cacheMode() != mode:
+            markers.setCacheMode(mode)
 
     def highlight_endpoint(self, point: QPoint | None) -> None:
         pts = [] if point is None else [(point.x(), point.y())]
