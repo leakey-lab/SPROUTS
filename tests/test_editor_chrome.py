@@ -48,6 +48,9 @@ from tests.qt_teardown import delete_widgets  # noqa: E402
 
 M = LayoutMetrics()
 UNDER_TEST = {"editor_chrome.py", "editor_canvas.py", "test_editor_chrome.py"}
+# A camera photo's name and a polyline hint: a chip wide enough to drop below a wide prompt.
+PHOTO_NAME = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
+POLYLINE_HINT = "Skeleton · Polyline · 1 point · click to add more"
 
 
 @pytest.fixture(scope="module")
@@ -156,6 +159,19 @@ def bottom(widget) -> int:
     return geo.y() + geo.height()
 
 
+def record_fit_insets(page) -> list:
+    """From now on, every insets answer the canvas's fits get from the chrome's layout."""
+    seen = []
+    layout = page.chrome.layout
+
+    def insets():
+        seen.append(layout.insets())
+        return seen[-1]
+
+    page.view.set_fit_insets_provider(insets)
+    return seen
+
+
 # --------------------------------------------------------------------------- building
 def test_the_chrome_builds_its_overlays_on_the_host(make_page):
     page = make_page(show=False)
@@ -223,6 +239,83 @@ def test_fit_keeps_clear_of_the_overlays(app, make_page):
     page.view.fit_to_view()
     shown = page.view.mapFromScene(QRectF(0, 0, 640, 480)).boundingRect()
     assert shown.left() >= insets.left() - 1
+
+
+def test_zooms_and_fits_leave_a_chip_below_the_prompt_as_placed(app, make_page):
+    """Every zoom and fit asks the layout for the insets. A chip moved below the polyline
+    prompt (no room beside it) used to be left narrowed to that room: name elided, hint
+    wrapped over the rail."""
+    page = make_page((900, 600))
+    chrome, view = page.chrome, page.view
+    chrome.chip.set_text(PHOTO_NAME)
+    chrome.chip.set_hint(POLYLINE_HINT)
+    prompt = QFrame(page)
+    prompt.setFixedSize(658, 44)
+    prompt.show()
+    chrome.register(prompt=prompt)
+    settle(app, page)
+    chip = chrome.chip
+    assert chip.y() > bottom(prompt)  # the chip sits below the prompt
+    placed = (chip.geometry(), chip.file_label.text(), chip.hint_label.text())
+
+    for action in (
+        lambda: view.zoom_step(-1),
+        lambda: view.zoom_step(+1),
+        lambda: view.set_zoom(2.0),
+        view.fit_to_view,
+    ):
+        action()
+        assert (chip.geometry(), chip.file_label.text(), chip.hint_label.text()) == placed
+
+
+def test_the_resize_refit_gets_the_insets_of_the_new_size(app, make_page):
+    """A fitted canvas re-fits from its own resize event, which the page's layout sends
+    before the overlay layout sees the page's resize. The fit must still get the insets of
+    the new size, where the chip drops below the prompt, not those of the last plan."""
+    page = make_page((1400, 700))
+    chrome = page.chrome
+    chrome.chip.set_text(PHOTO_NAME)
+    chrome.chip.set_hint(POLYLINE_HINT)
+    prompt = QFrame(page)
+    prompt.setFixedSize(658, 44)
+    prompt.show()
+    chrome.register(prompt=prompt)
+    settle(app, page)
+    assert chrome.chip.y() == M.margin  # beside the prompt
+    before = chrome.layout.insets()
+    page.view.fit_to_view()
+    seen = record_fit_insets(page)
+
+    page.resize(900, 700)
+    settle(app, page)
+
+    assert chrome.chip.y() > bottom(prompt)  # below it now
+    assert seen and seen[0] == chrome.layout.insets()
+    assert seen[0].top() > before.top()
+
+
+def test_a_fit_while_a_relayout_is_pending_counts_the_shown_overlay(app, make_page):
+    """The prompt shown and a fit in the same call, with the relayout still queued: the fit
+    already keeps clear of the chip the prompt pushes below it."""
+    page = make_page((1400, 700))
+    chrome = page.chrome
+    chrome.chip.set_text(PHOTO_NAME)
+    chrome.chip.set_hint(POLYLINE_HINT)
+    prompt = QFrame(page)
+    prompt.setFixedSize(1100, 44)
+    prompt.hide()
+    chrome.register(prompt=prompt)
+    settle(app, page)
+    assert chrome.chip.y() == M.margin
+    seen = record_fit_insets(page)
+
+    prompt.show()
+    page.view.fit_to_view()
+    settle(app, page)
+
+    assert chrome.chip.y() > bottom(prompt)
+    assert seen and seen[0].top() == bottom(chrome.chip) + M.fit_padding
+    assert seen[0] == chrome.layout.insets()
 
 
 # --------------------------------------------------------------------------- behaviour

@@ -11,7 +11,10 @@ while an editor page is on screen (``ui_panels.LibraryTree``, V5).
 
 A key held when the tree loses the keyboard ends its hold the way the canvas ends one
 when it loses the keyboard itself (a ``FocusOut``), unless the canvas took the keyboard
-(a press on it during a Space pan): the release then reaches the canvas.
+(a press on it during a Space pan): the release then reaches the canvas. The release of a
+relayed key goes to its canvas whatever is held by then (Ctrl down before Space up); when
+that canvas's page left the screen meanwhile (a stage switch leaves the keyboard on the
+tree), it ends the holds with a ``FocusOut`` too.
 """
 
 from __future__ import annotations
@@ -82,31 +85,52 @@ class CanvasKeyRelay(QObject):
 
     def _relay(self, event: QKeyEvent) -> bool:
         """Send ``event`` to the editor canvas when it is one of its keys; True = consumed."""
+        key = event.key()
+        press = event.type() == QEvent.Type.KeyPress
+        if not press and key in self._held and not event.isAutoRepeat():
+            return self._relay_held_release(event)
         found = self._target()
         if found is None:
             return False
         canvas, scope = found
-        key = event.key()
         if not canvas.isVisible() or event.modifiers() & _COMMAND or key not in canvas_keys(scope):
             return False
-        press = event.type() == QEvent.Type.KeyPress
+        self._send(canvas, event)
+        if press and not event.isAutoRepeat():
+            self._held.add(key)
+            self._held_by = canvas
+        return True
+
+    def _relay_held_release(self, event: QKeyEvent) -> bool:
+        """The release of a key whose press went to a canvas: to that canvas, with the
+        modifiers held now; while its page is off screen it ends the canvas's holds instead
+        (as a lost keyboard does: no B tap). True = consumed."""
+        self._held.discard(event.key())
+        canvas = self._held_by
+        if canvas is None or sip.isdeleted(canvas):
+            return False
+        if canvas.isVisible():
+            self._send(canvas, event)
+            return True
+        self._held.clear()
+        self._held_by = None
+        self._end_holds(canvas)
+        event.accept()
+        return True
+
+    @staticmethod
+    def _send(canvas: QWidget, event: QKeyEvent) -> None:
+        """A copy of ``event`` to ``canvas``; ``event`` is accepted (the tree never sees it)."""
         copy = QKeyEvent(
             event.type(),
-            key,
+            event.key(),
             event.modifiers(),
             event.text(),
             event.isAutoRepeat(),
             event.count(),
         )
         QApplication.sendEvent(canvas, copy)
-        if not event.isAutoRepeat():
-            if press:
-                self._held.add(key)
-                self._held_by = canvas
-            else:
-                self._held.discard(key)
         event.accept()
-        return True
 
     def _release_holds(self) -> None:
         """The tree lost the keyboard: the releases of held keys will not come through it."""
@@ -115,8 +139,12 @@ class CanvasKeyRelay(QObject):
         self._held_by = None
         if not held or canvas is None or sip.isdeleted(canvas):
             return  # nothing held (or the window is being torn down)
-        if QApplication.focusWidget() is canvas:
-            return  # the canvas has the keyboard: it gets the releases
+        if QApplication.focusWidget() is not canvas:  # else the canvas gets the releases
+            self._end_holds(canvas)
+
+    @staticmethod
+    def _end_holds(canvas: QWidget) -> None:
+        """End ``canvas``'s holds (B, Space) the way it ends them when it loses the keyboard."""
         QApplication.sendEvent(
             canvas, QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason)
         )

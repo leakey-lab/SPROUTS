@@ -132,7 +132,7 @@ class EditorCanvasView(CanvasViewMixin, QGraphicsView):
         self.drawing = False
 
     def _pixel_in(self, pos: QPointF, size: QSize) -> QPoint:
-        """``CanvasViewMixin._scene_pixel`` clamped to ``size``, inlined: every hover runs it."""
+        """The scene pixel under ``pos``, clamped to ``size``, inlined: every hover runs it."""
         scene = self.mapToScene(pos.toPoint())
         x = min(max(math.floor(scene.x()), 0), size.width() - 1)
         y = min(max(math.floor(scene.y()), 0), size.height() - 1)

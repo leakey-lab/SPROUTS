@@ -50,6 +50,7 @@ class OverlayLayout(QObject):
         self._busy = False
         self._pending = False
         self._last_plan: OverlayPlan | None = None
+        self._planned_for: tuple[int, int] | None = None  # the host size _last_plan was made for
         host.installEventFilter(self)
 
     # ------------------------------------------------------------------ API
@@ -77,24 +78,34 @@ class OverlayLayout(QObject):
         self._busy = True
         self._pending = False
         try:
-            plan = plan_overlays(self._spec(), self._metrics)
+            spec = self._spec()
+            plan = plan_overlays(spec, self._metrics)
             if plan != self._last_plan or not self._matches(plan):
                 self._apply(plan)
                 self._last_plan = plan
+            self._planned_for = spec.host
         finally:
             self._busy = False
 
     def insets(self) -> QMargins:
         """Margins of the canvas area the overlays leave clear, for the host's current size.
 
-        Planned afresh from the overlays' sizes, so it is right even while the host is being
-        resized (a view asks for it from its own resize event, before the relayout).
+        Those of the applied plan while it still holds (same host size, no relayout pending,
+        every overlay where the plan put it): every zoom and fit asks, and planning again
+        re-fits the chip to the rows it tries (a chip placed below the polyline prompt was
+        left narrowed to the room beside it). Otherwise planned afresh from the overlays'
+        sizes, so it is right even while the host is being resized (a view asks for it from
+        its own resize event, before the relayout).
         """
+        plan = self._last_plan
         if self._busy:
-            plan = self._last_plan or plan_overlays(
-                OverlaySpec(host=self._host_size()), self._metrics
-            )
-        else:
+            plan = plan or plan_overlays(OverlaySpec(host=self._host_size()), self._metrics)
+        elif (
+            plan is None
+            or self._pending
+            or self._planned_for != self._host_size()
+            or not self._matches(plan)
+        ):
             self._busy = True
             try:
                 plan = plan_overlays(self._spec(), self._metrics)

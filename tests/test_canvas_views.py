@@ -17,7 +17,14 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QMargins, QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPixmap, QWheelEvent  # noqa: E402
+from PyQt6.QtGui import (  # noqa: E402
+    QColor,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+    QPixmap,
+    QWheelEvent,
+)
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -34,7 +41,9 @@ from tests.qt_teardown import delete_widgets  # noqa: E402
 
 VIEWS = [MagnifyingGraphicsView, EditorCanvasView]
 CTRL = Qt.KeyboardModifier.ControlModifier
+SHIFT = Qt.KeyboardModifier.ShiftModifier
 NO_MOD = Qt.KeyboardModifier.NoModifier
+PRESS, RELEASE = QEvent.Type.KeyPress, QEvent.Type.KeyRelease
 IMAGE_W, IMAGE_H = 800, 600
 
 
@@ -101,6 +110,11 @@ def _drag(view, button, start: QPointF, end: QPointF) -> None:
     _mouse(view, QEvent.Type.MouseButtonPress, start, button)
     _mouse(view, QEvent.Type.MouseMove, end, Qt.MouseButton.NoButton, button)
     _mouse(view, QEvent.Type.MouseButtonRelease, end, button, Qt.MouseButton.NoButton)
+
+
+def _key(view, kind, key, modifiers=NO_MOD) -> None:
+    """One key event straight to ``view`` (``modifiers``: the keys held as it happens)."""
+    QApplication.sendEvent(view, QKeyEvent(kind, key, modifiers))
 
 
 def _scroll(view) -> tuple[int, int]:
@@ -293,6 +307,41 @@ def test_space_hold_turns_left_drag_into_a_pan_with_hand_cursors(make_view, view
 
 
 @pytest.mark.parametrize("view_cls", VIEWS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize(
+    ("modifier_key", "modifier"),
+    [(Qt.Key.Key_Control, CTRL), (Qt.Key.Key_Shift, SHIFT)],
+    ids=["ctrl", "shift"],
+)
+def test_a_space_pan_ends_when_space_is_released_with_a_modifier_down(
+    make_view, view_cls, modifier_key, modifier
+):
+    """Space down, then Ctrl (to zoom while panning) or Shift, then Space up first: the
+    release carries the modifier and still ends the pan (it used to stay on)."""
+    view = make_view(view_cls)
+    before = (view.is_panning_mode(), view.viewport().cursor().shape())
+    _key(view, PRESS, Qt.Key.Key_Space)
+    _key(view, PRESS, modifier_key, modifier)
+    assert view.space_pan
+
+    _key(view, RELEASE, Qt.Key.Key_Space, modifier)
+    _key(view, RELEASE, modifier_key)
+
+    assert not view.space_pan
+    assert (view.is_panning_mode(), view.viewport().cursor().shape()) == before
+
+
+@pytest.mark.parametrize("view_cls", VIEWS, ids=lambda c: c.__name__)
+def test_ctrl_space_starts_no_pan(make_view, view_cls):
+    view = make_view(view_cls)
+    _key(view, PRESS, Qt.Key.Key_Control, CTRL)
+    _key(view, PRESS, Qt.Key.Key_Space, CTRL)
+    assert not view.space_pan
+    _key(view, RELEASE, Qt.Key.Key_Space, CTRL)
+    _key(view, RELEASE, Qt.Key.Key_Control)
+    assert not view.space_pan
+
+
+@pytest.mark.parametrize("view_cls", VIEWS, ids=lambda c: c.__name__)
 def test_page_keys_do_not_scroll_the_canvas(make_view, view_cls):
     view = make_view(view_cls)
     view.set_zoom(3.0)
@@ -404,6 +453,24 @@ def test_mask_layer_pans_instead_of_painting_while_space_is_held(correct_page, t
     assert not page.layers["mask"].document.history.plane.any()  # nothing painted
     assert not page.session.can_undo()
     assert _scroll(view) == (before[0] + 20, before[1] + 10)
+
+
+def test_mask_layer_paints_again_after_space_is_released_with_ctrl_down(correct_page, tmp_path):
+    """Space, then Ctrl (a Ctrl+wheel zoom mid-pan), then Space up first: the next left
+    drag paints again instead of panning."""
+    page = correct_page(_write_image(tmp_path / "a.png", 400, 300))
+    view = page.graphics_view
+    view.set_zoom(4.0)
+    _key(view, PRESS, Qt.Key.Key_Space)
+    _key(view, PRESS, Qt.Key.Key_Control, CTRL)
+    _key(view, RELEASE, Qt.Key.Key_Space, CTRL)
+    _key(view, RELEASE, Qt.Key.Key_Control)
+
+    before = _scroll(view)
+    _drag(view, Qt.MouseButton.LeftButton, QPointF(300, 300), QPointF(280, 290))
+
+    assert page.layers["mask"].document.history.plane.any()  # painted
+    assert _scroll(view) == before
 
 
 def test_mask_layer_ignores_a_left_press_during_a_middle_drag(correct_page, tmp_path):

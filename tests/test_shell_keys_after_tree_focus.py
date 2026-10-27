@@ -24,8 +24,8 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QKeySequence, QShortcut  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QSettings, Qt  # noqa: E402
+from PyQt6.QtGui import QKeyEvent, QKeySequence, QShortcut, QWheelEvent  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
@@ -49,6 +49,8 @@ from tests.test_correct_main_window import (  # noqa: E402
 )
 
 CTRL = Qt.KeyboardModifier.ControlModifier
+NO_MOD = Qt.KeyboardModifier.NoModifier
+PRESS, RELEASE = QEvent.Type.KeyPress, QEvent.Type.KeyRelease
 
 
 @pytest.fixture(scope="module")
@@ -109,6 +111,30 @@ def click_row(window, i: int) -> None:
 
 def key(widget, k, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
     QTest.keyClick(widget, k, modifiers)
+    settle()
+
+
+def send(widget, kind, k, modifiers=NO_MOD, text="") -> None:
+    """One key press or release on ``widget`` (``modifiers``: the keys held as it happens)."""
+    QApplication.sendEvent(widget, QKeyEvent(kind, k, modifiers, text))
+    settle()
+
+
+def ctrl_wheel(view) -> None:
+    """One Ctrl+wheel notch up over the middle of ``view``."""
+    vp = view.viewport()
+    pos = QPointF(vp.width() / 2, vp.height() / 2)
+    event = QWheelEvent(
+        pos,
+        QPointF(vp.mapToGlobal(pos.toPoint())),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.MouseButton.NoButton,
+        CTRL,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(vp, event)
     settle()
 
 
@@ -357,6 +383,69 @@ def test_a_hold_ends_when_the_tree_loses_the_keyboard_elsewhere(window):
     assert not view.space_pan
     assert holds == [True, False]
     assert editor.layers[MASK].current_tool == "eraser"  # a lost hold is not a B tap
+
+
+def test_a_relayed_space_pan_ends_when_space_is_released_with_ctrl_down(window):
+    """Space from the tree, then Ctrl (a Ctrl+wheel zoom mid-pan), then Space up first: the
+    release still reaches the canvas and ends the pan."""
+    editor = in_stage(window, "Correct")
+    tree, view = window.file_list, editor.graphics_view
+    send(tree, PRESS, Qt.Key.Key_Space, text=" ")
+    send(tree, PRESS, Qt.Key.Key_Control, CTRL)
+    assert view.space_pan
+
+    send(tree, RELEASE, Qt.Key.Key_Space, CTRL, " ")
+    send(tree, RELEASE, Qt.Key.Key_Control)
+
+    assert not view.space_pan
+    assert tree.hasFocus()
+
+
+def test_a_relayed_b_released_with_ctrl_down_ends_the_hold_as_on_the_canvas(window):
+    """B, Ctrl, then B up first ends the hold as it does with the keyboard on the canvas:
+    without a wheel turn meanwhile it was a tap (the brush)."""
+    editor = in_stage(window, "Correct")
+    tree, view = window.file_list, editor.graphics_view
+    for target in (view, tree):
+        key(tree, Qt.Key.Key_E)
+        assert editor.layers[MASK].current_tool == "eraser"
+        target.setFocus()
+        settle()
+        send(target, PRESS, Qt.Key.Key_B, text="b")
+        assert editor.router.b_held
+        send(target, PRESS, Qt.Key.Key_Control, CTRL)
+
+        send(target, RELEASE, Qt.Key.Key_B, CTRL, "b")
+        send(target, RELEASE, Qt.Key.Key_Control)
+
+        assert not editor.router.b_held, type(target).__name__
+        assert editor.layers[MASK].current_tool == "brush"
+
+
+@pytest.mark.parametrize("held", [Qt.Key.Key_B, Qt.Key.Key_Space], ids=["b", "space"])
+def test_a_hold_released_on_another_stage_has_ended_when_correct_is_back(window, held):
+    """A stage switch leaves the keyboard on the tree, so the release of a key held from
+    there comes while the Correct page is hidden, and the page gives its canvas the keyboard
+    when it is back. The hold must have ended by then (no B tap: the tool stays); a stuck B
+    sized the brush on every wheel turn, a stuck Space panned on every left drag."""
+    editor = in_stage(window, "Correct")
+    tree, view = window.file_list, editor.graphics_view
+    key(tree, Qt.Key.Key_E)
+    text = "b" if held == Qt.Key.Key_B else " "
+    send(tree, PRESS, held, text=text)
+    assert editor.router.b_held or view.space_pan
+
+    enter(window, "Library")
+    assert not editor.isVisible() and tree.hasFocus()
+    send(tree, RELEASE, held, text=text)
+    enter(window, "Correct")
+
+    assert QApplication.focusWidget() is view  # the page gave its canvas the keyboard
+    assert not editor.router.b_held and not view.space_pan
+    assert editor.layers[MASK].current_tool == "eraser"  # a lost hold is not a B tap
+    zoom = view.target_zoom
+    ctrl_wheel(view)
+    assert view.target_zoom != pytest.approx(zoom)  # the wheel zooms, it sizes no brush
 
 
 def test_a_b_tap_reaches_the_class_labels_from_the_tree(window):

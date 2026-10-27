@@ -223,6 +223,36 @@ def test_insets_follow_the_current_canvas_size(editor):
     assert editor.layout.insets().bottom() == 600 - editor.dock.geometry().y() + 8
 
 
+def test_asking_for_the_insets_leaves_a_chip_below_the_prompt_as_placed(app):
+    """Every zoom and fit asks for the insets. A chip too wide to sit beside the polyline
+    prompt drops below it at its natural size; measuring it for the row beside the prompt
+    used to leave it narrowed there (name elided, hint wrapped) until the next relayout."""
+    host = QWidget()
+    host.resize(900, 600)
+    chip = StatusChip(host)
+    chip.set_text(LONG_NAME)
+    chip.set_hint("Skeleton · Polyline · 1 point · click to add more")
+    prompt = QFrame(host)
+    prompt.setFixedSize(658, 44)
+    layout = OverlayLayout(host)
+    host.show()
+    QTest.qWaitForWindowExposed(host)
+    layout.register(top_chip=chip, prompt=prompt)
+    QApplication.processEvents()
+    try:
+        assert chip.geometry().top() > prompt.geometry().bottom()  # the two-row case
+        placed = (chip.geometry(), chip.file_label.text(), chip.hint_label.text())
+
+        margins = layout.insets()
+
+        assert (chip.geometry(), chip.file_label.text(), chip.hint_label.text()) == placed
+        assert margins.top() == chip.geometry().y() + chip.geometry().height() + 8
+    finally:
+        host.close()
+        host.deleteLater()
+        flush_deleted()
+
+
 def test_layout_settles_after_a_change(editor, monkeypatch):
     """No relayout ping-pong: a change costs a handful of passes, then the layout is idle."""
     calls = []

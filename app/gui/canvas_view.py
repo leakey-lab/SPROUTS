@@ -602,7 +602,9 @@ class CanvasViewMixin:
             super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Space and event.modifiers() in _PLAIN:
+        # A pan ends on the release of its Space whatever else is held by then (Space, then
+        # Ctrl, then Space up first); only a plain Space starts one (_canvas_key_press).
+        if event.key() == Qt.Key.Key_Space and (self.space_pan or event.modifiers() in _PLAIN):
             if not event.isAutoRepeat():
                 self.set_space_pan(False)
             event.accept()
@@ -649,10 +651,6 @@ class CanvasViewMixin:
         self.pan_mode = bool(pan_mode)
         self.drawing = False
         self.refresh_cursor()
-
-    def set_pan_mode(self, enabled: bool) -> None:
-        """Alias of :meth:`set_mode` (the skeleton editor's name)."""
-        self.set_mode(enabled)
 
     def set_space_pan(self, active: bool) -> None:
         """Start or stop the temporary pan of a held Space key."""
@@ -710,10 +708,6 @@ class CanvasViewMixin:
         """Show the cursor for the current state: grabbing, pan, or the tool's."""
         self.viewport().setCursor(self._cursor_for_state())
 
-    def update_cursor(self) -> None:
-        """Alias of :meth:`refresh_cursor` (the skeleton editor's name)."""
-        self.refresh_cursor()
-
     def _cursor_for_state(self) -> QCursor | Qt.CursorShape:
         if self._pan_origin is not None:
             return Qt.CursorShape.ClosedHandCursor
@@ -761,8 +755,3 @@ class CanvasViewMixin:
 
     def _tool_double_click(self, event: QMouseEvent) -> bool:
         return False
-
-    def _scene_pixel(self, pos: QPointF) -> QPoint:
-        """The (unclamped) image pixel under viewport position ``pos``."""
-        scene_pos = self.mapToScene(pos.toPoint())
-        return QPoint(math.floor(scene_pos.x()), math.floor(scene_pos.y()))
