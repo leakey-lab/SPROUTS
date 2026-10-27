@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QStackedWidget,
-    QToolButton,
     QTreeWidget,
     QVBoxLayout,
     QWidget,
@@ -37,44 +36,14 @@ def get_icon_path(icon_name: str) -> str:
         icon_name: Name of the icon file (with extension)
 
     Returns:
-        Full path to the icon file
+        Full path to the icon file in resources/icons, or "" when it is not there
     """
-    # Check in resources/icons first
     base_path = str(project_root())
     resources_icons_path = os.path.join(base_path, "resources", "icons", icon_name)
     if os.path.exists(resources_icons_path):
         return resources_icons_path
 
-    # Check in app/utils for XML icons
-    app_utils_path = os.path.join(base_path, "app", "utils", icon_name)
-    if os.path.exists(app_utils_path):
-        return app_utils_path
-
     return ""
-
-
-def create_icon_button(icon_path: str, tooltip: str, size: int = 100) -> QToolButton:
-    """
-    Create a QToolButton with an icon and tooltip.
-
-    Args:
-        icon_path: Path to the icon file (SVG or XML)
-        tooltip: Tooltip text for the button
-        size: Button size in pixels
-
-    Returns:
-        Configured QToolButton
-    """
-    button = QToolButton()
-    button.setToolTip(tooltip)
-    button.setFixedSize(QSize(size, size))
-    # Use full button size for icon
-    button.setIconSize(QSize(size, size))
-
-    if icon_path and os.path.exists(icon_path):
-        button.setIcon(QIcon(icon_path))
-
-    return button
 
 
 def create_text_button(text: str, tooltip: str) -> QPushButton:
@@ -91,31 +60,6 @@ def create_text_button(text: str, tooltip: str) -> QPushButton:
     button = QPushButton(text)
     button.setToolTip(tooltip)
     return button
-
-
-def create_section_label(text: str, color: str | None = None) -> QLabel:
-    """
-    Create a styled section label for button groups.
-
-    Args:
-        text: Label text
-        color: Color for the label text (default ``tokens.ACCENT``)
-
-    Returns:
-        Styled QLabel
-    """
-    color = color or tokens.ACCENT
-    label = QLabel(text)
-    label.setStyleSheet(f"""
-        QLabel {{
-            color: {color};
-            font-size: 8pt;
-            font-weight: bold;
-            padding: 2px 0px;
-            margin-top: 4px;
-        }}
-    """)
-    return label
 
 
 class LibraryTree(QTreeWidget):

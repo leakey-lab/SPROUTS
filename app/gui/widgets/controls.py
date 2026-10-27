@@ -235,10 +235,6 @@ class IconButton(QToolButton):
         col = self._on_color if self.isChecked() else self._color
         self.setIcon(load_icon(self._icon_name, col, self._icon_px))
 
-    def set_icon_name(self, name: str):
-        self._icon_name = name
-        self._refresh_icon()
-
     def set_colors(self, color: str | None = None, on_color: str | None = None):
         if color is not None:
             self._color = color

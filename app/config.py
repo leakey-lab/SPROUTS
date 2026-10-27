@@ -62,12 +62,6 @@ class Calibration:
         mx, my = self.mm_per_px(width_px, height_px)
         return mx * my
 
-    def mean_mm_per_px(self, width_px: int, height_px: int) -> float:
-        """Mean mm-per-pixel. The default pixels are square (0.028125 mm at 640 x 480); a
-        project file may set another field of view."""
-        mx, my = self.mm_per_px(width_px, height_px)
-        return (mx + my) / 2.0
-
 
 CALIBRATION = Calibration()
 

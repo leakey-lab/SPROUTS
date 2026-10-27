@@ -23,12 +23,11 @@ import weakref
 from functools import partial
 
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QFileDialog
 
 from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.gui.library_index import index_names
 from app.io_utils import sweep_stale_temp_files
-from app.naming import image_stem, parse_image_name
+from app.naming import image_stem
 from app.project_layout import (
     SKELETON_SUFFIX,
     GtStems,
@@ -49,7 +48,21 @@ TEMP_SWEEP_DELAY_MS = 2000
 
 def _stems_of(found: set[str], images) -> set[str]:
     """``found`` (output stems) under the Library's stems: an output whose name differs
-    from its image's only in case belongs to that image (O7)."""
+    from its image's only in case belongs to that image (O7).
+
+    A scan of an eighth of the images or more comes back in the Library's own strings, so
+    the scan's copies are freed (4 MiB for the skeletons of 46k images); a few stems (GT)
+    named as their images keep theirs, as :func:`~app.project_layout.key_to_stems` does.
+    """
+    if 8 * len(found) >= len(images):
+        # One pass over the Library's stems also tells whether every output is named as its
+        # image: a subset test first would walk the set in hash order, slower than this pass.
+        stems = set(filter(found.__contains__, images))
+        if len(stems) < len(found):  # some are not: those go by stem key (O7)
+            stems.update(key_to_stems(dict.fromkeys(found - stems), images))
+        return stems
+    if images.keys() >= found:  # every output named as its image: nothing to remap
+        return set(found)
     return set(key_to_stems(dict.fromkeys(found), images))
 
 
@@ -175,7 +188,6 @@ class ImageManager:
         self.gt_mask_stems: set[str] = set()
         self.gt_skeleton_stems: set[str] = set()
         self.gt_label_stems: set[str] = set()
-        self.has_fake_real_pairs = False
         self.original_folder = None
         # The newest delivered scan's listing (what it did not list too); None before one.
         self.last_scan: ImageScan | None = None
@@ -183,9 +195,8 @@ class ImageManager:
         self.main_window = main_window
         self.current_view_mode = None
         self.processed_base_path = None
-        # Cache for hierarchical structure
+        # The library hierarchy and row texts, built once per load (None: not built yet).
         self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
         self._labels_cache = None
         # Scan bookkeeping: only the newest scan may deliver; superseded scans are kept
         # referenced until their thread really ends (never terminate()), then let go.
@@ -195,13 +206,12 @@ class ImageManager:
 
     # ------------------------------------------------------------------ loading
     def load_images(self, folder_path=None):
-        """Scan ``folder_path`` (asks with a dialog when None) in the background.
+        """Scan ``folder_path`` in the background; without a folder nothing happens (the
+        window's own load action asks for one).
 
         The current library stays until the scan delivers images; a failed or
         image-less scan is reported to the main window and changes nothing.
         """
-        if folder_path is None:
-            folder_path = QFileDialog.getExistingDirectory(None, "Select Image Directory")
         if not folder_path:
             return
 
@@ -323,13 +333,14 @@ class ImageManager:
 
         ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``gt`` come precomputed from the
         loader thread; without them they are computed here (the first two lazily).
+        ``fake_images`` and ``has_fake_real_pairs`` are not read: a load starts with no
+        overlay paths, and the window is told False.
         """
         self._clear_images()
         self.images = images
         self.masks = masks
         self._find_processed_base_path()
         self._hierarchy_cache = hierarchy
-        self._hierarchy_cache_valid = hierarchy is not None
         self._labels_cache = labels if hierarchy is not None else None
         if skeleton_stems is not None:
             self.skeleton_stems = set(skeleton_stems)
@@ -340,9 +351,7 @@ class ImageManager:
         if gt is not None:
             self._adopt_gt(gt)
         if self.main_window:
-            self.main_window.on_loading_finished(
-                images, self.fake_images, masks, self.has_fake_real_pairs
-            )
+            self.main_window.on_loading_finished(images, self.fake_images, masks, False)
 
     def _adopt_gt(self, gt: GtStems) -> None:
         self.gt_mask_stems = set(gt.mask)
@@ -353,14 +362,12 @@ class ImageManager:
         self.images = {}
         self.fake_images.clear()
         self._fake_misses.clear()
-        self.has_fake_real_pairs = False
         self.masks = {}
         self.skeleton_stems = set()
         self._adopt_gt(GtStems(frozenset(), frozenset(), frozenset()))
         self.processed_base_path = None
         # Invalidate cache
         self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
         self._labels_cache = None
 
     # ------------------------------------------------------------ project folder
@@ -478,7 +485,6 @@ class ImageManager:
                     self._fake_misses.add((base, name))
             if fake_path is not None:
                 self.fake_images[name] = fake_path
-                self.has_fake_real_pairs = True
                 return fake_path
 
         return None
@@ -488,31 +494,14 @@ class ImageManager:
         self.current_view_mode = view_mode
         if view_mode == "Single Image":
             self.fake_images.clear()
-            self.has_fake_real_pairs = False
-
-    def get_image_names(self):
-        return list(self.images.keys())
 
     def get_image_path(self, name):
         return self.images.get(name)
 
-    def parse_image_name(self, name):
-        """Field, tube, depth, date and time of ``name`` (see :mod:`app.naming`)."""
-        parsed = parse_image_name(name)
-        return {
-            "original_name": name,
-            "field": parsed.field,
-            "tube_number": parsed.tube,
-            "length_position": parsed.position,
-            "date": parsed.date,
-            "time": parsed.time,
-        }
-
     def get_hierarchical_structure(self):
         """Field -> Tube -> Date -> [(depth, name)], cached until the images change."""
-        if not (self._hierarchy_cache_valid and self._hierarchy_cache is not None):
+        if self._hierarchy_cache is None:
             self._hierarchy_cache, self._labels_cache = index_names(self.images)
-            self._hierarchy_cache_valid = True
         return self._hierarchy_cache
 
     def get_leaf_labels(self) -> dict[str, str]:

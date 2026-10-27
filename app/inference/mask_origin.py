@@ -54,7 +54,9 @@ def scan_existing_masks(layout: ProjectLayout, stems: Iterable[str] | None = Non
     found = layout.scan_masks()  # {} when mask/ does not exist
     if stems is not None:
         wanted = set(stems)
-        found = {s: p for s, p in key_to_stems(found, wanted).items() if s in wanted}
+        # Nearly always every mask is named as one of the images: none to rename or drop.
+        if not found.keys() <= wanted:
+            found = {s: p for s, p in key_to_stems(found, wanted).items() if s in wanted}
     return ExistingMasks(stems=frozenset(found))
 
 

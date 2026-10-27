@@ -89,7 +89,7 @@ def index_names(names: Iterable[str]) -> tuple[Hierarchy, dict[str, str]]:
     for tubes in hierarchy.values():
         for dates in tubes.values():
             for images in dates.values():
-                images.sort(key=lambda entry: (entry[0], entry[1]))  # ties by name, not scan order
+                images.sort()  # (depth, name) pairs: ties by name, not scan order
     return hierarchy, labels
 
 
@@ -391,6 +391,7 @@ class LibraryIndex:
         bold = QFont(tree.font())
         bold.setBold(True)
         leaves: list[QTreeWidgetItem] = []
+        names: list[str] = []
         keys: list[str] = []
         groups: list[_Group] = []
         top: list[QTreeWidgetItem] = []
@@ -421,6 +422,7 @@ class LibraryIndex:
                         leaf.setData(0, USER_ROLE, name)
                         children.append(leaf)
                         leaves.append(leaf)
+                        names.append(name)
                         keys.append(f"{label}\n{name}".lower())
                     date_item.addChildren(children)
                     groups[date_at].end = len(leaves)
@@ -439,7 +441,7 @@ class LibraryIndex:
         finally:
             self._building = False
             tree.setUpdatesEnabled(True)
-        self._adopt(leaves, keys, groups)
+        self._adopt(leaves, names, keys, groups, fresh=True)
         if self._query:
             self.apply_filter(self._query)
 
@@ -452,13 +454,22 @@ class LibraryIndex:
             icon = self._group_icons[depth] = load_icon(name, tokens.TEXT_MUTED, 14)
         return icon
 
-    def _adopt(self, leaves, keys, groups) -> None:
+    def _adopt(self, leaves, names, keys, groups, *, fresh: bool = False) -> None:
+        """Take over the rows of a walk; ``names`` are the leaves' stems (``USER_ROLE``).
+
+        ``fresh``: the rows were just made by :meth:`build` into a cleared tree, so none is
+        hidden (only :meth:`_sync_hidden` hides rows) and no row is read back through Qt.
+        """
         self._leaves = leaves
         self._keys = keys
         self._groups = groups
-        self._pos = {leaf.data(0, USER_ROLE): i for i, leaf in enumerate(leaves)}
-        self._leaf_hidden = [leaf.isHidden() for leaf in leaves]
-        self._group_hidden = [g.item.isHidden() for g in groups]
+        self._pos = {name: i for i, name in enumerate(names)}
+        if fresh:
+            self._leaf_hidden = [False] * len(leaves)
+            self._group_hidden = [False] * len(groups)
+        else:
+            self._leaf_hidden = [leaf.isHidden() for leaf in leaves]
+            self._group_hidden = [g.item.isHidden() for g in groups]
         self._dirty = False
 
     def _mark_dirty(self, *_args) -> None:
@@ -470,6 +481,7 @@ class LibraryIndex:
         if not self._dirty:
             return
         leaves: list[QTreeWidgetItem] = []
+        names: list[str] = []
         keys: list[str] = []
         groups: list[_Group] = []
 
@@ -477,6 +489,7 @@ class LibraryIndex:
             name = item.data(0, USER_ROLE)
             if name and item.childCount() == 0:
                 leaves.append(item)
+                names.append(name)
                 keys.append(f"{item.text(0)}\n{name}".lower())
                 return
             record = _Group(item, item.text(0).lower(), len(leaves), 0, parent)
@@ -488,7 +501,7 @@ class LibraryIndex:
 
         for i in range(self._tree.topLevelItemCount()):
             walk(self._tree.topLevelItem(i), -1)
-        self._adopt(leaves, keys, groups)
+        self._adopt(leaves, names, keys, groups)
 
     # ------------------------------------------------------------------- lookups
     def leaves(self, *, visible_only: bool = False) -> list[QTreeWidgetItem]:

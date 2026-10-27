@@ -150,6 +150,27 @@ def test_index_resyncs_after_the_tree_is_rebuilt_by_hand(app):
     assert index.step(index.item_for("a"), 1) is index.item_for("b")
 
 
+@pytest.mark.parametrize("query", ["", "t002", "2024.08.07", "zzz"])
+def test_a_build_holds_what_a_walk_of_the_tree_reads(app, query):
+    """build() keeps the names and hidden states of the rows it made (no read back through
+    Qt, S06-07): they equal what a walk of the tree reads, also re-opened under a search."""
+    names = [*synth_names(), "loose_b", "loose_a"]
+    tree, index = _built(app, names)
+    index.apply_filter(query)
+    index.build(build_hierarchy(names))
+    built = (list(index._leaves), dict(index._pos), list(index._leaf_hidden))
+    built_groups, built_keys = list(index._group_hidden), list(index._keys)
+
+    index._dirty = True
+    index._ensure()  # re-reads every row through Qt
+
+    assert all(a is b for a, b in zip(built[0], index._leaves, strict=True))
+    assert built[1:] == (index._pos, index._leaf_hidden)
+    assert (built_groups, built_keys) == (index._group_hidden, index._keys)
+    assert built[2] == [leaf.isHidden() for leaf in index.leaves()]
+    assert any(built[2]) == bool(query) and any(built_groups) == bool(query)
+
+
 def test_filter_matches_the_stem_not_only_the_label(app):
     tree, index = _built(app)
     assert index.apply_filter("t002_l013_2024.08") == 1

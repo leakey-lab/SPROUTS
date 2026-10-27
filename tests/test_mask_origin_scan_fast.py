@@ -16,6 +16,7 @@ import os
 import pytest
 from PIL import Image
 
+from app.inference import mask_origin
 from app.inference.mask_origin import ExistingMasks, scan_existing_masks
 from app.project_layout import ProjectLayout
 
@@ -53,6 +54,28 @@ def test_a_large_folder_is_counted_by_name(tmp_path, limit_to_images):
     found = scan_existing_masks(layout, wanted if limit_to_images else None)
 
     assert found.count == (len(wanted) if limit_to_images else 3000)
+
+
+def test_masks_named_as_their_images_are_not_remapped(tmp_path, monkeypatch):
+    """Every mask named as one of the images (nearly always): the count needs no remap."""
+    mask_dir = tmp_path / "mask"
+    mask_dir.mkdir()
+    for i in range(300):
+        (tmp_path / f"T{i:05d}.jpg").write_bytes(b"")
+        if i % 3:
+            (mask_dir / f"T{i:05d}.png").write_bytes(b"")
+    layout = ProjectLayout(str(tmp_path))
+    remaps = []
+    real = mask_origin.key_to_stems
+    monkeypatch.setattr(mask_origin, "key_to_stems", lambda *a: remaps.append(a) or real(*a))
+
+    found = scan_existing_masks(layout, layout.scan_images())
+
+    assert found.stems == frozenset(f"T{i:05d}" for i in range(300) if i % 3)
+    assert remaps == []
+    # A mask of no image: remapped, then left out of the count.
+    (mask_dir / "orphan.png").write_bytes(b"")
+    assert scan_existing_masks(layout, layout.scan_images()) == found and len(remaps) == 1
 
 
 # --------------------------------------------------------------------------- prompt label

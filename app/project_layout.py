@@ -17,14 +17,17 @@ Older runs used ``output/mask`` and ``[output/]skeletonizer/test_latest/images``
 ``find_*_csv`` methods keep today's search order for those.
 
 Qt-free and side-effect free: nothing is created on disk, and each ``scan_*``
-method is a single ``os.scandir`` of one folder.
+method is a single ``os.scandir`` of one folder. The case-variant lookups remember, in
+memory only, which stem keys a case-sensitive folder held while it is unchanged.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TypeVar
 
@@ -184,6 +187,16 @@ def _ignores_case(directory: str) -> bool:
     return folds
 
 
+# Case-sensitive folders a lookup listed: ``(folder, endings, fold_endings)`` -> (the folder's
+# ``(st_dev, st_ino, st_mtime_ns)`` before that listing, the stem key of every name with one
+# of the endings). Only atomic get / set / clear: the GUI thread and the workers share it.
+_LISTED_KEYS: dict[tuple[str, tuple[str, ...], bool], tuple[tuple[int, int, int], set[str]]] = {}
+_LISTED_MAX = 8
+# A listing is remembered only when the folder had not changed for this long (git's racy
+# timestamp rule): a change in the same timestamp tick as the listing is never missed.
+_SETTLED_NS = 2_000_000_000
+
+
 def _find_without_case(
     directory: str, stem: str, endings: tuple[str, ...], *, fold_endings: bool
 ) -> str | None:
@@ -192,11 +205,27 @@ def _find_without_case(
     ranked scan. ``fold_endings`` matches the endings without case too (extensions).
 
     One ``os.scandir``, skipped where the file system ignores case: there the exact-name
-    lookup has already found any case variant.
+    lookup has already found any case variant. Skipped too while the folder is unchanged
+    since a listing that had no name with that key: one ``os.stat`` then (P2-01).
     """
     if _ignores_case(directory):
         return None
     key = stem_key(stem)
+    memo = (os.path.normpath(directory), endings, fold_endings)
+    started = time.time_ns()
+    try:
+        st = os.stat(directory)  # before the listing: a change during it shows next time
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    stamp = (st.st_dev, st.st_ino, st.st_mtime_ns)
+    listed = _LISTED_KEYS.get(memo)
+    keys: set[str] | None = None
+    if listed is not None and listed[0] == stamp:
+        if key not in listed[1]:
+            return None
+        # a name has the key: list for it (file test, ranking), the memo stays as it is
+    elif st.st_mtime_ns < started - _SETTLED_NS:
+        keys = set()
     rank = {(e.lower() if fold_endings else e): i for i, e in enumerate(endings)}
     best: tuple[int, str, str] | None = None
     try:
@@ -207,12 +236,19 @@ def _find_without_case(
                     tail = name[-len(ending) :]
                     if (tail.lower() if fold_endings else tail) != ending:
                         continue
-                    if stem_key(name[: -len(ending)]) != key or not entry.is_file():
+                    name_key = stem_key(name[: -len(ending)])
+                    if keys is not None:
+                        keys.add(name_key)  # every name, file or not: a key it lacks has none
+                    if name_key != key or not entry.is_file():
                         continue
                     if best is None or (r, name) < best[:2]:
                         best = (r, name, entry.path)
     except (FileNotFoundError, NotADirectoryError):
         return None
+    if keys is not None:
+        if len(_LISTED_KEYS) >= _LISTED_MAX:
+            _LISTED_KEYS.clear()
+        _LISTED_KEYS[memo] = (stamp, keys)
     return best[2] if best is not None else None
 
 
@@ -230,8 +266,21 @@ def key_to_stems(found: Mapping[str, _V], stems: Iterable[str]) -> dict[str, _V]
     :func:`~app.naming.stem_key` (``{"a": m}`` with stems ``["A"]`` -> ``{"A": m}``).
 
     Keys without such a stem are kept as they are. A mask or skeleton whose name differs
-    from its image's only in case is then found under the image's stem (O7).
+    from its image's only in case is then found under the image's stem (O7). ``stems`` holds
+    one stem per stem key, as a scan lists them: a key that is one of them is its own stem, so
+    when every key is (outputs named as their images), no stem-key table of ``stems`` is built.
+    The result's keys are then still the strings of ``stems`` (in ``found``'s order), so a
+    caller that keeps it holds no second copy of them (4 MiB for the masks of 46k images);
+    only a few keys, under an eighth of ``stems``, keep their own strings.
     """
+    if not found:
+        return {}
+    names = stems.keys() if isinstance(stems, Mapping) else stems
+    if isinstance(names, AbstractSet) and names >= found.keys():
+        if 8 * len(found) < len(names):
+            return dict(found)  # a few keys: their copies cost next to nothing
+        canon = dict(zip(names, names, strict=True))  # each stem to its own string
+        return dict(zip(map(canon.__getitem__, found), found.values(), strict=True))
     by_key = {stem_key(stem): stem for stem in stems}
     return {by_key.get(stem_key(key), key): value for key, value in found.items()}
 
@@ -367,12 +416,11 @@ class ProjectLayout:
         """:meth:`scan_images` plus the files it does not list (the same one scandir)."""
         skips = _Skips()
         images = _scan_ranked(self.root, IMAGE_EXTENSIONS, skips)
-        winners = {stem_key(stem): os.path.basename(path) for stem, path in images.items()}
-        return ImageScan(
-            images=images,
-            hidden=tuple(sorted((name, winners[key]) for key, name in skips.losers)),
-            unsupported=tuple(sorted(skips.unsupported)),
-        )
+        hidden: tuple[tuple[str, str], ...] = ()
+        if skips.losers:  # the names of the files listed instead: only when a stem was shared
+            winners = {stem_key(stem): os.path.basename(path) for stem, path in images.items()}
+            hidden = tuple(sorted((name, winners[key]) for key, name in skips.losers))
+        return ImageScan(images=images, hidden=hidden, unsupported=tuple(sorted(skips.unsupported)))
 
     # ------------------------------------------------------------------ masks
     def mask_path(self, stem: str) -> str:
