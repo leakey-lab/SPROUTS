@@ -200,7 +200,14 @@ def test_a_wide_tube_span_is_matched_against_the_trial_not_expanded(
     # test instead of exhausting the machine.)
     dashboard = build_length_app(tmp_path)  # tubes 1, 2 and 3
 
-    tracemalloc.start()
+    # A trace that already runs (PYTHONTRACEMALLOC, a profiler) stays on; the peak is
+    # counted above what is held when the measurement starts.
+    tracing = tracemalloc.is_tracing()
+    if tracing:
+        tracemalloc.reset_peak()
+    else:
+        tracemalloc.start()
+    held = tracemalloc.get_traced_memory()[0]
     try:
         _, out = call_callback(
             dashboard.app,
@@ -208,9 +215,10 @@ def test_a_wide_tube_span_is_matched_against_the_trial_not_expanded(
             {**values, "selected-tubes-store.data": []},
             changed=[trigger],
         )
-        peak = tracemalloc.get_traced_memory()[1]
+        peak = tracemalloc.get_traced_memory()[1] - held
     finally:
-        tracemalloc.stop()
+        if not tracing:
+            tracemalloc.stop()
 
     assert out["selected-tubes-store"]["data"] == expected
     assert peak < 16 * 2**20, f"{peak / 2**20:.0f} MiB at peak for a 2-million span"

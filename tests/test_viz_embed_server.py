@@ -18,23 +18,12 @@ import textwrap
 import time
 
 import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent, QThread
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QCoreApplication, QEvent, Qt, QThread  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.visualization import _viz_server  # noqa: E402
-from app.visualization._viz_server import _DashServerThreadBase, join_qthread  # noqa: E402
+from app.visualization import _viz_server
+from app.visualization._viz_server import _DashServerThreadBase, join_qthread
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 def wait_until(predicate, timeout: float = 5.0) -> bool:
@@ -228,12 +217,13 @@ def test_release_qthread_does_not_block_and_outlives_dropped_references():
         destroyed = []
         thread = Sleeper()
         thread.destroyed.connect(lambda *_: destroyed.append(1))
+        thread.destroyed.connect(app.quit)  # quits once deleted (after the append above)
         thread.start()
         t0 = time.perf_counter()
         release_qthread(thread)
         blocked = time.perf_counter() - t0
         del thread  # the helper must keep the running thread alive itself
-        QTimer.singleShot(1500, app.quit)
+        QTimer.singleShot(1500, app.quit)  # the deadline: a leaked thread ends with destroyed=0
         app.exec()
         print(f"blocked={blocked:.3f} destroyed={len(destroyed)}")
     """)

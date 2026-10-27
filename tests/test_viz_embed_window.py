@@ -15,26 +15,16 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QUrl, pyqtSignal
+from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage
+from PyQt6.QtWidgets import QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, QUrl, pyqtSignal  # noqa: E402
-from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.visualization._viz_server import _DashServerThreadBase  # noqa: E402
-from app.visualization.viz_window import DashVizWindow, require_rows  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
+from app.visualization._viz_server import _DashServerThreadBase
+from app.visualization.viz_window import DashVizWindow, require_rows
+from tests.qt_teardown import delete_widgets, flush_deleted
 
 DownloadState = QWebEngineDownloadRequest.DownloadState
 TerminationStatus = QWebEnginePage.RenderProcessTerminationStatus
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 def pump(seconds: float) -> None:

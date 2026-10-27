@@ -12,13 +12,9 @@ import os
 from types import SimpleNamespace
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QCoreApplication, Qt, pyqtSignal  # noqa: E402
-from PyQt6.QtOpenGLWidgets import QOpenGLWidget  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QCoreApplication, Qt, pyqtSignal
+from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+from PyQt6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QStackedWidget,
@@ -27,20 +23,13 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-import app.project_layout as project_layout  # noqa: E402
-from app.gui import visualization_manager as vm  # noqa: E402
-from app.gui.panels import Panel  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+import app.project_layout as project_layout
+from app.gui import visualization_manager as vm
+from app.gui.panels import Panel
+from tests.qt_teardown import flush_deleted
 
 #: The fixed right-panel pages, in page order: ``switch_right_panel`` key -> index.
 _PANELS = {panel.key: int(panel) for panel in Panel}
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 # --------------------------------------------------------------------------- #
