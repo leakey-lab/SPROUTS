@@ -2,14 +2,20 @@
 
 ``SkeletonCorrectionModel`` records each action as the box of pixels it changed, before and
 after, instead of a copy of the whole mask. These tests replay seeded random action
-sequences on the model and on a whole-snapshot history (the previous implementation, kept
-here as the reference) and require the same mask, the same Undo / Redo availability and the
-same unsaved state after every step, including edits made without ``push_undo()``, writes in
-place, a replaced mask and the depth limit. They also pin the depth (100 actions), the
-history's memory on a 2048 px skeleton and the box an undo or redo reports to the display.
+sequences that follow the edit protocol (every edit inside an action opened by
+``push_undo()``: tool edits, writes in place, a replaced mask) on the model and on a
+whole-snapshot history (the previous implementation, kept here as the reference) and require
+the same mask, the same Undo / Redo availability and the same unsaved state after every
+step, up to the depth limit. They also pin the depth (100 actions), the history's memory on
+a 2048 px skeleton, the box an undo or redo reports to the display, and what happens outside
+the protocol: an array of another shape starts a new history, any array is kept as 2D
+C-contiguous uint8, and an edit outside an action is logged, is in no step and never makes
+a later thinning trust a state it did not thin.
 """
 
 from __future__ import annotations
+
+import logging
 
 import cv2
 import numpy as np
@@ -17,6 +23,7 @@ import pytest
 
 import app.gui.skeleton_graph_model as sgm
 from app.editing.history import SnapshotHistory
+from app.editing.thinning import _skeletonize_uint8
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel
 
 
@@ -74,7 +81,7 @@ def _edit(model: SkeletonCorrectionModel, rng) -> None:
 
 
 def _write_in_place(model: SkeletonCorrectionModel, rng) -> None:
-    """A raw write into the mask array (the legacy in-place protocol)."""
+    """A raw write into the mask array (the legacy in-place protocol: right after a push)."""
     h, w = model.mask.shape
     x, y = int(rng.integers(0, w - 4)), int(rng.integers(0, h - 4))
     model.mask[y : y + int(rng.integers(1, 5)), x : x + int(rng.integers(1, 5))] = 255
@@ -86,6 +93,7 @@ def _replay(seed: int, size: tuple[int, int], depth: int, steps: int) -> None:
     ref = SnapshotReference(depth)
     model.set_empty(size)
     ref.mask = model.mask.copy()
+    saved = model.mask.copy()
     for step in range(steps):
         roll = rng.random()
         stepped = False  # an undo or redo: the reference computes the state itself
@@ -102,16 +110,23 @@ def _replay(seed: int, size: tuple[int, int], depth: int, steps: int) -> None:
         elif roll < 0.80:
             assert model.redo() is ref.redo(), step
             stepped = True
-        elif roll < 0.86:  # an edit without push_undo(): not undoable by itself
+        elif roll < 0.86:  # an action of one edit (the release of an eraser drag thins)
+            model.push_undo()
+            ref.push()
             _edit(model, rng)
-        elif roll < 0.90:
+        elif roll < 0.90:  # an action that only writes in place
+            model.push_undo()
+            ref.push()
             _write_in_place(model, rng)
         elif roll < 0.93:
             model.drop_redo()
             ref.history.drop_redo()
         elif roll < 0.96:
             model.mark_saved()
-        elif roll < 0.98:  # the array replaced, same shape
+            saved = model.mask.copy()
+        elif roll < 0.98:  # the array replaced, same shape, as one action (Load prediction)
+            model.push_undo()
+            ref.push()
             model.mask = np.where(rng.random(model.mask.shape) < 0.01, 255, 0).astype(np.uint8)
         else:
             model.clear_history()
@@ -123,9 +138,10 @@ def _replay(seed: int, size: tuple[int, int], depth: int, steps: int) -> None:
             ref.history.can_undo,
             ref.history.can_redo,
         ), (seed, step)
+        assert model.has_unsaved_changes() == (not np.array_equal(saved, model.mask)), step
 
 
-@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5, 6, 7, 8])
 def test_undo_and_redo_match_a_whole_snapshot_history(seed):
     _replay(seed, (120, 90), depth=6, steps=400)
 
@@ -237,22 +253,84 @@ def test_undo_and_redo_change_the_mask_in_place():
     assert model.redo() and model.mask is live
 
 
-def test_a_mask_of_another_shape_undoes_to_the_old_array():
+def test_a_mask_of_another_shape_starts_a_new_history():
     model = SkeletonCorrectionModel()
     model.set_empty((60, 40))
-    model.draw_polyline([(5, 20), (50, 20)], thickness=1)
-    first = model.mask.copy()
     model.push_undo()
-    model.mask = np.full((20, 30), 255, np.uint8)
+    model.draw_polyline([(5, 20), (50, 20)], thickness=1)
+    model.push_undo()
+    full = np.full((20, 30), 255, np.uint8)
+    model.mask = full.copy()
+
+    assert not model.can_undo and not model.can_redo and model.history_nbytes == 0
+    assert model.take_changed_box() is None  # the whole array changed
     model.push_undo()
     model.erase_circle((10, 10), 3)
-    second = model.mask.copy()
+    assert model.undo() is True and np.array_equal(model.mask, full)
+    assert model.undo() is False
 
-    assert model.undo() is True and model.mask.shape == (20, 30)
-    assert model.undo() is True and np.array_equal(model.mask, first)
-    assert model.take_changed_box() is None  # the whole array changed
-    assert model.redo() is True and model.mask.shape == (20, 30)
-    assert model.redo() is True and np.array_equal(model.mask, second)
+
+def test_any_mask_is_kept_as_a_2d_contiguous_uint8_array():
+    model = SkeletonCorrectionModel()
+    model.set_empty((30, 20))
+    plain = np.zeros((20, 30), np.uint8)
+    model.mask = plain
+    assert model.mask is plain  # what the app hands over is kept, not copied
+    strided = np.zeros((20, 60), np.uint8)[:, ::2]
+    for other in (plain.astype(np.int32) + 255, plain.astype(bool), strided, plain.T.copy().T):
+        model.mask = other
+        assert model.mask.dtype == np.uint8 and model.mask.flags.c_contiguous
+        assert np.array_equal(model.mask, other.astype(np.uint8))
+    with pytest.raises(ValueError):
+        model.mask = np.zeros((20, 30, 3), np.uint8)
+    with pytest.raises(ValueError):
+        model.load_thinned(np.zeros((2, 20, 30), np.uint8))
+
+
+def test_an_edit_outside_an_action_is_logged_and_in_no_step(caplog):
+    model = SkeletonCorrectionModel()
+    model.set_empty((80, 60))
+    model.push_undo()
+    model.draw_polyline([(5, 5), (70, 5)], thickness=1)
+    drawn = model.mask.copy()
+    assert model.undo() and model.redo()  # no action is open now
+    model.mask[40:44, 30:34] = 255  # in place, no push_undo(): outside the protocol
+
+    with caplog.at_level(logging.WARNING, logger=sgm.__name__):
+        assert model.undo() is True
+    assert "outside an undo action" in caplog.text
+    expected = np.zeros_like(drawn)
+    expected[40:44, 30:34] = 255  # the line is undone, the block stays: it is in no step
+    assert np.array_equal(model.mask, expected)
+    assert model.redo() is True
+    assert np.array_equal(model.mask, np.maximum(drawn, expected))
+
+
+def test_after_an_edit_outside_an_action_no_state_is_trusted_as_thin(monkeypatch):
+    # A thin skeleton, an action, then a thick block written outside any action: undoing the
+    # action gives a state no thinning made (the block is in no step). The next action's
+    # thinning must take the whole frame, not a window around its own edit.
+    model = SkeletonCorrectionModel()
+    thin = np.zeros((120, 160), np.uint8)
+    thin[20, 10:150] = 255
+    model.load_from_raster(thin, target_size=(160, 120))
+    model.push_undo()
+    model.draw_polyline([(10, 100), (60, 100)], thickness=3)
+    model.skeletonize()
+    assert model.undo() and model.redo()  # no action is open now
+    model.mask[60:80, 100:140] = 255  # outside any action
+    model.undo()  # the line goes, the block stays
+    model.push_undo()
+    model.draw_polyline([(10, 40), (30, 40)], thickness=3)
+    edited = model.mask.copy()
+    shapes = []
+    real = sgm._skeletonize_uint8
+    monkeypatch.setattr(sgm, "_skeletonize_uint8", lambda m: shapes.append(m.shape) or real(m))
+
+    model.skeletonize()
+
+    assert shapes == [(120, 160)]  # the whole frame
+    assert np.array_equal(model.mask, _skeletonize_uint8(edited))
 
 
 def test_undo_to_the_saved_state_reads_clean_and_redo_after_a_new_edit_is_gone():
@@ -285,43 +363,3 @@ def test_clear_history_and_a_new_document_free_the_base_copy():
     model.push_undo()
     model.set_empty((64, 48))
     assert model.history_nbytes == 0 and not model.can_undo
-
-
-@pytest.mark.parametrize("seed", [7, 8])
-def test_masks_of_other_shapes_and_dtypes_undo_like_whole_snapshots(seed):
-    rng = np.random.default_rng(seed)
-    model = SkeletonCorrectionModel(max_stack_size=5)
-    ref = SnapshotReference(5)
-    model.set_empty((40, 30))
-    ref.mask = model.mask.copy()
-    for step in range(300):
-        roll = rng.random()
-        stepped = False
-        if roll < 0.35:
-            model.push_undo()
-            ref.push()
-            if model.mask.dtype == np.uint8 and min(model.mask.shape) >= 8:
-                _edit(model, rng)
-        elif roll < 0.55:
-            assert model.undo() is ref.undo(), step
-            stepped = True
-        elif roll < 0.72:
-            assert model.redo() is ref.redo(), step
-            stepped = True
-        elif roll < 0.85:  # another array: another shape, sometimes another dtype
-            if rng.random() < 0.5:
-                model.push_undo()
-                ref.push()
-            h, w = int(rng.integers(8, 40)), int(rng.integers(8, 40))
-            dtype = np.uint8 if rng.random() < 0.8 else np.int32
-            model.mask = np.where(rng.random((h, w)) < 0.05, 255, 0).astype(dtype)
-        elif model.mask.dtype == np.uint8 and min(model.mask.shape) >= 8:
-            _write_in_place(model, rng)
-        if not stepped:
-            ref.mask = model.mask.copy()
-        assert model.mask.dtype == ref.mask.dtype, (seed, step)
-        assert np.array_equal(model.mask, ref.mask), (seed, step)
-        assert (model.can_undo, model.can_redo) == (
-            ref.history.can_undo,
-            ref.history.can_redo,
-        ), (seed, step)

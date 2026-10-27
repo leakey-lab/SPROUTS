@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
+from app.editing.history import UNDO_STEPS
 from app.editing.journal import EditJournal
 from app.gui.correct import save_gate
 from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome
@@ -91,7 +92,9 @@ class CorrectSession:
         on_saved: Callable[[SaveOutcome], None],
     ) -> None:
         self.layers: dict[str, EditLayer] = _by_id(layers)
-        self.journal = EditJournal()
+        # Room for each layer's newest UNDO_STEPS actions, its own stack's depth (C4-01).
+        depth = max(len(LAYER_IDS), len(self.layers)) * UNDO_STEPS
+        self.journal = EditJournal(depth, per_layer=UNDO_STEPS)
         self.image_path = ""
         self._prompts = prompts
         self._parent = parent

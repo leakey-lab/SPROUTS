@@ -137,6 +137,7 @@ APP_MODULES = [
     "app.editing.thinning",
     "app.imaging",
     "app.imaging.pyramid",
+    "app.imaging.skeleton_vectors",
     "app.gui.canvas_layers",
     "app.gui.canvas_layers.photo",
     "app.gui.canvas_layers.raster",

@@ -88,3 +88,58 @@ def test_the_values_of_the_mask_do_not_matter_only_where_it_is_set(tmp_path):
     opened = thin_raster(gray, PHOTO)
 
     assert is_generated_as_opened((opened > 0).astype(np.uint8), path, PHOTO)
+
+
+def _reference_skeletonize_uint8(mask: np.ndarray) -> np.ndarray:
+    """``_skeletonize_uint8`` as it was before the lean form (2026-10-26): the 0/255 copy of
+    ``_ensure_uint8_binary``, then two passes back to 0/255."""
+    mask = thinning._ensure_uint8_binary(mask)
+    skel_bool = thinning._skeletonize_fn()(mask > 0)
+    return skel_bool.astype(np.uint8) * 255
+
+
+def _layouts(plane: np.ndarray):
+    yield plane
+    yield np.asfortranarray(plane)
+    yield plane[::2, 1::3]
+    yield plane.T
+    yield plane[::-1, ::-1]
+
+
+def test_the_skeletonize_wrapper_gives_the_reference_bytes_for_any_input():
+    rng = np.random.default_rng(20261026)
+    planes = []
+    for dtype in (np.uint8, np.int8, np.uint16, np.int16, np.int32, np.int64):
+        values = rng.integers(-300, 600, (37, 53)) * (rng.random((37, 53)) < 0.4)
+        planes.append(values.astype(dtype))
+    for dtype in (np.float32, np.float64):
+        values = rng.normal(0.0, 200.0, (37, 53)) * (rng.random((37, 53)) < 0.4)
+        values[0, :4] = (0.5, -0.5, 255.9, 256.0)
+        planes.append(values.astype(dtype))
+    planes.append(rng.random((37, 53)) < 0.3)  # bool
+    blob = np.zeros((60, 80), np.uint8)
+    cv2.circle(blob, (40, 30), 20, 255, -1)  # a thick blob: thinning removes pixels
+    cv2.line(blob, (0, 59), (79, 0), 7, 3)  # values other than 255
+    planes.append(blob)
+    compared = 0
+    with np.errstate(invalid="ignore"):
+        for plane in planes:
+            for mask in _layouts(plane):
+                want = _reference_skeletonize_uint8(mask)
+                got = thinning._skeletonize_uint8(mask)
+                assert got.dtype == want.dtype == np.uint8 and got.shape == want.shape
+                assert np.array_equal(got, want), (plane.dtype, mask.strides)
+                assert got.flags.c_contiguous and got.flags.writeable and got.flags.owndata
+                compared += 1
+    assert compared == len(planes) * 5
+
+
+def test_the_skeletonize_wrapper_refuses_what_is_not_a_plane():
+    for bad in (np.zeros(5, np.uint8), np.zeros((4, 5, 3), np.uint8), np.uint8(1), np.zeros(())):
+        for fn in (thinning._skeletonize_uint8, _reference_skeletonize_uint8):
+            try:
+                fn(np.asarray(bad))
+            except ValueError as exc:
+                assert str(exc) == "Expected a 2D binary mask."
+            else:
+                raise AssertionError(f"{fn.__name__} took a {np.asarray(bad).shape} array")

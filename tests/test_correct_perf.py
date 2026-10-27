@@ -211,7 +211,8 @@ def test_the_undo_timeline_is_bounded(make_editor, tmp_path):
     for i in range(journal.maxlen + 4):
         click(editor, (20 + (i % 60) * 10, 20 + (i // 60) * 10))
 
-    assert len(journal) == journal.maxlen == 256
+    assert journal.maxlen == 300  # each layer's newest 100 actions
+    assert len(journal) == 100  # the mask's entries, capped at its own history's depth
     assert len(editor.layers[MASK].document.history.undo_stack) == 100  # the mask's own cap
     editor.undo()
     assert editor.session.journal.redo_entries == (MASK,)

@@ -482,6 +482,100 @@ def test_a_resolver_that_starts_finding_a_file_changes_the_stamps(project):
     assert after != before and after[1] == _stamp(produced)
 
 
+# ------------------------------------------------------------------ prediction lookups
+# On a case-sensitive disk a lookup that misses the exact name lists skeletons/ (O7): an
+# open, a plan, a Discard or a save asks for the prediction once, and only file_stamps()
+# asks afresh on every call (its contract, above).
+@pytest.fixture
+def lookups(monkeypatch):
+    """The threads that looked a prediction up (``ProjectLayout.find_skeleton``)."""
+    import threading
+
+    from app.project_layout import ProjectLayout
+
+    calls: list[threading.Thread] = []
+    real = ProjectLayout.find_skeleton
+
+    def counting(self, stem):
+        calls.append(threading.current_thread())
+        return real(self, stem)
+
+    monkeypatch.setattr(ProjectLayout, "find_skeleton", counting)
+    return calls
+
+
+def test_an_open_from_a_read_ahead_looks_the_prediction_up_once(project, lookups, monkeypatch):
+    root, image = project
+    _write_skeleton(_paths(root)[1], row=40)
+    doc = SkeletonDocument()
+    read = doc.plan_read(image, str(root))((W, H))
+    monkeypatch.setattr(doc, "_read", lambda *_args, **_kw: pytest.fail("read again"))
+    lookups.clear()
+
+    doc.open(image, (W, H), str(root), read)
+
+    assert len(lookups) == 1
+    assert doc.source == PREDICTION and doc.prediction_file() == _paths(root)[1]
+    doc.file_stamps()
+    doc.file_stamps()
+    assert len(lookups) == 3  # file_stamps() asks afresh each time
+
+
+def test_a_planned_read_looks_its_files_up_in_the_reader_only(project, lookups, monkeypatch):
+    root, image = project
+    _write_skeleton(_paths(root)[1], row=40)
+    asked: list[str] = []
+    doc = SkeletonDocument(lambda image_path: asked.append(image_path) or None)
+    stats: list = []
+    real_stat = os.stat
+    monkeypatch.setattr(os, "stat", lambda *a, **kw: stats.append(a[0]) or real_stat(*a, **kw))
+
+    reader = doc.plan_read(image, str(root))
+    planned = list(stats)
+    monkeypatch.setattr(os, "stat", real_stat)
+
+    assert asked == [image]  # the resolver is asked where the plan is made (the GUI thread)
+    assert lookups == [] and planned == []  # no file is touched there
+    read = reader((W, H))
+    assert len(lookups) == 1 and asked == [image]
+    assert read.kind == PREDICTION and read.mask[40].any()
+    assert read.stamps == doc_stamps(root, image)
+
+
+def doc_stamps(root, image) -> tuple:
+    """The file stamps an open of ``image`` reports."""
+    return _opened(root, image).file_stamps()
+
+
+def test_discard_looks_the_prediction_up_once(project, lookups):
+    root, image = project
+    _write_skeleton(_paths(root)[1], row=40)
+    doc = _opened(root, image)
+    _draw(doc)
+    lookups.clear()
+
+    doc.reopen()
+
+    assert len(lookups) == 1 and doc.source == PREDICTION and not doc.is_dirty()
+
+
+def test_a_save_back_to_the_prediction_looks_it_up_once(project, lookups):
+    root, image = project
+    gt_file, generated = _paths(root)
+    _write_skeleton(generated, row=40)
+    doc = _opened(root, image)
+    _draw(doc)
+    assert doc.save().path == gt_file
+    plane, _notices = doc.read_prediction()
+    doc.load_prediction(plane)
+    lookups.clear()
+
+    result = doc.save()
+
+    assert result.removed and not os.path.isfile(gt_file) and doc.source == PREDICTION
+    assert len(lookups) == 1
+
+
 # ------------------------------------------------------------------ Qt-free
 def test_the_module_loads_no_qt():
     code = textwrap.dedent(

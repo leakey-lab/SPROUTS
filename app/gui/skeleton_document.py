@@ -30,12 +30,14 @@ class SkeletonFiles:
 
     ``gt_file``: the GT path as :meth:`resolved` looked it up once (None: looked up on each
     access of :attr:`gt_path`; on a case-sensitive disk a miss lists ``gt/skeletons/``).
+    ``generated_file``: the same for :meth:`generated_path` (``""``: none was found).
     """
 
     image_path: str
     project_root: str
     generated_resolver: GeneratedResolver | None = None
     gt_file: str | None = None
+    generated_file: str | None = None
 
     @property
     def layout(self) -> ProjectLayout:
@@ -53,11 +55,15 @@ class SkeletonFiles:
         return layout.find_gt_skeleton(self.image_path) or layout.gt_skeleton_path(self.image_path)
 
     def resolved(self) -> SkeletonFiles:
-        """These files with :attr:`gt_path` looked up now, once (``gt_file``)."""
-        return replace(self, gt_file=self.gt_path)
+        """These files with :attr:`gt_path` and :meth:`generated_path` looked up now, once
+        (``gt_file``, ``generated_file``): what one open, plan or save asks several times."""
+        return replace(self, gt_file=self.gt_path, generated_file=self.generated_path() or "")
 
     def generated_path(self) -> str | None:
-        """The generated skeleton if it exists (injected resolver first, then skeletons/)."""
+        """The generated skeleton if it exists (injected resolver first, then skeletons/);
+        ``generated_file`` when it is set."""
+        if self.generated_file is not None:
+            return self.generated_file or None
         if self.generated_resolver is not None:
             path = self.generated_resolver(self.image_path)
             if path and os.path.isfile(path):

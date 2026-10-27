@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.gui.correct.layer import MASK, SKELETON, Notice, SaveOutcome
+from app.editing.history import UNDO_STEPS
+from app.gui.correct.layer import CLASSES, MASK, SKELETON, Notice, SaveOutcome
 from app.gui.correct.session import CANCEL, DISCARD, KEEP, SAVE, CorrectSession, SaveReport
 from tests.correct_fakes import FakeHost, FakeLayer, FakePrompts
 
@@ -600,6 +601,54 @@ def test_undo_skips_actions_a_layer_already_evicted():
     assert rig.of("undone") == [(SKELETON, "undo"), (MASK, "undo")]
     assert rig.session.journal.undo_entries == ()
     assert rig.session.undo(MASK) is None
+
+
+def _undo_all(session: CorrectSession) -> dict[str, int]:
+    """Ctrl+Z while the Undo button is on: how many steps each layer went back."""
+    undone: dict[str, int] = {}
+    while session.can_undo():
+        layer_id = session.undo(MASK)
+        assert layer_id is not None
+        undone[layer_id] = undone.get(layer_id, 0) + 1
+    return undone
+
+
+def test_a_busy_layer_never_pushes_another_layers_live_steps_off_the_timeline():
+    # Each layer keeps its newest UNDO_STEPS actions; 300 skeleton actions after 50 mask
+    # strokes once left only skeleton entries on a 256-entry timeline (C4-01).
+    rig = _Rig(skeleton_history=UNDO_STEPS)
+    rig.mask.history_limit = UNDO_STEPS
+    rig.opened()
+    for _ in range(50):
+        rig.mask.act()
+    for _ in range(300):
+        rig.skeleton.act()
+
+    assert _undo_all(rig.session) == {SKELETON: UNDO_STEPS, MASK: 50}
+    assert not rig.mask.can_undo() and not rig.skeleton.can_undo()
+
+
+def test_three_layers_at_full_depth_keep_every_step_on_the_timeline():
+    host = FakeHost()
+    layers = [FakeLayer(i, host=host, history_limit=UNDO_STEPS) for i in (MASK, SKELETON, CLASSES)]
+    session = CorrectSession(
+        layers,
+        prompts=FakePrompts(),
+        parent=lambda: None,
+        on_dirty_changed=lambda _dirty: None,
+        on_notice=lambda _m, _k: None,
+        on_history_changed=lambda: None,
+        on_undone=lambda _i, _h: None,
+        on_saved=lambda _o: None,
+    )
+    host.session = session
+    session.open(IMAGE, SIZE, BASE)
+    for index in range(3 * UNDO_STEPS):
+        layers[index % 3].act()
+    layers[1].act()  # one more: the skeleton's own history drops its oldest action
+
+    assert len(session.journal) == 3 * UNDO_STEPS
+    assert _undo_all(session) == dict.fromkeys((MASK, SKELETON, CLASSES), UNDO_STEPS)
 
 
 def test_redo_mirrors_undo():

@@ -29,12 +29,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from app.editing.history import SnapshotHistory
+from app.editing.history import UNDO_BYTES, UNDO_STEPS, SnapshotHistory
 
 Rect = tuple[int, int, int, int]  # x, y, width, height
 
-DEFAULT_MAX_ENTRIES = 100
-DEFAULT_BYTE_BUDGET = 64 * 1024 * 1024
+DEFAULT_MAX_ENTRIES = UNDO_STEPS  # 100 actions
+DEFAULT_BYTE_BUDGET = UNDO_BYTES  # 64 MiB
 # Regions at least this large are stored deflated (level 1, run-length matches only:
 # faster than the default strategy on planes and no larger).
 COMPRESS_MIN_BYTES = 16 * 1024

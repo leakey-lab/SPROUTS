@@ -25,6 +25,11 @@ from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
+# The depth and memory of each Correct layer's own history (mask and class labels: the
+# patch history; skeleton: the model's), and the undo timeline keeps as many per layer.
+UNDO_STEPS = 100
+UNDO_BYTES = 64 * 1024 * 1024
+
 
 def _nbytes(snapshot: object) -> int:
     """Default snapshot size: the ``nbytes`` of an ndarray-like snapshot."""

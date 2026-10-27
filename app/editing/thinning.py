@@ -58,10 +58,17 @@ def _ensure_uint8_binary(mask: np.ndarray) -> np.ndarray:
 
 
 def _skeletonize_uint8(mask: np.ndarray) -> np.ndarray:
-    """Skeletonize a uint8 0/255 foreground mask to 1px (uint8 0/255)."""
-    mask = _ensure_uint8_binary(mask)
-    skel_bool = _skeletonize_fn()(mask > 0)
-    return skel_bool.astype(np.uint8) * 255
+    """Skeletonize a uint8 0/255 foreground mask to 1px (uint8 0/255).
+
+    Foreground is what :func:`_ensure_uint8_binary` keeps (non-zero after a uint8 cast),
+    tested without building its 0/255 copy; the result is a new C-contiguous array.
+    """
+    if mask.dtype != np.uint8:
+        mask = mask.astype(np.uint8)
+    if mask.ndim != 2:
+        raise ValueError("Expected a 2D binary mask.")
+    skel = np.asarray(_skeletonize_fn()(mask > 0), dtype=bool)
+    return skel.view(np.uint8) * np.uint8(255)
 
 
 def thin_raster(

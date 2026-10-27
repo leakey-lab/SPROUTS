@@ -43,7 +43,7 @@ class SkeletonSaveResult:
 class SkeletonRead:
     """The start file of one image's skeleton, read and thinned ahead on a worker thread.
 
-    ``stamps`` are the ``file_stamps()`` when the read was planned; ``path`` / ``kind`` the
+    ``stamps`` are the ``file_stamps()`` taken just before the read; ``path`` / ``kind`` the
     start file (None: nothing to read); ``mask`` the thinned skeleton at ``size`` and ``tips``
     its endpoints (``skeleton_tips``); ``mask`` None with a ``path``: unreadable, the open
     reads it again (and says so).

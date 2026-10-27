@@ -1,11 +1,14 @@
 """
 Chronological order of undoable actions across the layers of one image (Qt-free).
 
-The Correct workspace edits two documents on one canvas, each with its own bounded
-undo stack (the mask's patch history, the skeleton's snapshots). ``EditJournal``
-records only *which* layer acted, newest last, so Ctrl+Z undoes "what I just did"
-on either layer. Entries are tokens: a layer whose own stack already evicted an old
-action reports that its stack is empty, and the journal drops the entry for good.
+The Correct workspace edits three documents on one canvas (mask, skeleton, class labels),
+each with its own bounded undo stack. ``EditJournal`` records only *which* layer acted,
+newest last, so Ctrl+Z undoes "what I just did" on any layer. Entries are tokens: a layer
+whose own stack already evicted an old action reports that its stack is empty, and the
+journal drops the entry for good. With ``per_layer`` (the depth of the layers' own
+stacks) a layer keeps at most that many entries: its oldest goes when it records one
+more. With ``maxlen`` at least the number of layers times ``per_layer`` (CorrectSession
+sizes it so), a busy layer then never pushes the live steps of another off the journal.
 
 Standard library only.
 """
@@ -20,15 +23,18 @@ class EditJournal:
     """Chronological order of the undoable actions of one image, across layers.
 
     Each layer keeps its own undo stack; the journal only records which layer acted,
-    newest last, so Ctrl+Z undoes "what I just did" on either layer.
+    newest last, so Ctrl+Z undoes "what I just did" on any layer.
     """
 
     DEFAULT_MAXLEN = 256
 
-    def __init__(self, maxlen: int = DEFAULT_MAXLEN) -> None:
+    def __init__(self, maxlen: int = DEFAULT_MAXLEN, *, per_layer: int | None = None) -> None:
         if maxlen < 1:
             raise ValueError(f"maxlen must be at least 1, got {maxlen}")
+        if per_layer is not None and per_layer < 1:
+            raise ValueError(f"per_layer must be at least 1, got {per_layer}")
         self._maxlen = int(maxlen)
+        self._per_layer = per_layer
         self._undo: deque[str] = deque(maxlen=self._maxlen)
         # Only undo() fills it, from the bounded undo list, so it never outgrows maxlen.
         self._redo: list[str] = []
@@ -39,7 +45,16 @@ class EditJournal:
         return self._maxlen
 
     def record(self, layer_id: str) -> None:
-        """A new action of ``layer_id``: appended newest; the redo list is emptied."""
+        """A new action of ``layer_id``: appended newest; the redo list is emptied.
+
+        A layer at its ``per_layer`` cap first loses its own oldest entry, before the
+        append. With ``maxlen`` at least the number of layers times ``per_layer``, a full
+        journal then never pushes out another layer's entry; a smaller ``maxlen`` drops
+        the oldest entry, whichever layer it belongs to.
+        """
+        cap = self._per_layer
+        if cap is not None and self._undo.count(layer_id) >= cap:
+            self._undo.remove(layer_id)
         self._undo.append(layer_id)
         self._redo.clear()
 

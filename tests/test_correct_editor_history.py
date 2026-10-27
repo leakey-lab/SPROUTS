@@ -421,6 +421,28 @@ def test_sixty_mixed_actions_undo_and_redo_exactly_across_both_layers(
     assert {layer_id: layer.current_tool for layer_id, layer in editor.layers.items()} == tools
 
 
+def test_a_busy_layer_never_pushes_the_other_layers_steps_off_the_timeline(make_editor, tmp_path):
+    # 250 polylines after 10 mask strokes: every stroke stays undoable. The timeline once
+    # held the newest 256 actions of all layers together, here 6 of the strokes (C4-01).
+    editor = make_editor(history_project(tmp_path), size=(1000, 760))
+    opened = plane(editor).copy()
+    editor.controls.tool_buttons[(MASK, "brush")].click()
+    editor.layers[MASK].set_size(2)
+    for i in range(10):
+        click(editor, (20 + i * 10, 20))
+    for i in range(250):
+        draw_line(editor, (40, 30 + i % 180), (160, 35 + i % 180))
+
+    for _ in range(400):
+        if not editor.session.can_undo():
+            break
+        editor.undo()
+    undone = editor.session.journal.redo_entries
+    assert (undone.count(MASK), undone.count(SKELETON)) == (10, 100)
+    assert not editor.layers[MASK].can_undo() and not editor.layers[SKELETON].can_undo()
+    assert np.array_equal(plane(editor), opened)
+
+
 # ================================================================ gestures in progress
 STROKE = [(20, 40), (60, 40)]  # the part of the drag before the key
 REST = [(60, 100), (120, 100)]  # the rest of the drag, after the key

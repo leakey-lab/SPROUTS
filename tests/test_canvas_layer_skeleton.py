@@ -27,13 +27,10 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QStyleOptionGraphicsItem,
 )
 
-from app.gui.canvas_layers.skeleton import (  # noqa: E402
-    SkeletonLayerItem,
-    skeleton_links,
-    tile_segments,
-)
+from app.gui.canvas_layers.skeleton import SkeletonLayerItem  # noqa: E402
 from app.gui.skeleton_overlay import overlay_indices  # noqa: E402
 from app.gui.widgets import tokens  # noqa: E402
+from app.imaging.skeleton_vectors import skeleton_links, tile_segments  # noqa: E402
 from tests.qt_teardown import delete_widgets  # noqa: E402
 
 GREY = QColor(96, 96, 96)
@@ -693,6 +690,131 @@ def test_a_box_update_renders_the_same_pixels_as_a_full_update(app, box, new_arr
 
     size = (int(1024 * zoom), int(768 * zoom))
     assert np.array_equal(_render(item, zoom, size), _render(fresh, zoom, size))
+
+
+ODD_BOXES = [(300, 200, 32, 32), (0, 0, 9, 7), (990, 770, 11, 7), (511, 255, 3, 3)]
+
+
+@pytest.mark.parametrize("box", ODD_BOXES)
+def test_a_box_update_patches_every_cached_level_to_a_full_rebuild(app, box):
+    mask = _busy_mask(1001, 777)  # odd sides: each level replicates its last row and column
+    item = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    item.set_mask(mask)
+    zooms = (0.5, 0.24, 1.0 - 1e-7)  # levels 1 and 3, and level 0 of the LOD tier
+    for zoom in zooms:
+        _render(item, zoom, (int(1001 * zoom), int(777 * zoom)))
+    assert set(item._level_images) == {0, 1, 3}
+    for step in range(3):  # edits one after the other, each patched in place
+        x, y, w, h = box
+        _edit(mask, (max(0, x - 5 * step), y, w, h))
+        item.set_mask(mask, changed=(max(0, x - 5 * step), y, w, h))
+    fresh = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    fresh.set_mask(mask.copy())
+
+    for zoom in zooms:
+        size = (int(1001 * zoom), int(777 * zoom))
+        assert np.array_equal(_render(item, zoom, size), _render(fresh, zoom, size)), zoom
+
+
+def test_a_box_update_never_rebuilds_a_whole_level_and_moves_its_cache_key(app, monkeypatch):
+    import app.gui.canvas_layers.skeleton as module
+
+    mask = _busy_mask(2048, 1536)
+    item = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    item.set_mask(mask)
+    for zoom in (0.5, 0.24):
+        _render(item, zoom, (int(2048 * zoom), int(1536 * zoom)))
+    keys = {k: image.cacheKey() for k, image in item._level_images.items()}
+    shapes = []
+    monkeypatch.setattr(
+        module, "overlay_indices", lambda m: shapes.append(m.shape) or overlay_indices(m)
+    )
+
+    _edit(mask, (1000, 690, 32, 32))
+    item.set_mask(mask, changed=(1000, 690, 32, 32))
+    _render(item, 0.5, (1024, 768))
+    _render(item, 0.24, (int(2048 * 0.24), int(1536 * 0.24)))
+
+    assert max(h * w for h, w in shapes) <= 36 * 36  # the box and its context, never a level
+    assert set(item._level_images) == set(keys)  # patched, not dropped
+    for k, image in item._level_images.items():
+        assert image.cacheKey() != keys[k], k  # an OpenGL texture of it is uploaded again
+
+
+def test_a_box_update_patches_a_cached_level_only_when_that_level_is_drawn(app, monkeypatch):
+    import app.gui.canvas_layers.skeleton as module
+
+    mask = _busy_mask(2048, 1536)
+    item = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    item.set_mask(mask)
+    for zoom in (0.5, 0.24):  # levels 1 and 3 cached
+        _render(item, zoom, (int(2048 * zoom), int(1536 * zoom)))
+    keys = {k: image.cacheKey() for k, image in item._level_images.items()}
+    shapes = []
+    monkeypatch.setattr(
+        module, "overlay_indices", lambda m: shapes.append(m.shape) or overlay_indices(m)
+    )
+
+    _edit(mask, (1000, 690, 32, 32))
+    item.set_mask(mask, changed=(1000, 690, 32, 32))
+    assert shapes == [(36, 36)]  # the level-0 overlay only: the levels wait for a draw
+    assert {k: image.cacheKey() for k, image in item._level_images.items()} == keys
+    _render(item, 0.5, (1024, 768))  # level 1 drawn and patched, level 3 still waits
+    assert len(shapes) == 2 and shapes[1][0] * shapes[1][1] <= 20 * 20
+    assert item._level_images[1].cacheKey() != keys[1]
+    assert item._level_images[3].cacheKey() == keys[3]
+    _render(item, 0.24, (int(2048 * 0.24), int(1536 * 0.24)))
+    assert len(shapes) == 3 and item._level_images[3].cacheKey() != keys[3]
+
+
+def test_a_frame_sized_box_drops_the_cached_levels_instead_of_patching_them(app, monkeypatch):
+    import app.gui.canvas_layers.skeleton as module
+
+    mask = _busy_mask(1001, 777)
+    full = mask.copy()
+    frame = (0, 0, 1001, 777)
+    item = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    item.set_mask(mask)
+    zooms = (0.5, 0.24)  # levels 1 and 3
+    for zoom in zooms:
+        _render(item, zoom, (int(1001 * zoom), int(777 * zoom)))
+    assert set(item._level_images) == {1, 3}
+    words, patched = module._image_words, []
+    monkeypatch.setattr(module, "_image_words", lambda image: patched.append(image) or words(image))
+
+    for content in (0, full):  # Clear, then its undo
+        mask[:] = content
+        item.set_mask(mask, changed=frame)
+        assert item._level_images == {}  # rebuilt when drawn, as cheap as a patch
+        fresh = _unbudgeted(_in_scene(SkeletonLayerItem()))
+        fresh.set_mask(mask.copy())
+        for zoom in zooms:
+            size = (int(1001 * zoom), int(777 * zoom))
+            assert np.array_equal(_render(item, zoom, size), _render(fresh, zoom, size)), zoom
+
+    assert patched == []  # no level was patched
+
+
+def test_a_cached_level_merges_its_stale_boxes_and_is_dropped_past_half_of_it(app):
+    mask = _busy_mask(1001, 777)
+    item = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    item.set_mask(mask)
+    zooms = (0.5, 0.24)  # levels 1 and 3 cached; level 3 is the one drawn below
+    for zoom in zooms:
+        _render(item, zoom, (int(1001 * zoom), int(777 * zoom)))
+
+    for box in ((0, 0, 8, 8), (990, 770, 11, 7)):  # opposite corners
+        _edit(mask, box)
+        item.set_mask(mask, changed=box)
+        _render(item, 0.24, (int(1001 * 0.24), int(777 * 0.24)))
+
+    # level 1 waited: one stale box over both corners, the whole level, so it was dropped
+    assert set(item._level_images) == {3}
+    fresh = _unbudgeted(_in_scene(SkeletonLayerItem()))
+    fresh.set_mask(mask.copy())
+    for zoom in zooms:
+        size = (int(1001 * zoom), int(777 * zoom))
+        assert np.array_equal(_render(item, zoom, size), _render(fresh, zoom, size)), zoom
 
 
 def test_a_box_update_recomputes_the_overlay_around_the_box_only_and_extracts_nothing(

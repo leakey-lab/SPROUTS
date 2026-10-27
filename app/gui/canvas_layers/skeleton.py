@@ -16,7 +16,7 @@ item's own ``scale``):
 * ``vectors=False`` (the Library's generated file, lines about 2 px wide): "raster-lod"
   below 1, else "raster-smooth", the overlay drawn bilinear (soft edges, no pixel blocks).
 
-The vector extraction (:func:`skeleton_links`, :func:`tile_segments`) is Qt-free numpy.
+The vector extraction is the Qt-free :mod:`app.imaging.skeleton_vectors`.
 Colours come from :mod:`app.gui.widgets.tokens`.
 """
 
@@ -35,156 +35,15 @@ from app.gui.canvas_layers import device_scale
 from app.gui.skeleton_overlay import HALO_ALPHA, HALO_INDEX, LINE_INDEX, overlay_indices
 from app.gui.widgets import tokens
 from app.imaging.pyramid import ImagePyramid, max_half
+from app.imaging.skeleton_vectors import Box, clip_box, tile_segments
 
-Box = tuple[int, int, int, int]  # (x, y, width, height) in skeleton pixels
 Edges = tuple[float, float, float, float]  # (left, top, right, bottom) in skeleton pixels
 TileKey = tuple[int, int]  # (tx, ty)
 
-# Forward link directions (dx, dy): each undirected 8-neighbour pair once, from the pixel
-# met first in row-major order (E, S, SE, SW).
-_FORWARD = ((1, 0), (0, 1), (1, 1), (-1, 1))
-_NO_LINKS = np.zeros((0, 4), np.int32)
 _GL_ENGINES = (QPaintEngine.Type.OpenGL, QPaintEngine.Type.OpenGL2)
 _LOD_EPS = 1e-6  # absorbs float noise at exact powers of two (0.5, 0.25, ...)
 _PEN_REACH = 3.0  # device px a vector pen reaches beyond a segment (halo half-width + AA)
-
-
-# ---------------------------------------------------------------- vector extraction (Qt-free)
-def skeleton_links(mask: np.ndarray, box: Box | None = None) -> np.ndarray:
-    """Unit m-adjacency links of the 1 px skeleton ``mask`` whose first pixel is in ``box``.
-
-    Rows are ``(x0, y0, x1, y1)`` int32 pixel coordinates. A link joins two 8-neighbours
-    that are set; a diagonal one only when neither pixel of its 2x2 corner is set
-    (m-adjacency: no corner triangles). Its first pixel is the one met first in row-major
-    order, so a mask split into boxes yields every link exactly once. An isolated pixel
-    is a dot ``(x, y, x, y)``. ``box`` is ``(x, y, width, height)``; None = the whole
-    mask. ``mask`` is only read.
-    """
-    x0, y0, x1, y1 = _clip_box(box, mask.shape)
-    if x1 <= x0 or y1 <= y0 or not mask[y0:y1, x0:x1].any():
-        return _NO_LINKS.copy()
-    *links, lone = _link_planes(mask, x0, y0, x1, y1)
-    parts = []
-    for (dx, dy), plane in zip(_FORWARD, links, strict=True):
-        xs, ys = _coords(plane)
-        parts.append(np.stack([xs, ys, xs + dx, ys + dy], axis=1))
-    xs, ys = _coords(lone)
-    parts.append(np.stack([xs, ys, xs, ys], axis=1))
-    return _offset(np.concatenate(parts), x0, y0)
-
-
-def tile_segments(mask: np.ndarray, box: Box) -> np.ndarray:
-    """The links of ``box`` (see :func:`skeleton_links`) with collinear runs merged.
-
-    Chained links of one direction become one ``(x0, y0, x1, y1)`` int32 run from the
-    first pixel of its first link to the last pixel of its last link; runs never leave
-    the box (a line crossing its edge is split there, the two runs sharing the pixel).
-    Dots stay dots. Vectorised: no Python loop over pixels.
-    """
-    x0, y0, x1, y1 = _clip_box(box, mask.shape)
-    if x1 <= x0 or y1 <= y0 or not mask[y0:y1, x0:x1].any():
-        return _NO_LINKS.copy()
-    east, south, south_east, south_west, lone = _link_planes(mask, x0, y0, x1, y1)
-    xs, ys = _coords(lone)
-    parts = [
-        _east_runs(east),
-        _south_runs(south),
-        _diagonal_runs(south_east, 1),
-        _diagonal_runs(south_west, -1),
-        np.stack([xs, ys, xs, ys], axis=1),
-    ]
-    return _offset(np.concatenate(parts), x0, y0)
-
-
-def _clip_box(box: Box | None, shape: tuple[int, ...]) -> tuple[int, int, int, int]:
-    """``(x0, y0, x1, y1)`` of ``box`` clipped to a mask of ``shape`` (end exclusive)."""
-    h, w = shape[0], shape[1]
-    if box is None:
-        return 0, 0, w, h
-    x, y, bw, bh = (int(v) for v in box)
-    return max(0, x), max(0, y), min(w, x + bw), min(h, y + bh)
-
-
-def _offset(links: np.ndarray, x0: int, y0: int) -> np.ndarray:
-    out = links.astype(np.int32, copy=False)
-    out[:, 0::2] += x0
-    out[:, 1::2] += y0
-    return out
-
-
-def _link_planes(mask: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> tuple[np.ndarray, ...]:
-    """Boolean planes over the box: the E, S, SE and SW links starting at each pixel, and
-    the isolated pixels. Reads the box plus a one-pixel margin (outside the mask is 0)."""
-    h, w = y1 - y0, x1 - x0
-    mh, mw = mask.shape[0], mask.shape[1]
-    win = np.zeros((h + 2, w + 2), bool)
-    sx0, sy0, sx1, sy1 = max(x0 - 1, 0), max(y0 - 1, 0), min(x1 + 1, mw), min(y1 + 1, mh)
-    np.greater(
-        mask[sy0:sy1, sx0:sx1],
-        0,
-        out=win[sy0 - y0 + 1 : sy1 - y0 + 1, sx0 - x0 + 1 : sx1 - x0 + 1],
-    )
-
-    def near(dx: int, dy: int) -> np.ndarray:
-        return win[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
-
-    own, east, west, south, north = near(0, 0), near(1, 0), near(-1, 0), near(0, 1), near(0, -1)
-    south_east, south_west = near(1, 1), near(-1, 1)
-    four = east | west | south | north
-    return (
-        own & east,
-        own & south,
-        own & south_east & ~(east | south),
-        own & south_west & ~(west | south),
-        own & ~(four | south_east | south_west | near(1, -1) | near(-1, -1)),
-    )
-
-
-def _coords(plane: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """``(xs, ys)`` of the set pixels of ``plane``, row-major (flat indices: ~10x faster
-    than a 2-D ``np.nonzero``)."""
-    ys, xs = np.divmod(np.flatnonzero(plane), plane.shape[1])
-    return xs, ys
-
-
-def _east_runs(links: np.ndarray) -> np.ndarray:
-    """Merged runs of E links: pair the k-th run start with the k-th run end, row-major."""
-    starts = links.copy()
-    starts[:, 1:] &= ~links[:, :-1]
-    ends = links.copy()
-    ends[:, :-1] &= ~links[:, 1:]
-    xs, ys = _coords(starts)
-    xe, _ = _coords(ends)
-    return np.stack([xs, ys, xe + 1, ys], axis=1)
-
-
-def _south_runs(links: np.ndarray) -> np.ndarray:
-    """Merged runs of S links, paired column by column (the transposed planes)."""
-    starts = links.copy()
-    starts[1:, :] &= ~links[:-1, :]
-    ends = links.copy()
-    ends[:-1, :] &= ~links[1:, :]
-    ys, xs = _coords(starts.T)  # column-major: (row of the transpose = x, column = y)
-    ye, _ = _coords(ends.T)
-    return np.stack([xs, ys, xs, ye + 1], axis=1)
-
-
-def _diagonal_runs(links: np.ndarray, dx: int) -> np.ndarray:
-    """Merged runs of SE (``dx`` 1) or SW (``dx`` -1) links, paired along each diagonal."""
-    starts = links.copy()
-    ends = links.copy()
-    if dx > 0:  # the previous link of a run starts at (x - 1, y - 1), the next at (x + 1, y + 1)
-        starts[1:, 1:] &= ~links[:-1, :-1]
-        ends[:-1, :-1] &= ~links[1:, 1:]
-    else:  # previous at (x + 1, y - 1), next at (x - 1, y + 1)
-        starts[1:, :-1] &= ~links[:-1, 1:]
-        ends[:-1, 1:] &= ~links[1:, :-1]
-    xs, ys = _coords(starts)
-    xe, ye = _coords(ends)
-    first = np.lexsort((ys, xs - dx * ys))  # by diagonal, then down it
-    last = np.lexsort((ye, xe - dx * ye))
-    xs, ys, xe, ye = xs[first], ys[first], xe[last], ye[last]
-    return np.stack([xs, ys, xe + dx, ye + 1], axis=1)
+_LEVEL_PATCH_SHARE = 0.5  # a larger stale part of a LOD level image: rebuilt, not patched
 
 
 # ------------------------------------------------------------------------------ the item
@@ -294,6 +153,8 @@ class SkeletonLayerItem(QGraphicsItem):
         self._full_image: QImage | None = None  # vectors=False: one image, bilinear
         self._pyramid: ImagePyramid | None = None  # max-pool pyramid of the mask
         self._level_images: dict[int, QImage] = {}
+        # Per cached level image: the level px box (x0, y0, x1, y1) the mask changed since.
+        self._level_stale: dict[int, tuple[int, int, int, int]] = {}
         self._warm_timer: QTimer | None = None  # idle vector extraction (see _warm_later)
 
     # ------------------------------------------------------------------ public API
@@ -399,14 +260,35 @@ class SkeletonLayerItem(QGraphicsItem):
         if self._pyramid is None:  # down to 1 px: small skeletons need levels too (lazy)
             self._pyramid = ImagePyramid(self._mask, reducer=max_half, min_side=1)
         k = _lod_level(scale, self._pyramid.count)
+        image = self._level_image(k)
+        f = float(1 << k)
+        w, h = float(self._width), float(self._height)
+        painter.drawImage(QRectF(0.0, 0.0, w, h), image, QRectF(0.0, 0.0, w / f, h / f))
+
+    def _level_image(self, k: int) -> QImage:
+        """The overlay image of LOD level ``k``: built once, then patched in place over the
+        part the mask changed since (:meth:`_stale_levels`), as a full rebuild writes it
+        there (the image's ``cacheKey`` moves)."""
         image = self._level_images.get(k)
         if image is None:
             level = self._pyramid.level(k)
             indices = self._indices if k == 0 else overlay_indices(level)
             image = self._level_images[k] = _argb(indices, self._table)
-        f = float(1 << k)
-        w, h = float(self._width), float(self._height)
-        painter.drawImage(QRectF(0.0, 0.0, w, h), image, QRectF(0.0, 0.0, w / f, h / f))
+            return image
+        stale = self._level_stale.pop(k, None)
+        if stale is not None:
+            x0, y0, x1, y1 = stale
+            if k == 0:  # the level-0 overlay is up to date already
+                indices = self._indices[y0:y1, x0:x1]
+            else:  # the overlay there reads one more level px around it (the 3x3 halo)
+                lw, lh = self._pyramid.level_size(k)
+                ix0, iy0 = max(x0 - 1, 0), max(y0 - 1, 0)
+                ix1, iy1 = min(x1 + 1, lw), min(y1 + 1, lh)
+                fresh = overlay_indices(self._pyramid.level(k)[iy0:iy1, ix0:ix1])
+                indices = fresh[y0 - iy0 : y1 - iy0, x0 - ix0 : x1 - ix0]
+            patch = _argb(indices, self._table)  # Qt's conversion: the words of a rebuild
+            _image_words(image)[y0:y1, x0:x1] = _image_words(patch)
+        return image
 
     def _paint_smooth(self, painter: QPainter) -> None:
         """The whole level-0 overlay, bilinear (one image: tiles would seam)."""
@@ -649,10 +531,12 @@ class SkeletonLayerItem(QGraphicsItem):
 
         The overlay (line + 3x3 halo) changes on the box padded by 1 px and is recomputed
         there from the box padded by 2 px; tiles meeting the padded box lose their vectors
-        (a link reads a one-pixel margin) and overlay images. Nothing is extracted.
+        (a link reads a one-pixel margin) and overlay images; the cached LOD level images
+        are marked stale there and patched when drawn (:meth:`_stale_levels`). Nothing is
+        extracted.
         """
         w, h = self._width, self._height
-        x0, y0, x1, y1 = _clip_box(changed, (h, w))
+        x0, y0, x1, y1 = clip_box(changed, (h, w))
         if x1 <= x0 or y1 <= y0:
             return
         ox0, oy0, ox1, oy1 = max(x0 - 1, 0), max(y0 - 1, 0), min(x1 + 1, w), min(y1 + 1, h)
@@ -668,8 +552,31 @@ class SkeletonLayerItem(QGraphicsItem):
         self._full_image = None
         if self._pyramid is not None:
             self._pyramid.invalidate((x0, y0, x1 - x0, y1 - y0))
-        self._level_images.clear()
+            self._stale_levels(x0, y0, x1, y1)
+        else:  # a new array: its pyramid is built again, and its levels
+            self._level_images.clear()
+            self._level_stale.clear()
         self.update(QRectF(ox0, oy0, ox1 - ox0, oy1 - oy0))
+
+    def _stale_levels(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Mark what the mask change in ``[x0, x1) x [y0, y1)`` (level-0 px) reaches in each
+        cached LOD level image: the level px over the box and their 1 px halo, merged into
+        one stale box per level, patched only when that level is drawn (:meth:`_level_image`).
+        A level whose stale box passes ``_LEVEL_PATCH_SHARE`` of it is dropped instead: its
+        rebuild when drawn is then about as cheap as the patch."""
+        for k in list(self._level_images):
+            lw, lh = self._pyramid.level_size(k)
+            sx0, sy0 = max((x0 >> k) - 1, 0), max((y0 >> k) - 1, 0)
+            sx1, sy1 = min(((x1 - 1) >> k) + 2, lw), min(((y1 - 1) >> k) + 2, lh)
+            stale = self._level_stale.get(k)
+            if stale is not None:
+                sx0, sy0 = min(sx0, stale[0]), min(sy0, stale[1])
+                sx1, sy1 = max(sx1, stale[2]), max(sy1, stale[3])
+            if (sx1 - sx0) * (sy1 - sy0) > _LEVEL_PATCH_SHARE * lw * lh:
+                del self._level_images[k]
+                self._level_stale.pop(k, None)
+            else:
+                self._level_stale[k] = (sx0, sy0, sx1, sy1)
 
     def _drop_caches(self) -> None:
         self._base_revision = self._revision
@@ -679,6 +586,7 @@ class SkeletonLayerItem(QGraphicsItem):
         self._full_image = None
         self._pyramid = None
         self._level_images.clear()
+        self._level_stale.clear()
 
     def _resize(self, width: int, height: int) -> None:
         if (width, height) != (self._width, self._height):
@@ -753,6 +661,14 @@ def _argb(indices: np.ndarray, table: list[int]) -> QImage:
     image = QImage(data.data, w, h, w, QImage.Format.Format_Indexed8)
     image.setColorTable(table)
     return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+
+
+def _image_words(image: QImage) -> np.ndarray:
+    """The pixels of a 32-bit ``image`` as a writable ``(h, w)`` uint32 array, no copy
+    (``bits()`` copies only a shared image; 32-bit rows carry no padding)."""
+    ptr = image.bits()
+    ptr.setsize(image.sizeInBytes())
+    return np.frombuffer(ptr, np.uint32).reshape(image.height(), image.width())
 
 
 def _color_table(line: QColor, halo: QColor | None) -> list[int]:

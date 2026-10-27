@@ -33,7 +33,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from app.editing.history import SnapshotHistory
+from app.editing.history import UNDO_BYTES, UNDO_STEPS, SnapshotHistory
 from app.editing.thinning import (
     _ensure_uint8_binary,
     _skeletonize_uint8,
@@ -49,8 +49,8 @@ Box = tuple[int, int, int, int]  # (x, y, width, height) in mask pixels
 
 _NO_CHANGE = (0, 0, 0, 0)  # an empty (x0, y0, x1, y1) box
 
-UNDO_DEPTH = 100  # user actions kept (the default of SkeletonCorrectionModel)
-UNDO_BYTE_BUDGET = 64 * 1024 * 1024  # stored patches; the oldest actions go first past it
+UNDO_DEPTH = UNDO_STEPS  # 100 user actions kept (the default of SkeletonCorrectionModel)
+UNDO_BYTE_BUDGET = UNDO_BYTES  # 64 MiB of stored patches; the oldest actions go first past it
 _STEP_OVERHEAD = 64  # rough Python object cost of one history step, counted in nbytes
 _COMPRESS_MIN = 1024  # patch sides from this size on are stored zlib-compressed
 
@@ -93,20 +93,19 @@ def _union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tuple[
     return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
-def _plain_uint8(a: np.ndarray) -> bool:
-    """A 2D, C-contiguous uint8 array (what cv2 reads without a copy)."""
-    return a.dtype == np.uint8 and a.ndim == 2 and a.flags.c_contiguous
+def _plain(mask: np.ndarray) -> np.ndarray:
+    """``mask`` as the model keeps it: a 2D, C-contiguous uint8 array (what cv2 reads without
+    a copy); the same object when it is one already (every array the app hands over)."""
+    mask = np.ascontiguousarray(mask, dtype=np.uint8)
+    if mask.ndim != 2:
+        raise ValueError("Expected a 2D binary mask.")
+    return mask
 
 
 def _equal_uint8(a: np.ndarray, b: np.ndarray) -> bool:
     """Whether two plain uint8 arrays of one shape are equal (one cv2 pass, no temporary:
     0.05 ms at 2048 x 1536 against 0.5 ms for ``np.array_equal``)."""
     return cv2.norm(a, b, cv2.NORM_INF) == 0
-
-
-def _same_layout(a: np.ndarray | None, b: np.ndarray) -> bool:
-    """``a`` is a 2D array of ``b``'s shape and dtype (a patch of one fits the other)."""
-    return a is not None and a.ndim == 2 and a.shape == b.shape and a.dtype == b.dtype
 
 
 def _patch_edges(patch: Patch) -> tuple[int, int, int, int]:
@@ -120,61 +119,26 @@ def _capture(x: int, y: int, before: np.ndarray, after: np.ndarray) -> Patch:
     return Patch.capture(x, y, before, after, compress_min=_COMPRESS_MIN)
 
 
-def _widened(
-    patch: Patch, base: np.ndarray, mask: np.ndarray, box: tuple[int, ...], *, keep_before: bool
-) -> Patch:
-    """``patch`` grown to cover ``box`` too, where ``mask`` left ``base`` without an action.
-
-    The side next to "now" (after for the newest undo step, ``keep_before``; before for
-    the next redo step) becomes the mask; the other side keeps the patch's values, and
-    is the base elsewhere (the base is the step's side next to now, see ``_record``).
-    """
-    x0, y0, x1, y1 = _union(box, _patch_edges(patch))
-    region = (slice(y0, y1), slice(x0, x1))
-    kept = base[region].copy()
-    if not patch.is_empty:
-        rows = slice(patch.y - y0, patch.y - y0 + patch.height)
-        cols = slice(patch.x - x0, patch.x - x0 + patch.width)
-        kept[rows, cols] = patch.before() if keep_before else patch.after()
-    now = mask[region]
-    return _capture(x0, y0, kept, now) if keep_before else _capture(x0, y0, now, kept)
-
-
-def _state(step: _Step, base: np.ndarray, *, back: bool) -> np.ndarray:
-    """The whole state before (``back``) or after ``step``, whose other state is ``base``."""
-    if step.whole is not None:
-        return step.whole[0 if back else 1]
-    state = base.copy()
-    patch = step.patch
-    if not patch.is_empty:
-        state[patch.slices] = patch.before() if back else patch.after()
-    return state
-
-
 class _Step:
     """One undoable action of the skeleton model: the box it changed, before and after.
 
     A step is *open* from ``push_undo()`` until the next history call records it by
     comparing the mask with the state the action started from (the model's base), so
     edits of any kind, writes in place included, are recorded. ``patch`` is the changed
-    box (empty when nothing changed); ``whole`` holds the two whole arrays instead when
-    the mask was replaced by one of another shape or dtype. ``fixed`` says whether the
-    states before and after the action are known skeletonize fixed points.
+    box (empty when nothing changed). ``fixed`` says whether the states before and after
+    the action are known skeletonize fixed points.
     """
 
-    __slots__ = ("fixed", "opened", "patch", "whole")
+    __slots__ = ("fixed", "opened", "patch")
 
     def __init__(self, fixed_before: bool, opened: int) -> None:
         self.patch: Patch | None = None
-        self.whole: tuple[np.ndarray, np.ndarray] | None = None
         self.fixed = (fixed_before, False)
         self.opened = opened  # the model's revision when the action started
 
     @property
     def nbytes(self) -> int:
-        """Stored size: the patch (compressed where it was) or the two whole arrays."""
-        if self.whole is not None:
-            return self.whole[0].nbytes + self.whole[1].nbytes + _STEP_OVERHEAD
+        """Stored size: the patch (compressed where it was)."""
         return _STEP_OVERHEAD + (0 if self.patch is None else self.patch.nbytes)
 
 
@@ -385,7 +349,8 @@ class SkeletonCorrectionModel:
     cached topology.
 
     Representation:
-    - `mask` is uint8 0/255 foreground mask at *editor resolution* (typically image size).
+    - `mask` is uint8 0/255 foreground mask at *editor resolution* (typically image size),
+      always a 2D C-contiguous uint8 array (the setter and the loads convert any other).
 
     Edit protocol: call `push_undo()` once at the start of a user action, then any
     edit methods (`erase_*`, `draw_polyline`, `clear`, `skeletonize`); the action
@@ -394,15 +359,16 @@ class SkeletonCorrectionModel:
     through these methods. Code that still writes `mask` in place must do it right
     after `push_undo()` (which moves the revision too) and before any query, or assign
     the array back through the `mask` setter; `take_changed_box()` sees only the edit
-    methods, undo / redo and the setter.
+    methods, undo / redo and the setter. An array of another shape starts a new history.
 
     History (S1): an action is stored as the box of pixels it changed, before and after
     (:class:`_Step`), found by comparing the mask with a copy of the state the action
     started from (the *base*, one frame). Undo and redo write that box back in place, so
     they cost the box, not the frame, and a depth of 100 actions costs about the base plus
     the boxes (25 whole snapshots were 75 MiB at 2048 x 1536). The results are the states
-    a whole-snapshot history restores, bit for bit, edits without ``push_undo()``
-    included (tests/test_skeleton_patch_history.py).
+    a whole-snapshot history restores, bit for bit, for every edit made inside an action
+    (tests/test_skeleton_patch_history.py). An edit outside one breaks the protocol: it is
+    logged and stays in no step (see :meth:`_take_gap`).
 
     `on_action` (default None) is called at the end of every `push_undo()` that pushed
     a step: the Correct workspace records the action in its undo journal there.
@@ -449,7 +415,12 @@ class SkeletonCorrectionModel:
 
     @mask.setter
     def mask(self, value: np.ndarray | None) -> None:
-        # Replacing the array is an edit (push_undo() first to make it undoable).
+        # Replacing the array is an edit (push_undo() first to make it undoable); an array
+        # of another shape starts a new history (the open action included).
+        if value is not None:
+            value = _plain(value)
+            if self._base is not None and self._base.shape != value.shape:
+                self.clear_history()
         self._mask = value
         self._changed = self._tips_dirty = None
         self._fixed_point = False
@@ -502,11 +473,14 @@ class SkeletonCorrectionModel:
             saved, mask = self._saved_mask, self._mask
             if saved is None or saved.shape != mask.shape:
                 self._unsaved = True
-            elif _plain_uint8(saved) and _plain_uint8(mask):
-                self._unsaved = not _equal_uint8(saved, mask)
             else:
-                self._unsaved = not np.array_equal(saved, mask)
+                self._unsaved = not _equal_uint8(saved, mask)
         return self._unsaved
+
+    def is_empty(self) -> bool:
+        """True when no pixel is set, or no mask is loaded. Exact for any dtype; about 10x
+        faster than ``mask.any()``, which also reads the whole frame (the page refresh asks)."""
+        return self._mask is None or not np.count_nonzero(self._mask)
 
     @property
     def saved_mask(self) -> np.ndarray | None:
@@ -544,10 +518,9 @@ class SkeletonCorrectionModel:
         """The ``(x, y, w, h)`` union of the pixels that may have changed since the last call.
 
         ``(0, 0, 0, 0)`` when nothing changed; ``None`` when unknown: after a load,
-        ``set_empty``, the ``mask`` setter, a full-frame skeletonize, or an undo / redo
-        that replaced the array (a mask of another shape). Undo and redo otherwise report
-        the box they wrote back. Each call starts a new interval. Its only caller is the
-        Correct skeleton layer's item update: a second caller would take boxes the item
+        ``set_empty``, the ``mask`` setter or a full-frame skeletonize. Undo and redo
+        report the box they wrote back. Each call starts a new interval. Its only caller is
+        the Correct skeleton layer's item update: a second caller would take boxes the item
         then never sees.
         """
         box, self._changed = self._changed, _NO_CHANGE
@@ -611,24 +584,22 @@ class SkeletonCorrectionModel:
         """Bring the base up to the mask before a history call.
 
         With an open action, the box where the mask differs from the base is its patch
-        (before = base, after = mask). Otherwise that box holds edits made without
-        ``push_undo()`` since the last history call: the states next to "now" take them
-        (the newest undo step's after, the next redo step's before), as the whole
-        snapshots a snapshot history parks at each call hold them. Invariant between
-        calls: the base is the newest undo step's after and the next redo step's before.
+        (before = base, after = mask). Without one the mask equals the base, unless it was
+        edited outside an action (:meth:`_take_gap`). Invariant between calls: the base is
+        the newest undo step's after and the next redo step's before. An open action
+        always has a base: push_undo() records first, and only clear_history() drops both.
         """
         mask, base, step = self._mask, self._base, self._open
         self._open = None
-        if step is None:
-            self._take_gap()
-            return
-        step.fixed = (step.fixed[0], self._fixed_point)
-        if not _same_layout(base, mask):  # the array was replaced by another shape
-            step.whole = (base, mask.copy())
+        if base is None:  # a new document or history: its first base
             self._base = mask.copy()
-            self._tips_dirty = None
             return
         box = self._box_of_changes(base)
+        if step is None:
+            if box is not None:
+                self._take_gap(box)
+            return
+        step.fixed = (step.fixed[0], self._fixed_point)
         if box is None:
             step.patch = Patch.capture(0, 0, mask[:0, :0], mask[:0, :0])
             return
@@ -638,78 +609,45 @@ class SkeletonCorrectionModel:
         if self._tips_revision < step.opened:  # endpoints older than the action may have
             self._note_change(*box, display=False)  # missed its writes in place
 
-    def _take_gap(self) -> None:
-        """Edits since the last history call, no action open: see :meth:`_record`."""
-        mask, base = self._mask, self._base
-        undo, redo = self._history.undo_stack, self._history.redo_stack
-        below, above = (undo[-1] if undo else None), (redo[-1] if redo else None)
-        steps = [s for s in (below, above) if s is not None]
-        if not steps:  # nothing to undo past: the base alone catches up
-            if not _same_layout(base, mask):
-                self._base = mask.copy()
-            elif (box := self._box_of_changes(base)) is not None:
-                region = (slice(box[1], box[3]), slice(box[0], box[2]))
-                base[region] = mask[region]
-            return
-        fixed = self._fixed_point
-        if _same_layout(base, mask) and all(s.whole is None for s in steps):
-            box = self._box_of_changes(base)
-            if box is None:
-                return
-            if below is not None:
-                below.patch = _widened(below.patch, base, mask, box, keep_before=True)
-                below.fixed = (below.fixed[0], fixed)
-            if above is not None:
-                above.patch = _widened(above.patch, base, mask, box, keep_before=False)
-                above.fixed = (fixed, above.fixed[1])
-            region = (slice(box[1], box[3]), slice(box[0], box[2]))
-            base[region] = mask[region]
-            return
-        # The array was replaced by another shape: the neighbours keep whole arrays.
-        if below is not None:
-            below.whole, below.patch = (_state(below, base, back=True), mask.copy()), None
-            below.fixed = (below.fixed[0], fixed)
-        if above is not None:
-            above.whole, above.patch = (mask.copy(), _state(above, base, back=False)), None
-            above.fixed = (fixed, above.fixed[1])
-        self._base = mask.copy()
-        self._tips_dirty = None
+    def _take_gap(self, box: tuple[int, int, int, int]) -> None:
+        """The mask changed inside ``box`` with no action open (no push_undo() first).
+
+        The edit protocol rules this out. The base takes the change, which is in no step,
+        so an undo or redo now gives a state the action never left: no stored state, and
+        not the mask either, is trusted as a thinning fixed point any more (the next
+        skeletonize thins the whole frame), and the box goes to the display and the
+        endpoints.
+        """
+        logger.warning("The skeleton was edited outside an undo action: no undo step holds it")
+        region = (slice(box[1], box[3]), slice(box[0], box[2]))
+        self._base[region] = self._mask[region]
+        self._fixed_point = False
+        for step in (*self._history.undo_stack, *self._history.redo_stack):
+            step.fixed = (False, False)
+        self._note_change(*box)
 
     def _swap(self, step: _Step, *, back: bool) -> None:
-        """Make the mask the state before (``back``) or after ``step``, in place when the
-        step is a patch (the base follows); its box goes to the display and the endpoints.
-        Called right after :meth:`_record`, so the mask is the step's other state."""
-        mask, base = self._mask, self._base
+        """Make the mask the state before (``back``) or after ``step``, in place (the base
+        follows); its box goes to the display and the endpoints. Called right after
+        :meth:`_record`, so the mask is the step's other state."""
         now_fixed, to_fixed = self._fixed_point, step.fixed[0 if back else 1]
         step.fixed = (to_fixed, now_fixed) if back else (now_fixed, to_fixed)
         self._fixed_point = to_fixed
         patch = step.patch
-        if patch is not None and _same_layout(base, mask):
-            if not patch.is_empty:
-                values = patch.before() if back else patch.after()
-                mask[patch.slices] = values
-                base[patch.slices] = values
-                self._note_change(*_patch_edges(patch))
-            return
-        # The array itself changes (a mask of another shape or dtype): whole arrays.
-        target = _state(step, base, back=back)
-        self._mask, self._base = target.copy(), target.copy()
-        self._changed = self._tips_dirty = None
+        if not patch.is_empty:
+            values = patch.before() if back else patch.after()
+            self._mask[patch.slices] = values
+            self._base[patch.slices] = values
+            self._note_change(*_patch_edges(patch))
 
     def _box_of_changes(self, base: np.ndarray) -> tuple[int, int, int, int] | None:
         """``(x0, y0, x1, y1)`` around the pixels where the mask differs from ``base``
-        (same shape and dtype); None when there are none."""
+        (of the mask's shape); None when there are none."""
         mask = self._mask
-        if _plain_uint8(mask) and _plain_uint8(base):
-            if _equal_uint8(base, mask):  # the usual case at a history call: 5x cheaper
-                return None
-            x, y, w, h = cv2.boundingRect(cv2.compare(base, mask, cv2.CMP_NE, dst=self._scratch()))
-            return None if w == 0 or h == 0 else (x, y, x + w, y + h)
-        changed = base != mask
-        rows, cols = np.flatnonzero(changed.any(axis=1)), np.flatnonzero(changed.any(axis=0))
-        if not rows.size:
+        if _equal_uint8(base, mask):  # the usual case at a history call: 5x cheaper
             return None
-        return int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+        x, y, w, h = cv2.boundingRect(cv2.compare(base, mask, cv2.CMP_NE, dst=self._scratch()))
+        return None if w == 0 or h == 0 else (x, y, x + w, y + h)
 
     def _scratch(self) -> np.ndarray:
         """A uint8 array of the mask's shape for comparisons (reused)."""
@@ -753,7 +691,7 @@ class SkeletonCorrectionModel:
     def _start_document(self, mask: np.ndarray, *, saved: bool = True) -> None:
         """Adopt a freshly loaded, thinned (or empty) mask: empty history; nothing unsaved,
         unless ``saved`` is False (the saved baseline is kept, see load_from_raster)."""
-        self._mask = mask
+        self._mask = _plain(mask)
         self.clear_history()
         self._fixed_point = True
         self._changed = self._tips_dirty = None
@@ -826,12 +764,8 @@ class SkeletonCorrectionModel:
         self._touch()
 
     def _foreground_bounds(self) -> tuple[int, int, int, int]:
-        """``(x0, y0, x1, y1)`` around every set pixel (the whole mask if it cannot tell)."""
-        mask = self._mask
-        h, w = mask.shape[:2]
-        if not _plain_uint8(mask):
-            return (0, 0, w, h)
-        x, y, bw, bh = cv2.boundingRect(mask)
+        """``(x0, y0, x1, y1)`` around every set pixel."""
+        x, y, bw, bh = cv2.boundingRect(self._mask)
         return (x, y, x + bw, y + bh)
 
     def skeletonize(self) -> None:
@@ -856,11 +790,10 @@ class SkeletonCorrectionModel:
         self._touch()
 
     def _fixed_snapshot(self) -> np.ndarray | None:
-        """The base of the open action when it is a known skeletonize fixed point."""
-        step, base, mask = self._open, self._base, self._mask
-        if step is None or not step.fixed[0] or not _plain_uint8(mask):
-            return None
-        return base if _same_layout(base, mask) and _plain_uint8(base) else None
+        """The base of the open action when it is a known skeletonize fixed point (an open
+        action's base has the mask's shape: an array of another shape ends the action)."""
+        step = self._open
+        return self._base if step is not None and step.fixed[0] else None
 
     def _thin_window(self) -> tuple[int, ...] | None:
         """Thin only around the pixels changed since a known fixed point, in place.
@@ -971,9 +904,8 @@ class SkeletonCorrectionModel:
     def _fresh_tips(self) -> np.ndarray:
         """The tip indices of the mask, patched from the cached ones where it can."""
         mask, tips, dirty = self._mask, self._tips, self._tips_dirty
-        step, base = self._open, self._base
-        if dirty is not None and step is not None and _same_layout(base, mask):
-            dirty = _union(dirty, self._box_of_changes(base) or _NO_CHANGE)  # in place
+        if dirty is not None and self._open is not None:  # an open action has a base
+            dirty = _union(dirty, self._box_of_changes(self._base) or _NO_CHANGE)  # in place
         if tips is None or dirty is None or self._tips_shape != mask.shape:
             self._tips_shape = mask.shape
             return _tip_indices(mask)
@@ -985,11 +917,17 @@ class SkeletonCorrectionModel:
     def render_to_size(self, size: tuple[int, int]) -> np.ndarray:
         """
         Render current mask to a different size (uint8 0/255) using nearest neighbor.
+
+        At the mask's own size (the Save) the nearest resize is a plain copy, so a mask known
+        to be a fixed point of the thinning (``_fixed_point``: the state every tool action
+        ends in; the edit protocol above keeps it true) is returned as a copy, without
+        thinning it again: the same bytes.
         """
-        if self._mask is None:
-            w, h = size
-            return np.zeros((h, w), dtype=np.uint8)
         w, h = size
-        out = cv2.resize(self._mask, (w, h), interpolation=cv2.INTER_NEAREST)
-        out = _skeletonize_uint8(out)
-        return out
+        mask = self._mask
+        if mask is None:
+            return np.zeros((h, w), dtype=np.uint8)
+        if mask.shape == (h, w):
+            return mask.copy() if self._fixed_point else _skeletonize_uint8(mask)
+        out = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        return _skeletonize_uint8(out)

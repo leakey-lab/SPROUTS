@@ -404,6 +404,27 @@ def test_queries_on_an_empty_model_return_empty_results():
     assert model.topology().polylines == []
 
 
+@pytest.mark.parametrize("dtype", [np.uint8, np.int32, np.float32, bool])
+def test_is_empty_is_mask_any_negated_for_every_mask(dtype):
+    model = SkeletonCorrectionModel()
+    assert model.is_empty()  # nothing loaded
+    model.set_empty((30, 20))
+    assert model.is_empty()
+    for value in (255, 1):
+        mask = np.zeros((20, 30), dtype)
+        mask[19, 29] = value  # the last pixel only
+        model.mask = mask
+        assert model.is_empty() is (not mask.any()) is False
+    model.mask = np.zeros((20, 30), dtype)[:, ::2]  # a strided view
+    assert model.is_empty()
+    model.set_empty((30, 20))
+    model.push_undo()
+    model.draw_polyline([(1, 1), (8, 8)], thickness=1)
+    assert not model.is_empty()
+    model.clear()
+    assert model.is_empty()
+
+
 # --------------------------------------------------------------------------------------
 # Hooks for the Correct workspace (C4): on_action, drop_redo, take_changed_box
 # --------------------------------------------------------------------------------------

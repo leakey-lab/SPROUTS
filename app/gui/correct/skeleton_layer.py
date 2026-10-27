@@ -313,7 +313,7 @@ class SkeletonLayer:
         mask = self.model.mask
         if not self.is_open() or mask is None:
             return CLOSED_HINT
-        if not self.draft.points and self.current_tool != POLYLINE and not mask.any():
+        if not self.draft.points and self.current_tool != POLYLINE and self.model.is_empty():
             return EMPTY_HINT
         return self._tools[self.current_tool].hint()
 
