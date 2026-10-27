@@ -37,7 +37,7 @@ from dataclasses import dataclass
 # Qt6 only lets QtWebEngineWidgets load before the QApplication exists. The
 # dashboard modules that use it are imported lazily, so import it here.
 from PyQt6 import QtWebEngineWidgets  # noqa: F401
-from PyQt6.QtCore import QEventLoop, Qt, QThreadPool, QTimer
+from PyQt6.QtCore import QEventLoop, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
@@ -70,7 +70,6 @@ __all__ = [
     "close_visualization",
     "controller_for",
     "find_test_latest_dir",
-    "prewarm_dashboards",
     "release_all_visualizations",
     "show_root_area_visualization",
     "show_root_length_visualization",
@@ -158,7 +157,6 @@ class DashboardSpec:
     button_attr: str  # legacy button whose text follows open / closed
     open_text: str
     close_text: str
-    calculator_attr: str  # SkeletonHandler thread attribute, for handlers without is_busy()
     find_csv: Callable[[ProjectLayout], CsvLookup]
 
 
@@ -172,7 +170,6 @@ LENGTH = DashboardSpec(
     button_attr="visualize_root_length_button",
     open_text="📊 Visualize Root Length",
     close_text="Close Visualization",
-    calculator_attr="calculator_thread",
     find_csv=_find_lengths_csv,
 )
 
@@ -186,7 +183,6 @@ AREA = DashboardSpec(
     button_attr="visualize_root_area_button",
     open_text="📈 Visualize Root Area",
     close_text="Close Area Visualization",
-    calculator_attr="area_calculator_thread",
     find_csv=_find_areas_csv,
 )
 
@@ -518,17 +514,7 @@ class DashboardController:
     def _is_busy(self, spec: DashboardSpec) -> bool:
         """True while a run that writes (or invalidates) the dashboard's CSV is going."""
         handler = getattr(self._mw, "skeleton_handler", None)
-        if handler is None:
-            return False
-        is_busy = getattr(handler, "is_busy", None)
-        if callable(is_busy):
-            return bool(is_busy(spec.kind))
-        # Older SkeletonHandler without is_busy(): look at its threads.
-        threads = (
-            getattr(handler, spec.calculator_attr, None),
-            getattr(getattr(handler, "skeleton_handler", None), "_thread", None),
-        )
-        return any(thread is not None and thread.isRunning() for thread in threads)
+        return handler is not None and bool(handler.is_busy(spec.kind))
 
     def _set_button_text(self, spec: DashboardSpec, text: str) -> None:
         button = getattr(self._mw, spec.button_attr, None)
@@ -614,27 +600,6 @@ def warm_dashboard_imports() -> str:
         logger.exception("Could not prewarm the dashboard imports")
         return str(exc) or type(exc).__name__
     return ""
-
-
-def _prewarm_imports_logged() -> None:
-    """:func:`warm_dashboard_imports` as a thread-pool job (a failure is only logged)."""
-    warm_dashboard_imports()
-
-
-def prewarm_dashboards(*, web_engine: bool = True) -> None:
-    """Start what the first dashboard open of a session waits for; call it at a quiet moment.
-
-    dash, plotly and pandas are imported on a pool thread (0.7-1 s of the first
-    open, ~100 MiB). With ``web_engine``, QtWebEngine is started on the calling
-    (GUI) thread: ~0.4 s during which the GUI does not respond, ~95 MiB. Measured
-    on a 46k-row trial, both together took the first open of a session from 3.16 s
-    to 1.77 s to its first chart (median of 5) and its GUI freeze from 439 ms to 52 ms.
-    The main window no longer calls this on a timer: its warm-up queue imports the
-    stack when the user heads for Visualize (:func:`warm_dashboard_imports`).
-    """
-    QThreadPool.globalInstance().start(_prewarm_imports_logged)
-    if web_engine:
-        importlib.import_module("app.visualization.viz_window").prewarm_web_engine()
 
 
 def release_all_visualizations(main_window) -> bool:

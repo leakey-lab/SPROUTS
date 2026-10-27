@@ -33,6 +33,7 @@ class JobRegistry(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._name: str | None = None
+        self._ended_name: str | None = None  # the job that ended last (ended_name)
         self._thread: QThread | None = None
         self._generation = 0  # identifies the current job's finished connection
         self._closing = False  # set by shutdown(): no new job may start
@@ -76,6 +77,11 @@ class JobRegistry(QObject):
     def running_name(self) -> str | None:
         """Name of the running job, or None when idle."""
         return self._name
+
+    def ended_name(self) -> str | None:
+        """Name of the job that ended last (None before any): which job a
+        ``busy_changed(False)`` slot follows, since :meth:`running_name` is None by then."""
+        return self._ended_name
 
     def is_busy(self) -> bool:
         """True while a job is registered."""
@@ -121,6 +127,7 @@ class JobRegistry(QObject):
 
     def _release(self) -> None:
         logger.info("Job finished: %s", self._name)
+        self._ended_name = self._name
         self._name = None
         self._thread = None
         self.busy_changed.emit(False)

@@ -5,20 +5,24 @@ library selection). Without a ``root_lengths.csv`` in ``skeletons/`` or the proj
 locating one fell through to the legacy ``test_latest`` search, a walk of the project
 folders and their parents: about 60 ms per selection on a 46k-image project (at most every
 2 s). The GUI-thread calls now look only where Measure writes today (a few stats); the walk
-runs in the worker's :meth:`MeasurementIndex.prewarm`, which the window starts once when a
-project opens, so a legacy CSV is still found.
+runs in the worker's :meth:`MeasurementIndex.prewarm`, which the window starts when a
+project opens and after a Measure run, so a legacy CSV is still found. A located prewarm
+asked for while another parse runs (a project opened during the previous project's parse)
+starts when that parse reports.
 """
 
 from __future__ import annotations
 
 import os
+import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt, QThread, QThreadPool  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -28,7 +32,7 @@ from app import project_layout  # noqa: E402
 from app.config import LENGTH_CSV_HEADERS  # noqa: E402
 from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
 from app.inference.metrics import write_metric_csv  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 LEGACY = ("skeletonizer", "test_latest", "images")
@@ -168,3 +172,194 @@ def test_a_legacy_csv_reaches_the_metrics_bar(app, tmp_path):
         window.close()
         window.deleteLater()
         flush_deleted()
+
+
+# ------------------------------------------------------------------ after a batch job
+class _Job(QThread):
+    """A batch job that ends at once."""
+
+    def run(self) -> None:
+        pass
+
+
+def _until(condition, timeout_s: float = 5.0) -> bool:
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        if condition():
+            return True
+        QApplication.processEvents()
+    return condition()
+
+
+def _end_job(window, name: str) -> None:
+    """Run job ``name`` through the window's registry until it has ended."""
+    ended = []
+    window.jobs.busy_changed.connect(lambda busy: ended.append(1) if not busy else None)
+    thread = _Job()
+    assert window.jobs.try_start(name, thread)
+    assert _until(lambda: ended)
+    thread.wait()
+
+
+def _legacy_window(made: list, tmp_path, *, csv: bool = True) -> None:
+    """A window on a project whose length CSV is (or will be) in a legacy folder only, its
+    image selected; with ``csv`` it waits until the bar shows the CSV's value."""
+    from app.gui.main_window import MainWindow
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    image = QImage(32, 24, QImage.Format.Format_RGB32)
+    image.fill(QColor(90, 60, 30))
+    assert image.save(str(root / f"{STEM}.jpg"))
+    if csv:
+        _legacy_lengths(root)
+    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    made.append(window)
+    window.open_path(str(root))
+    assert _until(lambda: window._image_leaves())
+    item = window.library_index.item_for(STEM)
+    window.file_list.setCurrentItem(item)
+    window.on_image_selected(item)
+    assert _until(lambda: not window.metrics.loading)
+    if csv:
+        assert _until(lambda: window.metrics_bar._length_value.text() == "9.25 mm")
+
+
+@pytest.fixture
+def made():
+    widgets: list = []
+    yield widgets
+    QThreadPool.globalInstance().waitForDone(5000)
+    delete_widgets(widgets)
+
+
+def _length_text(window) -> str:
+    bar = window.metrics_bar
+    return "" if bar._length_cell.isHidden() else bar._length_value.text()
+
+
+@pytest.mark.parametrize("job", ["Measuring root length", None])
+def test_a_legacy_csv_stays_on_the_bar_after_a_measure_run(app, tmp_path, made, job):
+    _legacy_window(made, tmp_path)
+    window = made[0]
+
+    if job is None:
+        window.jobs.busy_changed.emit(False)  # a job end of no known name
+    else:
+        _end_job(window, job)
+
+    assert _until(lambda: _length_text(window) == "9.25 mm" and not window.metrics.loading)
+    assert window.metrics.index.sources()["length"].endswith("root_lengths.csv")
+
+
+def test_a_legacy_csv_stays_on_the_bar_after_a_generation_pass(app, tmp_path, made):
+    _legacy_window(made, tmp_path)
+    window = made[0]
+
+    _end_job(window, window.mask_generation_handler.job_label)
+
+    assert _length_text(window) == "9.25 mm"  # never hidden: nothing was re-read
+
+
+def test_a_measure_run_into_a_legacy_folder_reaches_the_bar(app, tmp_path, made):
+    _legacy_window(made, tmp_path, csv=False)
+    window = made[0]
+    assert _length_text(window) == ""  # nothing measured yet
+
+    _legacy_lengths(tmp_path / "proj")  # where Measure Length writes without skeletons/
+    _end_job(window, "Measuring root length")
+
+    assert _until(lambda: _length_text(window) == "9.25 mm")
+
+
+def test_a_project_opened_during_the_previous_parse_gets_its_own_search(app, tmp_path):
+    """One parse at a time: the located prewarm of a project opened while the previous
+    project's parse runs is refused, and starts when that parse reports."""
+    from app.gui.window.metrics import MetricsController
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    _legacy_lengths(tmp_path / "b")
+    first, second = MeasurementIndex(str(tmp_path / "a")), MeasurementIndex(str(tmp_path / "b"))
+    gate = threading.Event()
+    real = first.prewarm
+    first.prewarm = lambda: (gate.wait(5), real())  # the previous project's parse in flight
+    window = SimpleNamespace(
+        image_manager=None,
+        display_controller=SimpleNamespace(current_name=None),
+        stage_status=SimpleNamespace(check=lambda *a, **k: None),
+        _current_stage=lambda: None,
+    )
+    controller = MetricsController(window)
+    controller.signals.ready.connect(controller.on_ready)
+    controller.index = first
+    controller.prewarm(locate=True)  # project A opens
+    controller.index = second
+    controller.prewarm(locate=True)  # project B opens while A's parse runs: refused
+
+    gate.set()
+
+    assert _until(lambda: second.sources()["length"] is not None and not controller.loading)
+    assert second.lookup(STEM, load=False).length_mm == 9.25
+
+
+class _Pool:
+    """The thread pool, recording the jobs it is given (run by hand)."""
+
+    def __init__(self) -> None:
+        self.jobs: list = []
+
+    def globalInstance(self):  # noqa: N802 - Qt API name
+        return self
+
+    def start(self, job) -> None:
+        self.jobs.append(job)
+
+
+def _controller(monkeypatch, refreshed: list, checks: list):
+    """A metrics controller on the Measure stage whose bar refreshes and Measure counts are
+    recorded, over a stub pool (its jobs run by hand) and a stand-in index."""
+    from app.gui.window import metrics
+
+    pool = _Pool()
+    monkeypatch.setattr(metrics, "QThreadPool", pool)
+    window = SimpleNamespace(
+        image_manager=None,
+        display_controller=SimpleNamespace(current_name=None),
+        stage_status=SimpleNamespace(check=lambda *a, **k: checks.append(1)),
+        _current_stage=lambda: "Measure",
+    )
+    controller = metrics.MetricsController(window)
+    controller.refresh = lambda name=None: refreshed.append(name)
+    controller.index = SimpleNamespace(prewarm=lambda: None, needs_load=lambda: False)
+    return controller, pool
+
+
+def test_a_located_prewarm_asked_during_a_parse_runs_after_it(monkeypatch):
+    """A Measure run ended while an older parse ran (its search may predate the run's CSV):
+    the located prewarm runs once that parse reports, and the bar and Measure's counts
+    follow its own report."""
+    refreshed, checks = [], []
+    controller, pool = _controller(monkeypatch, refreshed, checks)
+    controller.prewarm()  # nothing to parse: refused
+    controller.loading = True  # an older parse in flight
+    controller.prewarm(locate=True)  # refused for now
+    assert pool.jobs == []
+
+    controller.on_ready(controller.index)  # the older parse reports
+
+    assert len(pool.jobs) == 1 and controller.loading
+    assert refreshed == [] and checks == []  # the located parse reports next
+    controller.on_ready(controller.index)
+    assert refreshed == [None] and checks == [1] and not controller.loading
+
+
+def test_a_plain_prewarm_refused_during_a_parse_waits_for_nothing(monkeypatch):
+    refreshed, checks = [], []
+    controller, pool = _controller(monkeypatch, refreshed, checks)
+    controller.loading = True
+    controller.prewarm()  # a selection's parse: the report's refresh asks again
+
+    controller.on_ready(controller.index)
+
+    assert pool.jobs == [] and refreshed == [None] and checks == [1]

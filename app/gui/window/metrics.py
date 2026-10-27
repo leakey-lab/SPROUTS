@@ -152,6 +152,8 @@ class MetricsController:
         self.index: MeasurementIndex | None = None
         self.loading = False
         self.signals = _MeasurementSignals()
+        # A located prewarm asked for while a parse ran: it starts when that parse reports.
+        self._locate_pending = False
 
     def image_has_mask(self, stored_name):
         """Return True if the image has a saved mask.
@@ -273,9 +275,15 @@ class MetricsController:
         """Parse new / changed measurement CSVs in the thread pool (once at a time).
 
         ``locate``: run even when no CSV is known yet: the pool job also looks in the
-        legacy folders, which the GUI thread never walks (once per opened project)."""
+        legacy folders, which the GUI thread never walks (when a project opens, and after a
+        Measure run). Asked for while a parse runs, it starts when that parse reports: the
+        parse may be the previous project's, or may have searched before a run's CSV was
+        written."""
         index = self.index
-        if index is None or self.loading:
+        if index is None:
+            return
+        if self.loading:
+            self._locate_pending = self._locate_pending or locate
             return
         if not locate and not index.needs_load():
             return
@@ -298,8 +306,14 @@ class MetricsController:
 
     def on_ready(self, index) -> None:
         """A pool job has parsed the CSVs of ``index``: the bar shows them, and the Measure
-        stage's counts follow (a CSV may have been found or re-read)."""
+        stage's counts follow (a CSV may have been found or re-read). A located prewarm
+        refused meanwhile starts first; its own report refreshes the bar."""
         self.loading = False
+        if self._locate_pending:
+            self._locate_pending = False
+            self.prewarm(locate=True)
+            if self.loading:
+                return
         if index is self.index:
             self.refresh(self.current_image_name())
             if self._window._current_stage() == "Measure":

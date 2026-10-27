@@ -362,24 +362,6 @@ def test_show_waits_while_the_data_is_being_measured(env):
     assert [box[0] for box in env.boxes] == ["information"]
 
 
-def test_busy_check_falls_back_to_the_calculator_threads(env):
-    class Running:
-        def isRunning(self):
-            return True
-
-    class OldHandler:  # a SkeletonHandler without is_busy()
-        calculator_thread = Running()
-        area_calculator_thread = None
-
-    env.mw.skeleton_handler = OldHandler()
-
-    vm.show_root_length_visualization(env.mw)
-    vm.show_root_area_visualization(env.mw)
-
-    assert StubLength.made == []
-    assert len(StubArea.made) == 1
-
-
 def test_an_editor_that_refuses_to_close_keeps_its_panel(env):
     mw = env.mw
     mw.right_panel.setCurrentIndex(_PANELS["correct"])
@@ -534,54 +516,27 @@ def test_a_dashboard_opened_after_the_release_reads_the_new_project(env, tmp_pat
 
 
 # --------------------------------------------------------------------------- #
-#  Prewarm (PKG-VIZ, V2)
+#  The dashboards' import warm-up (the warm-up queue's DASHBOARDS job)
 # --------------------------------------------------------------------------- #
-def test_prewarm_dashboards_imports_off_the_gui_thread(qapp, monkeypatch):
-    import threading
-
+def test_the_import_warmup_imports_the_dashboard_stack(monkeypatch):
     import app.visualization.viz_window as vw
 
-    threads, engine = [], []
-    done = threading.Event()
+    calls = []
+    monkeypatch.setattr(vw, "prewarm_imports", lambda: calls.append(1))
 
-    def imports():
-        threads.append(threading.current_thread())
-        done.set()
-
-    monkeypatch.setattr(vw, "prewarm_imports", imports)
-    monkeypatch.setattr(vw, "prewarm_web_engine", lambda: engine.append(1) or True)
-
-    vm.prewarm_dashboards(web_engine=False)
-
-    assert done.wait(5)
-    assert threads[0] is not threading.main_thread()
-    assert engine == []
-
-    done.clear()
-    vm.prewarm_dashboards()
-    assert done.wait(5)
-    assert engine == [1]  # the engine starts on the calling (GUI) thread
+    assert vm.warm_dashboard_imports() == ""
+    assert calls == [1]
 
 
-def test_a_failing_import_prewarm_is_only_logged(qapp, monkeypatch, caplog):
-    import threading
-
+def test_a_failing_import_prewarm_is_only_logged(monkeypatch, caplog):
     import app.visualization.viz_window as vw
-
-    done = threading.Event()
 
     def broken():
-        done.set()
         raise ImportError("dash is not installed")
 
     monkeypatch.setattr(vw, "prewarm_imports", broken)
 
-    vm.prewarm_dashboards(web_engine=False)
-
-    assert done.wait(5)
-    from PyQt6.QtCore import QThreadPool
-
-    QThreadPool.globalInstance().waitForDone(5000)
+    assert vm.warm_dashboard_imports() == "dash is not installed"  # never raises
     assert "dash is not installed" in caplog.text
 
 

@@ -83,6 +83,9 @@ class _Row(NamedTuple):
     value: float | None
     error: str
     source: str | None = None
+    #: The row's own stem, as Measure wrote it: its prediction's stem, which can differ in
+    #: case from the stem it is looked up by (O7).
+    stem: str = ""
 
 
 def _key(name: str) -> str:
@@ -173,7 +176,8 @@ def _read_metric_csv(path: str, value_column: str) -> _Rows:
                     value = None if err else float(rec[i_val])
                 except ValueError:
                     value = None
-                rows[rec[i_img].strip()] = _Row(value, err, src or None)  # Measure's stems
+                stem = rec[i_img].strip()  # Measure's stems
+                rows[stem] = _Row(value, err, src or None, stem)
     except (OSError, UnicodeDecodeError, csv.Error, ValueError) as exc:
         logger.warning("Cannot read measurements from %s: %s", path, exc)
         return _NO_ROWS
@@ -490,7 +494,7 @@ class MeasurementIndex:
             return None
         if row.source == SOURCE_GT:
             return self._gt_file(metric, stem) or self._gt_path(metric, stem), SOURCE_GT
-        return os.path.join(os.path.dirname(csv_path), stem + suffix), SOURCE_PREDICTION
+        return _prediction_of(csv_path, row, suffix), SOURCE_PREDICTION
 
     def outdated(self, stem: str) -> dict[str, bool]:
         """``{"length": bool, "area": bool}``: whether the files each value of ``stem`` was
@@ -499,7 +503,9 @@ class MeasurementIndex:
         Each metric against its own files (a saved mask never outdates the length): the
         file the row names (``Source``, O1) — the GT file (``gt/skeletons/<stem>.png``,
         ``gt/mask/<stem>.png``) for a ``gt`` row, else the prediction next to the CSV
-        (``<csv dir>/<stem>_fake.png``, ``<csv dir>/<stem>.png``) — and, for a
+        (``<csv dir>/<stem>_fake.png``, ``<csv dir>/<stem>.png``, with the row's own stem,
+        which may differ in case, O7; a second prediction named exactly like the image makes
+        it outdated: Measure would read that one) — and, for a
         ``prediction`` row, the image's GT file when one exists (one saved after the CSV
         makes the value outdated; a regenerated prediction under a ``gt`` row does not). A
         metric without a row for ``stem`` is never outdated. With the record of the CSV's
@@ -535,7 +541,9 @@ class MeasurementIndex:
             return True  # a CSV from before O1: Measure would now read this GT file
         if gt is None and row.source == SOURCE_GT:
             return True  # the file it was measured from is gone
-        prediction = os.path.join(os.path.dirname(csv_path), stem + suffix)
+        prediction = _prediction_of(csv_path, row, suffix)
+        if row.source != SOURCE_GT and _another_named_like(stem, prediction, suffix):
+            return True  # a new Measure would read that one (split_inputs keeps its name)
         record = table.record
         if record is not None:
             files = [gt] if row.source == SOURCE_GT else [prediction]
@@ -552,6 +560,23 @@ class MeasurementIndex:
             files = [gt if gt is not None else prediction]
         signatures = (_signature(path) for path in files)
         return any(sig is not None and sig[0] > csv_sig[0] for sig in signatures)
+
+
+def _prediction_of(csv_path: str, row: _Row, suffix: str) -> str:
+    """The prediction ``row`` was measured from: ``<csv dir>/<row's own stem><suffix>``."""
+    return os.path.join(os.path.dirname(csv_path), row.stem + suffix)
+
+
+def _another_named_like(stem: str, prediction: str, suffix: str) -> bool:
+    """True when the row's ``prediction`` is named in another case than image ``stem`` and a
+    second file named exactly like the image is beside it (a case-sensitive disk)."""
+    exact = os.path.join(os.path.dirname(prediction), stem + suffix)
+    if exact == prediction or not os.path.isfile(exact):
+        return False
+    try:
+        return not os.path.samefile(exact, prediction)
+    except OSError:  # the row's file vanished since the stat: the other one is what is left
+        return True
 
 
 def _differs_from_record(record: InputsRecord, source: str, root: str) -> bool:

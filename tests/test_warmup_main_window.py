@@ -35,7 +35,6 @@ from app.gui import (  # noqa: E402
     canvas_gl,
     main_window,
     shell_chrome,
-    visualization_manager,
     warmup,
 )
 from tests.qt_teardown import delete_widgets  # noqa: E402
@@ -268,15 +267,11 @@ def test_headless_windows_warm_nothing_unless_asked(make_window, warmups):
     assert wait(lambda: window.warmups.state(warmup.SKIMAGE) == "done")  # start-up, as before
 
 
-def test_nothing_is_warmed_on_a_timer_after_a_project_load(
-    make_window, warmups, tmp_path, monkeypatch
-):
-    prewarms = []
-    monkeypatch.setattr(visualization_manager, "prewarm_dashboards", lambda **k: prewarms.append(k))
+def test_nothing_is_warmed_on_a_timer_after_a_project_load(make_window, warmups, tmp_path):
     window = make_window(warm_up=True)
     open_project(window, new_project(tmp_path))
     QTest.qWait(2300)  # the old timer fired 2 s after the load
-    assert prewarms == [] and warmups.runs == []
+    assert warmups.runs == []
     assert not hasattr(main_window, "DASHBOARD_PREWARM_DELAY_MS")
 
 

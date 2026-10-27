@@ -2,9 +2,9 @@
 
 While a job runs (generation or measurement; one at a time, ``app.handlers.job_registry``)
 the buttons that start one are disabled with a tooltip that says why. When it ends they
-come back, the measured values are re-read (a Measure run may have rewritten the CSVs),
-the modules the run imported are frozen, and a Visualize page that waited for the run
-tries again.
+come back, the measured values are re-read (a Measure run may have rewritten the CSVs; a
+generation run writes predictions only, so its end keeps them), the modules the run
+imported are frozen, and a Visualize page that waited for the run tries again.
 
 :func:`on_jobs_busy_changed` is a function of the window, bound as
 ``MainWindow._on_jobs_busy_changed`` (the slot of ``jobs.busy_changed``); the buttons'
@@ -27,6 +27,15 @@ JOB_BUTTONS = (
 )
 
 
+def _generation_labels(window: "MainWindow") -> set[str]:
+    """The job names of the two generation runs (masks, skeletons)."""
+    handlers = (
+        getattr(window, "mask_generation_handler", None),
+        getattr(getattr(window, "skeleton_handler", None), "skeleton_handler", None),
+    )
+    return {label for handler in handlers if (label := getattr(handler, "job_label", None))}
+
+
 def on_jobs_busy_changed(window: "MainWindow", busy: bool) -> None:
     """Disable the job buttons while a job runs; refresh measured values after one."""
     name = window.jobs.running_name() or "A task"
@@ -42,12 +51,22 @@ def on_jobs_busy_changed(window: "MainWindow", busy: bool) -> None:
             button.setEnabled(True)
             if attr in window._job_button_tooltips:
                 button.setToolTip(window._job_button_tooltips.pop(attr))
-    if not busy and window.metrics.index is not None:
-        # A Measure run may have rewritten the CSVs: re-locate and re-read them.
-        window.metrics.index.invalidate()
-        window.metrics.refresh(window.metrics.current_image_name())
+    metrics = window.metrics
+    # A generation run writes predictions only, never a CSV: its parsed rows stay valid.
+    # Any other job (a Measure run, or one of no known name) may have rewritten them.
+    measured = not busy and window.jobs.ended_name() not in _generation_labels(window)
+    if not busy and metrics.index is not None:
+        if measured:
+            metrics.index.invalidate()  # re-locate and re-read the CSVs
+        metrics.refresh(metrics.current_image_name())
     if not busy and window._current_stage() == "Measure":
-        window.metrics.check_freshness()  # a Measure run rewrote a CSV
+        metrics.check_freshness()  # a run changed Measure's inputs, or rewrote a CSV
+    index = metrics.index
+    if measured and index is not None and index.sources()["length"] is None:
+        # The GUI thread looks for root_lengths.csv only where Measure writes it today: a
+        # legacy folder (skeletonizer/test_latest/images, ...) is searched by the pool job.
+        if not window.jobs.is_closing():
+            metrics.prewarm(locate=True)
     warmups = getattr(window, "warmups", None)
     if not busy and warmups is not None:
         # A run that started before its warm-up imported torch itself: its modules are
