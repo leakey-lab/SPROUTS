@@ -12,12 +12,10 @@ look of a QGraphicsDropShadowEffect blitted from a cache).
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Callable
 
 from PyQt6.QtCore import QEvent, QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QFontMetrics, QFontMetricsF
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -35,8 +33,7 @@ from .controls import DockSlider, IconButton
 from .effects import pop_shadow
 from .focus import keep_canvas_focus
 from .icons import load_pixmap
-from .text_fit import wrap_label
-from .toasts import Toast, ToastManager  # noqa: F401  (moved; re-exported for old imports)
+from .text_fit import fit_forms, label_advance, wrap_label
 
 
 # --------------------------------------------------------------------------- #
@@ -313,14 +310,6 @@ _CAPTURE = re.compile(
 )
 
 
-def _label_advance(metrics: QFontMetrics, text: str) -> int:
-    """The width a label gives ``text``: its fractional advance rounded up. A font with
-    fractional advances (DejaVu on Linux) makes ``horizontalAdvance`` round to the nearest
-    pixel, so when the fraction is under .5 a name chosen by it ends one pixel wider than the
-    budget it was chosen for."""
-    return math.ceil(QFontMetricsF(metrics).horizontalAdvance(text))
-
-
 def name_forms(name: str) -> tuple[str, ...]:
     """``name`` and shorter forms of it that keep what identifies a capture, longest first.
 
@@ -391,7 +380,6 @@ class StatusChip(CornerPanel):
         self._name = ""
         self._forms: tuple[str, ...] = ("",)
         self._positions: tuple[str, ...] = ()  # "Image 12 / 40", "12 / 40"; () hides it
-        self._hint = ""
         self._dot: str | None = None
         self._state = "none"
 
@@ -483,7 +471,6 @@ class StatusChip(CornerPanel):
         ``dot`` is a colour from ``tokens`` (e.g. a layer's ``tokens.MASK``): a "●" in
         that colour then leads the hint; ``None`` hides it. The hint stays plain text.
         """
-        self._hint = text
         self.hint_label.setText(text)
         self.hint_label.setToolTip(tooltip or text)
         self.hint_label.setVisible(bool(text))
@@ -530,11 +517,12 @@ class StatusChip(CornerPanel):
             state = self.state_label
             free = inner - (state.sizeHint().width() + spacing if state.text() else 0)
             # The name keeps its shortest telling form; the position takes what is left.
-            kept = min(_label_advance(metrics, self._forms[-1]), self._max_name_width)
+            kept = min(label_advance(metrics, self._forms[-1]), self._max_name_width)
             position = self._fit_position(free - max(kept, self.MIN_NAME_WIDTH) - spacing)
             used = self._position_width(position) + spacing if position else 0
             name_width = max(self.MIN_NAME_WIDTH, min(name_width, free - used))
-        text = self._fit_name(metrics, name_width)
+        # The longest form that fits, else the shortest elided (a lone form in the middle).
+        text = fit_forms(self._forms, metrics, name_width)
         if self.file_label.text() != text:
             self.file_label.setText(text)
         self.file_label.setToolTip(self._name)
@@ -551,15 +539,6 @@ class StatusChip(CornerPanel):
             hint_width -= self.hint_dot.sizeHint().width() + self._hint_row.spacing()
         wrap_label(self.hint_label, hint_width)
         self._box.activate()  # the name row / column layouts cache hints until activated
-
-    def _fit_name(self, metrics, width: int) -> str:
-        """The longest form of the name that fits ``width`` px, else the shortest one
-        elided (at its end for a camera name, in the middle for any other name)."""
-        for form in self._forms:
-            if _label_advance(metrics, form) <= width:
-                return form
-        mode = Qt.TextElideMode.ElideRight if len(self._forms) > 1 else Qt.TextElideMode.ElideMiddle
-        return metrics.elidedText(self._forms[-1], mode, width)
 
     def _position_width(self, text: str) -> int:
         return self.position_label.fontMetrics().horizontalAdvance(text) + 1
@@ -658,7 +637,7 @@ class ProgressOverlay(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(frame)
 
-        col = QVBoxLayout(frame)
+        col = self._column = QVBoxLayout(frame)  # a subclass may add its own lines below
         col.setContentsMargins(16, 12, 16, 14)
         col.setSpacing(9)
         top = QHBoxLayout()

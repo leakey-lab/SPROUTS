@@ -1,15 +1,17 @@
 """Fitting label text into a width: wrap only when needed, elide what cannot wrap.
 
-Shared by the status chip (file name / hint line) and the toasts, which must never grow
-past the space the overlay layout or the window gives them.
+Shared by the status chip (file name / hint line), the toasts, the metrics bar's image name
+and the one-line elided labels (status line, loading card, recent projects, class names),
+which must never grow past the space the overlay layout or the window gives them.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Sequence
 
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QPainter
+from PyQt6.QtGui import QFontMetrics, QFontMetricsF, QPainter
 from PyQt6.QtWidgets import QLabel
 
 QWIDGETSIZE_MAX = 16777215  # Qt's QWIDGETSIZE_MAX: "no maximum width"
@@ -47,6 +49,35 @@ class ElidedLabel(QLabel):
         painter.setPen(self.palette().color(self.foregroundRole()))
         painter.drawText(self.contentsRect(), int(self.alignment()), self.elided_text())
         painter.end()
+
+
+def label_advance(metrics: QFontMetrics, text: str) -> int:
+    """The width a label gives ``text``: its fractional advance rounded up. A font with
+    fractional advances (DejaVu on Linux) makes ``horizontalAdvance`` round to the nearest
+    pixel, so when the fraction is under .5 a name chosen by it ends one pixel wider than the
+    budget it was chosen for."""
+    return math.ceil(QFontMetricsF(metrics).horizontalAdvance(text))
+
+
+def fit_forms(
+    forms: Sequence[str],
+    metrics: QFontMetrics,
+    width: int,
+    fits: Callable[[str], bool] | None = None,
+) -> str:
+    """The first of ``forms`` (most complete first) that ``fits``, else the last one, elided
+    to ``width`` px: at its end, or in the middle when it is the only form.
+
+    ``fits`` defaults to "whole in ``width`` px" (:func:`label_advance`)."""
+    if len(forms) == 1:
+        return metrics.elidedText(forms[0], Qt.TextElideMode.ElideMiddle, width)
+    if fits is None:
+        for form in forms:
+            if label_advance(metrics, form) <= width:
+                return form  # whole in the width: Qt would not elide it
+        return metrics.elidedText(forms[-1], Qt.TextElideMode.ElideRight, width)
+    shown = next((form for form in forms if fits(form)), forms[-1])
+    return metrics.elidedText(shown, Qt.TextElideMode.ElideRight, width)
 
 
 def elide_long_words(text: str, fits: Callable[[str], bool], elide: Callable[[str], str]) -> str:

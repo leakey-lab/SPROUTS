@@ -251,6 +251,22 @@ def test_class_panel_fits_a_smaller_height_and_scrolls(app):
     assert panel._rows_container.sizeHint().height() > panel._scroll.height()
 
 
+def test_a_long_class_name_is_elided_at_its_end(app):
+    """The start of the name stays (it is what tells the classes apart); the full name is
+    the tooltip."""
+    host = _host(900, 600)
+    name = "Mycorrhizal hyphae and fine roots"
+    panel = ClassPanel(host)
+    panel.set_registry(default_registry().add(key="long", name=name, color="#123456"))
+    host.show()
+    panel.reposition()
+    QApplication.processEvents()
+    label = panel._rows["long"]._name_label
+    shown = label.elided_text()
+    assert shown.endswith("…") and name.startswith(shown[:-1])
+    assert label.is_elided() and label.toolTip() == name and label.text() == name
+
+
 def test_gear_button_emits_edit_requested(app):
     host = _host()
     panel = ClassPanel(host)

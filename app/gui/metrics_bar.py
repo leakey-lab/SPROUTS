@@ -35,15 +35,16 @@ import math
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize
 from PyQt6.QtGui import QPainter, QPalette
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from app import config
 from app.calibration import ProjectCalibration, calibration_words
 from app.gui.key_text import platform_keys
-from app.gui.library_index import fit_label, stem_forms
+from app.gui.library_index import stem_forms
 from app.gui.widgets import tokens
+from app.gui.widgets.text_fit import fit_forms
 from app.provenance import same_calibration
 
 _DASH = "—"
@@ -135,11 +136,11 @@ class _ElidedLabel(QLabel):
     def _elided(self) -> str:
         width = self.contentsRect().width()
         metrics = self.fontMetrics()
-        forms = self._text_forms()
-        if len(forms) == 1:
-            return metrics.elidedText(forms[0], Qt.TextElideMode.ElideMiddle, width)
-        shown = fit_label(forms, lambda form: metrics.horizontalAdvance(form) <= width)
-        return metrics.elidedText(shown, Qt.TextElideMode.ElideRight, width)
+
+        def fits(form: str) -> bool:  # by the rounded advance (fit_forms' default: the exact one)
+            return metrics.horizontalAdvance(form) <= width
+
+        return fit_forms(self._text_forms(), metrics, width, fits)
 
     def _sync_tooltip(self) -> None:
         self.setToolTip(self.text() if self._elided() != self.text() else "")

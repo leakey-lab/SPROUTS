@@ -19,11 +19,10 @@ from .overlays import (
     FloatingDock,
     ProgressOverlay,
     StatusChip,
-    Toast,
-    ToastManager,
     ToolRail,
     ZoomCluster,
 )
+from .toasts import Toast, ToastManager
 
 __all__ = [
     "tokens",

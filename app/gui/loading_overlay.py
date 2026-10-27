@@ -55,11 +55,7 @@ class LoadingOverlay(ProgressOverlay):
         self._filename_label.hide()
         self._count_label.hide()
         self._detail = detail
-
-        # The inherited frame is the first child of self's top-level layout.
-        frame = self.findChild(QWidget, "progFrame")
-        if frame is not None and frame.layout() is not None:
-            frame.layout().addLayout(detail)
+        self._column.addLayout(detail)
         self._sync_details()
 
     def set_filename(self, name: str, tooltip: str = "") -> None:
@@ -89,9 +85,7 @@ class LoadingOverlay(ProgressOverlay):
             label.setVisible(bool(label.text()))
             shown = shown or bool(label.text())
         self._detail.setContentsMargins(16, 0, 16, 12 if shown else 0)
-        frame = self.findChild(QWidget, "progFrame")
-        for layout in (frame.layout() if frame is not None else None, self.layout()):
-            if layout is not None:
-                layout.activate()  # the card's size follows the lines at once
+        for layout in (self._column, self.layout()):
+            layout.activate()  # the card's size follows the lines at once
         if self.isVisible():
             self.reposition()

@@ -19,13 +19,13 @@ the rows scroll vertically only. A box locked checked because its class has pixe
 says so in its tooltip and shows a dimmer fill than a box ticked by hand.
 
 This module never touches ``app/gui/widgets/*`` — it only consumes the
-existing ``_FloatingPanel``/``IconButton``/``keep_canvas_focus`` primitives.
+existing ``_FloatingPanel``/``IconButton``/``keep_canvas_focus``/``ElidedLabel`` primitives.
 """
 
 from __future__ import annotations
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -41,6 +41,7 @@ from app.gui.widgets import tokens
 from app.gui.widgets.controls import IconButton
 from app.gui.widgets.focus import keep_canvas_focus
 from app.gui.widgets.overlays import _FloatingPanel
+from app.gui.widgets.text_fit import ElidedLabel
 
 _MARGIN = 14
 _MAX_HEIGHT_FRACTION = 0.6
@@ -58,9 +59,12 @@ def _locked_fill() -> str:
     return f"rgba({color.red()}, {color.green()}, {color.blue()}, 0.45)"
 
 
-class _NameLabel(QLabel):
+class _NameLabel(ElidedLabel):
     """A class name elided at the right to the label's width; the full name is the
     tooltip while it is elided. ``text()`` is always the full name."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent, mode=Qt.TextElideMode.ElideRight)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
         hint = super().sizeHint()
@@ -83,14 +87,6 @@ class _NameLabel(QLabel):
 
     def _sync_tooltip(self) -> None:
         self.setToolTip(self.text() if self.is_elided() else "")
-
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
-        rect = self.contentsRect()
-        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, rect.width())
-        painter = QPainter(self)
-        painter.setPen(self.palette().color(self.foregroundRole()))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
-        painter.end()
 
 
 class _ClassRow(QFrame):

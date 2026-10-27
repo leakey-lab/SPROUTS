@@ -157,3 +157,15 @@ def test_the_stage_overview_names_every_stage_in_order(welcome):
     positions = [text.find(stage) for stage in STAGES]
     assert -1 not in positions and positions == sorted(positions), text
     assert widget.stage_labels() == STAGES
+
+
+# ---------------------------------------------------------------- long paths
+def test_a_long_recent_path_is_elided_in_the_middle(welcome):
+    """The drive and the folder's own name stay; the path never sets the row's width."""
+    row = welcome(names=("dataset_46k",)).recent_rows()[0]
+    label = row._path_label
+    label.setText("D:\\" + "a rather long folder name\\" * 12 + "dataset_46k")
+    QApplication.processEvents()
+    shown = label.elided_text()
+    assert label.minimumSizeHint().width() == 0
+    assert "…" in shown and shown.startswith("D:\\") and shown.endswith("dataset_46k")

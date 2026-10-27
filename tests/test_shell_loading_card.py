@@ -62,6 +62,24 @@ def test_the_card_keeps_below_a_top_offset(app):
     host.deleteLater()
 
 
+def test_the_detail_lines_sit_in_the_card_under_the_bar(app):
+    """The lines join the card's own column (a stray layout would leave them a window of
+    their own, outside the card)."""
+    host = QWidget()
+    host.resize(800, 600)
+    card = LoadingOverlay(host)
+    card.start("Loading images")
+    card.set_filename("project_2024", "D:/data/project_2024")
+    card.set_count(3, 9)
+    QApplication.processEvents()
+    frame = card.findChild(QWidget, "progFrame")
+    for label in (card._filename_label, card._count_label):
+        assert not label.isWindow() and label.parentWidget() is frame
+        assert frame.rect().contains(label.geometry())
+        assert label.geometry().top() >= card._bar.geometry().bottom()
+    host.deleteLater()
+
+
 @pytest.fixture
 def window(app, tmp_path, monkeypatch):
     from app.gui.main_window import MainWindow

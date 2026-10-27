@@ -28,7 +28,7 @@ import threading
 from collections.abc import Callable, Sequence
 
 from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -49,6 +49,7 @@ from app.gui.recent_projects import RecentProject, RecentProjectsStore
 from app.gui.widgets import tokens
 from app.gui.widgets.buttons import ghost_button, primary_button
 from app.gui.widgets.icons import load_icon, load_pixmap
+from app.gui.widgets.text_fit import ElidedLabel
 
 logger = logging.getLogger(__name__)
 
@@ -115,24 +116,6 @@ class _Dropzone(QFrame):
             return
         event.acceptProposedAction()
         self._on_drop_folder(folder)
-
-
-class _ElidedLabel(QLabel):
-    """Single-line label that elides in the middle instead of being clipped (long paths)."""
-
-    def minimumSizeHint(self):  # noqa: N802 - Qt API
-        hint = super().minimumSizeHint()
-        hint.setWidth(0)
-        return hint
-
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
-        painter = QPainter(self)
-        rect = self.contentsRect()
-        text = self.fontMetrics().elidedText(
-            self.text(), Qt.TextElideMode.ElideMiddle, rect.width()
-        )
-        painter.setPen(self.palette().color(self.foregroundRole()))
-        painter.drawText(rect, int(self.alignment()), text)
 
 
 class _ContentButton(QPushButton):
@@ -221,7 +204,7 @@ class RecentRow(QFrame):
         meta.setSpacing(1)
         self._name_label = self._label(entry.name, tokens.TEXT, "12.5px", bold=True)
         self._path_label = self._label(
-            entry.path, tokens.TEXT_FAINT, "10.5px", mono=True, cls=_ElidedLabel
+            entry.path, tokens.TEXT_FAINT, "10.5px", mono=True, cls=ElidedLabel
         )
         self._path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         meta.addWidget(self._name_label)
