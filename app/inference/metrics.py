@@ -31,9 +31,10 @@ import csv
 import logging
 import math
 import os
+import queue
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import NamedTuple
 
 import cv2
@@ -266,6 +267,7 @@ def _metric_row(
     *,
     data: bytes | None = None,
     memo: dict | None = None,
+    log: Callable[..., None] | None = None,
 ) -> dict:
     """One CSV row: ``measure(path)`` (the value and the decoded size) with the value
     rounded to 2 dp, or a 0 row with ``Error``. ``_size_px`` (and the further private keys
@@ -276,7 +278,10 @@ def _metric_row(
     ``_MEMO_MAX_BYTES`` whose bytes ``data`` equal those of a file of the run that measured
     0 is not decoded again: the measurement depends on the bytes and the field of view only,
     and most predictions of a project are the one empty file. A failure is never kept, so
-    each failed file names itself."""
+    each failed file names itself.
+
+    ``log(msg, *args)`` logs a failure (``None``: ``logger.error``); a Measure run passes
+    one that logs its first failures and counts the rest (C6-02)."""
     try:
         key = data if memo is not None and data and len(data) <= _MEMO_MAX_BYTES else None
         measured = None if key is None else memo.get(key)
@@ -297,7 +302,7 @@ def _metric_row(
             **private,
         }
     except Exception as e:  # per-image boundary: one bad file never aborts a run
-        logger.error("%s metric failed for %r: %s", label, name, e)
+        (logger.error if log is None else log)("%s metric failed for %r: %s", label, name, e)
         return {
             "Image": name,
             "Tube": None,
@@ -316,16 +321,19 @@ def length_row(
     data: bytes | None = None,
     calibration: Calibration | None = None,
     memo: dict | None = None,
+    log: Callable[..., None] | None = None,
 ) -> dict:
     """The ``root_lengths.csv`` row for the skeleton image at ``path`` (``data``: its bytes,
     already read; the row is the same), measured with ``calibration`` (``None``: the app's).
-    ``memo``: the run's (:func:`_metric_row`); the row is the same with or without it."""
+    ``memo`` and ``log``: the run's (:func:`_metric_row`); the row is the same without them."""
 
     def measure(p: str) -> tuple[float, str, dict]:
         skeleton = preprocess_image(p, data=data)
         return root_length_mm(skeleton, calibration=calibration), _size_text(skeleton), {}
 
-    return _metric_row(name, path, measure, LENGTH_VALUE_COLUMN, "Length", data=data, memo=memo)
+    return _metric_row(
+        name, path, measure, LENGTH_VALUE_COLUMN, "Length", data=data, memo=memo, log=log
+    )
 
 
 def area_row(
@@ -335,18 +343,21 @@ def area_row(
     data: bytes | None = None,
     calibration: Calibration | None = None,
     memo: dict | None = None,
+    log: Callable[..., None] | None = None,
 ) -> dict:
     """The ``root_areas.csv`` row for the mask image at ``path`` (``data``: its bytes,
     already read; the row is the same), measured with ``calibration`` (``None``: the app's).
     A mask with grey levels also gets the private key ``_non_binary: True`` (never a CSV
-    column). ``memo``: as :func:`length_row`."""
+    column). ``memo`` and ``log``: as :func:`length_row`."""
 
     def measure(p: str) -> tuple[float, str, dict]:
         mask, non_binary = _load_mask_and_grey_flag(p, data)
         area = root_area_mm2(mask, calibration=calibration)
         return area, _size_text(mask), {"_non_binary": True} if non_binary else {}
 
-    return _metric_row(name, path, measure, AREA_VALUE_COLUMN, "Area", data=data, memo=memo)
+    return _metric_row(
+        name, path, measure, AREA_VALUE_COLUMN, "Area", data=data, memo=memo, log=log
+    )
 
 
 # ----------------------------- CSV -----------------------------------------
@@ -396,6 +407,25 @@ def _task_bounds(total: int, workers: int) -> list[tuple[int, int]]:
     return bounds
 
 
+#: How often :func:`run_metric_pool` asks ``should_stop`` while no task ends: a Cancel waits
+#: about this, plus the image each task is measuring, never for a whole run of images.
+_STOP_POLL_S = 0.02
+
+
+def _next_finished(
+    finished: queue.SimpleQueue, should_stop: Callable[[], bool] | None
+) -> Future | None:
+    """The next task of ``finished`` to end, or None when ``should_stop`` says so first."""
+    if should_stop is None:
+        return finished.get()
+    while True:
+        try:
+            return finished.get(timeout=_STOP_POLL_S)
+        except queue.Empty:
+            if should_stop():
+                return None
+
+
 def run_metric_pool(
     images: dict[str, str],
     worker: Callable[[str, str], dict],
@@ -404,12 +434,12 @@ def run_metric_pool(
 ) -> list[dict]:
     """Run ``worker(name, path)`` over ``images`` on a thread pool, return sorted rows.
 
-    ``should_stop`` is polled after each finished task (a run of images); once it returns
-    True the pending images are cancelled and the rows so far are returned, so the caller
-    must check its own cancel flag before using them. A ``worker`` that raises cancels the
-    pending images too; its error is raised once the running ones have finished. A
-    ``progress_cb`` that raises is logged and ignored: it never fails a run whose images
-    were measured (R3).
+    ``should_stop`` is polled after each finished task (a run of images), and every
+    :data:`_STOP_POLL_S` while none ends; once it returns True the pending images are
+    cancelled and the rows so far are returned, so the caller must check its own cancel
+    flag before using them. A ``worker`` that raises cancels the pending images too; its
+    error is raised once the running ones have finished. A ``progress_cb`` that raises is
+    logged and ignored: it never fails a run whose images were measured (R3).
     """
     total = len(images)
     if total == 0:
@@ -434,10 +464,16 @@ def run_metric_pool(
 
     last_pct = -1
     done = 0
+    finished: queue.SimpleQueue = queue.SimpleQueue()  # the tasks, as they end
     ex = ThreadPoolExecutor(max_workers=max_workers)
     try:
         futures = [ex.submit(task, *bounds) for bounds in _task_bounds(total, max_workers)]
-        for fut in as_completed(futures):
+        for fut in futures:
+            fut.add_done_callback(finished.put)
+        for _ in futures:
+            fut = _next_finished(finished, should_stop)
+            if fut is None:  # stopped while every task was still measuring
+                break
             start, rows = fut.result()
             results[start : start + len(rows)] = rows
             done += len(rows)
@@ -454,4 +490,8 @@ def run_metric_pool(
     finally:  # stopped, or an image raised: the images not started are left out
         stopping.set()
         ex.shutdown(wait=True, cancel_futures=True)
+        # Every done callback has run. A task left in the queue refers to it through its
+        # callback: empty it so refcounting frees both (a cycle would survive a gc.freeze()).
+        while not finished.empty():
+            finished.get_nowait()
     return sorted((row for row in results if row is not None), key=_sort_key)

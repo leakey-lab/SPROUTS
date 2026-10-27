@@ -33,8 +33,10 @@ from app.project_layout import (
     GtStems,
     ImageScan,
     ProjectLayout,
+    few_keys,
     find_by_stem,
     key_to_stems,
+    project_layout_of,
 )
 from app.workers import describe_error
 
@@ -50,11 +52,11 @@ def _stems_of(found: set[str], images) -> set[str]:
     """``found`` (output stems) under the Library's stems: an output whose name differs
     from its image's only in case belongs to that image (O7).
 
-    A scan of an eighth of the images or more comes back in the Library's own strings, so
-    the scan's copies are freed (4 MiB for the skeletons of 46k images); a few stems (GT)
-    named as their images keep theirs, as :func:`~app.project_layout.key_to_stems` does.
+    A scan of many outputs comes back in the Library's own strings, so the scan's copies are
+    freed (4 MiB for the skeletons of 46k images); a few stems (GT) named as their images keep
+    theirs, by the rule of :func:`~app.project_layout.key_to_stems` (:func:`few_keys`).
     """
-    if 8 * len(found) >= len(images):
+    if not few_keys(found, images):
         # One pass over the Library's stems also tells whether every output is named as its
         # image: a subset test first would walk the set in hash order, slower than this pass.
         stems = set(filter(found.__contains__, images))
@@ -156,23 +158,6 @@ class ImageLoaderThread(QThread):
             return True
         self.progress.emit(percent)
         return False
-
-
-def project_layout_of(manager: object) -> ProjectLayout | None:
-    """Layout of ``manager``'s project: ``original_folder``, else the first image's folder.
-
-    ``manager`` is the window's :class:`ImageManager` or any stand-in with
-    ``original_folder`` / ``images``; None when nothing is loaded. Generate,
-    Measure, Visualize and the window all resolve the project through here, so
-    they can never disagree about it.
-    """
-    folder = getattr(manager, "original_folder", None)
-    if folder:
-        return ProjectLayout(folder)
-    images = getattr(manager, "images", None)
-    if images:
-        return ProjectLayout.for_image(next(iter(images.values())))
-    return None
 
 
 class ImageManager:
@@ -375,7 +360,8 @@ class ImageManager:
         """Layout of the loaded project: ``original_folder``, else the first image's folder.
 
         The one project-folder lookup shared by Generate, Measure, Visualize and
-        the window (see :func:`project_layout_of`); None when nothing is loaded.
+        the window (see :func:`app.project_layout.project_layout_of`); None when nothing
+        is loaded.
         """
         return project_layout_of(self)
 

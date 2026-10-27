@@ -35,12 +35,14 @@ from app.inference.measure_inputs import (
     scan_stamps,
 )
 from app.naming import stem_key
+from app.project_layout import SKELETON_SUFFIX, skeleton_stem
 
 __all__ = ["Freshness", "generate_text", "input_freshness", "measure_text", "missing"]
 
 #: Suffixes listed by the name rule of Measure's own listing (masks and GT files: the
-#: extension in any case, hidden names too), so the count is of the files Measure reads.
-_NAME_RULES = {".png": png_stem}
+#: extension in any case; skeletons: the exact suffix; hidden names too), so the count is of
+#: the files Measure reads.
+_NAME_RULES = {SKELETON_SUFFIX: skeleton_stem, ".png": png_stem}
 
 
 @dataclass(frozen=True)
@@ -316,9 +318,10 @@ def input_freshness(
     """The ``*suffix`` files of ``folder`` against ``csv_path`` (one ``os.scandir``).
 
     The temp file of a write in progress (``.<name>.<token>.tmp``) is not an input.
-    ``*.png`` files are listed as Measure lists them (the extension in any case, hidden
-    names too: :func:`~app.inference.input_split.png_stem`); other suffixes match without
-    case and skip hidden names. With ``record`` (the CSV's
+    ``*.png`` files and generated skeletons are listed as Measure lists them, hidden names
+    too (:func:`~app.inference.input_split.png_stem`: the extension in any case;
+    :func:`~app.project_layout.skeleton_stem`: the exact suffix); other suffixes match
+    without case and skip hidden names. With ``record`` (the CSV's
     :func:`~app.inference.measure_inputs.load_inputs_record`; keys relative to
     ``project_root``, default the parent of ``folder`` as in Measure), an input
     is changed when its content differs from the recorded one (hashed only when its size

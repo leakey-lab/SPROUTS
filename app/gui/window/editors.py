@@ -19,9 +19,8 @@ from typing import TYPE_CHECKING
 
 from app.gt.files import gt_files
 from app.naming import image_stem, stem_key
-from app.project_layout import SKELETON_SUFFIX
+from app.project_layout import SKELETON_SUFFIX, project_layout_of
 
-from ..image_manager import project_layout_of
 from ..panels import Panel
 from ._common import released
 

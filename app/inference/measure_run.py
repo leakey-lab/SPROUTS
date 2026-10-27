@@ -22,6 +22,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any
 
 from app import provenance
@@ -40,7 +41,8 @@ from app.config import (
     ROOT_LENGTHS_CSV,
     SOURCE_COLUMN,
 )
-from app.inference import measure_inputs, measure_sources
+from app.inference import measure_inputs, measure_sources, metrics
+from app.inference.batch_pipeline import LogLimiter
 from app.inference.input_split import (
     InputSplit,
     group_by_stem,
@@ -89,7 +91,7 @@ class MetricSpec:
     headers: tuple[str, ...]
     value_column: str
     # row(image name, path, data=<file bytes | None>, calibration=<Calibration | None>,
-    #     memo=<the run's dict | None>) -> CSV row
+    #     memo=<the run's dict | None>, log=<the run's failure log | None>) -> CSV row
     row: Callable[..., dict]
     parameters: Mapping[str, object]
 
@@ -270,6 +272,8 @@ class MeasureRun:
         #: While compute() measures: the measurements of the small files that measured 0, by
         #: their bytes (``memo`` of :func:`app.inference.metrics.length_row`).
         self._memo: dict | None = None
+        #: While compute() measures: how a row's failure is logged (``log`` of the rows).
+        self._log: Callable[..., None] | None = None
 
     @property
     def csv_path(self) -> str:
@@ -283,10 +287,13 @@ class MeasureRun:
         """Measure every image (skipped if already done); ``None`` if stopped early.
 
         With ``gt_files`` each image is decided and measured in one pool task
-        (:meth:`_measure_gt_first`). Each row gets its ``Source``."""
+        (:meth:`_measure_gt_first`). Each row gets its ``Source``. The first rows with an
+        ``Error`` are logged one by one, the rest only counted (C6-02)."""
         if self.rows is None:
             self.fingerprints, self._key_prefixes = {}, {}
             self._memo = {}
+            failures = LogLimiter(metrics.logger, "rows with an Error")
+            self._log = partial(failures.log, logging.ERROR)
             resolved = None
             try:
                 if self.gt_files is None:
@@ -294,7 +301,8 @@ class MeasureRun:
                 else:
                     rows, resolved = self._measure_gt_first(progress_cb, should_stop)
             finally:  # a run kept for a Retry of its write keeps no file bytes
-                self._memo = None
+                self._memo = self._log = None
+                failures.summary()
             if should_stop is not None and should_stop():
                 return None
             if resolved is not None:
@@ -358,9 +366,14 @@ class MeasureRun:
         return self._measure(source.stem, source.path)
 
     def _row(self, name: str, path: str, *, data: bytes | None = None) -> dict:
-        """``spec.row`` measured with this run's field of view (and its memo)."""
+        """``spec.row`` measured with this run's field of view (and its memo and log)."""
         return self.spec.row(
-            name, path, data=data, calibration=self.calibration.calibration, memo=self._memo
+            name,
+            path,
+            data=data,
+            calibration=self.calibration.calibration,
+            memo=self._memo,
+            log=self._log,
         )
 
     def _remember(self, path: str, fingerprint: Fingerprint) -> None:

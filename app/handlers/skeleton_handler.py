@@ -29,7 +29,6 @@ from app.calibration import (
     load_project_calibration,
 )
 from app.feedback import UiFeedback
-from app.gui.image_manager import project_layout_of
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
 from app.inference.input_split import images_by_key
@@ -47,7 +46,7 @@ from app.inference.measure_run import (
 from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 from app.inference.metric_thread import MetricCalculatorThread
 from app.masks.store import MASK_THRESHOLD
-from app.project_layout import ProjectLayout
+from app.project_layout import ProjectLayout, project_layout_of
 
 from .generate_skeleton_handler import GenerateSkeletonHandler
 
@@ -123,7 +122,7 @@ class SkeletonHandler(HandlerDependencies):
         kinds = (kind,) if kind else tuple(_THREAD_ATTRS)
         if any(self._running(getattr(self, _THREAD_ATTRS[k], None)) for k in kinds):
             return True
-        return kind == LENGTH.kind and self._generation_busy()
+        return kind == LENGTH.kind and bool(self.skeleton_handler.is_busy())
 
     def calculate_root_length(self):
         """Measure the root length of every image with a skeleton: its GT skeleton
@@ -493,13 +492,6 @@ class SkeletonHandler(HandlerDependencies):
         if getattr(self, attr, None) is thread:
             setattr(self, attr, None)
         thread.deleteLater()
-
-    def _generation_busy(self) -> bool:
-        gen = self.skeleton_handler
-        is_busy = getattr(gen, "is_busy", None)
-        if callable(is_busy):
-            return bool(is_busy())
-        return self._running(getattr(gen, "_thread", None))  # older generation handler
 
     @staticmethod
     def _running(thread: Any) -> bool:

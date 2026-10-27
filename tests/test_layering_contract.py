@@ -1,6 +1,7 @@
 """Layering contract (CQ-05): lower layers never import upward.
 
 * ``app.inference`` and ``app.visualization`` do not import ``app.gui`` / ``app.handlers``;
+* ``app.handlers`` does not import ``app.gui`` (the window imports the handlers);
 * the Qt-free ``UiFeedback`` port lives in ``app.feedback``;
 * the worker error boundary lives in ``app.workers``;
 * no compatibility re-export module is left (W5-T5), and the file stamp helpers have one home.
@@ -67,6 +68,19 @@ def test_lower_layers_do_not_import_gui_or_handlers(package: str) -> None:
 @pytest.mark.parametrize("module", ["feedback.py", "workers.py"])
 def test_neutral_modules_do_not_import_gui_or_handlers(module: str) -> None:
     assert _upward(_app_imports(ROOT / "app" / module)) == []
+
+
+def _gui(names) -> list[str]:
+    return sorted(n for n in names if n == "app.gui" or n.startswith("app.gui."))
+
+
+def test_handlers_do_not_import_gui() -> None:
+    offenders = {
+        str(path.relative_to(ROOT)): bad
+        for path in sorted((ROOT / "app" / "handlers").rglob("*.py"))
+        if (bad := _gui(_imported_names(path)))
+    }
+    assert offenders == {}
 
 
 REMOVED_MODULES = (
@@ -162,3 +176,10 @@ def test_feedback_port_stays_qt_free() -> None:
 def test_metric_thread_does_not_load_handlers_or_gui() -> None:
     loaded = _loaded_after_import("app.inference.metric_thread")
     assert not _upward(sorted(m for m in loaded if m.startswith("app")))
+
+
+@pytest.mark.parametrize(
+    "module", ["app.handlers.skeleton_handler", "app.handlers.mask_generation_handler"]
+)
+def test_the_handlers_load_no_gui_module(module: str) -> None:
+    assert _gui(_loaded_after_import(module)) == []

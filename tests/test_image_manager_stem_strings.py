@@ -22,7 +22,12 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from app.gui import image_manager as im  # noqa: E402
 from app.inference.mask_origin import scan_existing_masks  # noqa: E402
 from app.naming import stem_key  # noqa: E402
-from app.project_layout import SKELETON_SUFFIX, ProjectLayout, key_to_stems  # noqa: E402
+from app.project_layout import (  # noqa: E402
+    SKELETON_SUFFIX,
+    ProjectLayout,
+    few_keys,
+    key_to_stems,
+)
 
 # Long names: CPython shares one object for each one-letter string, so those prove nothing.
 STEMS = [
@@ -104,6 +109,20 @@ def test_key_to_stems_gives_a_large_scan_the_strings_of_stems_in_its_own_order(s
 
     assert list(out.items()) == list(found.items())
     assert _ids(out) <= _ids(stems)
+
+
+@pytest.mark.parametrize("n, few", [(2, True), (3, False)])  # 24 images: an eighth is 3
+def test_both_remaps_keep_their_own_strings_below_the_same_size(n, few):
+    images = dict.fromkeys(map(_fresh, STEMS))
+    found = [_fresh(stem) for stem in STEMS[:n]]
+
+    remapped = key_to_stems(dict.fromkeys(found), images)
+    stems = im._stems_of(set(found), images)
+
+    assert few_keys(found, images) is few
+    for out in (remapped, stems):
+        assert set(out) == set(found)
+        assert _ids(out) <= (_ids(found) if few else _ids(images))
 
 
 def _key_to_stems_before(found, stems):

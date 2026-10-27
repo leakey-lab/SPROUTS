@@ -33,6 +33,7 @@ import sys
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 # Qt6 only lets QtWebEngineWidgets load before the QApplication exists. The
 # dashboard modules that use it are imported lazily, so import it here.
@@ -41,9 +42,11 @@ from PyQt6.QtCore import QEventLoop, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
-from app.gui.image_manager import project_layout_of
 from app.io_utils import path_key
-from app.project_layout import ProjectLayout, find_test_latest_dir
+from app.project_layout import ProjectLayout, find_test_latest_dir, project_layout_of
+
+if TYPE_CHECKING:
+    from app.data_processing.measurement_index import MeasurementIndex
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,7 @@ __all__ = [
     "close_visualization",
     "controller_for",
     "find_test_latest_dir",
+    "measurement_index_of",
     "release_all_visualizations",
     "show_root_area_visualization",
     "show_root_length_visualization",
@@ -109,8 +113,9 @@ class CsvLookup:
     message: str = ""
 
 
-def _find_lengths_csv(layout: ProjectLayout) -> CsvLookup:
-    path = layout.find_lengths_csv()
+def _find_lengths_csv(layout: ProjectLayout, index: MeasurementIndex | None = None) -> CsvLookup:
+    # The project's index uses the legacy test_latest walk its pool search made: a few stats.
+    path = layout.find_lengths_csv() if index is None else index.find_lengths_csv()
     if path:
         return CsvLookup(path)
     return CsvLookup(
@@ -124,7 +129,8 @@ def _find_lengths_csv(layout: ProjectLayout) -> CsvLookup:
     )
 
 
-def _find_areas_csv(layout: ProjectLayout) -> CsvLookup:
+def _find_areas_csv(layout: ProjectLayout, index: MeasurementIndex | None = None) -> CsvLookup:
+    # ``index`` is not needed: the area CSV is found with stats only.
     masks_dir = layout.resolve_masks_dir()
     if masks_dir is None:
         return CsvLookup(
@@ -157,7 +163,8 @@ class DashboardSpec:
     button_attr: str  # legacy button whose text follows open / closed
     open_text: str
     close_text: str
-    find_csv: Callable[[ProjectLayout], CsvLookup]
+    #: ``find_csv(layout, index=None)``: ``index`` is the project's MeasurementIndex, if any.
+    find_csv: Callable[..., CsvLookup]
 
 
 LENGTH = DashboardSpec(
@@ -199,6 +206,16 @@ def _spec(kind: str) -> DashboardSpec:
 # --------------------------------------------------------------------------- #
 #  Helpers
 # --------------------------------------------------------------------------- #
+def measurement_index_of(window, layout: ProjectLayout | None) -> MeasurementIndex | None:
+    """The window's measurement index (``window.metrics.index``) when it reads ``layout``'s
+    project, else None. Its pool search walks for a legacy ``test_latest`` folder when the
+    project opens, so a length lookup through it does not walk the folders again."""
+    index = getattr(getattr(window, "metrics", None), "index", None)
+    if index is None or layout is None or path_key(index.root) != path_key(layout.root):
+        return None
+    return index
+
+
 def _source_signature(path: str | None) -> tuple | None:
     """Identity of a CSV's content on disk (path, size, mtime), or None if unreadable."""
     if not path:
@@ -426,7 +443,7 @@ class DashboardController:
         if layout is None:
             QMessageBox.warning(mw, "Warning", "The folder of the loaded images was not found.")
             return
-        lookup = spec.find_csv(layout)
+        lookup = self._find_csv(spec, layout)
         if lookup.path is None:
             QMessageBox.information(mw, lookup.title, lookup.message)
             return
@@ -447,7 +464,7 @@ class DashboardController:
         layout = self._project_layout()
         if layout is None:
             return False
-        signature = _source_signature(spec.find_csv(layout).path)
+        signature = _source_signature(self._find_csv(spec, layout).path)
         return signature == self._sources.get(spec.kind)
 
     def _bring_forward(self, dashboard) -> None:
@@ -510,6 +527,11 @@ class DashboardController:
     def _project_layout(self) -> ProjectLayout | None:
         """Layout of the loaded project (``ImageManager.project_layout``)."""
         return project_layout_of(self._mw.image_manager)
+
+    def _find_csv(self, spec: DashboardSpec, layout: ProjectLayout) -> CsvLookup:
+        """``spec``'s CSV in ``layout``, looked for through the window's measurement index
+        when it has one (:func:`measurement_index_of`)."""
+        return spec.find_csv(layout, measurement_index_of(self._mw, layout))
 
     def _is_busy(self, spec: DashboardSpec) -> bool:
         """True while a run that writes (or invalidates) the dashboard's CSV is going."""

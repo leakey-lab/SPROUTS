@@ -55,17 +55,22 @@ def on_jobs_busy_changed(window: "MainWindow", busy: bool) -> None:
     # A generation run writes predictions only, never a CSV: its parsed rows stay valid.
     # Any other job (a Measure run, or one of no known name) may have rewritten them.
     measured = not busy and window.jobs.ended_name() not in _generation_labels(window)
+    parsing = metrics.loading  # a parse that started before the invalidate below
     if not busy and metrics.index is not None:
         if measured:
             metrics.index.invalidate()  # re-locate and re-read the CSVs
         metrics.refresh(metrics.current_image_name())
-    if not busy and window._current_stage() == "Measure":
-        metrics.check_freshness()  # a run changed Measure's inputs, or rewrote a CSV
+    if not busy and window._current_stage() == "Measure" and not metrics.loading:
+        # A run changed Measure's inputs, or rewrote a CSV. While a parse runs, its report
+        # counts them (MetricsController.on_ready).
+        metrics.check_freshness()
     index = metrics.index
     if measured and index is not None and index.sources()["length"] is None:
         # The GUI thread looks for root_lengths.csv only where Measure writes it today: a
         # legacy folder (skeletonizer/test_latest/images, ...) is searched by the pool job.
-        if not window.jobs.is_closing():
+        # A parse the refresh above started searches there itself; an older one may have
+        # searched before the run wrote its CSV.
+        if not window.jobs.is_closing() and (parsing or not metrics.loading):
             metrics.prewarm(locate=True)
     warmups = getattr(window, "warmups", None)
     if not busy and warmups is not None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
 import re
 
@@ -270,6 +271,69 @@ def test_run_metric_pool_stops_early_when_asked():
     images = {str(i): "p" for i in range(400)}
     rows = metrics.run_metric_pool(images, worker, should_stop=lambda: len(calls) >= 5)
     assert len(rows) < len(images)
+
+
+def test_a_stop_is_heard_while_every_task_is_still_measuring():
+    """``should_stop`` is asked while no task ends, not only when one does: a Cancel never
+    waits for a whole run of images (up to 32 per task)."""
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def worker(name, path):
+        release.wait(0.5)  # each image is slow until the stop was asked for
+        return {"Image": name}
+
+    def should_stop():
+        release.set()
+        return True
+
+    images = {f"{i:04d}": "p" for i in range(4096)}  # tasks of 32 images: 16 s each
+    started = time.perf_counter()
+    rows = metrics.run_metric_pool(images, worker, should_stop=should_stop)
+    assert time.perf_counter() - started < 5
+    assert len(rows) < 256
+
+
+def test_a_stopped_run_frees_its_tasks_by_refcount(monkeypatch):
+    """A task still in the queue of finished tasks when a stopped run returns refers to that
+    queue through its done callback: a cycle, which a ``gc.freeze()`` (``app.gc_policy``,
+    after a warm-up) before the next full collection would keep for the rest of the session."""
+    import gc
+    import threading
+    import weakref
+    from concurrent.futures import ThreadPoolExecutor
+
+    tasks = []
+
+    class Recording(ThreadPoolExecutor):
+        def submit(self, *args, **kwargs):
+            future = super().submit(*args, **kwargs)
+            tasks.append(weakref.ref(future))
+            return future
+
+    monkeypatch.setattr(metrics, "ThreadPoolExecutor", Recording)
+    lock = threading.Lock()
+    measured = [0]
+
+    def worker(name, path):
+        with lock:
+            measured[0] += 1
+        return {"Image": name}
+
+    images = {f"{i:04d}": "p" for i in range(3000)}
+    gc.collect()
+    gc.disable()
+    try:
+        rows = metrics.run_metric_pool(images, worker, should_stop=lambda: measured[0] >= 600)
+        assert len(rows) < len(images)  # stopped with tasks left over
+        del rows
+        alive = sum(ref() is not None for ref in tasks)
+    finally:
+        gc.enable()
+    assert len(tasks) > 1
+    assert alive == 0
 
 
 def test_an_error_in_a_worker_ends_the_pool_without_measuring_the_rest():
@@ -730,6 +794,43 @@ def test_a_stopped_run_keeps_no_memo(tmp_path):
     run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"))
     assert run.compute(should_stop=lambda: True) is None
     assert run._memo is None and run.rows is None
+
+
+def test_a_run_logs_its_first_rows_with_an_error_and_counts_the_rest(tmp_path, caplog):
+    """C6-02: every unreadable input of a run is an Error row, as before; the log names the
+    first ones (each with its own line in ``_metric_row``) and one line counts the rest."""
+    from app.inference.batch_pipeline import FAILURE_LOG_LIMIT
+
+    names = [f"bad{i:03d}" for i in range(FAILURE_LOG_LIMIT + 30)]
+    images = _same_files(tmp_path / "skeletons", names, b"not a png", "_fake.png")
+    run = MeasureRun(LENGTH, images, str(tmp_path / "skeletons"), project_root=str(tmp_path))
+
+    with caplog.at_level(logging.DEBUG, logger=metrics.logger.name):
+        run.compute()
+
+    errors = {row["Image"]: row["Error"] for row in run.rows}
+    assert errors == {name: f"Could not read image: {name}_fake.png" for name in names}
+    records = [r for r in caplog.records if r.name == metrics.logger.name]
+    failed = [r for r in records if r.levelno == logging.ERROR]
+    assert len(failed) == FAILURE_LOG_LIMIT
+    assert {r.funcName for r in failed} == {"_metric_row"}
+    assert all(r.getMessage().startswith("Length metric failed for 'bad") for r in failed)
+    assert [r.getMessage() for r in records if r.levelno != logging.ERROR] == [
+        "30 more rows with an Error not logged one by one"
+    ]
+
+
+def test_a_row_measured_outside_a_run_logs_its_error(tmp_path, caplog):
+    bad = tmp_path / "x_fake.png"
+    bad.write_bytes(b"not a png")
+
+    with caplog.at_level(logging.DEBUG, logger=metrics.logger.name):
+        row = metrics.length_row("x", str(bad))
+
+    assert row["Error"] == "Could not read image: x_fake.png"
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (logging.ERROR, "Length metric failed for 'x': Could not read image: x_fake.png")
+    ]
 
 
 def test_rows_without_a_memo_are_the_same(tmp_path):

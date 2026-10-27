@@ -29,8 +29,8 @@ from app.calibration import (
 from app.data_processing.measurement_index import Measurement, MeasurementIndex
 from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
+from app.project_layout import project_layout_of
 
-from ..image_manager import project_layout_of
 from ..library_index import status_text
 from ..metrics_bar import differs_from_current, fov_owner_tip, fov_text
 from ._common import USER_ROLE

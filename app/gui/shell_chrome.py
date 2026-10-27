@@ -177,11 +177,8 @@ _ICONBTN_QSS = f"""
 
 
 def _stage_icon(icon_name: str):
-    """Muted stage icon with an ACCENT ``On`` state (UXS-12), when icons support it."""
-    try:
-        return load_icon(icon_name, tokens.TEXT_MUTED, 15, checked_color=tokens.ACCENT)
-    except TypeError:  # an icons module without ``checked_color``
-        return load_icon(icon_name, tokens.TEXT_MUTED, 15)
+    """Muted stage icon with an ACCENT ``On`` state (UXS-12)."""
+    return load_icon(icon_name, tokens.TEXT_MUTED, 15, checked_color=tokens.ACCENT)
 
 
 class _CurrentPageStack(QStackedWidget):

@@ -19,9 +19,10 @@ Contract:
   worker thread; ``lookup(stem, load=False)`` never parses and never blocks,
   which is what the GUI thread should call.
 * The GUI thread's calls (``lookup(load=False)``, ``needs_load``, ``outdated``) look
-  for a CSV only where Measure writes it today (a few stats). The legacy
-  ``test_latest`` search walks the project folders and their parents (about 60 ms
-  at 46k images), so only the worker's :meth:`MeasurementIndex.prewarm` runs it.
+  for a CSV only where Measure writes it (a few stats). The legacy ``test_latest`` search
+  walks the project folders and their parents (about 100 ms at 46k images), so only the
+  worker's :meth:`MeasurementIndex.prewarm` runs it; the index keeps what that walk found,
+  and :meth:`MeasurementIndex.find_lengths_csv` (the dashboards' check) uses it.
 * GT first (O1): a row's ``Source`` says which file it was measured from, the GT file
   (``gt/skeletons/<stem>.png``, ``gt/mask/<stem>.png``) or the prediction next to the CSV;
   freshness follows that file, and the provenance sidecar says why a GT file was not used
@@ -39,6 +40,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import Any, NamedTuple
 
+from app import project_layout
 from app.calibration import ProjectCalibration, fov_of, method_note
 from app.config import AREA_VALUE_COLUMN, LENGTH_VALUE_COLUMN, SOURCE_COLUMN
 from app.gt.files import SOURCE_GT, SOURCE_PREDICTION
@@ -329,6 +331,23 @@ class MetricTable:
             self._current(load=True)
 
 
+class _Walk:
+    """The legacy ``test_latest`` walk (:func:`app.project_layout.find_test_latest_dir`,
+    looked up at call time), keeping what it found. It never refers back to its index, so
+    refcounting frees an index: a cycle would survive a ``gc.freeze()`` (:mod:`app.gc_policy`)."""
+
+    __slots__ = ("found",)
+
+    def __init__(self) -> None:
+        #: ``(folder or None,)``: what the last walk found; ``None`` before one ran.
+        self.found: tuple[str | None] | None = None
+
+    def __call__(self, root: str) -> str | None:
+        found = project_layout.find_test_latest_dir(root)
+        self.found = (found,)
+        return found
+
+
 class MeasurementIndex:
     """Measured length / area per image of one project folder (read-only).
 
@@ -343,10 +362,14 @@ class MeasurementIndex:
         clock: Callable[[], float] = time.monotonic,
     ):
         self.layout = ProjectLayout(project_root)
+        #: The legacy ``test_latest`` walk and what it last found (``found``), which
+        #: :meth:`invalidate` keeps: the app never makes such a folder.
+        self._walk = _Walk()
         opts = {"relocate_after_s": relocate_after_s, "clock": clock}
         self._length = MetricTable(
             LENGTH_VALUE_COLUMN,
-            self.layout.find_lengths_csv,  # with the legacy test_latest walk: workers only
+            # with the legacy test_latest walk: workers only
+            partial(self.layout.find_lengths_csv, walk=self._walk),
             locate_fast=partial(self.layout.find_lengths_csv, search_test_latest=False),
             **opts,
         )
@@ -359,6 +382,16 @@ class MeasurementIndex:
     @property
     def root(self) -> str:
         return self.layout.root
+
+    def find_lengths_csv(self) -> str | None:
+        """The project's ``root_lengths.csv``, as :meth:`ProjectLayout.find_lengths_csv`
+        finds it, with stats only once a walk for a legacy ``test_latest`` folder has run
+        (:meth:`prewarm`, at project open): that walk's folder is used. Before one ran it
+        walks itself, as the layout does. The dashboards' check on the GUI thread."""
+        walked = self._walk.found
+        if walked is None:
+            return self.layout.find_lengths_csv(walk=self._walk)
+        return self.layout.find_lengths_csv(walk=lambda _root: walked[0])
 
     def lookup(self, stem: str, *, load: bool = True) -> Measurement:
         """``(length_mm, area_mm2, error, length_source, area_source)`` for ``stem`` (a

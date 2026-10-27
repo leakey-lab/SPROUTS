@@ -30,7 +30,7 @@ CHECKPOINTS_DIR = os.environ.get("SPROUTS_CHECKPOINTS_DIR") or os.path.join(
 )
 MASK_WEIGHTS_PATH = os.path.join(CHECKPOINTS_DIR, "mask_weights", "best_mask_model_V5.pth")
 SKELETONIZER_DIR = os.path.join(CHECKPOINTS_DIR, "skeletonizer")
-SKELETON_WEIGHTS_PATH = os.path.join(SKELETONIZER_DIR, "latest_net_G.pth")  # "<EPOCH>_net_G.pth"
+SKELETON_WEIGHTS_PATH = os.path.join(SKELETONIZER_DIR, "latest_net_G.pth")
 
 
 @dataclass(frozen=True)

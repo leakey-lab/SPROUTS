@@ -18,9 +18,9 @@ import os
 from typing import TYPE_CHECKING
 
 from app.config import ROOT_AREAS_CSV, ROOT_LENGTHS_CSV
+from app.project_layout import project_layout_of
 
 from .. import visualization_manager
-from ..image_manager import project_layout_of
 from ..key_text import platform_keys
 from ..panels import Panel
 
@@ -121,7 +121,9 @@ def missing_dashboard_data(
         title = f"{running}…" if running else "Waiting for a run to finish"
         return title, f"The {noun} dashboard opens when it has finished.", "", None
     try:
-        if spec.find_csv(layout).path:
+        # Through the project's measurement index: once its pool search has walked, a few stats.
+        index = visualization_manager.measurement_index_of(window, layout)
+        if spec.find_csv(layout, index).path:
             return None
     except Exception:  # noqa: BLE001 - the dashboard controller reports it then
         logger.exception("Could not look for the %s CSV", kind)

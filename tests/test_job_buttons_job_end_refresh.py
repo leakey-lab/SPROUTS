@@ -196,6 +196,79 @@ def test_a_job_end_of_no_known_name_re_reads_the_csvs(window, monkeypatch):
     assert window.metrics_bar._length_value.text() == "9.25 mm"
 
 
+def _settle() -> None:
+    QThreadPool.globalInstance().waitForDone(5000)
+    QApplication.processEvents()
+
+
+def test_a_measure_run_end_counts_measure_once_while_its_csv_is_parsed(window, monkeypatch):
+    """On the Measure stage with an image selected, the job end's refresh starts the parse
+    of the rewritten CSVs: Measure's inputs are counted once that parse is in (on_ready),
+    not a second time before it."""
+    window._go_to_stage("Measure")
+    _settle()
+    checks = []
+    real_check = window.stage_status.check
+    monkeypatch.setattr(
+        window.stage_status,
+        "check",
+        lambda *args, **kwargs: checks.append(kwargs.get("locate")) or real_check(*args, **kwargs),
+    )
+
+    run_job(window.jobs, "Measuring root length")
+    assert until(lambda: not window.metrics.loading)
+    _settle()
+
+    assert checks == [True]  # one count, after the parse: it may look for the CSVs
+
+
+def test_a_measure_run_end_parses_once_when_its_parse_also_searches(app, tmp_path, monkeypatch):
+    """A project measured for area only: after a Measure Area run the bar's refresh starts a
+    parse, which looks for root_lengths.csv in the legacy folders too; no second, located
+    parse follows it."""
+    from app.gui import image_manager
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setattr(
+        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
+    )
+    root = tmp_path / "proj"
+    root.mkdir()
+    image = QImage(32, 24, QImage.Format.Format_RGB32)
+    image.fill(QColor(90, 60, 30))
+    assert image.save(str(root / f"{STEM}.jpg"))
+    _csv(root / "mask" / "root_areas.csv", AREA_CSV_HEADERS, 4.5)
+    made = [MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))]
+    try:
+        window = made[0]
+        window.open_path(str(root))
+        assert until(lambda: window._image_leaves())
+        item = window.library_index.item_for(STEM)
+        window.file_list.setCurrentItem(item)
+        window.on_image_selected(item)
+        assert until(lambda: not window.metrics_bar._area_cell.isHidden())
+        assert until(lambda: not window.metrics.loading)
+        _settle()
+        parses = []
+        real_prewarm = measurement_index.MeasurementIndex.prewarm
+        monkeypatch.setattr(
+            measurement_index.MeasurementIndex,
+            "prewarm",
+            lambda index: parses.append(1) or real_prewarm(index),
+        )
+        _csv(root / "mask" / "root_areas.csv", AREA_CSV_HEADERS, 5.5)  # the run rewrote it
+
+        run_job(window.jobs, "Measuring root area")
+        assert until(lambda: window.metrics_bar._area_value.text().startswith("5.50 mm"))
+        assert until(lambda: not window.metrics.loading)
+        _settle()
+
+        assert parses == [1]
+    finally:
+        QThreadPool.globalInstance().waitForDone(5000)
+        delete_widgets(made)
+
+
 def test_a_measure_run_end_counts_against_the_csvs_found_again(app, tmp_path, monkeypatch):
     """On the Measure stage with no image selected, the job end's count of Measure's inputs
     looks for the CSVs it re-locates first: never "not measured yet" for a measured project

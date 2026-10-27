@@ -272,7 +272,71 @@ def test_find_lengths_csv_finds_measure_output_of_legacy_layouts(layout, tmp_pat
     written = _touch(os.path.join(images, "root_lengths.csv"))
     assert layout.resolve_skeletons_dir() == images
     assert layout.find_lengths_csv() == written
-    assert layout.find_lengths_csv(search_test_latest=False) is None
+    # A fixed folder is a stat, not a walk: found without the test_latest search too, as
+    # resolve_skeletons_dir(search_test_latest=False) finds the folder.
+    assert layout.find_lengths_csv(search_test_latest=False) == written
+
+
+def test_without_the_walk_the_fixed_legacy_folders_keep_the_full_search_order(
+    layout, tmp_path, monkeypatch
+):
+    def no_walk(*a, **k):
+        raise AssertionError("search_test_latest=False must never walk")
+
+    monkeypatch.setattr(pl, "find_test_latest_dir", no_walk)
+    root = str(tmp_path)
+    legacy2 = _touch(
+        os.path.join(root, "skeletonizer", "test_latest", "images", "root_lengths.csv")
+    )
+    assert layout.find_lengths_csv(search_test_latest=False) == legacy2
+    legacy1 = _touch(
+        os.path.join(root, "output", "skeletonizer", "test_latest", "images", "root_lengths.csv")
+    )
+    assert layout.find_lengths_csv(search_test_latest=False) == legacy1
+    base = _touch(os.path.join(root, "root_lengths.csv"))
+    assert layout.find_lengths_csv(search_test_latest=False) == base
+    primary = _touch(os.path.join(layout.skeletons_dir, "root_lengths.csv"))
+    assert layout.find_lengths_csv(search_test_latest=False) == primary
+    assert layout.find_lengths_csv() == primary  # the same order as the full search
+
+
+def test_the_csv_measure_writes_into_a_walked_test_latest_folder_is_found(
+    layout, tmp_path, walk_inside_tmp
+):
+    # resolve_skeletons_dir() measures <test_latest>/images and Measure writes its CSV there.
+    test_latest = os.path.join(str(tmp_path), "results", "run1", "test_latest")
+    images = os.path.join(test_latest, "images")
+    _touch(os.path.join(images, "a_fake.png"))
+    assert layout.resolve_skeletons_dir() == images
+    assert layout.find_lengths_csv() is None
+    written = _touch(os.path.join(images, "root_lengths.csv"))
+    assert layout.find_lengths_csv() == written
+    assert layout.find_lengths_csv(search_test_latest=False) is None  # only the walk finds it
+    # A CSV the app wrote into test_latest/ itself before 2024-12: the newer one wins.
+    older = _touch(os.path.join(test_latest, "root_lengths.csv"))
+    assert layout.find_lengths_csv() == written
+    os.remove(written)
+    assert layout.find_lengths_csv() == older
+
+
+def test_a_given_walk_replaces_the_test_latest_search(layout, tmp_path, monkeypatch):
+    def no_walk(*a, **k):
+        raise AssertionError("the given walk replaces the search")
+
+    monkeypatch.setattr(pl, "find_test_latest_dir", no_walk)
+    found = os.path.join(str(tmp_path), "elsewhere", "test_latest")
+    asked: list[str] = []
+
+    def walk(root):
+        asked.append(root)
+        return found
+
+    assert layout.find_lengths_csv(walk=walk) is None
+    assert asked == [layout.root]
+    written = _touch(os.path.join(found, "images", "root_lengths.csv"))
+    assert layout.find_lengths_csv(walk=walk) == written
+    assert layout.find_lengths_csv(search_test_latest=False, walk=walk) is None
+    assert asked == [layout.root, layout.root]  # never asked without search_test_latest
 
 
 def test_mask_candidates_follow_the_editor_lookup_order(layout):

@@ -23,7 +23,7 @@ from app.gui.stage_summary import Freshness, input_freshness, measure_text
 from app.handlers import skeleton_handler
 from app.inference import measure_run
 from app.inference.input_split import split_by_image, split_inputs
-from app.project_layout import ProjectLayout
+from app.project_layout import SKELETON_SUFFIX, ProjectLayout
 from tests.test_measure_handler import _handler, _project, _wait_idle, qapp  # noqa: F401
 
 ORPHAN = "orphan_T9_L2_2024.01.02_010209_001"
@@ -462,3 +462,32 @@ def test_the_status_lists_masks_and_gt_files_as_measure_lists_them(tmp_path):
     assert sorted(split.kept) == ["._A", "A"] and split.without_image == [".h.png"]
     assert sorted(gt_split.kept) == ["._A"]
     assert fresh == Freshness(2, False, without_image=1, gt=1)
+
+
+def test_the_status_lists_skeletons_as_measure_length_lists_them(tmp_path):
+    """Measure Length lists ``*_fake.png`` with that exact suffix, hidden names too
+    (``ProjectLayout.scan_skeletons``); the status count matched the suffix in any case and
+    skipped hidden names, so it counted skeletons Measure never reads and left out the
+    ones it does (C1-04)."""
+    for name in ("A.jpg", "B.jpg", "C.jpg", "._D.jpg"):
+        (tmp_path / name).write_bytes(b"x")
+    skeletons = tmp_path / "skeletons"
+    skeletons.mkdir()
+    names = ("A_fake.png", "B_fake.PNG", "C_FAKE.png", "._D_fake.png", ".h_fake.png", "_fake.png")
+    for name in (*names, ".A_fake.png.0123abcd.tmp"):
+        (skeletons / name).write_bytes(b"x")
+    layout = ProjectLayout(str(tmp_path))
+    images = layout.scan_images()
+
+    split = split_inputs(layout.scan_skeletons(layout.skeletons_dir), images)
+    fresh = input_freshness(
+        layout.skeletons_dir,
+        SKELETON_SUFFIX,
+        None,
+        images=images,
+        gt_folder=layout.gt_skeletons_dir,
+    )
+
+    assert sorted(split.kept) == ["._D", "A"]
+    assert split.without_image == [".h_fake.png", "_fake.png"]
+    assert fresh == Freshness(2, False, without_image=2)

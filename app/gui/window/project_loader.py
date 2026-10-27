@@ -31,11 +31,10 @@ from app.config import (
     SKELETONS_DIRNAME,
 )
 from app.data_processing.measurement_index import MeasurementIndex
-from app.project_layout import SKELETON_SUFFIX, ImageScan
+from app.project_layout import SKELETON_SUFFIX, ImageScan, project_layout_of
 from app.provenance import RUN_MANIFEST_FILENAME
 
 from .. import visualization_manager
-from ..image_manager import project_layout_of
 from ..library_index import count_label
 from ..panels import Panel
 from . import _common

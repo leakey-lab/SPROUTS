@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox
 from app import APP_NAME
 from app.gt import RegistryError, load_registry
 from app.handlers.job_registry import JobRegistry
+from app.project_layout import project_layout_of
 
 from . import (
     file_tree_manager,
@@ -36,7 +37,7 @@ from .correct.editor import CorrectEditor
 from .device_check import DeviceCheck
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
-from .image_manager import ImageManager, project_layout_of
+from .image_manager import ImageManager
 from .recent_projects import MemorySettings, RecentProjectsStore
 from .stage_status import StageStatus
 from .window import (
@@ -144,7 +145,7 @@ class MainWindow(QMainWindow):
         self._loading_project = False
         self._warmup_settle_until = 0.0
 
-        # Handlers are imported lazily (they import app.gui modules themselves).
+        # Handlers are imported lazily.
         from app.handlers.mask_generation_handler import MaskGenerationHandler
         from app.handlers.skeleton_handler import SkeletonHandler
 

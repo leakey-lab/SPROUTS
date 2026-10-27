@@ -25,9 +25,9 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.feedback import UiFeedback
-from app.gui.image_manager import project_layout_of
 from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
+from app.project_layout import project_layout_of
 from app.workers import GuardedThread, JobCancelled
 
 if TYPE_CHECKING:

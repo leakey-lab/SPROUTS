@@ -4,11 +4,12 @@
 library selection). Without a ``root_lengths.csv`` in ``skeletons/`` or the project folder,
 locating one fell through to the legacy ``test_latest`` search, a walk of the project
 folders and their parents: about 60 ms per selection on a 46k-image project (at most every
-2 s). The GUI-thread calls now look only where Measure writes today (a few stats); the walk
-runs in the worker's :meth:`MeasurementIndex.prewarm`, which the window starts when a
-project opens and after a Measure run, so a legacy CSV is still found. A located prewarm
-asked for while another parse runs (a project opened during the previous project's parse)
-starts when that parse reports.
+2 s). The GUI-thread calls now look only where Measure writes (a few stats: ``skeletons/``,
+the project folder and the two fixed legacy folders); the walk runs in the worker's
+:meth:`MeasurementIndex.prewarm`, which the window starts when a project opens and after a
+Measure run, so a legacy CSV is still found. A located prewarm asked for while another
+parse runs (a project opened during the previous project's parse) starts when that parse
+reports.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 LEGACY = ("skeletonizer", "test_latest", "images")
+#: Where Measure writes for a test_latest folder that only the walk finds.
+WALKED = ("results", "run1", "test_latest", "images")
 
 
 @pytest.fixture
@@ -52,8 +55,8 @@ def walks(monkeypatch):
     return seen
 
 
-def _legacy_lengths(root) -> str:
-    folder = root.joinpath(*LEGACY)
+def _legacy_lengths(root, parts: tuple[str, ...] = LEGACY) -> str:
+    folder = root.joinpath(*parts)
     folder.mkdir(parents=True)
     row = {
         "Image": STEM,
@@ -80,15 +83,36 @@ def test_the_gui_thread_calls_never_walk_for_a_legacy_csv(tmp_path, walks):
     assert walks == []
 
 
-def test_the_worker_prewarm_still_finds_a_legacy_csv(tmp_path, walks):
-    _legacy_lengths(tmp_path)
+@pytest.mark.parametrize("parts", [LEGACY, WALKED], ids=["fixed folder", "walked folder"])
+def test_the_worker_prewarm_still_finds_a_legacy_csv(tmp_path, walks, parts):
+    _legacy_lengths(tmp_path, parts)
     index = MeasurementIndex(str(tmp_path))
-    assert index.lookup(STEM, load=False).length_mm is None  # not found on the GUI thread
+    assert index.lookup(STEM, load=False).length_mm is None  # never parsed on the GUI thread
+    assert walks == []
 
     index.prewarm()  # a worker's job
 
     assert index.lookup(STEM, load=False).length_mm == 9.25
     assert index.sources()["length"].endswith("root_lengths.csv")
+
+
+def test_a_fixed_legacy_csv_is_found_again_after_a_job_end_without_a_walk(tmp_path, walks):
+    """invalidate() (every Measure job end) forgets the located CSV: the GUI thread's search
+    finds it again in a fixed legacy folder (a stat), so the bar asks for its parse."""
+    written = _legacy_lengths(tmp_path)
+    now = [0.0]
+    index = MeasurementIndex(str(tmp_path), clock=lambda: now[0])
+    index.prewarm()
+    assert index.lookup(STEM, load=False).length_mm == 9.25
+
+    index.invalidate()
+    now[0] += 5.0
+
+    assert index.needs_load() is True
+    assert index.sources()["length"] == written
+    index.prewarm()
+    assert index.lookup(STEM, load=False).length_mm == 9.25
+    assert walks == []  # a fixed folder is never walked for
 
 
 def test_a_csv_measure_writes_later_is_found_without_a_walk(tmp_path, walks):
@@ -261,15 +285,48 @@ def test_a_legacy_csv_stays_on_the_bar_after_a_generation_pass(app, tmp_path, ma
     assert _length_text(window) == "9.25 mm"  # never hidden: nothing was re-read
 
 
-def test_a_measure_run_into_a_legacy_folder_reaches_the_bar(app, tmp_path, made):
+@pytest.mark.parametrize("parts", [LEGACY, WALKED], ids=["fixed folder", "walked folder"])
+def test_a_measure_run_into_a_legacy_folder_reaches_the_bar(app, tmp_path, made, parts):
     _legacy_window(made, tmp_path, csv=False)
     window = made[0]
     assert _length_text(window) == ""  # nothing measured yet
 
-    _legacy_lengths(tmp_path / "proj")  # where Measure Length writes without skeletons/
+    _legacy_lengths(tmp_path / "proj", parts)  # where Measure Length writes without skeletons/
     _end_job(window, "Measuring root length")
 
     assert _until(lambda: _length_text(window) == "9.25 mm")
+
+
+def test_a_measure_run_that_ends_during_an_older_parse_reaches_the_bar(
+    app, tmp_path, made, monkeypatch
+):
+    """A parse in flight at a Measure end searched for root_lengths.csv before the run wrote
+    it into a walked legacy folder: a located search follows that parse (S06-01), so the
+    value reaches the bar."""
+    _legacy_window(made, tmp_path, csv=False)
+    window = made[0]
+    searched, gate, calls = threading.Event(), threading.Event(), []
+    real_prewarm = MeasurementIndex.prewarm
+
+    def prewarm(index):
+        calls.append(1)
+        if len(calls) > 1:
+            return real_prewarm(index)
+        index._length.load()  # its search predates the run's CSV
+        searched.set()
+        gate.wait(5)
+        index._area.load()
+
+    monkeypatch.setattr(MeasurementIndex, "prewarm", prewarm)
+    window.metrics.prewarm(locate=True)  # the older parse
+    assert searched.wait(5)
+    _legacy_lengths(tmp_path / "proj", WALKED)  # where the run writes
+
+    _end_job(window, "Measuring root length")
+    gate.set()
+
+    assert _until(lambda: _length_text(window) == "9.25 mm")
+    assert len(calls) == 2
 
 
 def test_a_project_opened_during_the_previous_parse_gets_its_own_search(app, tmp_path):

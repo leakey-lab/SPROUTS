@@ -14,7 +14,8 @@ A SPROUTS project is a folder of images. Every stage writes next to them::
 
 Older runs used ``output/mask`` and ``[output/]skeletonizer/test_latest/images``
 (plus a ``test_latest`` folder found by a bounded walk); the ``resolve_*`` and
-``find_*_csv`` methods keep today's search order for those.
+``find_*_csv`` methods keep today's search order for those. Only the walk lists folders:
+the fixed places are a few stats.
 
 Qt-free and side-effect free: nothing is created on disk, and each ``scan_*``
 method is a single ``os.scandir`` of one folder. The case-variant lookups remember, in
@@ -26,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sized
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TypeVar
@@ -50,9 +51,12 @@ __all__ = [
     "GtStems",
     "ImageScan",
     "ProjectLayout",
+    "few_keys",
     "find_by_stem",
     "find_test_latest_dir",
     "key_to_stems",
+    "project_layout_of",
+    "skeleton_stem",
 ]
 
 #: File-name suffix of a generated skeleton (skeleton_inference output).
@@ -94,11 +98,11 @@ def _scan(directory: str, key_of: Callable[[str], _K | None]) -> Iterator[tuple[
         return
 
 
-def _suffix_stem(suffix: str) -> Callable[[str], str | None]:
-    def stem_of(name: str) -> str | None:
-        return name[: -len(suffix)] if name.endswith(suffix) else None
-
-    return stem_of
+def skeleton_stem(name: str) -> str | None:
+    """The stem of a generated skeleton's file name, None for any other name: Measure
+    Length's name rule (the exact suffix; hidden names count; ``_fake.png`` alone has the
+    stem "")."""
+    return name[: -len(SKELETON_SUFFIX)] if name.endswith(SKELETON_SUFFIX) else None
 
 
 @dataclass
@@ -261,6 +265,14 @@ def find_by_stem(directory: str, stem: str, suffix: str) -> str | None:
     return _find_without_case(directory, stem, (suffix,), fold_endings=False)
 
 
+def few_keys(found: Sized, stems: Sized) -> bool:
+    """True when ``found`` holds under an eighth as many names as ``stems``: a remap onto the
+    Library's stems then keeps the strings of ``found`` (copies of a few names cost next to
+    nothing); a larger one hands back the strings of ``stems``, so its caller holds no second
+    copy of them (4 MiB for the masks of 46k images)."""
+    return 8 * len(found) < len(stems)
+
+
 def key_to_stems(found: Mapping[str, _V], stems: Iterable[str]) -> dict[str, _V]:
     """``found`` with each key replaced by the stem of ``stems`` with the same
     :func:`~app.naming.stem_key` (``{"a": m}`` with stems ``["A"]`` -> ``{"A": m}``).
@@ -269,15 +281,14 @@ def key_to_stems(found: Mapping[str, _V], stems: Iterable[str]) -> dict[str, _V]
     from its image's only in case is then found under the image's stem (O7). ``stems`` holds
     one stem per stem key, as a scan lists them: a key that is one of them is its own stem, so
     when every key is (outputs named as their images), no stem-key table of ``stems`` is built.
-    The result's keys are then still the strings of ``stems`` (in ``found``'s order), so a
-    caller that keeps it holds no second copy of them (4 MiB for the masks of 46k images);
-    only a few keys, under an eighth of ``stems``, keep their own strings.
+    The result's keys are then still the strings of ``stems`` (in ``found``'s order), unless
+    they are a few (:func:`few_keys`), which keep their own strings.
     """
     if not found:
         return {}
     names = stems.keys() if isinstance(stems, Mapping) else stems
     if isinstance(names, AbstractSet) and names >= found.keys():
-        if 8 * len(found) < len(names):
+        if few_keys(found, names):
             return dict(found)  # a few keys: their copies cost next to nothing
         canon = dict(zip(names, names, strict=True))  # each stem to its own string
         return dict(zip(map(canon.__getitem__, found), found.values(), strict=True))
@@ -424,7 +435,7 @@ class ProjectLayout:
 
     # ------------------------------------------------------------------ masks
     def mask_path(self, stem: str) -> str:
-        """Canonical save path ``mask/<stem>.png`` (what the mask editor writes)."""
+        """Canonical path ``mask/<stem>.png`` of the prediction (the editor never writes it)."""
         return self._path(MASK_DIRNAME, self.stem(stem) + ".png")
 
     def mask_candidates(self, stem: str) -> tuple[str, ...]:
@@ -473,7 +484,7 @@ class ProjectLayout:
 
     def scan_skeletons(self, directory: str | None = None) -> dict[str, str]:
         """``stem -> path`` of ``*_fake.png`` in ``directory`` (default ``skeletons/``)."""
-        return dict(_scan(directory or self.skeletons_dir, _suffix_stem(SKELETON_SUFFIX)))
+        return dict(_scan(directory or self.skeletons_dir, skeleton_stem))
 
     def scan_skeleton_stems(self) -> set[str]:
         return set(self.scan_skeletons())
@@ -563,23 +574,41 @@ class ProjectLayout:
         )
 
     # ------------------------------------------------------------------ metric CSVs
-    def _lengths_csv_candidates(self, search_test_latest: bool) -> Iterator[str]:
+    def _lengths_csv_candidates(
+        self, search_test_latest: bool, walk: Callable[[str], str | None] | None
+    ) -> Iterator[str]:
         yield self._path(SKELETONS_DIRNAME, ROOT_LENGTHS_CSV)
         yield self._path(ROOT_LENGTHS_CSV)
+        for parts in _LEGACY_SKELETON_DIRS:  # where Measure writes for legacy layouts
+            yield self._path(*parts, ROOT_LENGTHS_CSV)
         if search_test_latest:
-            for parts in _LEGACY_SKELETON_DIRS:  # where Measure writes for legacy layouts
-                yield self._path(*parts, ROOT_LENGTHS_CSV)
-            found = find_test_latest_dir(self.root)
+            found = (walk or find_test_latest_dir)(self.root)
             if found:
+                # Measure writes into the images/ folder it read (resolve_skeletons_dir);
+                # before 2024-12 the CSV went into test_latest/ itself.
+                yield os.path.join(found, "images", ROOT_LENGTHS_CSV)
                 yield os.path.join(found, ROOT_LENGTHS_CSV)
 
-    def find_lengths_csv(self, search_test_latest: bool = True) -> str | None:
-        """Existing ``root_lengths.csv``: ``skeletons/``, the project folder, then legacy.
+    def find_lengths_csv(
+        self,
+        search_test_latest: bool = True,
+        *,
+        walk: Callable[[str], str | None] | None = None,
+    ) -> str | None:
+        """Existing ``root_lengths.csv``: ``skeletons/``, the project folder, the legacy
+        folders of :attr:`skeleton_dir_candidates`, then a ``test_latest`` folder nearby.
 
-        The ``test_latest`` walk only runs when no primary location has the file.
+        Only that last place needs a walk of the folders: :func:`find_test_latest_dir`, or
+        ``walk`` called with the project folder (one that answers with an earlier walk's
+        result, say). It runs with ``search_test_latest`` and only when no other place has
+        the file; the other places are a few stats.
         """
         return next(
-            (p for p in self._lengths_csv_candidates(search_test_latest) if os.path.isfile(p)),
+            (
+                p
+                for p in self._lengths_csv_candidates(search_test_latest, walk)
+                if os.path.isfile(p)
+            ),
             None,
         )
 
@@ -590,6 +619,23 @@ class ProjectLayout:
             return None
         path = os.path.join(masks_dir, ROOT_AREAS_CSV)
         return path if os.path.isfile(path) else None
+
+
+def project_layout_of(manager: object) -> ProjectLayout | None:
+    """Layout of ``manager``'s project: ``original_folder``, else the first image's folder.
+
+    ``manager`` is the window's ``app.gui.image_manager.ImageManager`` or any stand-in with
+    ``original_folder`` / ``images``; None when nothing is loaded. Generate,
+    Measure, Visualize and the window all resolve the project through here, so
+    they can never disagree about it.
+    """
+    folder = getattr(manager, "original_folder", None)
+    if folder:
+        return ProjectLayout(folder)
+    images = getattr(manager, "images", None)
+    if images:
+        return ProjectLayout.for_image(next(iter(images.values())))
+    return None
 
 
 def find_test_latest_dir(start_path: str, max_depth: int = 3) -> str | None:
