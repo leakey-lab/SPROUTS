@@ -9,28 +9,19 @@ drops only the tiles it touches.
 
 from __future__ import annotations
 
-import os
 import time
 
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtWidgets import QGraphicsScene, QGraphicsView
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QImage, QPainter  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView  # noqa: E402
-
-from app.gui.canvas_layers.skeleton import SkeletonLayerItem  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui.canvas_layers.skeleton import SkeletonLayerItem
+from tests.qt_teardown import delete_widgets
 
 W, H = 1100, 700  # 5 x 3 tiles of 256 px
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

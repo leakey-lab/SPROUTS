@@ -4,20 +4,9 @@ GL viewports are used only when the env opt-out allows them AND a one-time probe
 found a usable hardware OpenGL context (UI-16, PE-05).
 """
 
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import canvas_gl  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui import canvas_gl
 
 
 @pytest.fixture(autouse=True)

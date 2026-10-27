@@ -17,30 +17,27 @@ pre-merge canvases fail every photo threshold here:
 import contextlib
 import os
 
+import cv2
+import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPoint, QPointF, QRectF  # noqa: E402
-from PyQt6.QtGui import QPainter  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QPoint, QPointF, QRectF
+from PyQt6.QtGui import QPainter
+from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
-    QMessageBox,
     QStatusBar,
     QWidget,
 )
 
-from app.gui import canvas_gl, editor_prompts  # noqa: E402
-from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import CLASSES  # noqa: E402
-from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.render_metrics import (  # noqa: E402
+from app.gui import canvas_gl, editor_prompts
+from app.gui.correct.editor import CorrectEditor
+from app.gui.correct.layer import CLASSES
+from app.gui.display_controller import DisplayController
+from app.gui.image_manager import ImageManager
+from app.gui.widgets import tokens
+from tests.correct_support import drag
+from tests.qt_teardown import flush_deleted
+from tests.render_metrics import (
     chirp_alias_std,
     chirp_image,
     chirp_pan_delta,
@@ -50,22 +47,13 @@ from tests.render_metrics import (  # noqa: E402
     sine_step_ratio,
     stripes_image,
 )
-from tests.test_correct_editor import drag  # noqa: E402
 
 W, H = 640, 480  # photo patterns
 CHIRP_H = 64
 VIEW_SIZE = (1100, 800)
 CANVASES = ("editor", "library")
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_modal(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture(scope="module")
@@ -184,11 +172,10 @@ def _discarding():
 
 
 @pytest.fixture(scope="module")
-def canvases(app, patterns, tmp_path_factory):
+def canvases(app, patterns):
     """Both canvases, built once for the module on the raster viewport."""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv(canvas_gl.ENV_VAR, "0")
-        mp.setenv("SPROUTS_CONFIG_DIR", str(tmp_path_factory.mktemp("cfg")))
         folder = os.path.dirname(patterns["sine"])
         built = {kind: _Canvas(kind, folder, patterns).present() for kind in CANVASES}
         yield built
@@ -281,9 +268,8 @@ def test_the_next_image_leaves_nothing_of_the_last_one_when_zoomed_out(canvases,
     assert region.size and np.abs(_gray(region) - 200).max() <= 1
 
 
-def test_enhance_on_and_off_changes_the_zoomed_out_photo(app, patterns, monkeypatch, tmp_path):
+def test_enhance_on_and_off_changes_the_zoomed_out_photo(app, patterns, monkeypatch):
     monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
     canvas = _Canvas("editor", "", {}).present()  # its own editor: Enhance sticks to it
     try:
         canvas.show("gradient", patterns["gradient"])
@@ -303,11 +289,10 @@ def test_enhance_on_and_off_changes_the_zoomed_out_photo(app, patterns, monkeypa
 # ------------------------------------------------------------------ GL on / off
 @pytest.mark.parametrize("kind", CANVASES)
 def test_an_opengl_swap_keeps_the_view_config_and_the_smooth_photo(
-    app, patterns, monkeypatch, tmp_path, kind
+    app, patterns, monkeypatch, kind
 ):
     """Config level (offscreen cannot draw GL): a GL viewport and back leaves the render
     hints as they were, and the photo is still smooth at 4x."""
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setattr(canvas_gl, "opengl_viewports_allowed", lambda: True)
     canvas = _Canvas(kind, os.path.dirname(patterns["sine"]), patterns)  # not shown yet
     try:

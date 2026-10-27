@@ -10,29 +10,21 @@ once, invisibly, so their textures are uploaded before the first frame that show
 A new image drops the warm-up of the old one.
 """
 
-import os
 import time
 
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QImage, QPainter  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QGraphicsScene,
     QStyleOptionGraphicsItem,
 )
 
-from app.gui.canvas_layers.photo import PhotoLayerItem, TiledLevels  # noqa: E402
+from app.gui.canvas_layers.photo import PhotoLayerItem, TiledLevels
 
-
-@pytest.fixture(scope="module", autouse=True)
-def app():
-    return QApplication.instance() or QApplication([])
+pytestmark = pytest.mark.usefixtures("app")
 
 
 def photo(w: int = 1400, h: int = 1000, tile: int = 64) -> PhotoLayerItem:

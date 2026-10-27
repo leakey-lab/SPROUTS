@@ -11,12 +11,9 @@ import os
 import cv2
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtGui import QFontInfo, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtGui import QFontInfo, QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QLabel,
@@ -24,23 +21,19 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.enhancement import (  # noqa: E402
+from app.enhancement import (
     METHOD_CLAHE,
     METHOD_STRETCH,
     EnhanceDefaultsStore,
     EnhanceSettings,
     enhance,
 )
-from app.gui.image_normalization_interface import NormalizationControls  # noqa: E402
-from app.gui.widgets import EnhancePopover  # noqa: E402
-from resources.resource_utils import resource_path  # noqa: E402
+from app.gui.image_normalization_interface import NormalizationControls
+from app.gui.widgets import EnhancePopover
+from resources.resource_utils import resource_path
+from tests.qt_wait import wait_until
 
 FACTORY = resource_path("config", "normalization_defaults.json")
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +56,12 @@ def _store(tmp_path, user=None, factory=None):
 def _image():
     rng = np.random.default_rng(3)
     return rng.normal(90, 10, (60, 80, 3)).clip(0, 255).astype(np.uint8)
+
+
+def _wait_for_preview(controls: NormalizationControls) -> None:
+    """Run the event loop until the debounced preview has fired (at once when none is due):
+    a loaded machine can deliver the timer well after its delay."""
+    wait_until(lambda: not controls._preview_timer.isActive())
 
 
 # --------------------------------------------------------------------------- defaults (RB-13)
@@ -172,7 +171,7 @@ def test_rapid_slider_changes_emit_one_debounced_update(app, tmp_path):
     for value in (11, 12, 13, 14, 15):
         controls.clip_slider.setValue(value)
     assert hits == []  # nothing rendered on the per-tick path
-    QTest.qWait(150)
+    _wait_for_preview(controls)
     assert hits == [1]
     assert controls.is_active()
 
@@ -324,7 +323,7 @@ def test_checking_the_box_smooths_blocks_without_turning_on_clahe(app, tmp_path)
     controls.enhancement_changed.connect(lambda: hits.append(1))
     assert not controls.is_active() and controls.apply_to(img) is img
     controls.deblock_check.setChecked(True)
-    QTest.qWait(120)  # past the 80 ms preview delay
+    _wait_for_preview(controls)
     assert controls.is_active() and hits == [1]
     assert np.array_equal(controls.apply_to(img), enhance(img, controls.settings(), tone=False))
     assert not np.array_equal(controls.apply_to(img), img)
@@ -365,15 +364,15 @@ def test_the_box_is_saved_with_the_defaults_and_reset_restores_it(app, user_conf
     assert again.deblock_check.isChecked() and again.settings().deblock
     again.set_source_path("a.jpg")
     again.deblock_check.setChecked(False)
-    QTest.qWait(120)  # let the toggle's own preview go first
+    _wait_for_preview(again)  # let the toggle's own preview go first
     hits = []
     again.enhancement_changed.connect(lambda: hits.append(1))
     again.reset_to_defaults()
     assert again.deblock_check.isChecked()
-    QTest.qWait(120)
+    _wait_for_preview(again)
     assert hits == [1]  # only the box is in effect, and the picture follows it
     again.reset_to_defaults()
-    QTest.qWait(120)
+    _wait_for_preview(again)
     assert hits == [1]  # nothing effective changed: no re-render
 
 

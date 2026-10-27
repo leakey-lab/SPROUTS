@@ -14,19 +14,19 @@ import pytest
 from app import enhancement as enh
 from app.gui.correct.layer import MASK, SKELETON
 from tests.correct_goldens_support import make_synth_project
-from tests.test_correct_goldens import (  # noqa: F401  (the fixtures are used by name)
+from tests.test_correct_goldens import (
     GOLDENS,
-    app,
     assert_mask_file,
     assert_skeleton_file,
     files,
-    guards,
-    make_editor,
     replay,
     skeleton_start,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+# The Correct page's guards, as for the goldens this module replays.
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 #: Packages that write masks, skeletons, ground truth or measurements: none may use Enhance.
 FORBIDDEN = ("inference", "handlers", "gt", "masks")
@@ -88,7 +88,7 @@ def _blocky_jpeg_instead_of(png: str) -> str:
     return jpg
 
 
-def test_the_correct_goldens_replay_identically_with_the_box_on(make_editor, tmp_path):  # noqa: F811
+def test_the_correct_goldens_replay_identically_with_the_box_on(make_editor, tmp_path):
     case = "synth_model_mask_and_skeleton"
     golden = GOLDENS["cases"][case]
     folder, png = make_synth_project(str(tmp_path), case)

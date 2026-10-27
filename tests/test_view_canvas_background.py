@@ -23,27 +23,23 @@ module that fails to import fails only its own cases.
 
 import ast
 import importlib
-import os
 import textwrap
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QPixmap, QTransform  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QPoint, QRectF, Qt
+from PyQt6.QtGui import QColor, QPixmap, QTransform
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
 )
 
-from app.gui.brush_preview import BrushPreview  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
+from app.gui.brush_preview import BrushPreview
+from app.gui.widgets import tokens
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_QSS = REPO_ROOT / "resources" / "themes" / "dark_theme.qss"

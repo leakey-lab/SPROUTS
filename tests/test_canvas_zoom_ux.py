@@ -6,29 +6,23 @@ integer stops from 2x), the wheel stays continuous (1.2 per notch), and GL viewp
 for ``gl_samples()`` MSAA samples (``ROOT_VIEWER_GL_SAMPLES``, default 4, 0 = off).
 """
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QPixmap, QWheelEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QPixmap, QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
     QMenu,
-    QMessageBox,
     QWidget,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from app.gui.widgets import ZoomCluster  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_view import CanvasViewMixin
+from app.gui.widgets import ZoomCluster
+from tests.qt_teardown import flush_deleted
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 IMAGE_W, IMAGE_H = 800, 600
@@ -42,17 +36,7 @@ class _View(CanvasViewMixin, QGraphicsView):
         self._init_canvas()
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_message_boxes(monkeypatch):
-    def fail(*_args, **_kwargs):
-        raise AssertionError("unexpected QMessageBox.exec in a zoom test")
-
-    monkeypatch.setattr(QMessageBox, "exec", fail)
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 @pytest.fixture

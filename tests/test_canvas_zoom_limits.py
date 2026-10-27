@@ -8,24 +8,19 @@ the image: the fit zoom is never clamped up to ``MIN_ZOOM``. Programmatic ``set_
 the absolute limits.
 """
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QMargins, QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QPixmap, QWheelEvent  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QMargins, QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QPixmap, QWheelEvent
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_view import CanvasViewMixin
+from tests.qt_teardown import delete_widgets
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 
@@ -34,11 +29,6 @@ class _View(CanvasViewMixin, QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._init_canvas()
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -9,29 +9,19 @@ as one path (the engine covers a translucent stroke once). Display only.
 
 from __future__ import annotations
 
-import os
-
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import QLineF, QPointF, QRectF
+from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtWidgets import QGraphicsScene
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QLineF, QPointF, QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene  # noqa: E402
-
-import app.gui.canvas_layers.skeleton as sk  # noqa: E402
-from app.gui.skeleton_graph_model import _skeletonize_uint8  # noqa: E402
-from app.gui.skeleton_overlay import HALO_ALPHA  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
+import app.gui.canvas_layers.skeleton as sk
+from app.gui.skeleton_graph_model import _skeletonize_uint8
+from app.gui.skeleton_overlay import HALO_ALPHA
+from app.gui.widgets import tokens
 
 W, H = 160, 120
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _bent() -> np.ndarray:

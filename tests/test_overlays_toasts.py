@@ -7,30 +7,19 @@ success.
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
-
-from app.gui.widgets import ToastManager  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.widgets import ToastManager
+from tests.qt_teardown import flush_deleted
 
 LONG_ERROR = (
     "Cannot export: gt/classes.json is invalid ("
     + "class 'root_tip' colour #ffd166 duplicates class 'nodule'; " * 4
     + ")"
 )
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
 
 
 @pytest.fixture

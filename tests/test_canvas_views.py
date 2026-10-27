@@ -9,15 +9,11 @@ policy with partial updates and mouse tracking on the raster viewport (PE-05,
 PE-12, UI-16). The Correct page's layers get the canvas input behind the view.
 """
 
-import os
 import sys
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QMargins, QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import (  # noqa: E402
+from PyQt6.QtCore import QEvent, QMargins, QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import (
     QColor,
     QImage,
     QKeyEvent,
@@ -25,8 +21,8 @@ from PyQt6.QtGui import (  # noqa: E402
     QPixmap,
     QWheelEvent,
 )
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
@@ -34,10 +30,10 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QPushButton,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.display_controller import MagnifyingGraphicsView  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.display_controller import MagnifyingGraphicsView
+from app.gui.editor_canvas import EditorCanvasView
+from tests.qt_teardown import delete_widgets
 
 VIEWS = [MagnifyingGraphicsView, EditorCanvasView]
 CTRL = Qt.KeyboardModifier.ControlModifier
@@ -47,19 +43,8 @@ PRESS, RELEASE = QEvent.Type.KeyPress, QEvent.Type.KeyRelease
 IMAGE_W, IMAGE_H = 800, 600
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
-def raster_only(monkeypatch):
-    """No OpenGL: the documented env opt-out (also what offscreen CI ends up with)."""
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-
-
-@pytest.fixture
-def make_view(app, raster_only):
+def make_view(app, gl_off):
     """A shown top-level view holding an 800x600 image, 100 % zoom."""
     made = []
 
@@ -354,7 +339,7 @@ def test_page_keys_do_not_scroll_the_canvas(make_view, view_cls):
 
 # ------------------------------------------------------------------ viewport policy
 @pytest.mark.parametrize("view_cls", VIEWS, ids=lambda c: c.__name__)
-def test_raster_viewport_gets_partial_updates_and_mouse_tracking(app, raster_only, view_cls):
+def test_raster_viewport_gets_partial_updates_and_mouse_tracking(app, gl_off, view_cls):
     view = view_cls(None)
     for _ in range(2):
         assert not view.viewport().inherits("QOpenGLWidget")
@@ -405,7 +390,7 @@ def _write_image(path, w=64, h=48) -> str:
 
 
 @pytest.fixture
-def correct_page(app, raster_only):
+def correct_page(app, gl_off):
     """``open(image_path, size=(800, 600))``: a shown Correct page with the image open;
     every page made is deleted deterministically afterwards."""
     from app.gui.correct.editor import CorrectEditor

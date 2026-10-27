@@ -12,49 +12,19 @@ from __future__ import annotations
 
 import os
 
+import cv2
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-
-from app.gui.correct.layer import SKELETON  # noqa: E402
-from app.io_utils import imread_unicode  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    draw_line,
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-    record,
-    write_skeleton,
-)
+from app.gui.correct.layer import SKELETON
+from app.io_utils import imread_unicode
+from tests.correct_support import draw_line, record, write_skeleton
 
 UNCHANGED = ("Skeleton unchanged: nothing to save", "info")
 NOTHING_UNSAVED = ("Nothing unsaved", "info")  # the page saves unsaved layers only (O2)
 REMOVED = ("Skeleton equals the prediction: removed gt/skeletons/a.png", "info")
 REMOVED_B = ("Skeleton equals the prediction: removed gt/skeletons/b.png", "info")
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def test_a_no_op_save_writes_nothing_and_says_so(make_editor, project):

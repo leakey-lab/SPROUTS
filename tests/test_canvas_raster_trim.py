@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT"] = "0"
 
 import cv2  # noqa: E402
@@ -19,7 +18,7 @@ import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 from PyQt6.QtCore import QPointF, QRect, QRectF  # noqa: E402
 from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QRegion  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QStyleOptionGraphicsItem  # noqa: E402
+from PyQt6.QtWidgets import QGraphicsScene, QStyleOptionGraphicsItem  # noqa: E402
 
 from app.gui.canvas_layers import raster  # noqa: E402
 from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
@@ -32,9 +31,7 @@ SCALES = [(1.0, 1.0), (1.37, 1.0), (2.0, 1.0), (8.0, 1.0), (1.0, 1.25), (0.8, 1.
 SCALES += [(1.25, 1.5), (1.0, 1.75), (0.5, 2.0), (1.0, 2.0), (3.7, 2.0)]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def app():
-    return QApplication.instance() or QApplication([])
+pytestmark = pytest.mark.usefixtures("app")
 
 
 class _WholeTiles(RasterLayerItem):

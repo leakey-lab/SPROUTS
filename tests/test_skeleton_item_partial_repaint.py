@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT"] = "0"
 
 import cv2  # noqa: E402
@@ -30,11 +29,6 @@ from tests.qt_teardown import delete_widgets  # noqa: E402
 
 W, H = 200, 150
 SIDE = 24  # device px of each region repainted: about a brush ring's hover update
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

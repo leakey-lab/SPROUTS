@@ -9,25 +9,14 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtGui import QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget  # noqa: E402
-
-from app.gui.widgets import DockSlider, IconButton, SegmentedControl  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
+from app.gui.widgets import DockSlider, IconButton, SegmentedControl
+from tests.qt_teardown import flush_deleted
 
 
 @pytest.fixture

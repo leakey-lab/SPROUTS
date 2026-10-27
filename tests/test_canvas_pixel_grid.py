@@ -8,16 +8,12 @@ calls; ``pixel_grid_changed`` reports the new state.
 """
 
 import math
-import os
 
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
+from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsPixmapItem,
@@ -25,11 +21,11 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QGraphicsView,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin, draw_pixel_grid  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.render_metrics import qimage_to_rgb  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_layers.raster import RasterLayerItem
+from app.gui.canvas_view import CanvasViewMixin, draw_pixel_grid
+from tests.qt_teardown import delete_widgets
+from tests.render_metrics import qimage_to_rgb
 
 W, H = 64, 48
 FLAT = QColor(90, 90, 90)
@@ -41,11 +37,6 @@ class _View(CanvasViewMixin, QGraphicsView):
         self._init_canvas()
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setRenderHints(QPainter.RenderHint.Antialiasing)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

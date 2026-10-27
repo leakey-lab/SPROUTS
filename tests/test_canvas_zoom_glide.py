@@ -11,17 +11,13 @@ setting (``QApplication.isEffectEnabled(UI_General)``: Windows' UI effects switc
 offscreen platform) unless ``set_zoom_animation`` overrides it; a hidden view jumps.
 """
 
-import os
 import time
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QMouseEvent, QPixmap, QWheelEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QMouseEvent, QPixmap, QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
@@ -29,10 +25,10 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from app.gui.widgets import ZoomCluster  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_view import CanvasViewMixin
+from app.gui.widgets import ZoomCluster
+from tests.qt_teardown import flush_deleted
 
 CTRL = Qt.KeyboardModifier.ControlModifier
 IMAGE_W, IMAGE_H = 800, 600
@@ -42,11 +38,6 @@ class _View(CanvasViewMixin, QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._init_canvas()
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _build(app, monkeypatch) -> _View:

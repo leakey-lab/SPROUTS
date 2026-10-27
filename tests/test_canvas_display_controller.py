@@ -15,15 +15,11 @@ Unified-editor plan P3 (spec 10.3, 11): the photo is a PhotoLayerItem (smooth at
 
 import os
 
+import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen
+from PyQt6.QtWidgets import (
     QComboBox,
     QGraphicsItem,
     QGraphicsTextItem,
@@ -32,11 +28,11 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
-from app.gui.canvas_layers.skeleton import SkeletonLayerItem  # noqa: E402
-from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
+from app.gui.canvas_layers.photo import PhotoLayerItem
+from app.gui.canvas_layers.skeleton import SkeletonLayerItem
+from app.gui.display_controller import DisplayController
+from app.gui.image_manager import ImageManager
+from app.gui.widgets import tokens
 
 SINGLE, OVERLAY, SIDE_BY_SIDE = 0, 1, 2
 IMG_W, IMG_H = 320, 240  # library image
@@ -46,11 +42,6 @@ A_RGB, B_RGB, C_RGB = (90, 60, 40), (40, 60, 90), (60, 90, 40)
 # horizontal one rows 59-61. Their centres in image pixels:
 B_LINE_X = 100.5 * IMG_W / SKEL_W
 A_LINE_Y = 60.5 * IMG_H / SKEL_H
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _image(path, rgb):

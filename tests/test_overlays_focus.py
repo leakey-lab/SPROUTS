@@ -8,15 +8,10 @@ was, Tab still reaches them.
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QLabel,
@@ -27,13 +22,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gui.widgets import DockSlider, FloatingDock, ToolRail, keep_canvas_focus  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
+from app.gui.widgets import DockSlider, FloatingDock, ToolRail, keep_canvas_focus
 
 
 def _panel_with_controls():

@@ -4,22 +4,10 @@ Instantiates every widget + the icon loader under an offscreen QApplication so
 regressions in the presentation layer surface in CI without a display.
 """
 
-import os
+from PyQt6.QtWidgets import QLabel, QWidget
 
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
-
-from app.gui import widgets  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
+from app.gui import widgets
+from app.gui.widgets import tokens
 
 
 def test_tokens_rgba():

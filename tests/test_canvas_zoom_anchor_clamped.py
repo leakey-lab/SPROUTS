@@ -7,25 +7,19 @@ start from the point shown there, not from the one the earlier zooms aimed at (t
 jumped back to that one: ~500 px at 300 % in the probe below).
 """
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QPointF, QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QPoint, QPointF, QRectF
+from PyQt6.QtGui import QColor, QPixmap
+from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_view import CanvasViewMixin
+from tests.qt_teardown import flush_deleted
 
 W, H = 400, 300
 
@@ -35,11 +29,6 @@ class _View(CanvasViewMixin, QGraphicsView):
         super().__init__(parent)
         self._init_canvas()
         self.setFrameShape(QFrame.Shape.NoFrame)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

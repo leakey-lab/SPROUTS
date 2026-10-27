@@ -7,23 +7,19 @@ request must name a part of the photo that is on screen: the top-left pixel it n
 frame came and every tile made ahead waited for the first frame that showed it.
 """
 
-import os
 import time
 
 import numpy as np
 import pytest
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QFrame, QGraphicsScene, QGraphicsView
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsView  # noqa: E402
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_layers import photo as photo_module  # noqa: E402
-from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_layers import photo as photo_module
+from app.gui.canvas_layers.photo import PhotoLayerItem
+from app.gui.canvas_view import CanvasViewMixin
+from tests.qt_teardown import flush_deleted
 
 W, H = 1400, 1000
 
@@ -33,11 +29,6 @@ class _View(CanvasViewMixin, QGraphicsView):
         super().__init__(None)
         self._init_canvas()
         self.setFrameShape(QFrame.Shape.NoFrame)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

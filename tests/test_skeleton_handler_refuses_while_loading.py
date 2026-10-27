@@ -17,7 +17,6 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import pytest
-from PyQt6.QtWidgets import QApplication
 
 from app.feedback import RecordingFeedback
 from app.handlers import skeleton_handler as sh
@@ -27,11 +26,6 @@ from app.handlers.skeleton_handler import SkeletonHandler
 
 LOADING = (LOADING_REFUSED, "warn")
 ENTRY_POINTS = ["calculate_root_length", "calculate_root_area"]
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 class _IdleGeneration:

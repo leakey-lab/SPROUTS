@@ -4,34 +4,26 @@ over the editor widget, with fit insets, focus return and click-without-focus wi
 """
 
 import gc
-import os
-import sys
-import traceback
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QPixmap  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QColor, QPixmap
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QAbstractButton,
     QApplication,
     QFrame,
     QGraphicsPixmapItem,
     QGraphicsScene,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
-from app.enhancement import EnhanceDefaultsStore  # noqa: E402
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from app.gui.editor_chrome import EditorChrome  # noqa: E402
-from app.gui.image_normalization_interface import NormalizationControls  # noqa: E402
-from app.gui.widgets import (  # noqa: E402
+from app.enhancement import EnhanceDefaultsStore
+from app.gui.editor_canvas import EditorCanvasView
+from app.gui.editor_chrome import EditorChrome
+from app.gui.image_normalization_interface import NormalizationControls
+from app.gui.widgets import (
     DockSlider,
     EnhancePopover,
     FloatingDock,
@@ -42,42 +34,20 @@ from app.gui.widgets import (  # noqa: E402
     ZoomCluster,
     tokens,
 )
-from app.gui.widgets.buttons import primary_button  # noqa: E402
-from app.gui.widgets.overlay_geometry import LayoutMetrics  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui.widgets.buttons import primary_button
+from app.gui.widgets.overlay_geometry import LayoutMetrics
+from tests.qt_teardown import delete_widgets
 
 M = LayoutMetrics()
-UNDER_TEST = {"editor_chrome.py", "editor_canvas.py", "test_editor_chrome.py"}
+# Only an exception of the code under test fails the test (``slot_errors``); another
+# module's leftover widget (e.g. a queued repaint) only gets its traceback printed.
+SLOT_ERRORS_FROM = ("editor_chrome.py", "editor_canvas.py", "test_editor_chrome.py")
 # A camera photo's name and a polyline hint: a chip wide enough to drop below a wide prompt.
 PHOTO_NAME = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
 POLYLINE_HINT = "Skeleton · Polyline · 1 point · click to add more"
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _guards(monkeypatch, tmp_path):
-    """No prompt, no GL, no write to the real user config, and no exception of the code under
-    test hidden in a slot (PyQt hands those to sys.excepthook). Another module's leftover
-    widget (e.g. a queued repaint) only gets its traceback printed."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    errors = []
-
-    def hook(kind, value, tb):
-        files = {os.path.basename(frame.filename) for frame in traceback.extract_tb(tb)}
-        if files & UNDER_TEST:
-            errors.append(value)
-        else:
-            sys.__excepthook__(kind, value, tb)
-
-    monkeypatch.setattr(sys, "excepthook", hook)
-    yield
-    assert errors == []
+# No prompt, no GL, and no exception of the code under test hidden in a slot.
+pytestmark = pytest.mark.usefixtures("no_prompts", "gl_off", "slot_errors")
 
 
 class Page(QWidget):

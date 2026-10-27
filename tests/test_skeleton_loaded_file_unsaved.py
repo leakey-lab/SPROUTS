@@ -15,22 +15,18 @@ import os
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint
+from PyQt6.QtWidgets import QFileDialog
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QPoint  # noqa: E402
-from PyQt6.QtWidgets import QFileDialog  # noqa: E402
-
-from app.gui.correct.layer import SKELETON, LayerStatus  # noqa: E402
-from app.gui.correct.skeleton_document import (  # noqa: E402
+from app.gui.correct.layer import SKELETON, LayerStatus
+from app.gui.correct.skeleton_document import (
     GT,
     LOADED,
     PREDICTION,
     SkeletonDocument,
 )
-from app.gui.skeleton_graph_model import SkeletonCorrectionModel  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.gui.skeleton_graph_model import SkeletonCorrectionModel
+from tests.correct_support import (
     CANCEL,
     DISCARD,
     SAVE,
@@ -38,8 +34,6 @@ from tests.test_correct_editor import (  # noqa: E402
     answer_prompts,
     editor_factory,
     install_guards,
-    new_project,
-    qapp,
     raster,
     record,
     write_skeleton,
@@ -153,11 +147,6 @@ def test_an_unreadable_file_leaves_a_clean_skeleton_clean(folder):
 
 
 # ----------------------------------------------------------------------------- the editor
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
 @pytest.fixture
 def guarded(monkeypatch, tmp_path):
     yield from install_guards(monkeypatch, tmp_path)
@@ -166,11 +155,6 @@ def guarded(monkeypatch, tmp_path):
 @pytest.fixture
 def make_editor(app, guarded):
     yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
 
 
 @pytest.fixture

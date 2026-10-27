@@ -27,12 +27,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QRectF  # noqa: E402
-from PyQt6.QtGui import QImage, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QEvent, QRectF
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsItem,
     QGraphicsPixmapItem,
@@ -40,25 +37,20 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QGraphicsView,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from app.gui.skeleton_overlay import (  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.editor_canvas import EditorCanvasView
+from app.gui.skeleton_overlay import (
     _SPACING_PASSES,
     DotsItem,
     SkeletonDecorations,
     _min_spacing,
     partial_device_cache,
 )
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from tests.qt_teardown import delete_widgets
 
 CACHE = QGraphicsItem.CacheMode.DeviceCoordinateCache
 DIRECT = QGraphicsItem.CacheMode.NoCache
 W, H = 640, 480
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

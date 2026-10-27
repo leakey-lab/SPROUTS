@@ -7,15 +7,10 @@ chip, Enhance popover and the GT class panel.
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRect  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QRect
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
@@ -23,9 +18,9 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gt.registry import default_registry  # noqa: E402
-from app.gui.class_panel import ClassPanel  # noqa: E402
-from app.gui.widgets import (  # noqa: E402
+from app.gt.registry import default_registry
+from app.gui.class_panel import ClassPanel
+from app.gui.widgets import (
     DockSlider,
     EnhancePopover,
     FloatingDock,
@@ -35,15 +30,9 @@ from app.gui.widgets import (  # noqa: E402
     ToolRail,
     ZoomCluster,
 )
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from tests.qt_teardown import flush_deleted
 
 LONG_NAME = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
 
 
 class _Editor:

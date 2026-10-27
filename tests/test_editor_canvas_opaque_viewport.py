@@ -18,29 +18,19 @@ before the view filled it again. ``EditorCanvasView`` marks its raster viewport 
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
+from PyQt6.QtCore import QEvent, QObject, QPoint, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
+from PyQt6.QtWidgets import QApplication, QGraphicsPixmapItem, QGraphicsScene
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QObject, QPoint, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsPixmapItem, QGraphicsScene  # noqa: E402
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.display_controller import MagnifyingGraphicsView  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.display_controller import MagnifyingGraphicsView
+from app.gui.editor_canvas import EditorCanvasView
+from tests.qt_teardown import delete_widgets
 
 OPAQUE = Qt.WidgetAttribute.WA_OpaquePaintEvent
 POISON = QColor(255, 0, 255)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

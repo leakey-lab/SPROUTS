@@ -12,19 +12,14 @@ through a weak reference that it is gone.
 """
 
 import gc
-import os
 import weakref
 
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRect, QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QRect, QRectF
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QGraphicsScene,
@@ -33,15 +28,16 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
-from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
-from app.gui.canvas_layers.skeleton import SkeletonLayerItem  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.gui.skeleton_overlay import DotsItem  # noqa: E402
-from app.imaging.pyramid import ImagePyramid  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_layers.photo import PhotoLayerItem
+from app.gui.canvas_layers.raster import RasterLayerItem
+from app.gui.canvas_layers.skeleton import SkeletonLayerItem
+from app.gui.canvas_view import CanvasViewMixin
+from app.gui.display_controller import DisplayController
+from app.gui.image_manager import ImageManager
+from app.gui.skeleton_overlay import DotsItem
+from app.imaging.pyramid import ImagePyramid
+from tests.qt_wait import wait_until
 
 W, H = 1400, 1000
 
@@ -51,11 +47,6 @@ class _View(CanvasViewMixin, QGraphicsView):
         super().__init__(None)
         self._init_canvas()
         self.setFrameShape(QFrame.Shape.NoFrame)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
@@ -82,6 +73,24 @@ def no_gc():
         gc.enable()
 
 
+@pytest.fixture(autouse=True)
+def short_warm_delay(monkeypatch):
+    """The idle warm-ups start 10 ms after the last paint (or set_mask), not 120-150 ms:
+    these tests need them run, not their delay (the warm-up tests pin that)."""
+    for cls in (PhotoLayerItem, RasterLayerItem, SkeletonLayerItem):
+        monkeypatch.setattr(cls, "WARM_DELAY_MS", 10)
+
+
+def _idle(*items) -> None:
+    """Run the event loop until no item's warm-up timer is pending (each slice restarts it;
+    an item that never planned a warm-up has no timer)."""
+
+    def idle() -> bool:
+        return not any(i._warm_timer is not None and i._warm_timer.isActive() for i in items)
+
+    assert wait_until(idle), "the idle warm-up did not finish"
+
+
 def _photo(tile: int = 64) -> PhotoLayerItem:
     item = PhotoLayerItem()
     item.TILE = tile  # several tiles per level: the tiled path, not one pixmap
@@ -99,7 +108,7 @@ def _show(view: _View, item, zooms=(0.3, 0.9, 2.0)) -> QGraphicsScene:
     for zoom in zooms:
         view.set_zoom(zoom)
         view.viewport().repaint()
-        QTest.qWait(250)  # the warm-ups start 120-150 ms after the last paint
+        _idle(item)
     return scene
 
 
@@ -183,7 +192,7 @@ def test_a_skeleton_item_is_freed_at_once(view, no_gc, vectors):
     for zoom in (0.3, 1.0, 3.0):
         view.set_zoom(zoom)
         view.viewport().repaint()
-        QTest.qWait(250)
+        _idle(item)
     assert item.mode_painted()
     ref = weakref.ref(item)
     scene.removeItem(item)
@@ -258,8 +267,8 @@ def test_the_library_lets_the_previous_image_go_at_once(app, tmp_path, monkeypat
         controller.display_selected_image_by_name("A")
         view = controller.magnifying_view
         view.viewport().repaint()
-        QTest.qWait(250)  # the idle warm-up
         kinds = (PhotoLayerItem, SkeletonLayerItem)
+        _idle(*[i for i in view.scene().items() if isinstance(i, kinds)])  # the idle warm-up
         shown = [weakref.ref(i) for i in view.scene().items() if isinstance(i, kinds)]
         assert len(shown) == (1 if mode == "Single Image" else 2)
         controller.display_selected_image_by_name("B")

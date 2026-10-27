@@ -7,36 +7,23 @@ The op-by-op identity with the deleted mask editor is carried by the pixel golde
 """
 
 import hashlib
-import os
 
 import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtGui import QColor, QImage, QPixmap
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QRect  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-from app.gui.paint_canvas import (  # noqa: E402
+from app.gui.paint_canvas import (
     PaintCanvas,
     argb_array_to_image,
     pixmap_to_argb_array,
 )
-from app.gui.patch_history import PatchHistory  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
+from app.gui.patch_history import PatchHistory
+from app.gui.widgets import tokens
 
 MASK = QColor(tokens.MASK)
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_modal(monkeypatch):
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 # --------------------------------------------------------------------------- helpers

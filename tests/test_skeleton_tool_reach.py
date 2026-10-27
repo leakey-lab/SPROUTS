@@ -14,26 +14,17 @@ import os
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QTransform
+from PyQt6.QtWidgets import QGraphicsScene, QGraphicsView
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QPoint, Qt  # noqa: E402
-from PyQt6.QtGui import QTransform  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView  # noqa: E402
-
-from app.gui import skeleton_tools  # noqa: E402
-from app.gui.correct.skeleton_layer import SkeletonLayer  # noqa: E402
-from tests.correct_fakes import FakeHost  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import skeleton_tools
+from app.gui.correct.skeleton_layer import SkeletonLayer
+from tests.correct_fakes import FakeHost
+from tests.qt_teardown import delete_widgets
 
 W, H = 640, 480
 NO_MOD = Qt.KeyboardModifier.NoModifier
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

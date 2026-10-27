@@ -25,19 +25,11 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from PyQt6.QtCore import QEvent, QSize
+from PyQt6.QtGui import QResizeEvent
+from PyQt6.QtWidgets import QApplication, QFrame, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QSize  # noqa: E402
-from PyQt6.QtGui import QResizeEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFrame, QWidget  # noqa: E402
-
-from app.gui.widgets import OverlayLayout  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.widgets import OverlayLayout
 
 
 @pytest.fixture

@@ -444,7 +444,8 @@ def _assert_deblock_matches_reference(img, threshold, case):
 @pytest.mark.parametrize("kind", ["noise", "smooth", "blocky", "jpeg", "flat"])
 def test_deblock_is_bit_exact_with_the_reference(kind):
     rng = np.random.default_rng(22)
-    sides = (10, 11, 18, 19)  # block + 2 / + 3 for both grids: the first boundary just fits
+    # block + 2 (no boundary yet) and block + 3 (the first one just fits), for both grids
+    sides = (10, 11, 18, 19)
     small = [(1, 1)] + [(h, w) for h in sides for w in sides]
     for h, w in small + [(480, 640)]:
         thresholds = (6.0, 14.0, 30.0, 0.0, float("inf")) if (h, w) in small else (14.0,)

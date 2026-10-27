@@ -15,48 +15,10 @@ import cv2
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.gui.correct.layer import SKELETON, LayerStatus
+from tests.correct_support import CANCEL, DISCARD, SAVE, click, raster, record
 
-from app.gui.correct.layer import SKELETON, LayerStatus  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
-    CANCEL,
-    DISCARD,
-    SAVE,
-    answer_prompts,
-    click,
-    editor_factory,
-    install_guards,
-    new_project,
-    qapp,
-    raster,
-    record,
-)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
-
-
-@pytest.fixture
-def project(tmp_path):
-    return new_project(tmp_path)
-
-
-@pytest.fixture
-def answers(monkeypatch):
-    return answer_prompts(monkeypatch)
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def draft(editor, *points) -> None:
@@ -192,7 +154,7 @@ def test_paging_with_a_draft_still_stays_and_says_how_to_end_it(make_editor, pro
 
 # ------------------------------------------------------------------------------- helpers
 def _mouse():
-    from tests.test_correct_editor import Mouse
+    from tests.correct_support import Mouse
 
     return Mouse()
 

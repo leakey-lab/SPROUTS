@@ -14,26 +14,17 @@ import time
 
 import numpy as np
 import pytest
+from PyQt6.QtCore import QRect
+from PyQt6.QtGui import QImage
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRect  # noqa: E402
-from PyQt6.QtGui import QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.paint_canvas import (  # noqa: E402
+from app.gui.paint_canvas import (
     PaintCanvas,
     argb_array_to_image,
     pixmap_to_argb_array,
 )
-from app.gui.patch_history import PatchHistory  # noqa: E402
+from app.gui.patch_history import PatchHistory
 
 STRICT = os.environ.get("SPROUTS_PERF_TESTS") == "1"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def make_canvas(plane, lut):

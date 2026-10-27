@@ -3,17 +3,12 @@ canvas editors, with today's wording word for word, answers mapped to plain stri
 box freed after use.
 """
 
-import os
-
 import pytest
+from PyQt6.QtCore import QEvent
+from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
-
-from app.gui import editor_prompts  # noqa: E402
-from app.gui.editor_prompts import (  # noqa: E402
+from app.gui import editor_prompts
+from app.gui.editor_prompts import (
     CANCEL,
     DISCARD,
     KEEP,
@@ -22,15 +17,10 @@ from app.gui.editor_prompts import (  # noqa: E402
     ask_unsaved,
     join_nouns,
 )
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from tests.qt_teardown import flush_deleted
 
 Button = QMessageBox.StandardButton
 ESCAPE = "escape"  # the scripted answer "the user pressed Esc"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

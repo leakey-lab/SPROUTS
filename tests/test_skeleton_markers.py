@@ -12,18 +12,12 @@
 
 from __future__ import annotations
 
-import os
-
 import cv2
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmapCache, QTransform  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmapCache, QTransform
+from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsItem,
     QGraphicsScene,
@@ -31,19 +25,14 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QStyleOptionGraphicsItem,
 )
 
-from app.gui.skeleton_graph_model import (  # noqa: E402
+from app.gui.skeleton_graph_model import (
     SkeletonCorrectionModel,
     _compute_degree_map,
     _ensure_uint8_binary,
 )
-from app.gui.skeleton_overlay import DotsItem, SkeletonDecorations  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.skeleton_overlay import DotsItem, SkeletonDecorations
+from app.gui.widgets import tokens
+from tests.qt_teardown import delete_widgets
 
 
 # ---------------------------------------------------------------- windowed endpoints

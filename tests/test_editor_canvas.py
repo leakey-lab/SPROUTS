@@ -4,65 +4,35 @@ Trace GT editor), keys and the wheel reach the sink first, and a drag stops the 
 scrolling. ``end_gesture()`` forgets a drag the editor has finished on its own.
 """
 
-import os
-import sys
-import traceback
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import (  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import (
     QColor,
     QMouseEvent,
     QPainter,
     QPixmap,
     QWheelEvent,
 )
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
-    QMessageBox,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
+from app.gui.editor_canvas import EditorCanvasView
+from app.gui.widgets import tokens
 
 LEFT, MIDDLE = Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton
 NO_BUTTON = Qt.MouseButton.NoButton
 CTRL, NO_MOD = Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.NoModifier
 IMAGE = QSize(200, 150)
-UNDER_TEST = {"editor_canvas.py", "test_editor_canvas.py"}
+# Only an exception of the code under test fails the test (``slot_errors``); another
+# module's leftover widget (e.g. a queued repaint) only gets its traceback printed.
+SLOT_ERRORS_FROM = ("editor_canvas.py", "test_editor_canvas.py")
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _guards(monkeypatch):
-    """No modal prompt, no GL, and no exception of the code under test hidden in an event
-    handler (PyQt hands those to sys.excepthook). Another module's leftover widget (e.g. a
-    queued repaint) only gets its traceback printed."""
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    errors = []
-
-    def hook(kind, value, tb):
-        files = {os.path.basename(frame.filename) for frame in traceback.extract_tb(tb)}
-        if files & UNDER_TEST:
-            errors.append(value)
-        else:
-            sys.__excepthook__(kind, value, tb)
-
-    monkeypatch.setattr(sys, "excepthook", hook)
-    yield
-    assert errors == []
+# No modal prompt, no GL, and no exception of the code under test hidden in an event handler.
+pytestmark = pytest.mark.usefixtures("no_prompts", "gl_off", "slot_errors")
 
 
 class FakeSink:

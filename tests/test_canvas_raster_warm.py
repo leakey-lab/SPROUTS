@@ -13,19 +13,15 @@ frames draw the tiles made ahead once, invisibly (their texture upload); on the 
 engine nothing is drawn and nothing runs once the warm-up is done.
 """
 
-import os
 import time
 
 import cv2
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsScene,
@@ -33,11 +29,11 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QStyleOptionGraphicsItem,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.render_metrics import qimage_to_rgb  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_layers.raster import RasterLayerItem
+from app.gui.canvas_view import CanvasViewMixin
+from tests.qt_teardown import flush_deleted
+from tests.render_metrics import qimage_to_rgb
 
 W, H = 1400, 1000
 VIEW = (400, 300)
@@ -70,11 +66,6 @@ def _mask_image(w: int = W, h: int = H, seed: int = 7) -> QImage:
     bgra[plane > 0] = (160, 214, 95, 255)
     straight = QImage(bgra.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
     return straight.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _build(app, monkeypatch, image: QImage, *, tile: int = 64, cover_tile: int = 128, skip=None):

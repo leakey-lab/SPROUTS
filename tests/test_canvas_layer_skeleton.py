@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT"] = "0"
 
 import cv2  # noqa: E402
@@ -23,7 +22,6 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QGraphicsScene,
     QGraphicsView,
-    QMessageBox,
     QStyleOptionGraphicsItem,
 )
 
@@ -37,17 +35,7 @@ GREY = QColor(96, 96, 96)
 HALO_ALPHA = 170
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _no_message_boxes(monkeypatch):
-    def _fail(*_args, **_kwargs):
-        raise AssertionError("unexpected QMessageBox.exec")
-
-    monkeypatch.setattr(QMessageBox, "exec", _fail)
+pytestmark = pytest.mark.usefixtures("no_prompts")
 
 
 # ------------------------------------------------------------------------------ helpers

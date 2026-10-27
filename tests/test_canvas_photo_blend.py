@@ -9,19 +9,13 @@ this is at least as close to the ideal area resample as the plain draw at every 
 closer from 55 % to 70 %); blending lower octaves made them softer, so only this one blends.
 """
 
-import os
-
 import cv2
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
-from app.imaging.pyramid import area_half  # noqa: E402
-from tests.render_metrics import (  # noqa: E402
+from app.gui.canvas_layers.photo import PhotoLayerItem
+from app.imaging.pyramid import area_half
+from tests.render_metrics import (
     area_reference,
     chirp_alias_std,
     chirp_image,
@@ -30,10 +24,7 @@ from tests.render_metrics import (  # noqa: E402
     render_view,
 )
 
-
-@pytest.fixture(scope="module", autouse=True)
-def app():
-    return QApplication.instance() or QApplication([])
+pytestmark = pytest.mark.usefixtures("app")
 
 
 def jpeg_texture(w: int = 640, h: int = 480, seed: int = 3) -> np.ndarray:

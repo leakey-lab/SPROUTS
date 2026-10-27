@@ -9,28 +9,23 @@ mid-pixel, with no grid over the top-left band).
 """
 
 import math
-import os
 
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsScene,
     QGraphicsView,
     QWidget,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.render_metrics import qimage_to_rgb  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_layers.raster import RasterLayerItem
+from app.gui.canvas_view import CanvasViewMixin
+from tests.qt_teardown import flush_deleted
+from tests.render_metrics import qimage_to_rgb
 
 W, H = 64, 48
 OFFSET = (37, 23)  # the view's position in its window
@@ -51,11 +46,6 @@ def _checkerboard_canvas() -> QImage:
     bgra[on] = (40, 200, 40, 255)
     bgra[~on] = (200, 40, 200, 255)
     return QImage(bgra.data, W, H, W * 4, QImage.Format.Format_ARGB32_Premultiplied).copy()
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

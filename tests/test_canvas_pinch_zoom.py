@@ -7,25 +7,20 @@ the zoom by ``1 + v`` about the fingers, at once (no glide), within the zoom-out
 Both are ignored mid-stroke. Every canvas has it, the editor canvas without asking its sink.
 """
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QNativeGestureEvent, QPixmap, QPointingDevice  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import QColor, QNativeGestureEvent, QPixmap, QPointingDevice
+from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_view import CanvasViewMixin  # noqa: E402
-from app.gui.editor_canvas import EditorCanvasView  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import canvas_gl
+from app.gui.canvas_view import CanvasViewMixin
+from app.gui.editor_canvas import EditorCanvasView
+from tests.qt_teardown import delete_widgets
 
 ZOOM = Qt.NativeGestureType.ZoomNativeGesture
 SMART_ZOOM = Qt.NativeGestureType.SmartZoomNativeGesture
@@ -74,11 +69,6 @@ class _WheelEatingSink:
 
     def canvas_pan_changed(self, panning) -> None:
         pass
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

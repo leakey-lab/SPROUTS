@@ -3,34 +3,23 @@ ZoomCluster (UXE-05) and StatusChip (UXE-11)."""
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QObject, pyqtSignal  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QPushButton,
     QWidget,
 )
 
-from app.gui.widgets import (  # noqa: E402
+from app.gui.widgets import (
     DockSlider,
     EnhancePopover,
     FloatingDock,
     IconButton,
 )
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
+from tests.qt_teardown import flush_deleted
 
 
 @pytest.fixture

@@ -8,29 +8,21 @@
 Offscreen raster viewport; thresholds from the zoom-render and contracts scouts.
 """
 
-import os
-
+import cv2
+import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtCore import QPoint, QRect, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
+from PyQt6.QtCore import QPoint, QRect, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtWidgets import (
     QGraphicsScene,
-    QMessageBox,
     QStyleOptionGraphicsItem,
 )
 
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.canvas_layers import device_scale  # noqa: E402
-from app.gui.canvas_layers.photo import PhotoLayerItem  # noqa: E402
-from app.gui.canvas_layers.raster import RasterLayerItem  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.render_metrics import (  # noqa: E402
+from app.gui.canvas_layers import device_scale
+from app.gui.canvas_layers.photo import PhotoLayerItem
+from app.gui.canvas_layers.raster import RasterLayerItem
+from app.gui.widgets import tokens
+from tests.render_metrics import (
     area_reference,
     chirp_alias_std,
     chirp_image,
@@ -49,25 +41,8 @@ from tests.render_metrics import (  # noqa: E402
 
 SEED = 20260929
 
-
-@pytest.fixture(scope="module", autouse=True)
-def app():
-    application = QApplication.instance() or QApplication([])
-    yield application
-
-
-@pytest.fixture(autouse=True)
-def no_message_boxes(monkeypatch):
-    def fail(*_args, **_kwargs):
-        raise AssertionError("unexpected QMessageBox.exec in a render test")
-
-    monkeypatch.setattr(QMessageBox, "exec", fail)
-
-
-@pytest.fixture(autouse=True)
-def raster_viewport(monkeypatch):
-    """Render tests measure the raster engine (offscreen has no GL anyway)."""
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
+# Render tests measure the raster engine (offscreen has no GL anyway).
+pytestmark = pytest.mark.usefixtures("app", "no_prompts", "gl_off")
 
 
 def _photo_bgr(w=640, h=480, seed=SEED) -> np.ndarray:

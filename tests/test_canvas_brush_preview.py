@@ -5,23 +5,13 @@ centred on the pixel under the cursor like the stroke and the cv2 eraser, and
 drawn with cosmetic pens so no cursor bitmap is rebuilt per zoom step.
 """
 
-import os
-
 import pytest
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QTransform
+from PyQt6.QtWidgets import QGraphicsScene, QGraphicsView
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QTransform  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView  # noqa: E402
-
-from app.gui.brush_preview import BrushPreview  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.brush_preview import BrushPreview
+from app.gui.widgets import tokens
 
 
 @pytest.fixture

@@ -7,21 +7,10 @@ Copied from ``tests/test_skeleton_editor_tools.py``, which goes with that editor
 
 from __future__ import annotations
 
-import os
-
 import cv2
 import numpy as np
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPointF  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from PyQt6.QtCore import QPointF
 
 
 def test_overlay_halo_surrounds_the_line_only():

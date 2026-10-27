@@ -12,27 +12,20 @@ import os
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import QPoint
+from PyQt6.QtGui import QColor, QImage
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QPoint  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.correct.mask_document import MaskDocument  # noqa: E402
-from app.gui.correct.mask_tools import argb_to_plane, fill_source, mask_lut  # noqa: E402
-from app.gui.paint_canvas import (  # noqa: E402
+from app.gui.correct.mask_document import MaskDocument
+from app.gui.correct.mask_tools import argb_to_plane, fill_source, mask_lut
+from app.gui.paint_canvas import (
     PaintCanvas,
     argb_array_to_image,
     pixmap_to_argb_array,
 )
-from app.gui.patch_history import PatchHistory  # noqa: E402
-from app.masks import MaskStore  # noqa: E402
+from app.gui.patch_history import PatchHistory
+from app.masks import MaskStore
 
-
-@pytest.fixture(scope="module", autouse=True)
-def app():
-    return QApplication.instance() or QApplication([])
+pytestmark = pytest.mark.usefixtures("app")
 
 
 def make_canvas(lut: np.ndarray):
