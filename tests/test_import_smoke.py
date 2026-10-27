@@ -177,6 +177,8 @@ APP_MODULES = [
     "app.gui.warmup",
     "app.gc_policy",
     "app.inference.device_probe",
+    # Modules added by the 2026-10-26 redundancy and speed pass.
+    "app.read_ahead_cache",
 ]
 
 

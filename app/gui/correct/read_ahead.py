@@ -12,7 +12,8 @@ The byte budget counts finished reads (a queued or running job holds nothing yet
 is enforced when a read is queued, put back or completes. What goes first is what is least
 likely to be opened: the entries outside the last plan (:meth:`ReadAhead.keep_only`, the
 neighbours nearest first), oldest first, then the plan's from its end; the plan's first
-entry (without a plan, the newest) always stays.
+entry (without a plan, the newest) always stays. The bounded cache is
+:mod:`app.read_ahead_cache`'s, which the Library's read-ahead uses too.
 
 The job, :func:`read_image`, decodes the photo as :class:`app.enhancement.SourceImageCache`
 does (Qt's geometry, EXIF orientation ignored), or takes a photo decoded already (the
@@ -25,16 +26,15 @@ left out: that layer then opens by itself. Nothing here touches Qt, and a job mu
 from __future__ import annotations
 
 import logging
-import threading
-from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
-from concurrent.futures import Executor, Future, ThreadPoolExecutor
+from concurrent.futures import Executor, Future
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from app import enhancement
 from app.io_utils import file_stamp, path_key
+from app.read_ahead_cache import ReadAheadCache, finished
 
 logger = logging.getLogger(__name__)
 
@@ -115,13 +115,14 @@ def read_image(
     return AheadImage(image_path, stamp, decoded, layers)
 
 
-class ReadAhead:
+class ReadAhead(ReadAheadCache):
     """A few images read ahead on one worker thread: bounded, keyed by path, never waited on.
 
     Only the thread that owns it (the GUI thread) calls it; the worker runs the jobs and
     touches nothing else (the end of a job only re-checks the byte budget, under the lock).
     ``executor`` is for tests (an executor that runs jobs inline); by default the object
-    owns a one-thread pool, stopped by :meth:`close`.
+    owns a one-thread pool, stopped by :meth:`close`. The plan is the last
+    :meth:`keep_only`'s keys, the most wanted first.
     """
 
     def __init__(
@@ -131,18 +132,12 @@ class ReadAhead:
         max_bytes: int = MAX_BYTES,
         executor: Executor | None = None,
     ) -> None:
-        if max_images < 1:
-            raise ValueError(f"max_images must be at least 1, got {max_images}")
-        self._max_images = int(max_images)
-        self._max_bytes = int(max_bytes)
-        self._owns_executor = executor is None
-        self._executor = executor or ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="sprouts-read-ahead"
+        super().__init__(
+            max_images=max_images,
+            max_bytes=max_bytes,
+            thread_name="sprouts-read-ahead",
+            executor=executor,
         )
-        self._jobs: OrderedDict[str, Future] = OrderedDict()  # oldest first
-        self._plan: list[str] = []  # keys of the last keep_only, the most wanted first
-        self._lock = threading.Lock()
-        self._closed = False
 
     # ------------------------------------------------------------------ API
     def request(self, image_path: str, job: Callable[[], AheadImage | None]) -> bool:
@@ -156,10 +151,8 @@ class ReadAhead:
             if future is not None and _usable(future):
                 self._jobs.move_to_end(key)
                 return False
-            self._jobs.pop(key, None)
-            future = self._jobs[key] = self._executor.submit(job)
-            self._trim()
-        future.add_done_callback(self._completed)  # its result counts once it is done
+            future = self._submit(key, job)  # the stale or failed read it replaces is done
+        self._watch(key, future)  # its result counts once it is done
         return True
 
     def take(self, image_path: str) -> AheadImage | None:
@@ -171,37 +164,24 @@ class ReadAhead:
             if future is None or not future.done():
                 return None
             del self._jobs[key]
-        result = _result(future)
-        return result if result is not None and result.is_current() else None
+        return _current(future)
 
     def peek(self, image_path: str) -> AheadImage | None:
         """The finished, current read of ``image_path``, kept (not handed over): its photo
         is read-only and may be shared; None otherwise. Never waits."""
         with self._lock:
             future = self._jobs.get(path_key(image_path))
-        if future is None or not future.done():
-            return None
-        result = _result(future)
-        return result if result is not None and result.is_current() else None
+        return None if future is None else _current(future)
 
     def put(self, image: AheadImage) -> None:
         """Keep ``image`` as the newest read: one taken for an open that did not happen, or
         the image just left (handed back). The last plan is over (LRU until the next)."""
-        future: Future = Future()
-        future.set_result(image)
         key = path_key(image.image_path)
         with self._lock:
             if self._closed:
                 return
-            self._jobs.pop(key, None)
-            self._jobs[key] = future
             self._plan = []
-            self._trim()
-
-    def pending(self) -> list[str]:
-        """Keys (normalised paths) of the entries kept, finished or not, oldest first."""
-        with self._lock:
-            return list(self._jobs)
+            self._put(key, image)
 
     def keep_only(self, image_paths: Iterable[str]) -> None:
         """Forget every entry but those of ``image_paths`` (a queued job is cancelled). Their
@@ -211,88 +191,21 @@ class ReadAhead:
         with self._lock:
             self._plan = plan
             for key in [key for key in self._jobs if key not in keep]:
-                self._jobs.pop(key).cancel()
+                self._drop(key)
 
     def invalidate(self, image_path: str) -> None:
         """Forget ``image_path``'s entry (its files changed: a save, a new run)."""
         with self._lock:
-            future = self._jobs.pop(path_key(image_path), None)
-        if future is not None:
-            future.cancel()
-
-    def clear(self) -> None:
-        """Forget every entry (a new folder); a queued job is cancelled."""
-        with self._lock:
-            futures, self._jobs, self._plan = list(self._jobs.values()), OrderedDict(), []
-        for future in futures:
-            future.cancel()
-
-    def close(self) -> None:
-        """Forget everything and stop the worker (a running job ends on its own)."""
-        self.clear()
-        with self._lock:
-            self._closed = True
-        if self._owns_executor:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-
-    # ------------------------------------------------------------ internals
-    def _completed(self, future: Future) -> None:
-        """A job ended (on the worker, or at once): a failure is logged; a result now
-        counts towards the byte budget. A cancelled job holds nothing, and ``cancel`` calls
-        this with the lock held: it must return before taking the lock."""
-        if future.cancelled():
-            return
-        error = future.exception()
-        if error is not None:
-            logger.warning("A read-ahead job failed: %s", error)
-            return
-        with self._lock:
-            if not self._closed:
-                self._trim()
-
-    def _trim(self) -> None:
-        """Keep at most ``max_images`` entries and ``max_bytes`` of finished reads (lock
-        held), dropping first what is least likely to be opened (see the module docstring);
-        the last of that order always stays, and a job not done yet holds no bytes."""
-        order = self._eviction_order()
-        while len(self._jobs) > self._max_images:
-            self._jobs.pop(order.pop(0)).cancel()
-        held = {key: _held_bytes(self._jobs[key]) for key in order}
-        total = sum(held.values())
-        for key in order[:-1]:
-            if total <= self._max_bytes:
-                break
-            if held[key]:
-                total -= held[key]
-                self._jobs.pop(key).cancel()
-
-    def _eviction_order(self) -> list[str]:
-        """Keys, first dropped first: outside the plan (oldest first), then the plan's
-        from its end (without a plan: oldest first, the newest last)."""
-        planned = [key for key in reversed(self._plan) if key in self._jobs]
-        chosen = set(planned)
-        return [key for key in self._jobs if key not in chosen] + planned
+            self._drop(path_key(image_path))
 
 
-def _result(future: Future) -> AheadImage | None:
-    """A finished future's result; None when it was cancelled or raised (a failure is
-    logged once, when the job ends)."""
-    if future.cancelled() or future.exception() is not None:
-        return None
-    return future.result()
+def _current(entry: Future) -> AheadImage | None:
+    """An entry's finished read (a job's, or one put back) whose photo is still the one on
+    disk; None otherwise (not done yet, cancelled, failed or stale)."""
+    result = finished(entry)
+    return result if result is not None and result.is_current() else None
 
 
-def _held_bytes(future: Future) -> int:
-    """Bytes a finished read holds; 0 for a job not done yet, cancelled or failed."""
-    if not future.done():
-        return 0
-    result = _result(future)
-    return 0 if result is None else result.nbytes
-
-
-def _usable(future: Future) -> bool:
-    """A job still running or queued, or a finished one whose result is current."""
-    if not future.done():
-        return True
-    result = _result(future)
-    return result is not None and result.is_current()
+def _usable(entry: Future) -> bool:
+    """A job still running or queued, or a finished entry whose result is current."""
+    return not entry.done() or _current(entry) is not None

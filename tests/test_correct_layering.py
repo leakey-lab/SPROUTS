@@ -27,6 +27,7 @@ QT_FREE = [
     "app.editing.thinning",
     "app.editing.planes",
     "app.imaging.skeleton_vectors",
+    "app.read_ahead_cache",
     "app.gt.files",
     "app.gui.correct.layer",
     "app.gui.correct.session",

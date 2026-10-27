@@ -6,6 +6,7 @@ reads that finished but were never shown could hold more than the budget. Now a 
 counts when it completes, and the bounds are enforced then: the oldest go first (the photo
 shown before its neighbours were asked for, then the reads in the order asked), a read
 still queued or running holds nothing, and the photo just decoded, kept or asked for stays.
+A decode whose end reports only after its photo was shown and kept changes nothing.
 """
 
 from __future__ import annotations
@@ -41,6 +42,31 @@ class StepExecutor:
 
     def shutdown(self, wait=True, cancel_futures=False) -> None:
         pass
+
+
+class LateFuture(Future):
+    """A future whose done-callbacks wait for :meth:`report`: the moment a job has ended
+    on the worker and has not called back yet."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reports: list = []
+
+    def add_done_callback(self, fn) -> None:
+        self.reports.append(fn)
+
+    def report(self) -> None:
+        for fn in self.reports:
+            fn(self)
+
+
+class LateStepExecutor(StepExecutor):
+    """A StepExecutor whose jobs call back only when the test says so."""
+
+    def submit(self, fn, *args):
+        future = LateFuture()
+        self.jobs.append((future, lambda: fn(*args)))
+        return future
 
 
 def _decode(path: str) -> np.ndarray:
@@ -124,6 +150,26 @@ def test_a_photo_over_the_budget_on_its_own_is_still_kept(tmp_path):
 
     assert ahead.pending() == [_key(path)]
     assert ahead.get(path) is not None
+
+
+def test_a_decode_reporting_after_its_photo_was_kept_trims_nothing(tmp_path):
+    executor = LateStepExecutor()
+    budget = int(ONE * 1.5)  # room for one photo
+    ahead = DisplayReadAhead(_decode, max_images=3, max_bytes=budget, executor=executor)
+    first, second = _photos(tmp_path, 2)
+    ahead.request([first])
+    decode_first = executor.jobs[0][0]
+    executor.run_next()  # decoded; its done-callback has not come yet
+    assert ahead.get(first) is not None  # shown: kept as a new entry
+    ahead.request([second])
+    decode_second = executor.jobs[0][0]
+    executor.run_next()
+
+    decode_first.report()  # late: the photo kept is not that decode's entry
+    assert ahead.pending() == [_key(first), _key(second)]
+
+    decode_second.report()  # its bytes count now: the photo just decoded stays
+    assert ahead.pending() == [_key(second)]
 
 
 def test_the_bound_holds_when_reads_finish_on_the_worker_thread(tmp_path):
