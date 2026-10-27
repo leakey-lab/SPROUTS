@@ -19,13 +19,6 @@ KEY_TOKEN = re.compile(r"\b(Ctrl|Alt)\+")
 NOT_WRAPPED_FILES = {"shortcuts.py", "key_text.py"}  # the registry is data; key_text is the map
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PyQt6.QtWidgets import QApplication
-
-    yield QApplication.instance() or QApplication([])
-
-
 # ------------------------------------------------------------------ platform_keys
 def test_ctrl_and_alt_become_cmd_and_option_on_macos():
     assert platform_keys("Ctrl+Shift+Z", "darwin") == "Cmd+Shift+Z"

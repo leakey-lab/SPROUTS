@@ -25,19 +25,16 @@ import types
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent, QThreadPool
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import QCoreApplication, QEvent, QThreadPool  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-from app.gui import image_manager as im  # noqa: E402
-from app.gui import shell_chrome  # noqa: E402
-from app.gui.device_check import DeviceCheck  # noqa: E402
-from app.gui.window import project_loader  # noqa: E402
-from app.gui.window.metrics import MetricsController  # noqa: E402
-from tests.qt_teardown import delete_widgets, flush_deleted  # noqa: E402
+from app.gui import image_manager as im
+from app.gui import shell_chrome
+from app.gui.device_check import DeviceCheck
+from app.gui.window import project_loader
+from app.gui.window.metrics import MetricsController
+from tests.qt_teardown import delete_widgets, flush_deleted
 
 RUNTIME = "app.inference.runtime"
 
@@ -50,20 +47,13 @@ ENDINGS = [SystemExit(3), KeyboardInterrupt(), Abort("stopped")]
 ENDING_IDS = ["exit", "interrupt", "other"]
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture(autouse=True)
-def nothing_escapes(app, monkeypatch):
-    """No exception may leave a job's thread (PyQt hands it to ``sys.excepthook``)."""
-    hooked: list = []
-    monkeypatch.setattr(sys, "excepthook", lambda *exc: hooked.append(exc))
+def nothing_escapes(app, slot_errors):
+    """No exception may leave a job's thread (PyQt hands it to ``sys.excepthook``):
+    ``slot_errors`` asserts none once the pool's jobs have ended and their objects are gone."""
     yield
     assert QThreadPool.globalInstance().waitForDone(10_000)
     flush_deleted()
-    assert hooked == []
 
 
 def wait(predicate, timeout: float = 5.0) -> bool:

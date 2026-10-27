@@ -11,18 +11,9 @@ import os
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gt import default_registry, gt_dir  # noqa: E402
-from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gt import default_registry, gt_dir
+from app.gui.export_dataset_dialog import ExportDatasetDialog
+from tests.qt_teardown import delete_widgets
 
 
 @pytest.fixture

@@ -7,21 +7,10 @@ the progress.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.task_progress import TaskProgressWidget  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from app.gui.task_progress import TaskProgressWidget
+from tests.qt_teardown import delete_widgets
 
 
 @pytest.fixture

@@ -10,16 +10,11 @@ Runs under an offscreen QApplication (``QT_QPA_PLATFORM=offscreen``).
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QPalette  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QDialogButtonBox,
     QFrame,
@@ -27,18 +22,11 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from app.gt.registry import default_registry  # noqa: E402
-from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
-from app.gui.class_panel import ClassPanel  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    a = QApplication.instance() or QApplication([])
-    yield a
-
+from app.gt.registry import default_registry
+from app.gui.class_editor_dialog import ClassEditorDialog
+from app.gui.class_panel import ClassPanel
+from app.gui.widgets import tokens
+from tests.qt_teardown import delete_widgets
 
 _MADE: list[QWidget] = []  # the hosts and dialogs a test made: deleted after it
 

@@ -27,15 +27,12 @@ from app.inference import skeleton_inference as si
 from app.inference.mask_origin import OverwritePolicy, scan_existing_masks
 from app.naming import image_stem, stem_key
 from app.project_layout import ImageScan, ProjectLayout
-from tests.test_generation_inference import cpu_runtime  # noqa: F401 - fixture
-from tests.test_library_main_window import (  # noqa: F401 - fixtures
-    _wait,
-    app,
-    mw,
-    no_delayed_temp_sweep,
-)
+from tests.qt_wait import wait_until as _wait
+from tests.test_library_main_window import mw  # noqa: F401 - fixture
 from tests.test_robust_generation_stem_clash import _Brightness, _mean, _Skeleton
 from tests.test_shell_info_measurement_index import _row, _write_lengths
+
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 
 def _images(folder, spec):
@@ -65,7 +62,7 @@ def test_stem_key_lowers_and_does_not_casefold():
 @pytest.mark.parametrize("run", range(5))
 def test_case_variant_stems_give_one_image_and_one_output_every_run(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     run,
 ):
     src = _images(tmp_path / "imgs", {"A.png": 255, "a.jpg": 0, "b.jpg": 120})
@@ -86,7 +83,7 @@ def test_case_variant_stems_give_one_image_and_one_output_every_run(
 @pytest.mark.parametrize("mask_name", ["A.png", "a.png"])
 def test_a_manual_mask_survives_keep_existing_whatever_its_case(
     tmp_path,
-    cpu_runtime,  # noqa: F811 - fixture
+    cpu_runtime,
     mask_name,
 ):
     src = _images(tmp_path / "imgs", {"A.png": 255, "a.jpg": 0, "b.jpg": 120})

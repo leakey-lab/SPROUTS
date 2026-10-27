@@ -7,20 +7,17 @@ Audit UXS-12 / UI-18: icons were rasterised once at 1x, so Qt upscaled them (blu
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QColor, QIcon, QImage
+from PyQt6.QtWidgets import QApplication
 
-import subprocess  # noqa: E402
-import sys  # noqa: E402
-import uuid  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-import pytest  # noqa: E402
-from PyQt6.QtCore import QSize  # noqa: E402
-from PyQt6.QtGui import QColor, QIcon, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.widgets import icons, tokens  # noqa: E402
+from app.gui.widgets import icons, tokens
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ON, OFF, NORMAL = QIcon.State.On, QIcon.State.Off, QIcon.Mode.Normal

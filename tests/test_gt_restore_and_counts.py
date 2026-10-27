@@ -9,33 +9,24 @@ applied: ``tests/test_exif_policy.py``) and one pixel count per exported class.
 from __future__ import annotations
 
 import csv
-import os
 import struct
 
 import numpy as np
 import pytest
 from PIL import Image
+from PyQt6.QtWidgets import QDialogButtonBox, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QWidget  # noqa: E402
-
-from app.config import GT_IGNORE_ID  # noqa: E402
-from app.gt.export import ExportOptions, export_dataset  # noqa: E402
-from app.gt.registry import RegistryError, default_registry  # noqa: E402
-from app.gt.store import Tracing, gt_path, write_tracing  # noqa: E402
-from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.config import GT_IGNORE_ID
+from app.gt.export import ExportOptions, export_dataset
+from app.gt.registry import RegistryError, default_registry
+from app.gt.store import Tracing, gt_path, write_tracing
+from app.gui.class_editor_dialog import ClassEditorDialog
+from tests.qt_teardown import delete_widgets
 
 W, H = 640, 480
 NODULE_PIXELS = 59 * 15  # 885
 _STEMS = ("plot_T1_L1_2024.01.01_120000", "plot_T2_L1_2024.01.01_120000")
 _MADE: list[QWidget] = []
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(autouse=True)

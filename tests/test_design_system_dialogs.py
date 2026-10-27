@@ -7,18 +7,14 @@ steppers were too narrow for the native arrows to draw.
 
 from __future__ import annotations
 
-import os
+from collections import Counter
+from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from collections import Counter  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-import pytest  # noqa: E402
-from PyQt6.QtCore import QSize  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+import pytest
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
     QMessageBox,
@@ -28,10 +24,10 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QStyleOptionSpinBox,
 )
 
-from app.gt.registry import default_registry  # noqa: E402
-from app.gui.class_editor_dialog import ClassEditorDialog  # noqa: E402
-from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
-from app.gui.widgets import tokens  # noqa: E402
+from app.gt.registry import default_registry
+from app.gui.class_editor_dialog import ClassEditorDialog
+from app.gui.export_dataset_dialog import ExportDatasetDialog
+from app.gui.widgets import tokens
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 

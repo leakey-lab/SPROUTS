@@ -11,21 +11,16 @@ tooltip keeps the full line.
 
 from __future__ import annotations
 
-import os
 import sys
 import types
 
 import pytest
+from PyQt6.QtGui import QFontMetrics
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtGui import QFontMetrics  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import shell_chrome  # noqa: E402
-from app.gui.shell_chrome import INFO_MAX_WIDTH, StatusLine, runtime_chip_text  # noqa: E402
-from app.inference.device_probe import DeviceGuess  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import shell_chrome
+from app.gui.shell_chrome import INFO_MAX_WIDTH, StatusLine, runtime_chip_text
+from app.inference.device_probe import DeviceGuess
+from tests.qt_teardown import delete_widgets
 
 RUNTIME = "app.inference.runtime"
 BOTH = "mask model missing · skeleton model missing"
@@ -105,11 +100,6 @@ class FakeRuntime:
             skeleton_weights=False,
         )
         self.module.describe_runtime = lambda resolve=False: summary
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

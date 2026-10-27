@@ -19,24 +19,18 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtCore import QThreadPool, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QMainWindow
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtCore import QSettings, Qt, QThreadPool, pyqtSignal  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app import project_layout  # noqa: E402
-from app.config import LENGTH_CSV_HEADERS, ROOT_LENGTHS_CSV  # noqa: E402
-from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
-from app.gui import image_manager  # noqa: E402
-from app.gui import visualization_manager as vm  # noqa: E402
-from app.inference.metrics import write_metric_csv  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app import project_layout
+from app.config import LENGTH_CSV_HEADERS, ROOT_LENGTHS_CSV
+from app.data_processing.measurement_index import MeasurementIndex
+from app.gui import visualization_manager as vm
+from app.inference.metrics import write_metric_csv
+from app.project_layout import ProjectLayout
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle as _settle
+from tests.window_support import build_window, write_photos
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 #: A test_latest folder that only the walk finds.
@@ -152,29 +146,14 @@ class StubLength(QMainWindow):
 _UNSET = object()
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
-def window(app, tmp_path, monkeypatch, walks):
+def window(app, tmp_path, walks, no_prompts, no_temp_sweep):
     """A shown window whose length dashboard is :class:`StubLength` (set on the module itself:
     a monkeypatch would import the Dash stack to read the old value)."""
-    from app.gui.main_window import MainWindow
-
-    for name in ("information", "warning", "critical", "question"):
-        monkeypatch.setattr(
-            QMessageBox, name, lambda *a, n=name, **k: pytest.fail(f"QMessageBox.{n}: {a[2:]}")
-        )
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
     saved = vm.__dict__.get("RootLengthVisualization", _UNSET)
     vm.RootLengthVisualization = StubLength
     StubLength.made = []
-    made = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    made.resize(1280, 800)
+    made = build_window(tmp_path / "s.ini", show=False)
     made.show()
     try:
         yield made
@@ -185,11 +164,6 @@ def window(app, tmp_path, monkeypatch, walks):
             vm.__dict__.pop("RootLengthVisualization", None)
         else:
             vm.RootLengthVisualization = saved
-
-
-def _settle() -> None:
-    for _ in range(3):
-        QApplication.processEvents()
 
 
 def _until(condition, timeout_s: float = 5.0) -> bool:
@@ -207,13 +181,9 @@ def _idle() -> None:
 
 
 def _project(root, *, skeletons: bool):
-    root.mkdir(parents=True)
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(root / f"{STEM}.jpg"))
+    write_photos(root, [STEM])
     if skeletons:
-        (root / "skeletons").mkdir()
-        assert image.save(str(root / "skeletons" / f"{STEM}_fake.png"))
+        write_photos(root / "skeletons", [f"{STEM}_fake"], suffix=".png")
     return root
 
 

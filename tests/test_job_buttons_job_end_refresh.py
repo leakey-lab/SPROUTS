@@ -14,28 +14,19 @@ import os
 import time
 
 import pytest
+from PyQt6.QtCore import QThread, QThreadPool
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS
+from app.data_processing import measurement_index
+from app.handlers.job_registry import JobRegistry
+from app.inference.metrics import write_metric_csv
+from tests.qt_teardown import delete_widgets
+from tests.window_support import build_window, write_photos
 
-from PyQt6.QtCore import QSettings, Qt, QThread, QThreadPool  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS  # noqa: E402
-from app.data_processing import measurement_index  # noqa: E402
-from app.handlers.job_registry import JobRegistry  # noqa: E402
-from app.inference.metrics import write_metric_csv  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 class Job(QThread):
@@ -86,16 +77,10 @@ def _csv(path, headers, value) -> None:
 
 def _open_selected(made: list, tmp_path) -> None:
     """A window on a project with both CSVs, its image selected and its values shown."""
-    from app.gui.main_window import MainWindow
-
-    root = tmp_path / "proj"
-    root.mkdir()
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(root / f"{STEM}.jpg"))
+    root = write_photos(tmp_path / "proj", [STEM])
     _csv(root / "skeletons" / "root_lengths.csv", LENGTH_CSV_HEADERS, 9.25)
     _csv(root / "mask" / "root_areas.csv", AREA_CSV_HEADERS, 4.5)
-    window = MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    window = build_window(tmp_path / "s.ini", size=None, show=False)
     made.append(window)
     window.open_path(str(root))
     assert until(lambda: window._image_leaves())
@@ -106,12 +91,7 @@ def _open_selected(made: list, tmp_path) -> None:
 
 
 @pytest.fixture
-def window(app, tmp_path, monkeypatch):
-    from app.gui import image_manager
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
+def window(app, tmp_path):
     made: list = []
     _open_selected(made, tmp_path)
     yield made[0]
@@ -226,19 +206,9 @@ def test_a_measure_run_end_parses_once_when_its_parse_also_searches(app, tmp_pat
     """A project measured for area only: after a Measure Area run the bar's refresh starts a
     parse, which looks for root_lengths.csv in the legacy folders too; no second, located
     parse follows it."""
-    from app.gui import image_manager
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    root = tmp_path / "proj"
-    root.mkdir()
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(root / f"{STEM}.jpg"))
+    root = write_photos(tmp_path / "proj", [STEM])
     _csv(root / "mask" / "root_areas.csv", AREA_CSV_HEADERS, 4.5)
-    made = [MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))]
+    made = [build_window(tmp_path / "s.ini", size=None, show=False)]
     try:
         window = made[0]
         window.open_path(str(root))
@@ -273,21 +243,11 @@ def test_a_measure_run_end_counts_against_the_csvs_found_again(app, tmp_path, mo
     """On the Measure stage with no image selected, the job end's count of Measure's inputs
     looks for the CSVs it re-locates first: never "not measured yet" for a measured project
     while a slow parse (46k rows) runs."""
-    from app.gui import image_manager
-    from app.gui.main_window import MainWindow
-
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    root = tmp_path / "proj"
-    (root / "skeletons").mkdir(parents=True)
-    image = QImage(32, 24, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    assert image.save(str(root / f"{STEM}.jpg"))
-    assert image.save(str(root / "skeletons" / f"{STEM}_fake.png"))
+    root = write_photos(tmp_path / "proj", [STEM])
+    write_photos(root / "skeletons", [f"{STEM}_fake"], suffix=".png")
     time.sleep(0.05)  # the CSV after its input
     _csv(root / "skeletons" / "root_lengths.csv", LENGTH_CSV_HEADERS, 3.0)
-    made = [MainWindow(settings=QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))]
+    made = [build_window(tmp_path / "s.ini", size=None, show=False)]
     try:
         texts = _measure_texts_after_a_job_end(made[0], root, monkeypatch)
     finally:

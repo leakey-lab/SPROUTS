@@ -39,11 +39,7 @@ def test_the_prediction_store_cannot_write_or_remove_a_prediction():
     assert not hasattr(MaskStore, "write") and not hasattr(MaskStore, "remove")
 
 
-def test_write_is_pixel_identical_to_the_qt_writer_and_far_smaller(tmp_path):
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication
-
-    QApplication.instance() or QApplication([])
+def test_write_is_pixel_identical_to_the_qt_writer_and_far_smaller(tmp_path, app):
     on = np.zeros((480, 640), bool)
     on[100:110, 50:600] = True
     store = MaskStore.for_image(str(tmp_path / "a.jpg"))

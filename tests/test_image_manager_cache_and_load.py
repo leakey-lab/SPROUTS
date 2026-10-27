@@ -12,14 +12,11 @@ from __future__ import annotations
 import os
 
 import pytest
+from PyQt6.QtWidgets import QFileDialog
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QFileDialog  # noqa: E402
-
-from app.gui import image_manager as im  # noqa: E402
-from app.gui.library_index import index_names  # noqa: E402
-from app.project_layout import SKELETON_SUFFIX  # noqa: E402
+from app.gui import image_manager as im
+from app.gui.library_index import index_names
+from app.project_layout import SKELETON_SUFFIX
 
 STEMS = ["plot_T1_L1_2024.01.01_120000", "plot_T1_L2_2024.01.01_120000"]
 

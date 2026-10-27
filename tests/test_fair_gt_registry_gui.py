@@ -11,34 +11,22 @@ from __future__ import annotations
 
 import os
 
+import cv2
+import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-from app.gt import gt_path  # noqa: E402
-from app.gui.correct.editor import CorrectEditor  # noqa: E402
-from app.gui.correct.layer import CLASSES  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
-from tests.test_correct_editor import drag  # noqa: E402
+from app.gt import gt_path
+from app.gui.correct.editor import CorrectEditor
+from app.gui.correct.layer import CLASSES
+from tests.correct_support import drag
+from tests.qt_teardown import delete_widgets
 
 _IGNORE = '{"id": 255, "key": "ignore", "name": "Ignore", "color": "#8a8f98"}'
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
+@pytest.mark.usefixtures("no_prompts")
 @pytest.mark.parametrize("raw_id", ["1e999", "true"])
-def test_the_class_labels_report_a_bad_class_id_instead_of_crashing(
-    app, tmp_path, monkeypatch, raw_id
-):
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("unexpected modal dialog"))
+def test_the_class_labels_report_a_bad_class_id_instead_of_crashing(app, tmp_path, raw_id):
     image = tmp_path / "plot_T1_L1_2024.01.01_120000.png"
     cv2.imwrite(str(image), np.full((30, 40, 3), 90, np.uint8))
     (tmp_path / "gt").mkdir()
@@ -47,7 +35,6 @@ def test_the_class_labels_report_a_bad_class_id_instead_of_crashing(
         f'"color": "#5fd6a0"}}, {_IGNORE}]}}',
         encoding="utf-8",
     )
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
     editor = CorrectEditor()
     notices: list[tuple[str, str]] = []
     editor.notice.connect(lambda msg, kind: notices.append((msg, kind)))

@@ -14,24 +14,15 @@ import os
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtWidgets import QApplication, QComboBox, QStatusBar, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from PyQt6.QtWidgets import QApplication, QComboBox, QStatusBar, QWidget  # noqa: E402
-
-import app.gui.display_controller as display_module  # noqa: E402
-from app.gui.display_controller import DisplayController  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.io_utils import file_stamp  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+import app.gui.display_controller as display_module
+from app.gui.display_controller import DisplayController
+from app.gui.image_manager import ImageManager
+from app.io_utils import file_stamp
+from tests.qt_teardown import delete_widgets
 
 NAMES = ("A", "B", "C")
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 class _Window:

@@ -22,17 +22,14 @@ import time
 
 import numpy as np
 import pytest
+from PIL import Image, PngImagePlugin
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PIL import Image, PngImagePlugin  # noqa: E402
-
-from app import io_utils  # noqa: E402
-from app.config import GT_BACKGROUND_ID, GT_META_CHUNK, GT_UNKNOWN_COLOR  # noqa: E402
-from app.gt.registry import default_registry, save_registry  # noqa: E402
-from app.gt.store import Tracing, empty_tracing, gt_path, read_tracing, write_tracing  # noqa: E402
-from app.io_utils import FileLockedError, atomic_open  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
+from app import io_utils
+from app.config import GT_BACKGROUND_ID, GT_META_CHUNK, GT_UNKNOWN_COLOR
+from app.gt.registry import default_registry, save_registry
+from app.gt.store import Tracing, empty_tracing, gt_path, read_tracing, write_tracing
+from app.io_utils import FileLockedError, atomic_open
+from app.project_layout import ProjectLayout
 
 HOUR = 3600.0
 STEM = "24EFCAM1_T001_L045_2024.07.18_111618_001_SMM"
@@ -252,13 +249,6 @@ def test_the_project_sweep_covers_every_output_folder(tmp_path):
     assert all(os.path.exists(p) for p in kept)
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PyQt6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 def test_a_loaded_project_is_swept_on_a_daemon_thread_after_its_scan(app, tmp_path, monkeypatch):
     import cv2
 
@@ -452,17 +442,14 @@ def test_a_gt_file_held_open_raises_file_locked_error(tmp_path, monkeypatch, whi
     assert os.listdir(tmp_path / "gt") == [os.path.basename(path)]
 
 
+@pytest.mark.usefixtures("no_prompts", "gl_off")
 def test_the_class_labels_report_a_locked_gt_file(app, tmp_path, monkeypatch):
     import cv2
-    from PyQt6.QtWidgets import QMessageBox
 
     from app.gui.correct.editor import CorrectEditor
     from app.gui.correct.layer import CLASSES
-    from tests.test_correct_editor import drag
+    from tests.correct_support import drag
 
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("unexpected modal dialog"))
-    monkeypatch.setenv("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
     image = str(tmp_path / f"{STEM}.png")
     cv2.imwrite(image, np.full((30, 40, 3), 90, np.uint8))
     notices = []

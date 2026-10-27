@@ -20,29 +20,25 @@ from PIL import Image
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from app.gui import canvas_gl, image_manager  # noqa: E402
-from app.gui.correct.layer import MASK  # noqa: E402
-from app.handlers import generate_skeleton_handler as gsh  # noqa: E402
-from app.handlers import mask_generation_handler as mgh  # noqa: E402
-from app.handlers.mask_generation_handler import ask_overwrite_policy  # noqa: E402
-from app.inference import runtime  # noqa: E402
-from app.inference.mask_origin import OverwritePolicy  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.correct_goldens_support import png_colour_type  # noqa: E402
-from tests.test_correct_editor import plane, write_image, write_mask  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
+from app.gui.correct.layer import MASK
+from app.handlers import generate_skeleton_handler as gsh
+from app.handlers import mask_generation_handler as mgh
+from app.handlers.mask_generation_handler import ask_overwrite_policy
+from app.inference import runtime
+from app.inference.mask_origin import OverwritePolicy
+from app.masks import write_mask_file
+from app.project_layout import ProjectLayout
+from tests.correct_goldens_support import png_colour_type
+from tests.correct_support import plane, write_image, write_mask
+from tests.generation_support import generation_project
+from tests.generation_support import wait_for_thread as _wait
+from tests.qt_wait import settle
+from tests.test_correct_main_window import (
     STEMS,
     Project,
-    app,  # noqa: F401  (fixture)
     in_correct,
     make_window,  # noqa: F401  (fixture)
-    settle,
 )
-from tests.test_generation_handlers import _wait, project, qapp  # noqa: E402,F401  (fixtures)
 
 KEEP_TEXT = "Keep predictions (predict missing only)"
 REPLACE_TEXT = "Replace all predictions"
@@ -102,10 +98,16 @@ def capture_prompt(call, *, press: QMessageBox.ButtonRole | None = None):
     return shown
 
 
-def run(handler, qapp) -> None:  # noqa: F811
+def run(handler, qapp) -> None:
     """Generate masks through ``handler`` and wait for the worker."""
     assert handler.generate_masks() is True
     _wait(handler.generation_thread, qapp)
+
+
+@pytest.fixture
+def project(tmp_path, qapp, monkeypatch):
+    """A folder of 3 images, CPU runtime, stub models and a fake main window."""
+    yield from generation_project(tmp_path, monkeypatch)
 
 
 @pytest.fixture
@@ -115,7 +117,7 @@ def real_prompt(monkeypatch):
 
 
 @pytest.fixture
-def gt_project(project):  # noqa: F811
+def gt_project(project):
     """``project`` (images a, b, c; stub model) with GT of image a: a mask and a skeleton."""
     layout = ProjectLayout(str(project.folder))
     block = np.zeros((48, 64), bool)
@@ -129,7 +131,7 @@ def gt_project(project):  # noqa: F811
 
 
 # ============================================================================== the prompt
-def test_the_prompt_says_keep_or_replace_predictions(qapp):  # noqa: F811
+def test_the_prompt_says_keep_or_replace_predictions(qapp):
     shown = capture_prompt(lambda: ask_overwrite_policy(None, 3, 10))
 
     assert shown["title"] == "Predictions already exist"
@@ -149,7 +151,7 @@ def test_the_prompt_says_keep_or_replace_predictions(qapp):  # noqa: F811
     assert shown["result"] is None  # the box was cancelled
 
 
-def test_the_prompt_counts_with_thousands_separators(qapp):  # noqa: F811
+def test_the_prompt_counts_with_thousands_separators(qapp):
     shown = capture_prompt(lambda: ask_overwrite_policy(None, 1234, 46000))
 
     assert shown["text"] == "1,234 of 46,000 images already have a predicted mask."
@@ -163,14 +165,14 @@ def test_the_prompt_counts_with_thousands_separators(qapp):  # noqa: F811
         (QMessageBox.ButtonRole.RejectRole, None),
     ],
 )
-def test_the_prompt_buttons_answer_keep_replace_and_cancel(qapp, role, policy):  # noqa: F811
+def test_the_prompt_buttons_answer_keep_replace_and_cancel(qapp, role, policy):
     shown = capture_prompt(lambda: ask_overwrite_policy(None, 2, 5), press=role)
 
     assert shown["result"] is policy
 
 
 # ================================================================== the run never touches gt
-def test_replace_all_predictions_never_touches_gt(gt_project, qapp, monkeypatch):  # noqa: F811
+def test_replace_all_predictions_never_touches_gt(gt_project, qapp, monkeypatch):
     layout = gt_project.layout
     write_mask(layout.mask_path("a"), np.ones((48, 64), np.uint8))  # an old prediction
     old_prediction = file_sha(layout.mask_path("a"))
@@ -192,7 +194,7 @@ def test_replace_all_predictions_never_touches_gt(gt_project, qapp, monkeypatch)
     assert run_manifest(layout)["parameters"]["overwrite_policy"] == "overwrite_all"
 
 
-def test_a_skeleton_run_never_touches_gt(gt_project, qapp):  # noqa: F811
+def test_a_skeleton_run_never_touches_gt(gt_project, qapp):
     layout = gt_project.layout
     gt_before = tree_sha(layout.gt_dir)
     assert any(name.startswith(os.path.join("skeletons", "a")) for name in gt_before)
@@ -209,7 +211,7 @@ def test_a_skeleton_run_never_touches_gt(gt_project, qapp):  # noqa: F811
     ]  # the run rewrote the generated skeletons, as always
 
 
-def test_keep_predictions_generates_only_the_missing_ones(project, qapp):  # noqa: F811
+def test_keep_predictions_generates_only_the_missing_ones(project, qapp):
     layout = ProjectLayout(str(project.folder))
     write_mask(layout.mask_path("a"), np.ones((48, 64), np.uint8))
     write_mask(layout.mask_path("b"), np.zeros((48, 64), np.uint8))
@@ -231,7 +233,7 @@ def test_keep_predictions_generates_only_the_missing_ones(project, qapp):  # noq
     assert run_manifest(layout)["parameters"]["overwrite_policy"] == "keep_existing"
 
 
-def test_an_rgba_file_in_mask_is_a_prediction_like_any_other(project, qapp, real_prompt):  # noqa: F811
+def test_an_rgba_file_in_mask_is_a_prediction_like_any_other(project, qapp, real_prompt):
     # Old data is out of scope: mask/ has no hand-corrected category.
     layout = ProjectLayout(str(project.folder))
     on = np.zeros((48, 64), bool)
@@ -257,7 +259,7 @@ def test_an_rgba_file_in_mask_is_a_prediction_like_any_other(project, qapp, real
     assert run_manifest(layout)["parameters"]["overwrite_policy"] == "overwrite_all"
 
 
-def test_the_handler_asks_with_the_count_of_existing_predictions(project, qapp):  # noqa: F811
+def test_the_handler_asks_with_the_count_of_existing_predictions(project, qapp):
     layout = ProjectLayout(str(project.folder))
     write_mask_file(layout.mask_path("a"), np.ones((48, 64), bool))  # RGBA: still a prediction
     write_mask(layout.mask_path("b"), np.zeros((48, 64), np.uint8))
@@ -281,20 +283,13 @@ class _PatternModel(torch.nn.Module):
         return out
 
 
+@pytest.mark.usefixtures("no_prompts", "gl_off", "no_temp_sweep", "cpu_runtime")
 def test_replace_predictions_leaves_an_open_gt_mask_as_it_is(
     make_window,  # noqa: F811
     tmp_path,
     monkeypatch,
-    qapp,  # noqa: F811
+    qapp,
 ):  # Review Focus 5
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
-    runtime.get_runtime.cache_clear()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     weights = tmp_path / "weights.pth"
     weights.write_bytes(b"w")
     monkeypatch.setattr(runtime, "mask_weights_path", lambda: str(weights))

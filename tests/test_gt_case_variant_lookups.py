@@ -26,49 +26,30 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import app.io_utils as io_utils  # noqa: E402
-from app import project_layout  # noqa: E402
-from app.gt import Tracing, default_registry, write_tracing  # noqa: E402
-from app.gt.export import ExportError, ExportOptions, export_dataset  # noqa: E402
-from app.gui.correct.layer import MASK, SKELETON  # noqa: E402
-from app.gui.export_dataset_dialog import count_traced  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.gui.stage_status import _with_gt  # noqa: E402
-from app.gui.window import editors  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+import app.io_utils as io_utils
+from app import project_layout
+from app.gt import Tracing, default_registry, write_tracing
+from app.gt.export import ExportError, ExportOptions, export_dataset
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.export_dataset_dialog import count_traced
+from app.gui.image_manager import ImageManager
+from app.gui.stage_status import _with_gt
+from app.gui.window import editors
+from app.masks import write_mask_file
+from app.project_layout import ProjectLayout
+from tests.correct_support import (
     H,
     W,
     box_plane,
     draw_line,
-    editor_factory,
-    install_guards,
     paint,
-    qapp,
     raster,
     write_image,
     write_mask,
     write_skeleton,
 )
 
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 
 def _case_sensitive(folder: str) -> bool:

@@ -8,20 +8,16 @@ cell that has its own background rule.
 
 from __future__ import annotations
 
-import os
+from collections import Counter
+from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
+from PyQt6.QtGui import QColor, QIcon, QImage, QPalette, QPixmap
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem
 
-from collections import Counter  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-import pytest  # noqa: E402
-from PyQt6.QtGui import QColor, QIcon, QImage, QPalette, QPixmap  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem  # noqa: E402
-
-from app.gui.widgets import tokens  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from app.gui.widgets import tokens
+from tests.qt_teardown import flush_deleted
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 # The library tree's own stylesheet (ui_panels.py) sets a translucent selection fill.

@@ -79,14 +79,6 @@ def test_masks_named_as_their_images_are_not_remapped(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- prompt label
-@pytest.fixture(scope="module")
-def qapp():
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 def _replace_button_text(existing_count):
     """The text of the prompt's destructive button (the prompt is cancelled)."""
     from PyQt6.QtCore import QTimer

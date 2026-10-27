@@ -14,19 +14,16 @@ import json
 import logging
 import os
 
+import cv2
+import numpy as np
 import pytest
+from PIL import Image, PngImagePlugin
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-from PIL import Image, PngImagePlugin  # noqa: E402
-
-from app import enhancement as enh  # noqa: E402
-from app.config import GT_META_CHUNK  # noqa: E402
-from app.gt.registry import RegistryError, load_registry  # noqa: E402
-from app.gt.store import GtFileError, gt_path, read_tracing  # noqa: E402
-from app.provenance import BUILD_INFO_FILENAME, git_commit  # noqa: E402
+from app import enhancement as enh
+from app.config import GT_META_CHUNK
+from app.gt.registry import RegistryError, load_registry
+from app.gt.store import GtFileError, gt_path, read_tracing
+from app.provenance import BUILD_INFO_FILENAME, git_commit
 
 _DEPTH = 100_000
 NESTED = {
@@ -114,24 +111,12 @@ def test_recent_projects_ignore_a_deeply_nested_list(kind):
 
 
 # ------------------------------------------------------------------ the class labels
-@pytest.fixture(scope="module")
-def app():
-    from PyQt6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
-def page(app, monkeypatch, tmp_path):
-    """The Correct page with its notices recorded; no modal box, no GL, no user config."""
-    from PyQt6.QtWidgets import QMessageBox
-
+def page(app, no_prompts, gl_off):
+    """The Correct page with its notices recorded; no modal box, no GL."""
     from app.gui.correct.editor import CorrectEditor
     from tests.qt_teardown import delete_widgets
 
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("unexpected modal dialog"))
-    monkeypatch.setenv("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
     editor = CorrectEditor()
     editor.notices = []
     editor.notice.connect(lambda msg, kind: editor.notices.append((msg, kind)))
@@ -147,7 +132,7 @@ def _image(folder) -> str:
 
 def test_the_class_labels_report_a_deeply_nested_classes_json_instead_of_crashing(page, tmp_path):
     from app.gui.correct.layer import CLASSES
-    from tests.test_correct_editor import drag
+    from tests.correct_support import drag
 
     image = _image(tmp_path)
     _write_classes_json(tmp_path, NESTED["array"])

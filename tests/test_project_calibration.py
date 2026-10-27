@@ -44,14 +44,6 @@ PROJECT = {
 }
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 def _write_project(root, data, *, bom: bool = False) -> str:
     path = os.path.join(root, PROJECT_FILENAME)
     text = data if isinstance(data, str) else json.dumps(data)

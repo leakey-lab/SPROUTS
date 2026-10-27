@@ -9,10 +9,6 @@ flushed with ``_pump_until``.
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import logging
 import sys
 import threading
@@ -21,15 +17,9 @@ import types
 
 import pytest
 from PyQt6.QtCore import QCoreApplication, QEventLoop, QThread, pyqtSignal
-from PyQt6.QtWidgets import QApplication
 
 from app.handlers.job_registry import JobRegistry
 from app.workers import GuardedThread, JobCancelled, describe_error
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 def _pump_until(predicate, timeout_s: float = 5.0) -> None:

@@ -158,20 +158,26 @@ def test_the_count_bound_drops_the_oldest_when_a_job_is_queued():
 
 
 def test_cancelling_queued_jobs_with_the_lock_held_does_not_deadlock():
+    """A deadlock fails the test instead of hanging the run: the clearing thread is a daemon,
+    and no thread is left waiting for its lock."""
     release = threading.Event()
     cache = Cache(max_images=3, max_bytes=100)  # its own one-thread pool
+    clearing = threading.Thread(target=cache.clear, daemon=True)  # cancels b with the lock held
     try:
-        cache.request("a", lambda: release.wait(5) and Sized(1))  # occupies the worker
+        # Occupies the worker. Not an entry: its end would wait for a deadlocked lock, and
+        # the pool's thread would keep the process from ending.
+        cache._executor.submit(release.wait, 5)
         queued = cache.request("b", Sized, 1)
-        clearing = threading.Thread(target=cache.clear)  # cancels b with the lock held
 
         clearing.start()
         clearing.join(5)
 
-        assert not clearing.is_alive() and queued.cancelled() and cache.pending() == []
+        assert not clearing.is_alive(), "clear() deadlocked"
+        assert queued.cancelled() and cache.pending() == []
     finally:
         release.set()
-        cache.close()
+        if not clearing.is_alive():  # else close() would wait for the same lock
+            cache.close()
 
 
 def test_a_failed_job_is_logged_and_holds_nothing(caplog):
@@ -189,7 +195,7 @@ def test_a_failed_job_is_logged_and_holds_nothing(caplog):
     assert cache.pending() == ["a"] and finished(cache._jobs["a"]) is None
 
 
-def test_a_job_ending_after_close_changes_nothing():
+def test_close_cancels_a_queued_job():
     executor = ManualExecutor()
     cache = Cache(max_images=3, max_bytes=100, executor=executor)
     future = cache.request("a", Sized, 500)
@@ -198,3 +204,25 @@ def test_a_job_ending_after_close_changes_nothing():
     executor.run_all()
 
     assert future.cancelled() and cache.pending() == []
+
+
+def test_a_job_ending_after_close_changes_nothing():
+    ended = []
+
+    class Watched(Cache):
+        def _ended(self, key, future):
+            ended.append(key)
+            super()._ended(key, future)
+
+    executor = ManualExecutor()
+    cache = Watched(max_images=3, max_bytes=100, executor=executor)
+    cache.request("a", Sized, 1)
+    executor.run_next()
+    assert ended == ["a"]  # before close, a job's end is checked
+    future = cache.request("b", Sized, 500)
+    assert future.set_running_or_notify_cancel()  # running: close() cannot cancel it
+
+    cache.close()
+    future.set_result(Sized(500))  # the job ends after close
+
+    assert not future.cancelled() and ended == ["a"] and cache.pending() == []

@@ -11,21 +11,17 @@ PyTorch not loaded yet)". Once PyTorch has resolved the runtime, the line is tha
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import about_dialog  # noqa: E402
-from app.inference import runtime  # noqa: E402
-from app.inference.device_probe import DeviceGuess  # noqa: E402
-from app.inference.runtime import RuntimeSummary  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui import about_dialog
+from app.inference import runtime
+from app.inference.device_probe import DeviceGuess
+from app.inference.runtime import RuntimeSummary
+from tests.qt_teardown import delete_widgets
 
 GPU_NAME = "NVIDIA GeForce RTX 5070 Ti"
 FROM_DRIVER = "(from the NVIDIA driver; PyTorch not loaded yet)"
@@ -51,11 +47,6 @@ def _summary(device="unknown", *, name=None, cuda=None, precision=None, mask=Tru
 
 UNRESOLVED = _summary()
 RESOLVED = _summary("GPU", name=GPU_NAME, cuda="12.8", precision="tf32")
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

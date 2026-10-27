@@ -16,15 +16,10 @@ import weakref
 
 import pytest
 from PyQt6 import sip
-from PyQt6.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
+from PyQt6.QtWidgets import QPushButton, QScrollArea, QWidget
 
 from tests import conftest
 from tests.qt_teardown import delete_widgets, flush_deleted
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 class _Page(QWidget):

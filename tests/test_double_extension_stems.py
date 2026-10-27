@@ -19,47 +19,28 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS  # noqa: E402
-from app.data_processing.measurement_index import MeasurementIndex  # noqa: E402
-from app.gt import Tracing, default_registry, write_tracing  # noqa: E402
-from app.gui.correct.layer import SKELETON  # noqa: E402
-from app.gui.image_manager import ImageManager  # noqa: E402
-from app.gui.window import editors  # noqa: E402
-from app.masks import write_mask_file  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app.config import AREA_CSV_HEADERS, LENGTH_CSV_HEADERS
+from app.data_processing.measurement_index import MeasurementIndex
+from app.gt import Tracing, default_registry, write_tracing
+from app.gui.correct.layer import SKELETON
+from app.gui.image_manager import ImageManager
+from app.gui.window import editors
+from app.masks import write_mask_file
+from app.project_layout import ProjectLayout
+from tests.correct_support import (
     H,
     W,
     box_plane,
     draw_line,
-    editor_factory,
-    install_guards,
-    qapp,
     write_image,
     write_mask,
     write_skeleton,
 )
-from tests.test_measure_gt_first import run_area, run_length  # noqa: E402
+from tests.test_measure_gt_first import run_area, run_length
+
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 LENGTH, AREA = LENGTH_CSV_HEADERS[5], AREA_CSV_HEADERS[5]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
 
 
 class Confirm:

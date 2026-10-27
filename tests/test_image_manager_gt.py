@@ -6,27 +6,16 @@ import os
 import time
 
 import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from app.gui import image_manager as im
+from app.project_layout import ProjectLayout
+from tests.window_support import write_photos
 
-from PyQt6.QtCore import QCoreApplication, QEvent  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import image_manager as im  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
+pytestmark = pytest.mark.usefixtures("no_temp_sweep")
 
 STEMS = ["a", "b", "c", "d"]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def no_delayed_temp_sweep(monkeypatch):
-    monkeypatch.setattr(im.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None))
 
 
 def _touch(path: str) -> None:
@@ -38,10 +27,7 @@ def _touch(path: str) -> None:
 @pytest.fixture
 def gt_project(tmp_path):
     """Images a..d; gt/mask/a.png, gt/skeletons/b.png, gt/c.png; mask/d.png (prediction)."""
-    image = QImage(8, 6, QImage.Format.Format_RGB32)
-    image.fill(QColor(90, 60, 30))
-    for stem in STEMS:
-        assert image.save(str(tmp_path / f"{stem}.png"))
+    write_photos(tmp_path, STEMS, size=(8, 6), suffix=".png")
     layout = ProjectLayout(str(tmp_path))
     _touch(layout.gt_mask_path("a"))
     _touch(layout.gt_skeleton_path("b"))
@@ -78,9 +64,7 @@ def test_the_loader_scans_gt_after_the_predictions(gt_project, app):
 
 
 def test_a_gt_file_named_in_another_case_belongs_to_the_librarys_stem(tmp_path, app):
-    image = QImage(8, 6, QImage.Format.Format_RGB32)
-    image.fill(QColor(1, 2, 3))
-    assert image.save(str(tmp_path / "Plot.png"))
+    write_photos(tmp_path, ["Plot"], size=(8, 6), color=(1, 2, 3), suffix=".png")
     layout = ProjectLayout(str(tmp_path))
     _touch(layout.gt_mask_path("plot"))
     manager = _load(layout)
@@ -114,9 +98,7 @@ def test_set_gt_and_refresh_outputs_follow_the_files(gt_project, app):
 def test_a_new_load_forgets_the_gt_of_the_old_one(gt_project, tmp_path_factory, app):
     manager = _load(gt_project)
     other = tmp_path_factory.mktemp("other")
-    image = QImage(8, 6, QImage.Format.Format_RGB32)
-    image.fill(QColor(1, 2, 3))
-    assert image.save(str(other / "z.png"))
+    write_photos(other, ["z"], size=(8, 6), color=(1, 2, 3), suffix=".png")
     manager.load_images(str(other))
     end = time.monotonic() + 10
     while time.monotonic() < end and "z" not in manager.images:

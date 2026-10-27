@@ -11,22 +11,19 @@ named ``gt`` that Generate has given ``mask/`` and ``skeletons/`` all open: a ``
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from app.config import (  # noqa: E402
+from app.config import (
     GT_CLASSES_FILENAME,
     GT_DIRNAME,
     MASK_DIRNAME,
     SKELETONS_DIRNAME,
 )
-from app.gui.panels import Panel  # noqa: E402
-from app.gui.window import project_loader  # noqa: E402
+from app.gui.panels import Panel
+from app.gui.window import project_loader
 
 
 def loader_window(calls: list) -> SimpleNamespace:

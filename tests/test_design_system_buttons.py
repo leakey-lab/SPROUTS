@@ -6,20 +6,16 @@ comes from ``dark_theme.qss`` - there is no per-module button stylesheet to drif
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-from pathlib import Path  # noqa: E402
-
-import pytest  # noqa: E402
-from PyQt6.QtCore import QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.widgets import tokens  # noqa: E402
-from app.gui.widgets.buttons import ghost_button, primary_button  # noqa: E402
+from app.gui.widgets import tokens
+from app.gui.widgets.buttons import ghost_button, primary_button
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 

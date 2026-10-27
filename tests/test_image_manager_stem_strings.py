@@ -15,14 +15,10 @@ import random
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui import image_manager as im  # noqa: E402
-from app.inference.mask_origin import scan_existing_masks  # noqa: E402
-from app.naming import stem_key  # noqa: E402
-from app.project_layout import (  # noqa: E402
+from app.gui import image_manager as im
+from app.inference.mask_origin import scan_existing_masks
+from app.naming import stem_key
+from app.project_layout import (
     SKELETON_SUFFIX,
     ProjectLayout,
     few_keys,
@@ -36,11 +32,6 @@ STEMS = [
     for depth in range(1, 13)
 ]
 ORPHAN = "24EFCAM1_T009_L001_2024.06.04_100001_001_SMM"  # an output of a deleted photo
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _touch(path: str) -> None:

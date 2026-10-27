@@ -74,10 +74,9 @@ def test_the_module_is_qt_free():
     assert "PyQt6" not in src and "torch" not in src
 
 
-@pytest.fixture(scope="module")
-def env_after_importing_main(tmp_path_factory):
-    """``[QSG_RHI_BACKEND, KMP_BLOCKTIME]`` after ``import main`` in a fresh process."""
-    tmp_path = tmp_path_factory.mktemp("import_main")
+def _import_main(tmp_path, **env_vars: str) -> subprocess.Popen:
+    """A fresh process that imports ``main`` and prints ``QSG_RHI_BACKEND KMP_BLOCKTIME``;
+    neither is set before the import unless ``env_vars`` sets it."""
     env = dict(
         os.environ,
         QT_QPA_PLATFORM="offscreen",
@@ -86,20 +85,49 @@ def env_after_importing_main(tmp_path_factory):
     )
     for name in ("QSG_RHI_BACKEND", "QTWEBENGINE_CHROMIUM_FLAGS", "KMP_BLOCKTIME"):
         env.pop(name, None)
+    env.update(env_vars)
     code = (
         "import sys; sys.path.insert(0, sys.argv[1]); import main, os; "
         "print(os.environ.get('QSG_RHI_BACKEND'), os.environ.get('KMP_BLOCKTIME'))"
     )
-    proc = subprocess.run(
+    return subprocess.Popen(
         [sys.executable, "-c", code, str(REPO_ROOT)],
         cwd=str(tmp_path),
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=180,
     )
-    assert proc.returncode == 0, proc.stderr
-    return proc.stdout.strip().splitlines()[-1].split()
+
+
+def _printed(proc: subprocess.Popen) -> list[str]:
+    try:
+        out, err = proc.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
+    assert proc.returncode == 0, err
+    return out.strip().splitlines()[-1].split()
+
+
+@pytest.fixture(scope="module")
+def imports_of_main(tmp_path_factory):
+    """``[QSG_RHI_BACKEND, KMP_BLOCKTIME]`` after ``import main`` in a fresh process, by the
+    ``KMP_BLOCKTIME`` the user set (None: none). The processes run at the same time."""
+    started = {
+        blocktime: _import_main(
+            tmp_path_factory.mktemp("import_main"),
+            **({} if blocktime is None else {"KMP_BLOCKTIME": blocktime}),
+        )
+        for blocktime in (None, "7")
+    }
+    return {blocktime: _printed(proc) for blocktime, proc in started.items()}
+
+
+@pytest.fixture(scope="module")
+def env_after_importing_main(imports_of_main):
+    """``[QSG_RHI_BACKEND, KMP_BLOCKTIME]`` after ``import main`` in a fresh process."""
+    return imports_of_main[None]
 
 
 def test_importing_main_sets_d3d11_only_on_windows(env_after_importing_main):
@@ -111,3 +139,8 @@ def test_importing_main_lets_idle_openmp_workers_sleep(env_after_importing_main)
     assert env_after_importing_main[1] == "0"
     source = (REPO_ROOT / "main.py").read_text(encoding="utf-8")
     assert source.index('os.environ.setdefault("KMP_BLOCKTIME", "0")') < source.index("from app")
+
+
+def test_a_blocktime_the_user_set_wins(imports_of_main):
+    """``main`` only defaults KMP_BLOCKTIME: a value the user set stays (P3-01)."""
+    assert imports_of_main["7"][1] == "7"

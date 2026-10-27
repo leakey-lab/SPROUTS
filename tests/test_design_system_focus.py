@@ -7,17 +7,13 @@ share of the control (its frame, or its indicator / handle).
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from pathlib import Path  # noqa: E402
-
-import pytest  # noqa: E402
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtGui import QImage  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
+import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
@@ -32,7 +28,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from tests.qt_teardown import flush_deleted  # noqa: E402
+from tests.qt_teardown import flush_deleted
 
 APP_QSS = Path(__file__).resolve().parents[1] / "resources" / "themes" / "dark_theme.qss"
 

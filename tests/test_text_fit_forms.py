@@ -3,25 +3,14 @@ status chip's file name and the metrics bar's image name."""
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QFontMetrics, QFontMetricsF
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtGui import QFont, QFontMetrics, QFontMetricsF  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gui.widgets.text_fit import fit_forms, label_advance  # noqa: E402
+from app.gui.widgets.text_fit import fit_forms, label_advance
 
 FORMS = ["T1 · L44 · 2024.07.18 · 11:15:30", "T1 · L44 · 2024.07.18", "T1 · L44"]
 LONE = "an_image_name_without_tube_or_depth_" * 3
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(params=[9.5, 11.0, 12.5], ids=lambda pt: f"{pt}pt")

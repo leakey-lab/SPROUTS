@@ -11,10 +11,6 @@ never race it.
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import logging
 import threading
 
@@ -33,11 +29,6 @@ _STEMS = [
     "plot_T1_L2_2024.01.01_120000",
     "plot_T2_L1_2024.01.01_120000",
 ]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _make_ids(shape, values):
@@ -223,12 +214,24 @@ def _failing_export(monkeypatch, exc: BaseException) -> None:
 
 
 def _logged(caplog) -> list[tuple[int, bool]]:
-    """``(level, with a traceback)`` of each record the dialog's module logged."""
+    """``(level, with a traceback)`` of each record the dialog's module or the worker error
+    boundary (``app.workers``) logged."""
+    from app.workers import LOGGER_NAME
+
     return [
         (record.levelno, record.exc_info is not None)
         for record in caplog.records
-        if record.name == "app.gui.export_dataset_dialog"
+        if record.name in ("app.gui.export_dataset_dialog", LOGGER_NAME)
     ]
+
+
+def test_the_export_runs_inside_the_worker_error_boundary():
+    """The export thread is a ``GuardedThread``: one error boundary for every background job."""
+    from app.gui.export_dataset_dialog import ExportThread
+    from app.workers import GuardedThread
+
+    assert issubclass(ExportThread, GuardedThread)
+    assert ExportThread.run is GuardedThread.run
 
 
 def _run_failing_export(tmp_path) -> ExportDatasetDialog:

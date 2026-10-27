@@ -15,81 +15,37 @@ Offscreen; every project is a tmp_path folder of four 200x150 photos ("L21 Â· â€
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QInputMethodEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
+from app.gui.main_window import TREE_LOAD_DELAY_MS
+from tests.correct_support import paint, same_path
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.qt_wait import wait_until as wait
+from tests.test_correct_main_window import STEMS, leaf, new_project, open_project
+from tests.test_shell_keys_after_tree_focus import click_row, in_stage
+from tests.window_support import build_window, quiet_window
 
-from PyQt6.QtCore import QSettings, Qt  # noqa: E402
-from PyQt6.QtGui import QInputMethodEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
-
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-
-from app.gui import canvas_gl  # noqa: E402
-from app.gui.correct.layer import SKELETON  # noqa: E402
-from app.gui.main_window import TREE_LOAD_DELAY_MS  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-from tests.test_correct_editor import paint, qapp  # noqa: E402
-from tests.test_correct_main_window import (  # noqa: E402
-    STEMS,
-    leaf,
-    new_project,
-    open_project,
-    same_path,
-    settle,
-    wait,
-)
-from tests.test_shell_keys_after_tree_focus import click_row, in_stage  # noqa: E402
+# No prompt or file dialog, no GL, no delayed sweeps.
+pytestmark = pytest.mark.usefixtures("window_guards")
 
 SHIFT = Qt.KeyboardModifier.ShiftModifier
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    """No prompt or file dialog, no GL, the user's config untouched, no delayed sweeps."""
-    from app.gui import image_manager
-
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: pytest.fail(f"prompt: {box.text()}"))
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: pytest.fail("dialog"))
-    monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
-    monkeypatch.setenv("SPROUTS_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(
-        image_manager.ImageManager, "_start_temp_sweep", staticmethod(lambda _folder: None)
-    )
 
 
 @pytest.fixture
 def window(app, tmp_path):
     """A shown 1280x800 window with the project open and image 0 shown in the Library."""
-    from app.gui.main_window import MainWindow
-
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    made = MainWindow(settings=settings)
-    made.resize(1280, 800)
-    made.show()
-    settle()
+    made = [build_window(tmp_path / "settings.ini")]
     project = new_project(tmp_path)
-    open_project(made, project)
-    made.project = project
-    click_row(made, 0)
-    yield made
-    for editor in made._editors().values():
-        editor.maybe_save_changes = lambda: True
-    made.correct_editor.layers[SKELETON].cancel_scheduled_render()
-    made.close()
-    made.deleteLater()
-    del made, editor
-    flush_deleted()
-    QApplication.processEvents()
+    open_project(made[0], project)
+    made[0].project = project
+    click_row(made[0], 0)
+    yield made[0]
+    delete_widgets(made, prepare=quiet_window)
 
 
 def type_keys(widget, *presses) -> None:

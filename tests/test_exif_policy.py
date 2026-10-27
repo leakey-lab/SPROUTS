@@ -17,7 +17,6 @@ from app.enhancement import DECODE_FLAGS
 from app.inference import mask_inference
 from app.inference import skeleton_inference as si
 from app.io_utils import imread_unicode
-from tests.test_generation_inference import cpu_runtime  # noqa: F401  (pytest fixture)
 
 STEM = "CAM1_T001_L010_2024.07.18_101010_001_EXIF6"
 
@@ -68,7 +67,7 @@ def test_the_tag_is_real(tagged):
     assert decoded.shape == (640, 480, 3)  # OpenCV's default applies the tag
 
 
-def test_mask_generation_keeps_the_stored_grid(tagged, cpu_runtime):  # noqa: F811
+def test_mask_generation_keeps_the_stored_grid(tagged, cpu_runtime):
     src, _ = tagged
     out = src / "mask"
     mask_inference.generate_masks(str(src), str(out), model=_Stub())
@@ -77,7 +76,7 @@ def test_mask_generation_keeps_the_stored_grid(tagged, cpu_runtime):  # noqa: F8
     assert _corner(mask) == "top-left"
 
 
-def test_skeleton_generation_keeps_the_stored_grid(tagged, cpu_runtime):  # noqa: F811
+def test_skeleton_generation_keeps_the_stored_grid(tagged, cpu_runtime):
     src, _ = tagged
     out = src / "skeletons"
     si.run_skeleton_generation(str(src), str(out), model=_SkelStub(), batch_size=1)

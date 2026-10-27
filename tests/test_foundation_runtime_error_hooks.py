@@ -11,18 +11,14 @@ re-entrance safety and the single coalescing, non-modal dialog.
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import logging
+import os
 import subprocess
 import sys
 import textwrap
 import threading
 import time
 
-import pytest
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEventLoop, QTimer, qInstallMessageHandler, qWarning
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -80,11 +76,6 @@ def _run_script(install: bool) -> subprocess.CompletedProcess:
         text=True,
         timeout=120,
     )
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 def _pump(seconds: float = 0.1) -> None:

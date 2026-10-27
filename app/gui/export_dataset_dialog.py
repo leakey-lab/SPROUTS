@@ -16,10 +16,9 @@ are, so Enter in the folder field no longer opens the folder picker).
 
 from __future__ import annotations
 
-import logging
 import os
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -39,9 +38,7 @@ from app.gt.export import ExportError, ExportOptions, ExportResult, export_datas
 from app.gt.files import LabelsIndex
 from app.gt.registry import Registry
 from app.gui.widgets import tokens
-from app.workers import is_user_condition
-
-logger = logging.getLogger(__name__)
+from app.workers import GuardedThread
 
 # Failed images listed in the summary; the rest are counted ("…and N more").
 _MAX_LISTED_ERRORS = 10
@@ -68,13 +65,13 @@ def traced_sentence(traced: int, total: int) -> str:
     return f"{traced} of {total} {noun} {verb} class labels."
 
 
-class ExportThread(QThread):
+class ExportThread(GuardedThread):
     """Runs ``export_dataset`` off the GUI thread; every run ends in ``finished_ok`` or
-    ``failed`` (a one-line message; an unexpected error's traceback goes to the log)."""
+    ``failed`` (a one-line message). A refused request (``ExportError``) logs nothing; any
+    other error, ``SystemExit`` too, is logged by ``GuardedThread`` (a bug's traceback too)."""
 
     progress = pyqtSignal(int)
     finished_ok = pyqtSignal(object)  # ExportResult
-    failed = pyqtSignal(str)
 
     def __init__(
         self,
@@ -90,7 +87,7 @@ class ExportThread(QThread):
         self._registry = registry
         self._options = options
 
-    def run(self) -> None:
+    def work(self) -> None:
         try:
             result = export_dataset(
                 self._project_dir,
@@ -101,19 +98,14 @@ class ExportThread(QThread):
             )
         except ExportError as exc:  # a refused request: its own message, nothing to log
             self.failed.emit(str(exc))
-        except BaseException as exc:  # noqa: BLE001 - thread boundary: SystemExit must report too
-            # Unreported, the dialog would stay "Exporting…" with every control off.
-            if is_user_condition(exc):
-                logger.warning("Dataset export failed: %s", exc)
-            else:
-                logger.exception("Dataset export failed")
-            try:
-                message = f"Export failed: {exc}"
-            except Exception:  # a broken __str__ must not break the error path
-                message = f"Export failed: {type(exc).__name__}"
-            self.failed.emit(message)
-        else:
-            self.finished_ok.emit(result)
+            return
+        self.finished_ok.emit(result)
+
+    def describe(self, exc: BaseException) -> str:
+        try:
+            return f"Export failed: {exc}"
+        except Exception:  # a broken __str__ must not break the error path
+            return f"Export failed: {type(exc).__name__}"
 
 
 class ExportDatasetDialog(QDialog):

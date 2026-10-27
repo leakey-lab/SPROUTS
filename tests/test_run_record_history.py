@@ -11,11 +11,7 @@ import pytest
 from app import provenance
 from app.inference import mask_inference, run_record
 from app.inference.batch_engine import BatchReport
-from tests.test_generation_inference import (  # noqa: F401 - cpu_runtime is a fixture
-    _images,
-    _StubMaskModel,
-    cpu_runtime,
-)
+from tests.test_generation_inference import _images, _StubMaskModel
 
 pytestmark = pytest.mark.usefixtures("cpu_runtime")
 

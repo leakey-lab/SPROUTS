@@ -19,57 +19,37 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
-
-import cv2  # noqa: E402
-
-from app import project_layout  # noqa: E402
-from app.gui.correct.layer import MASK  # noqa: E402
-from app.gui.correct.mask_document import MaskDocument  # noqa: E402
-from app.gui.correct.mask_files import mask_stamps, read_mask  # noqa: E402
-from app.io_utils import file_stamp  # noqa: E402
-from app.masks import MaskFileError, MaskStore, write_mask_file  # noqa: E402
-from app.project_layout import ProjectLayout  # noqa: E402
-from tests.test_correct_editor import (  # noqa: E402
+from app import project_layout
+from app.gui.correct.layer import MASK
+from app.gui.correct.mask_document import MaskDocument
+from app.gui.correct.mask_files import mask_stamps, read_mask
+from app.io_utils import file_stamp
+from app.masks import MaskFileError, MaskStore, write_mask_file
+from app.project_layout import ProjectLayout
+from tests.correct_support import (
     DISCARD,
     H,
     W,
     answer_prompts,
     box_plane,
     bump,
-    editor_factory,
-    install_guards,
     paint,
     plane,
-    qapp,
     record,
     write_image,
     write_mask,
 )
-from tests.test_correct_editor_paging import read_ahead_done, ring  # noqa: E402
-from tests.test_gt_case_variant_lookups import case_sensitive_folder  # noqa: E402
+from tests.test_correct_editor_paging import read_ahead_done, ring
+from tests.test_gt_case_variant_lookups import case_sensitive_folder
+
+pytestmark = pytest.mark.usefixtures("correct_guards")
 
 EXACT = "img.png"
 NAMES = [EXACT, "IMG.png", "img.Png"]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return qapp()
-
-
-@pytest.fixture(autouse=True)
-def guards(monkeypatch, tmp_path):
-    yield from install_guards(monkeypatch, tmp_path)
-
-
-@pytest.fixture
-def make_editor(app):
-    yield from editor_factory()
 
 
 def _project(tmp_path, name: str) -> SimpleNamespace:

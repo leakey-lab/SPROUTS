@@ -27,7 +27,7 @@ def test_error_column_persisted_and_dataprocessor_tolerates_it(tmp_path):
             "Length (mm)": round(float(info_pos), 2),
         }
 
-    # Failure handler mirrors process_single_image's failure dict (sets 'Error').
+    # Failure handler mirrors length_row's failure dict (sets 'Error').
     def safe_worker(name, path):
         try:
             return worker(name, path)

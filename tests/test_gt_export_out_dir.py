@@ -12,21 +12,13 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
 
-import pytest  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from app.gt.export import ExportError, ExportOptions, export_dataset  # noqa: E402
-from app.gui.export_dataset_dialog import ExportDatasetDialog  # noqa: E402
-from tests.test_gt_export import _STEMS, _build_project  # noqa: E402
+from app.gt.export import ExportError, ExportOptions, export_dataset
+from app.gui.export_dataset_dialog import ExportDatasetDialog
+from tests.test_gt_export import _STEMS, _build_project
 
 windows_only = pytest.mark.skipif(os.name != "nt", reason="drive letters are Windows paths")
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _drive(path: str) -> str:

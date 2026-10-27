@@ -9,24 +9,14 @@ as before.
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
-
-from app.gui.widgets import ToastManager  # noqa: E402
-from tests.qt_teardown import delete_widgets  # noqa: E402
+from app.gui.widgets import ToastManager
+from tests.qt_teardown import delete_widgets
 
 NAME = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM.jpg"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

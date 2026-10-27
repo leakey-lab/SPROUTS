@@ -6,23 +6,14 @@ from __future__ import annotations
 import logging
 import os
 
-import pytest
+from PyQt6 import QtWebEngineWidgets  # noqa: F401  (before any QApplication: main imports it)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPalette
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QLabel, QWidget
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6 import QtWebEngineWidgets  # noqa: E402, F401  (before any QApplication: main imports it)
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtGui import QPalette  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
-
-from resources.resource_utils import project_root, resource_path  # noqa: E402
-from tests.qt_teardown import flush_deleted  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from resources.resource_utils import project_root, resource_path
+from tests.qt_teardown import flush_deleted
 
 
 # --------------------------------------------------------------------------- AR-16

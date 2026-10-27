@@ -53,7 +53,10 @@ def server(tmp_path):
 
     handler = functools.partial(Handler, directory=str(srv))
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    # shutdown() waits up to one poll of serve_forever (0.5 s by default)
+    thread = threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
     thread.start()
     try:
         yield f"http://127.0.0.1:{httpd.server_address[1]}", srv, Handler
@@ -117,7 +120,8 @@ def test_a_missing_url_is_a_download_failure_not_a_crash(fm, server, tmp_path):
 
 def test_an_unreachable_server_is_a_download_failure(fm, tmp_path):
     root = tmp_path / "root"
-    status = fm.fetch(_spec(), "http://127.0.0.1:9/t.pth", str(root), timeout=2.0)
+    # Windows retries a refused local connect until the timeout; elsewhere it fails at once
+    status = fm.fetch(_spec(), "http://127.0.0.1:9/t.pth", str(root), timeout=0.3)
     assert status.state == "missing"
     assert _partials(root) == []
 

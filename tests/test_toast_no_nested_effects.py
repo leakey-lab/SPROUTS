@@ -7,15 +7,12 @@ toast that sat over another widget. Qt does not support nested graphics effects.
 
 from __future__ import annotations
 
-import os
 import time
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt6.QtCore import QRect, qInstallMessageHandler
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
-from PyQt6.QtCore import QRect, qInstallMessageHandler  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
-
-from app.gui.widgets.toasts import Toast, ToastManager  # noqa: E402
+from app.gui.widgets.toasts import Toast, ToastManager
 
 
 def _pump(app: QApplication, seconds: float) -> None:
