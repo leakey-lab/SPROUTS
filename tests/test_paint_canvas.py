@@ -308,6 +308,56 @@ def test_undo_waits_for_the_stroke_in_progress(app):
     assert len(canvas.history.undo_stack) == 1 and canvas.in_stroke()
 
 
+def test_blank_says_when_the_canvas_is_fully_transparent(app):
+    """``blank``: no plane, or only 0s drawn transparent (an image without labels), or a
+    cleared canvas; any painted or redrawn pixel ends it (an owner may skip a blank canvas)."""
+    canvas, _ = make_canvas(np.zeros((40, 40), np.uint8))
+    assert canvas.blank and not shown(canvas).any()
+    stroke(canvas, (10, 10), (20, 10))
+    assert not canvas.blank
+    canvas.undo()  # a redrawn box: no longer known to be blank (it is transparent again)
+    assert not canvas.blank
+    canvas.redo()
+    canvas.clear()
+    assert canvas.blank and not shown(canvas).any()
+    canvas.undo()  # the clear undone: the stroke is drawn again
+    assert not canvas.blank and shown(canvas).any()
+
+    canvas.history.reset(square_outline())
+    canvas.rebuild()
+    assert not canvas.blank
+    canvas.history.reset(np.zeros((40, 40), np.uint8))
+    canvas.rebuild()
+    assert canvas.blank
+    canvas.history.reset(None)
+    canvas.rebuild()
+    assert canvas.blank and canvas.image is None
+
+
+def test_a_dab_and_a_fill_on_a_blank_canvas_end_blank(app):
+    canvas, _ = make_canvas(np.zeros((40, 40), np.uint8))
+    canvas.begin(QPoint(5, 5), MASK, 4, erase=True)  # an eraser dab paints too
+    assert not canvas.blank
+    canvas.commit()
+
+    outline = square_outline()
+    outline[:] = 0
+    canvas, _ = make_canvas(outline)
+    assert canvas.blank
+    canvas.history.plane[:] = square_outline()  # behind the canvas's back, then a fill
+    assert canvas.fill(QPoint(50, 40)) is not None and not canvas.blank
+
+
+def test_a_plane_of_zeros_with_an_opaque_zero_is_not_blank(app):
+    def opaque_zero():
+        lut = mask_lut()
+        lut[0] = (10, 20, 30, 255)
+        return lut
+
+    canvas, _ = make_canvas(np.zeros((20, 20), np.uint8), lut=opaque_zero)
+    assert not canvas.blank and shown(canvas)[:, :, 3].all()
+
+
 def test_render_rect_repaints_from_the_plane(app):
     canvas, rec = make_canvas(np.zeros((30, 40), np.uint8))
     canvas.history.plane[5:10, 5:15] = 1  # changed behind the canvas's back

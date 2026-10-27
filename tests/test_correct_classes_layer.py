@@ -32,6 +32,7 @@ from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtGui import QColor  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
 
+from app.editing import planes  # noqa: E402
 from app.gt import (  # noqa: E402
     Registry,
     Tracing,
@@ -804,8 +805,8 @@ def test_a_class_count_change_needs_no_pixel_compare(scene, project, monkeypatch
     """The document keeps pixel counts per class: while they differ from the saved ones the
     labels are unsaved without a full pass; the pixels are compared only when they match."""
     calls = []
-    real = classes_document._same_plane
-    monkeypatch.setattr(classes_document, "_same_plane", lambda a, b: calls.append(1) or real(a, b))
+    real = planes.planes_equal
+    monkeypatch.setattr(planes, "planes_equal", lambda a, b: calls.append(1) or real(a, b))
     layer, _, _ = open_layer(scene, project.image)
     stroke(layer, (10, 30), (70, 30))
     stroke(layer, (10, 40), (70, 40))

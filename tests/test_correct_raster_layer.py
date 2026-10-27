@@ -19,7 +19,8 @@ os.environ.setdefault("ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT", "0")
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
-from PyQt6.QtCore import QPoint, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QRectF, Qt  # noqa: E402
+from PyQt6.QtGui import QImage, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QGraphicsScene, QMessageBox  # noqa: E402
 
 from app.gui.correct.classes_layer import ClassesLayer  # noqa: E402
@@ -156,3 +157,62 @@ def test_replace_plane_commits_a_stroke_in_progress_first(scene, project):
     assert layer.gesture_active() is False
     assert host.calls.count(("layer_edited", "mask")) == 2  # the stroke, then the plane
     assert layer.undo() and layer.document.history.plane[400:411, 10:61].any()  # the stroke
+
+
+# ------------------------------------------------------------------------ a blank canvas
+def render(scene) -> None:
+    """Draw the scene once at 100 %, as a view frame does (the items paint and plan)."""
+    image = QImage(W, H, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    scene.render(painter, QRectF(0, 0, W, H), QRectF(0, 0, W, H))
+    painter.end()
+
+
+def test_a_blank_reference_layer_is_neither_drawn_nor_tiled(scene, project):
+    """An image without class labels (most images): while the class layer is the dimmed
+    reference its fully transparent canvas is not drawn and holds no tiles; edited, it is
+    drawn as ever, so its tiles are made before the first stroke."""
+    layer = ClassesLayer(FakeHost(), scene)
+    layer.open(project.a, (W, H), project.folder)
+    layer.set_active(False)
+    render(scene)
+
+    assert layer.canvas.blank and layer.item.built_tiles() == {}
+    assert layer.item.boundingRect() == QRectF(0, 0, W, H)  # the item keeps its size
+
+    layer.set_active(True)
+    render(scene)
+
+    assert layer.item.built_tiles()
+
+
+def test_a_stroke_ends_the_blank_canvas_and_the_reference_shows_it(scene, project):
+    layer = ClassesLayer(FakeHost(), scene)
+    layer.open(project.a, (W, H), project.folder)
+    layer.press(QPoint(100, 100), NO_MODS)
+    layer.move(QPoint(160, 120), True)
+    layer.release(QPoint(160, 120))
+    layer.set_active(False)
+    render(scene)
+
+    assert not layer.canvas.blank and layer.item.built_tiles()
+    assert canvas_alpha(layer)[100:121, 100:161].any()
+
+
+def test_an_opened_mask_is_drawn_while_the_reference_and_a_cleared_one_is_not(scene, project):
+    layer = MaskLayer(FakeHost(), scene)
+    layer.open(project.a, (W, H), project.folder)  # the prediction
+    layer.set_active(False)
+    render(scene)
+    assert not layer.canvas.blank and layer.item.built_tiles()
+
+    layer.set_active(True)
+    assert layer.clear()
+    layer.set_active(False)
+    render(scene)
+    assert layer.canvas.blank and layer.item.built_tiles() == {}
+
+    assert layer.undo()  # the clear undone: the prediction is back on screen
+    render(scene)
+    assert not layer.canvas.blank and layer.item.built_tiles()

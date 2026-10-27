@@ -11,26 +11,18 @@ Submodules (import them directly, e.g.
   drawn as a line at every zoom.
 
 Every item chooses its level of detail from :func:`device_scale`, which counts device
-pixels per item pixel (view zoom times devicePixelRatio). This module imports nothing
-heavy: the item classes are re-exported lazily (PEP 562) from their submodules.
+pixels per item pixel (view zoom times devicePixelRatio). This module imports nothing heavy.
 """
 
 from __future__ import annotations
 
-import importlib
 import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from PyQt6.QtGui import QPainter
 
-__all__ = ["device_scale", "PhotoLayerItem", "RasterLayerItem", "SkeletonLayerItem"]
-
-_LAZY = {
-    "PhotoLayerItem": "photo",
-    "RasterLayerItem": "raster",
-    "SkeletonLayerItem": "skeleton",
-}
+__all__ = ["device_scale"]
 
 
 def device_scale(painter: QPainter) -> float:
@@ -41,18 +33,3 @@ def device_scale(painter: QPainter) -> float:
     """
     t = painter.deviceTransform()
     return math.hypot(t.m11(), t.m12())
-
-
-def __getattr__(name: str):
-    """Import an item class from its submodule on first access (PEP 562)."""
-    module = _LAZY.get(name)
-    if module is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(importlib.import_module(f"{__name__}.{module}"), name)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    """Module attributes plus the lazily exported item classes."""
-    return sorted(set(globals()) | set(__all__))

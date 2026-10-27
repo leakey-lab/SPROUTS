@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.gui.correct import mask_document
+from app.editing import planes
 from app.gui.correct.layer import LayerStatus, Notice
 from app.gui.correct.mask_document import MaskDocument, MaskSaveResult
 from app.gui.correct.read_back import mask_read_back
@@ -627,13 +627,13 @@ def test_dirty_sees_every_pixel_of_an_odd_sized_plane(tmp_path):
 
 def test_dirty_compare_runs_once_per_revision(tmp_path, monkeypatch):
     calls = []
-    compare = mask_document._planes_equal
+    compare = planes.planes_equal
 
     def counting(a, b):
         calls.append(1)
         return compare(a, b)
 
-    monkeypatch.setattr(mask_document, "_planes_equal", counting)
+    monkeypatch.setattr(planes, "planes_equal", counting)  # the saved plane's compare
     doc = MaskDocument()
     doc.open(_image(tmp_path), SIZE)
     _paint(doc, (5, 5, 10, 10))

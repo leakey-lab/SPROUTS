@@ -18,9 +18,12 @@ leave that layer's read to the GUI thread at the next open.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-from app.gui.correct.mask_document import MaskDocument, MaskRead
 from app.gui.correct.read_ahead import AheadImage
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.gui.correct.mask_document import MaskDocument, MaskRead
 
 __all__ = ["closed_image", "mask_read_back", "read_back"]
 
@@ -40,58 +43,22 @@ def closed_image(
     for layer_id, layer in layers.items():
         if getattr(layer, "read_ahead", None) is None:
             continue  # it reads nothing ahead: it opens by itself either way
-        payload = read_back(layer, opened.size, stamps.get(layer_id))
+        payload = read_back(layer, stamps.get(layer_id))
         if payload is None:
             return None
         payloads[layer_id] = payload
     return AheadImage(opened.image_path, opened.stamp, opened.photo, payloads)
 
 
-def read_back(layer: object, size: tuple[int, int], stamps: tuple | None) -> object | None:
+def read_back(layer: object, stamps: tuple | None) -> object | None:
     """``layer``'s document as its read-ahead payload: its optional ``read_back(stamps)``
-    hook wins (the skeleton and the class labels have one), else :func:`mask_read_back` for
-    a mask layer; None when there is none."""
+    hook (the mask, the skeleton and the class labels have one); None when there is none."""
     if stamps is None:
         return None
     hook = getattr(layer, "read_back", None)
-    if callable(hook):
-        return hook(stamps)
-    document = getattr(layer, "document", None)
-    if isinstance(document, MaskDocument):
-        return mask_read_back(document, size, stamps)
-    return None
+    return hook(stamps) if callable(hook) else None
 
 
 def mask_read_back(document: MaskDocument, size: tuple[int, int], stamps: tuple) -> MaskRead | None:
-    """The saved mask as :meth:`MaskDocument.read` would read it again, from the document:
-    the plane, where it came from (GT or the prediction), the prediction as opened and the
-    size it was stretched from, if any (so the next open says so again).
-
-    None while nothing is open or the plane differs from the saved mask, and when a mask
-    file is there that the document could not use (a GT mask of another size, an undecodable
-    file): the next open reads it again and says so again, as it would without a hand-back.
-    The prediction
-    part carries the stamps the prediction was read at (``prediction_stamps``), not the
-    session's: a prediction rewritten since (a Generate run) no longer matches, so the next
-    open reads it again instead of pairing new stamps with the old plane.
-    """
-    if not document.is_open() or document.is_dirty():
-        return None
-    if not document.has_saved_file and any(stamp[1:] != (None,) for stamp in stamps):
-        return None
-    plane = document.history.plane if document.has_saved_file else None
-    stamps = (*tuple(stamps)[:1], *document.prediction_stamps)
-    return MaskRead(
-        document.image_path,
-        tuple(size),
-        stamps,
-        plane,
-        document.has_saved_file,
-        "",
-        source=document.source,
-        prediction_plane=document.prediction(),
-        gt_path=document.gt_path,
-        prediction_path=document.prediction_path,
-        resized_from=document.resized_from,
-        prediction_resized_from=document.prediction_resized_from,
-    )
+    """``MaskDocument.read_back`` (``size``, the image's, is the open plane's already)."""
+    return document.read_back(stamps)

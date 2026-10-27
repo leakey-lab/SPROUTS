@@ -3,9 +3,10 @@
 A raster layer edits one ``uint8`` plane (the mask's 0/1, the class labels' ids) through
 parts that each do one job: its document (the plane in a ``PatchHistory``, the saved state,
 the files), the ``PaintCanvas`` (the ARGB canvas over the plane), the ``RasterLayerItem`` at
-the layer's z and the Brush / Eraser / Fill tools and ring of :mod:`.mask_tools`. ``MaskLayer``
-and ``ClassesLayer`` bring the document, the identity and the document members of
-``EditLayer`` (open, save, status ...).
+the layer's z and the Brush / Eraser / Fill tools and ring of :mod:`.mask_tools`. It passes
+the document members of ``EditLayer`` (open, save, status ...) on to the document;
+``MaskLayer`` and ``ClassesLayer`` bring the document (it words its save: ``outcome``) and
+the identity.
 
 The drag state lives here and in the canvas, never in a tool (C2): the layer forwards a drag
 only to the tool that began it, and :meth:`RasterLayer.finish_gesture` commits a stroke in
@@ -17,7 +18,9 @@ the document and redraw the whole canvas.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
+from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
@@ -25,7 +28,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QImage, QKeyEvent
 
 from app.gui.canvas_layers.raster import RasterLayerItem
-from app.gui.correct.layer import REFERENCE_DIM, LayerHost, SizeSpec, ToolSpec
+from app.gui.correct.layer import REFERENCE_DIM, SaveOutcome, SizeSpec, ToolSpec, project_label
 from app.gui.correct.mask_tools import (
     FILL_MISS_NOTICE,
     TOOL_CLASSES,
@@ -39,11 +42,14 @@ from app.gui.patch_history import Patch, PatchHistory
 if TYPE_CHECKING:  # pragma: no cover
     from PyQt6.QtWidgets import QGraphicsScene
 
+    from app.gui.correct.layer import LayerHost, Notice
+
 __all__ = ["RasterDocument", "RasterLayer"]
 
 
 class RasterDocument(Protocol):
-    """What a raster layer needs of its document (``revision``: +1 per ``touch``)."""
+    """What a raster layer needs of its document (``revision``: +1 per ``touch``), and the
+    members the layer passes on to it (``read``, ``open``, ``save``, ``outcome``, ...)."""
 
     history: PatchHistory  # the committed plane (None while closed) and its undo stacks
     revision: int
@@ -54,8 +60,9 @@ class RasterDocument(Protocol):
 
 
 class RasterLayer:
-    """The generic part of a raster edit layer (``EditLayer`` minus the document members;
-    the tools' ``MaskToolHost`` once a subclass gives it a ``brush_color``).
+    """The generic part of a raster edit layer (``EditLayer``, ``ReadAheadLayer``,
+    ``DiskGuardedLayer``; the tools' ``MaskToolHost`` once a subclass gives it a
+    ``brush_color``).
 
     ``document``, ``canvas``, ``item`` (in ``scene`` at ``Z``) and ``ring`` (the brush
     ring, a ``BrushPreview`` in the layer colour) are its parts; ``host`` hears of new
@@ -70,6 +77,8 @@ class RasterLayer:
     SIZE_RANGE = (1, 100)
     DEFAULT_OPACITY = 0.60
     CLEARED_NOTICE = ""
+    NOT_OPEN = ""  # the save's message while nothing is open
+    READ: type = type(None)  # the read-ahead payload open adopts (MaskRead, ClassesRead)
     FILL_MISS_NOTICE = FILL_MISS_NOTICE
     #: The one dock slider of the brush and the eraser (they share the size).
     SIZE_SPEC = SizeSpec("brush", "Brush size ([ and ])", *SIZE_RANGE)
@@ -89,7 +98,12 @@ class RasterLayer:
         (``PaintCanvas``'s ``lut``, ``to_plane``, ``fill_source``); nothing is open yet."""
         self._host = host
         self.document = document
-        self.item = RasterLayerItem(self._canvas_image)
+        # Calls the document answers as it is (so a subclass must not define these names).
+        self.is_open, self.is_dirty = document.is_open, document.is_dirty
+        self.status, self.file_stamps = document.status, document.file_stamps
+        self.write_stamps, self.matches_disk = document.write_stamps, document.matches_disk
+        self.read_back = document.read_back  # the image the page leaves, handed back
+        self.item = RasterLayerItem(self._canvas_image, skip=self._draws_nothing)
         self.item.setZValue(self.Z)
         scene.addItem(self.item)
         self.canvas = PaintCanvas(
@@ -118,6 +132,65 @@ class RasterLayer:
     def current_tool(self) -> str:
         """Id of the tool that takes the next press (change it with :meth:`set_tool`)."""
         return self._tool.tool_id
+
+    # ------------------------------------------------------------------ document
+    def read_ahead(self, image_path: str, images_base_folder: str | None):
+        """``ReadAheadLayer``: a worker reader of ``image_path``'s saved document."""
+        return partial(type(self.document).read, image_path)
+
+    def open(
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        images_base_folder: str | None,
+        ahead: object | None = None,
+    ) -> list[Notice]:
+        """Open the document of ``image_path`` (``size`` = (w, h)); the notices to show.
+
+        A stroke in progress is committed first. The files live next to the image, so
+        ``images_base_folder`` only roots the file labels. ``ahead``: a :meth:`read_ahead`
+        result (adopted when it is a ``READ``).
+        """
+        self.finish_gesture()
+        self._root = images_base_folder or os.path.dirname(image_path)
+        read = ahead if isinstance(ahead, self.READ) else None
+        notices = self.document.open(image_path, size, read, root=self._root)
+        self._opened()
+        self._replaced()
+        return notices
+
+    def close(self) -> None:
+        """Forget the document (a stroke in progress is committed first)."""
+        self.finish_gesture()
+        self.document.close()
+        self._replaced()
+
+    def revert(self) -> list[Notice]:
+        """Discard: back to the saved state in memory, history cleared (no notices)."""
+        self.finish_gesture()
+        if self.document.is_open():
+            self.document.revert()
+            self._replaced()
+        return []
+
+    def save(self) -> SaveOutcome:
+        """Write the document (``document.save``, worded by ``document.outcome``); a stroke is
+        committed first."""
+        self.finish_gesture()
+        if not self.document.is_open():
+            return SaveOutcome(self.layer_id, ok=False, message=self.NOT_OPEN, kind="danger")
+        result = self.document.save()
+        self._changed()
+        return self.document.outcome(result)
+
+    def unloaded_label(self) -> str:
+        """``DiskGuardedLayer``: the file a save would replace (``"gt/<stem>.png"``) while it
+        exists and was not shown (it could not be read, or has another size); else ``""``."""
+        if not self.document.unloaded_file():
+            return ""
+        stamp = self.document.write_stamps()[0]
+        gone = stamp[1:] == (None,)  # deleted since the open: nothing left to replace
+        return "" if gone else project_label(stamp[0], self._root)
 
     # ------------------------------------------------------------------ plane
     def clear(self) -> bool:
@@ -333,6 +406,11 @@ class RasterLayer:
         canvas = getattr(self, "canvas", None)  # None only while __init__ builds the item
         return None if canvas is None else canvas.image
 
+    def _draws_nothing(self) -> bool:
+        """A blank canvas (no labels, no mask) of the reference layer: its item skips the paint
+        and the warm-up. The edited layer is drawn as ever, so its tiles are made ahead."""
+        return self.canvas.blank and not self._active
+
     def _on_patch(self, patch: Patch, forward: bool) -> None:
         """Every plane change: a new document revision; a new action unless replayed."""
         self.document.touch()
@@ -347,6 +425,9 @@ class RasterLayer:
             return step() is not None
         finally:
             self._stepping = False
+
+    def _opened(self) -> None:
+        """A document was just opened, before the redraw (a hook for subclasses)."""
 
     def _replaced(self) -> None:
         """The document was opened, closed or reverted: redraw the canvas, tell the UI."""

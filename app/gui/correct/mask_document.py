@@ -26,7 +26,8 @@ the save rule); a save writes the image's size.
 
 The owner changes the plane only through ``history`` and calls
 :meth:`MaskDocument.touch` after each change (commit, undo, redo), so
-:meth:`MaskDocument.is_dirty` compares the pixels at most once per revision.
+:meth:`MaskDocument.is_dirty` compares the pixels at most once per revision. The revision,
+the baseline, the save error and Discard are :class:`app.editing.planes.PlaneDocument`'s.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from app.editing.planes import PlaneDocument, planes_equal
 from app.gui.correct.layer import MASK, LayerStatus, Notice, SaveOutcome, project_label
 from app.gui.correct.mask_files import (
     SOURCE_GT,
@@ -48,7 +50,6 @@ from app.gui.correct.mask_files import (
     read_mask,
 )
 from app.gui.patch_history import PatchHistory
-from app.io_utils import file_stamp
 from app.masks import write_mask_file
 from app.project_layout import ProjectLayout
 
@@ -102,7 +103,7 @@ class MaskSaveResult:
     message: str = ""
 
 
-class MaskDocument:
+class MaskDocument(PlaneDocument):
     """The mask of one image: committed plane + patch history + saved baseline + GT I/O.
 
     ``history.plane`` is the ``uint8`` 0/1 ``(h, w)`` plane (None while closed);
@@ -115,48 +116,18 @@ class MaskDocument:
     """
 
     def __init__(self, *, on_history_change: Callable[[], None] | None = None) -> None:
-        self.history = PatchHistory(on_change=on_history_change)
-        self.image_path = ""
-        self.has_saved_file = False
+        super().__init__(PatchHistory(on_change=on_history_change))
         self.source: str | None = None
-        self.gt_path = ""
         self.prediction_path: str | None = None
         self._layout: ProjectLayout | None = None
         self._prediction: np.ndarray | None = None  # the prediction as opened
-        self._baseline: np.ndarray | None = None  # the plane as last opened or saved
-        self._revision = 0
-        self._dirty = False
-        self._dirty_revision = 0  # the revision _dirty was computed for
-        self._save_error = ""
-        self._error_revision = -1  # the revision a failed save happened at
-        self._not_loaded = ""  # MaskRead.not_loaded of the open file, until a write
         self._prediction_resized_from: tuple[int, int] | None = None  # as read at open
         self._prediction_stamps: tuple = ()  # the prediction's names as read at open
-        self._root = ""  # the project folder the file labels are relative to
 
     # ------------------------------------------------------------------ state
-    @property
-    def revision(self) -> int:
-        """Plane revision: +1 per :meth:`touch` (and on open, revert and close)."""
-        return self._revision
-
-    def is_open(self) -> bool:
-        """True while a document is open."""
-        return self.history.plane is not None
-
-    def touch(self) -> None:
-        """The plane changed: bump the revision, so the next :meth:`is_dirty` compares again."""
-        self._revision += 1
-
     def is_dirty(self) -> bool:
         """True when the plane differs from the saved state (compared once per revision)."""
-        plane, baseline = self.history.plane, self._baseline
-        if plane is None or baseline is None:
-            return False
-        if self._dirty_revision != self._revision:
-            self._dirty = not _planes_equal(plane, baseline)
-            self._dirty_revision = self._revision
-        return self._dirty
+        return self.is_open() and not self._plane_saved()
 
     @property
     def prediction_stamps(self) -> tuple:
@@ -181,23 +152,19 @@ class MaskDocument:
         copy of it."""
         return self._prediction
 
-    def unloaded_file(self) -> bool:
-        """True while the file chosen at open was not loaded and nothing was written over it."""
-        return bool(self._not_loaded)
-
     def matches_disk(self) -> bool:
         """True when :meth:`open` would now open exactly the saved state: the mask files
         read (:meth:`read`; no usable file reads as empty) give the baseline from the same
         source, and the same file, if any, is not shown. Reads the files: call it only
         after a stamp changed."""
-        baseline = self._baseline
+        baseline = self._baseline.plane
         if baseline is None or not self.image_path:
             return False
         height, width = baseline.shape
         read = self.read(self.image_path, (width, height))
         plane = read.plane if read.plane is not None else np.zeros_like(baseline)
         same_file = (read.source, read.not_loaded) == (self.source, self._not_loaded)
-        return same_file and _planes_equal(plane, baseline)
+        return same_file and planes_equal(plane, baseline)
 
     def status(self) -> LayerStatus:
         """The save state: a failed save (until the next edit) > unsaved > a file not shown >
@@ -228,10 +195,39 @@ class MaskDocument:
             return ()
         return mask_stamps(self._layout, self.gt_path, self.image_path)
 
-    def write_stamps(self) -> tuple:
-        """``DiskGuardedLayer.write_stamps``: the GT mask, the one file a save writes or
-        removes (``()`` while closed)."""
-        return (file_stamp(self.gt_path),) if self.image_path else ()
+    def read_back(self, stamps: tuple) -> MaskRead | None:
+        """The saved mask as :meth:`read` would read it again, with the session's ``stamps``
+        (the read-ahead's payload when the page leaves the image): the plane (not copied),
+        where it came from (GT or the prediction), the prediction as opened and the size it
+        was stretched from, if any (so the next open says so again).
+
+        None while nothing is open or the plane differs from the saved mask, and when a mask
+        file is there that the document could not use (a GT mask of another size, an
+        undecodable file): the next open reads it again and says so again. The prediction
+        part carries the stamps the prediction was read at (``prediction_stamps``), not the
+        session's: a prediction rewritten since (a Generate run) no longer matches, so the
+        next open reads it again instead of pairing new stamps with the old plane.
+        """
+        if not self.is_open() or self.is_dirty():
+            return None
+        if not self.has_saved_file and any(stamp[1:] != (None,) for stamp in stamps):
+            return None
+        plane = self.history.plane
+        height, width = plane.shape  # the image's size: the plane opened at it
+        return MaskRead(
+            self.image_path,
+            (width, height),
+            (*tuple(stamps)[:1], *self._prediction_stamps),
+            plane if self.has_saved_file else None,
+            self.has_saved_file,
+            "",
+            source=self.source,
+            prediction_plane=self._prediction,
+            gt_path=self.gt_path,
+            prediction_path=self.prediction_path,
+            resized_from=self.resized_from,
+            prediction_resized_from=self._prediction_resized_from,
+        )
 
     # ------------------------------------------------------------------ lifecycle
     @staticmethod
@@ -286,7 +282,6 @@ class MaskDocument:
         self._prediction = prediction
         self._not_loaded = read.not_loaded
         self._prediction_resized_from = read.prediction_resized_from
-        self._baseline = plane.copy()
         self.history.reset(plane)
         self._restart()
         if read.not_loaded:
@@ -305,20 +300,7 @@ class MaskDocument:
         self._prediction = None
         self._prediction_stamps, self._root = (), ""
         self._not_loaded, self._prediction_resized_from = "", None
-        self._baseline = None
         self.history.reset(None)
-        self._restart()
-
-    def revert(self) -> None:
-        """Discard: the plane goes back to the saved state and the history is cleared."""
-        plane, baseline = self.history.plane, self._baseline
-        if plane is None or baseline is None:
-            return
-        if plane.shape == baseline.shape:
-            np.copyto(plane, baseline)  # in place: holders of the plane stay valid
-        else:
-            plane = baseline.copy()
-        self.history.reset(plane)
         self._restart()
 
     def save(self) -> MaskSaveResult:
@@ -338,18 +320,18 @@ class MaskDocument:
             return MaskSaveResult(ok=False, error="No mask is open")
         on = plane > 0
         if self._not_loaded and not on.any():
-            self._saved(plane)
+            self._saved()
             return MaskSaveResult(ok=True, kept=True)
         if not self.is_dirty():
             return MaskSaveResult(ok=True)
-        if self._prediction is not None and _planes_equal(plane, self._prediction):
+        if self._prediction is not None and planes_equal(plane, self._prediction):
             if self.file_stamps()[1:] == self._prediction_stamps:
-                return self._remove_gt(plane)
+                return self._remove_gt()
         try:
             write_mask_file(self.gt_path, on)
         except (OSError, ValueError) as exc:
             return self._failed(self.gt_path, exc)
-        self._now_from(SOURCE_GT, plane)
+        self._now_from(SOURCE_GT)
         if on.any():
             return MaskSaveResult(ok=True, path=self.gt_path)
         message = f"Empty mask saved as GT for {os.path.basename(self.image_path)}: root area 0"
@@ -372,7 +354,7 @@ class MaskDocument:
         return SaveOutcome(MASK, ok=False, message=message, kind="danger")
 
     # ------------------------------------------------------------------ internals
-    def _remove_gt(self, plane: np.ndarray) -> MaskSaveResult:
+    def _remove_gt(self) -> MaskSaveResult:
         """The plane equals the prediction: the GT file goes (already gone is fine)."""
         label, done = self._label(self.gt_path), "removed {}"
         try:
@@ -381,38 +363,26 @@ class MaskDocument:
             done = "{} was already gone"
         except OSError as exc:
             return self._failed(None, exc)
-        self._now_from(SOURCE_PREDICTION, plane)
+        self._now_from(SOURCE_PREDICTION)
         message = f"Mask equals the prediction: {done.format(label)}"
         return MaskSaveResult(ok=True, removed=True, message=message)
 
-    def _now_from(self, source: str, plane: np.ndarray) -> None:
-        """A save succeeded: ``source``'s file holds ``plane``, the saved state."""
+    def _now_from(self, source: str) -> None:
+        """A save succeeded: ``source``'s file holds the plane, the saved state."""
         self.source = source
         self.has_saved_file = True
         self._not_loaded = ""
-        self._saved(plane)
+        self._saved()
 
     def _label(self, path: str) -> str:
         """``path`` as the prompts name it: relative to the project folder, ``/`` separators
         (``gt/mask/a.png``; ``tube1/gt/mask/a.png`` for an image in a sub-folder)."""
         return project_label(path, self._root)
 
-    def _restart(self) -> None:
-        """A new plane was adopted: new revision, clean, no save error."""
-        self.touch()
+    def _saved(self) -> None:
+        """The file now holds the plane: it becomes the baseline (clean without a compare)."""
         self._save_error = ""
-        self._dirty = False
-        self._dirty_revision = self._revision
-
-    def _saved(self, plane: np.ndarray) -> None:
-        """The file now holds ``plane``: it becomes the baseline (clean without a compare)."""
-        if self._baseline is not None and self._baseline.shape == plane.shape:
-            np.copyto(self._baseline, plane)
-        else:
-            self._baseline = plane.copy()
-        self._save_error = ""
-        self._dirty = False
-        self._dirty_revision = self._revision
+        self._remember()
 
     def _failed(self, path: str | None, exc: Exception) -> MaskSaveResult:
         """Record a failed save (shown until the next edit) and describe it."""
@@ -420,21 +390,4 @@ class MaskDocument:
             logger.warning("Could not remove the GT mask of %s: %s", self.image_path, exc)
         else:
             logger.warning("Could not save mask to %s: %s", path, exc)
-        self._save_error = str(exc)
-        self._error_revision = self._revision
-        return MaskSaveResult(ok=False, path=path, error=str(exc))
-
-
-def _planes_equal(a: np.ndarray, b: np.ndarray) -> bool:
-    """``np.array_equal`` for two planes, compared as 64-bit words (8x fewer elements).
-
-    0.07 ms instead of 0.54 ms at 2048x1536; equal cost at 640x480.
-    """
-    if a.shape != b.shape or a.dtype != b.dtype:
-        return False
-    flat_a, flat_b = a.reshape(-1), b.reshape(-1)
-    n = flat_a.size - flat_a.size % 8
-    return bool(
-        np.array_equal(flat_a[:n].view(np.uint64), flat_b[:n].view(np.uint64))
-        and np.array_equal(flat_a[n:], flat_b[n:])
-    )
+        return MaskSaveResult(ok=False, path=path, error=self._save_failed(exc))

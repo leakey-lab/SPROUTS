@@ -25,7 +25,8 @@ minified zoom the exact tiles of actual pixels about the view's centre (Ctrl+1, 
 readout, the zoom presets). The tiles are made in short idle slices and, on OpenGL, drawn
 once invisibly so their textures are uploaded before the first frame that shows them. An
 edit drops the tiles it touches at every level; coverage tiles are kept only for the level
-last drawn and the levels planned, and let go when idle.
+last drawn and the levels planned, and let go when idle. While the owner's ``skip`` says the
+canvas is fully transparent (a blank reference layer), the item draws and makes nothing.
 """
 
 from __future__ import annotations
@@ -199,11 +200,20 @@ class RasterLayerItem(QGraphicsItem):
     UPLOADS_PER_FRAME = 6
     COVER_UPLOADS_PER_FRAME = 2
 
-    def __init__(self, source: ImageSource, parent: QGraphicsItem | None = None) -> None:
+    def __init__(
+        self,
+        source: ImageSource,
+        parent: QGraphicsItem | None = None,
+        *,
+        skip: Callable[[], bool] | None = None,
+    ) -> None:
         """Draw ``source()``: the canvas ``QImage`` (ideally ``Format_ARGB32_Premultiplied``),
-        or ``None`` while nothing is open. Never keeps a reference to the image."""
+        or ``None`` while nothing is open. Never keeps a reference to the image. While
+        ``skip()`` is True (the owner knows the canvas is fully transparent) nothing is
+        drawn, planned or made ahead; the item keeps its size."""
         super().__init__(parent)
         self._source = source
+        self._skip = skip
         self._tiles: dict[tuple[int, int], QPixmap] = {}
         self._undrawn: set[tuple[int, int]] = set()  # exact tiles made ahead, not drawn yet
         self._coverage = _Coverage()
@@ -274,7 +284,7 @@ class RasterLayerItem(QGraphicsItem):
         it directly.
         """
         image = self._source()
-        if image is None or image.isNull():
+        if image is None or image.isNull() or self._skipped():
             self._warm_plan = []
             return False
         deadline = time.perf_counter() + budget_ms / 1000.0
@@ -315,7 +325,7 @@ class RasterLayerItem(QGraphicsItem):
         """Draw the exposed part: exact tiles when magnified, area coverage when minified;
         then plan the idle warm-up (on OpenGL, upload a few tiles made ahead)."""
         image = self._source()
-        if image is None or image.isNull():
+        if image is None or image.isNull() or self._skipped():
             return
         exposed = option.exposedRect.intersected(QRectF(image.rect()))
         if exposed.isEmpty():
@@ -339,6 +349,10 @@ class RasterLayerItem(QGraphicsItem):
             self._warm_timer.start(0)  # another frame for the rest of the uploads
 
     # ------------------------------------------------------------- internals
+    def _skipped(self) -> bool:
+        """True while the owner's ``skip`` says there is nothing to draw."""
+        return self._skip is not None and self._skip()
+
     def _source_size(self) -> QSizeF:
         image = self._source()
         if image is None or image.isNull():
@@ -505,9 +519,9 @@ class RasterLayerItem(QGraphicsItem):
         return self.pending_uploads() > 0
 
     def _on_screen(self) -> bool:
-        """True while the layer is shown and a view of its scene is visible."""
+        """True while the layer is shown (and not skipped) and a view of its scene is visible."""
         scene = self.scene()
-        if not self.isVisible() or scene is None:
+        if not self.isVisible() or scene is None or self._skipped():
             return False
         return any(view.isVisible() for view in scene.views())
 

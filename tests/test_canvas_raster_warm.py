@@ -77,10 +77,10 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def _build(app, monkeypatch, image: QImage, *, tile: int = 64, cover_tile: int = 128):
+def _build(app, monkeypatch, image: QImage, *, tile: int = 64, cover_tile: int = 128, skip=None):
     monkeypatch.setenv(canvas_gl.ENV_VAR, "0")
     canvas = _Canvas(image)
-    item = RasterLayerItem(lambda: canvas.image)
+    item = RasterLayerItem(lambda: canvas.image, skip=skip)
     item.TILE = tile
     item.COVER_TILE = cover_tile
     view = _View()
@@ -390,3 +390,45 @@ def test_a_deleted_item_ignores_its_pending_warm_up(app):
     painter.end()
     scene.clear()  # deletes the C++ item while its warm-up timer is pending
     QTest.qWait(RasterLayerItem.WARM_DELAY_MS + 100)  # the timer fires: no error
+
+
+@pytest.fixture
+def skipped_page(app, monkeypatch):
+    """``page`` with an owner's ``skip`` (``state["skip"]``, True at first)."""
+    state = {"skip": True}
+    view, item, canvas = _build(app, monkeypatch, _mask_image(), skip=lambda: state["skip"])
+    yield view, item, state
+    view.scene().removeItem(item)
+    view.close()
+    view.deleteLater()
+    del view
+    flush_deleted()
+
+
+def test_a_skipped_canvas_draws_plans_and_makes_nothing(skipped_page):
+    """While ``skip()`` is True (a fully transparent reference layer) the item keeps its size
+    but makes no tile, plans no warm-up and draws nothing."""
+    view, item, _state = skipped_page
+    show(view, 1.0)
+    assert not _grab(view).any()  # the black background only (the mask is not drawn)
+    show(view, 0.4)
+    QTest.qWait(RasterLayerItem.WARM_DELAY_MS + 200)  # an idle warm-up would run now
+
+    assert item.boundingRect() == QRectF(0, 0, W, H)
+    assert item.built_tiles() == {} and item.coverage_tiles() == {}
+    assert item.warm_tiles(budget_ms=1000.0) is False and item.built_tiles() == {}
+    assert item.pending_uploads() == 0
+
+
+def test_a_canvas_no_longer_skipped_is_drawn_and_warmed_again(skipped_page):
+    view, item, state = skipped_page
+    show(view, 1.0)
+    assert item.built_tiles() == {}
+
+    state["skip"] = False
+    item.update()
+    show(view, 1.0)
+
+    assert item.built_tiles() and _grab(view).any()  # the tiles in view, drawn
+    warm_all(item)
+    assert item.coverage_tiles()  # the step out's level, made ahead

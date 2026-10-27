@@ -114,6 +114,10 @@ class PaintCanvas:
     values and ``fill_source(plane)`` gives the ``(0/255 outline image, value)`` a fill
     uses. ``on_region(rect)`` / ``on_replaced()`` report repaints; ``on_patch(patch,
     forward)`` follows every commit, fill, clear (forward), redo (forward) and undo.
+
+    ``blank`` is True while the canvas is known to be fully transparent: no plane, a plane
+    of 0s drawn transparent (an image without class labels or without a mask) or a cleared
+    canvas, until the next pixel is painted or redrawn.
     """
 
     def __init__(
@@ -129,6 +133,7 @@ class PaintCanvas:
     ) -> None:
         self.history = history
         self.image: QImage | None = None  # None while history.plane is None
+        self.blank = True  # fully transparent (see the class docstring)
         self._lut = lut
         self._to_plane = to_plane
         self._fill_source = fill_source
@@ -163,6 +168,8 @@ class PaintCanvas:
             cv2.LUT(np.ascontiguousarray(plane, dtype=np.uint8), words, dst=_pixel_words(image))
         else:
             self.image = _plane_image(plane, self._lut())
+        # A plane of 0s only, 0 transparent: 2 us at 640 x 480 (it stops at a nonzero pixel).
+        self.blank = plane is None or (self._lut()[0][3] == 0 and not cv2.hasNonZero(plane))
         self._on_replaced()
 
     def render_rect(self, rect: Rect) -> None:
@@ -180,6 +187,7 @@ class PaintCanvas:
         cv2.LUT(
             self.history.plane[y : y + h, x : x + w], _premultiplied_words(self._lut()), dst=box
         )
+        self.blank = False
         self._on_region(QRect(x, y, w, h))
 
     # ------------------------------------------------------------------ strokes
@@ -262,6 +270,7 @@ class PaintCanvas:
         dirty = dirty.intersected(self.image.rect())
         self._stroke_rect = dirty if self._stroke_rect is None else self._stroke_rect.united(dirty)
         self._last = QPoint(pos)
+        self.blank = False
         self._on_region(dirty)
 
     # ------------------------------------------------------------------ actions
@@ -307,6 +316,7 @@ class PaintCanvas:
         height, width = plane.shape
         patch = self._commit((0, 0, width, height), np.zeros_like(plane))
         self.image.fill(Qt.GlobalColor.transparent)
+        self.blank = True
         self._on_replaced()
         return patch
 

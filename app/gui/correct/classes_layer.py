@@ -19,9 +19,7 @@ change (a class gains or loses its pixels, so its box locks or unlocks).
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
-from functools import partial
 
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QColor
@@ -29,14 +27,7 @@ from PyQt6.QtWidgets import QGraphicsScene
 
 from app.gt import Registry
 from app.gui.correct.classes_document import ClassesDocument, ClassesRead
-from app.gui.correct.layer import (
-    CLASSES,
-    LayerHost,
-    LayerStatus,
-    Notice,
-    SaveOutcome,
-    project_label,
-)
+from app.gui.correct.layer import CLASSES, LayerHost, SaveOutcome
 from app.gui.correct.raster_layer import RasterLayer
 from app.gui.key_text import platform_keys
 from app.gui.patch_history import Patch
@@ -58,6 +49,8 @@ class ClassesLayer(RasterLayer):
     CLEARED_NOTICE = platform_keys(
         "Class labels cleared. Ctrl+Z to undo; Save writes an empty file."
     )
+    NOT_OPEN = "No class labels are open"
+    READ = ClassesRead
     document: ClassesDocument
 
     def __init__(self, host: LayerHost, scene: QGraphicsScene) -> None:
@@ -117,7 +110,6 @@ class ClassesLayer(RasterLayer):
         self.document.apply_registry(registry)
         self.set_size(self.document.brush_size(self.document.active_key))
         self._replaced()
-        self._classes_changed()
 
     def is_read_only(self) -> bool:
         """True while ``gt/classes.json`` is invalid: nothing can be edited or saved."""
@@ -129,102 +121,13 @@ class ClassesLayer(RasterLayer):
         return self.document.lossy_remap()
 
     # ------------------------------------------------------------------ document
-    def read_ahead(self, image_path: str, images_base_folder: str | None):
-        """``ReadAheadLayer``: a worker reader of ``image_path``'s class labels."""
-        return partial(ClassesDocument.read, image_path)
-
-    def read_back(self, stamps: tuple) -> ClassesRead | None:
-        """The open labels as the read-ahead's payload while they are as on disk."""
-        return self.document.read_back(stamps)
-
-    def open(
-        self,
-        image_path: str,
-        size: tuple[int, int],
-        images_base_folder: str | None,
-        ahead: object | None = None,
-    ) -> list[Notice]:
-        """Open the class labels of ``image_path`` (``size`` = (w, h)); the notices to show.
-
-        A stroke in progress is committed first; ``images_base_folder`` only roots the file
-        labels; ``ahead``: a :meth:`read_ahead` result.
-        """
-        self.finish_gesture()
-        self._root = images_base_folder or os.path.dirname(image_path)
-        read = ahead if isinstance(ahead, ClassesRead) else None
-        notices = self.document.open(image_path, size, read, root=self._root)
-        self._refused = False
-        self.set_size(self.document.brush_size(self.document.active_key))
-        self._replaced()
-        self._classes_changed()
-        return notices
-
-    def close(self) -> None:
-        """Forget the document (a stroke in progress is committed first)."""
-        self.finish_gesture()
-        self.document.close()
-        self._replaced()
-        self._classes_changed()
-
-    def is_open(self) -> bool:
-        """True while class labels are open."""
-        return self.document.is_open()
-
-    def file_stamps(self) -> tuple:
-        """``gt/<stem>.png`` and ``gt/classes.json``, stamped or absent (``()`` closed)."""
-        return self.document.file_stamps()
-
-    def write_stamps(self) -> tuple:
-        """``DiskGuardedLayer``: ``gt/<stem>.png``, the one file a save replaces."""
-        return self.document.write_stamps()
-
-    def matches_disk(self) -> bool:
-        """``DiskGuardedLayer``: reading the files now would open the saved labels."""
-        return self.document.matches_disk()
-
-    def unloaded_label(self) -> str:
-        """``DiskGuardedLayer``: ``"gt/<stem>.png"`` while that file exists and was not shown
-        (it could not be read, or has another size): a save would replace it."""
-        if not self.document.unloaded_file():
-            return ""
-        stamp = self.document.write_stamps()[0]
-        return "" if stamp[1:] == (None,) else project_label(stamp[0], self._root)
-
-    def is_dirty(self) -> bool:
-        """True while a save would write something new (ids, ticks, a remap)."""
-        return self.document.is_dirty()
-
     def save(self) -> SaveOutcome:
-        """Write ``gt/<stem>.png`` (``ClassesDocument.save``); a stroke is committed first."""
-        self.finish_gesture()
-        document = self.document
-        if not document.is_open():
-            message = "No class labels are open"
-            return SaveOutcome(self.layer_id, ok=False, message=message, kind="danger")
-        result = document.save()
-        self._changed()
-        self._classes_changed()
-        if result.ok:
-            return SaveOutcome(self.layer_id, ok=True, path=result.path)
-        if document.is_read_only():
-            message = f"Not saved: gt/classes.json is invalid ({document.registry_error})"
-        else:
-            message = f"Could not save class labels to {result.path}: {result.error}"
-        return SaveOutcome(self.layer_id, ok=False, message=message, kind="danger")
-
-    def revert(self) -> list[Notice]:
-        """Discard: back to the saved ids and ticks in memory, history cleared (no notices)."""
-        self.finish_gesture()
-        if self.document.is_open():
-            self.document.revert()
-            self._replaced()
+        """``RasterLayer.save`` (``ClassesDocument.outcome`` words it); the page hears of it."""
+        opened = self.document.is_open()
+        outcome = super().save()
+        if opened:
             self._classes_changed()
-        return []
-
-    def status(self) -> LayerStatus:
-        """``ClassesDocument.status``: "Read-only", "Not saved", unsaved ("· remapped"),
-        "Class labels not shown", "GT · n/m checked" or "No class labels"."""
-        return self.document.status()
+        return outcome
 
     # ------------------------------------------------------------------ editing
     def press(self, pos: QPoint, modifiers: Qt.KeyboardModifier) -> None:
@@ -261,6 +164,16 @@ class ClassesLayer(RasterLayer):
         """Every plane change: the class counts follow the patch first (dirty reads them)."""
         self.document.count_patch(patch, forward)
         super()._on_patch(patch, forward)
+        self._classes_changed()
+
+    def _opened(self) -> None:
+        """A new image: its first refused edit says why again; the active class's size."""
+        self._refused = False
+        self.set_size(self.document.brush_size(self.document.active_key))
+
+    def _replaced(self) -> None:
+        """Open, close, Discard, a new registry: the page hears of it after the redraw."""
+        super()._replaced()
         self._classes_changed()
 
     def _classes_changed(self) -> None:

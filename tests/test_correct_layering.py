@@ -25,6 +25,7 @@ MAX_LINES = 450
 QT_FREE = [
     "app.editing.journal",
     "app.editing.thinning",
+    "app.editing.planes",
     "app.imaging.skeleton_vectors",
     "app.gt.files",
     "app.gui.correct.layer",

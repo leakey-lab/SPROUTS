@@ -135,6 +135,7 @@ APP_MODULES = [
     # The unified Correct editor and the smooth-zoom render parts (2026-09-29).
     "app.editing.journal",
     "app.editing.thinning",
+    "app.editing.planes",
     "app.imaging",
     "app.imaging.pyramid",
     "app.imaging.skeleton_vectors",

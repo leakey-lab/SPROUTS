@@ -14,7 +14,8 @@ the file, ``gt/classes.json`` first when missing (its failure keeps the file). A
 registry makes it read-only (its status says so; the open sends no notice: the layer's first
 refused edit does, once per image); a file that cannot be read or has another size opens empty, is
 not shown and is kept unless a save replaces it. The owner changes the plane only through
-``history``, then calls ``count_patch`` and ``touch``.
+``history``, then calls ``count_patch`` and ``touch``. The revision, the baseline, the save
+error and Discard are :class:`app.editing.planes.PlaneDocument`'s.
 """
 
 from __future__ import annotations
@@ -24,15 +25,15 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
 from app import gt
 from app.config import GT_BACKGROUND_ID, GT_CLASSES_FILENAME, GT_DIRNAME
+from app.editing.planes import PlaneDocument, planes_equal
 from app.gt import Registry, Tracing
 from app.gui.correct.classes_files import ClassesRead, labels_files, read_classes
 from app.gui.correct.classes_paint import N_IDS, canvas_ids, class_lut, histogram
-from app.gui.correct.layer import LayerStatus, Notice, project_label
+from app.gui.correct.layer import CLASSES, LayerStatus, Notice, SaveOutcome, project_label
 from app.gui.patch_history import Patch, PatchHistory, Rect
 from app.io_utils import file_stamp
 
@@ -50,14 +51,6 @@ _NOT_SHOWN = {  # ClassesRead.error -> the open notice and the status tooltip
 }
 
 
-def _same_plane(plane: np.ndarray, saved: np.ndarray | None) -> bool:
-    """True when ``saved`` holds ``plane``'s pixels: one ``cv2.norm`` pass, no temporary
-    array (0.05 ms at 2048 x 1536)."""
-    if saved is None or saved.shape != plane.shape:
-        return False
-    return plane.size == 0 or cv2.norm(plane, saved, cv2.NORM_INF) == 0
-
-
 def _default_key(registry: Registry) -> str:
     return (registry.labelled() or registry.active())[0].key
 
@@ -71,7 +64,7 @@ class ClassesSaveResult:
     error: str = ""
 
 
-class ClassesDocument:
+class ClassesDocument(PlaneDocument):
     """The labels of one image: ``history.plane`` (None while closed), ``registry`` and
     ``registry_error`` ("" when valid), the ``active_key`` the brush paints, the ``gt_path``
     a save writes and the lossy remap ``warnings`` of the open, until saved."""
@@ -82,54 +75,32 @@ class ClassesDocument:
     )
 
     def __init__(self, *, on_history_change: Callable[[], None] | None = None) -> None:
-        self.history = PatchHistory(on_change=on_history_change)
+        super().__init__(PatchHistory(on_change=on_history_change))
         self.registry: Registry = gt.default_registry()
         self.registry_error = ""
         self.active_key = _default_key(self.registry)
-        self.image_path = self.gt_path = ""
-        self.has_saved_file = False  # a labels file holds the saved state
         self.warnings: tuple[str, ...] = ()
         self._lut = class_lut(self.registry)
         self._size = (0, 0)
-        self._root = self._project_dir = self._registry_path = ""
+        self._project_dir = self._registry_path = ""
         self._brush_sizes: dict[str, int] = {}
         self._ticked: set[str] = set()
         self._counts = np.zeros(N_IDS, np.int64)
         self._saved_ticked: frozenset[str] = frozenset()
         self._saved_counts = self._counts.copy()
-        self._baseline: np.ndarray | None = None
         self._remapped = False  # the open remapped the file's ids: they differ on disk
         self._opened_unsaved = False  # that remap is unsaved (until saved or discarded)
-        self._not_loaded = ""  # ClassesRead.error of the open file, until a save
-        self._revision = 0
-        self._same, self._same_revision = True, 0  # the last plane compare and its revision
-        self._save_error, self._error_revision = "", -1
 
     # ------------------------------------------------------------------ state
-    @property
-    def revision(self) -> int:
-        """+1 per :meth:`touch` (and on open, revert, close and a changed tick)."""
-        return self._revision
-
-    def is_open(self) -> bool:
-        return self.history.plane is not None
-
-    def touch(self) -> None:
-        """The plane changed: a new revision (the next :meth:`is_dirty` compares again)."""
-        self._revision += 1
-
     def is_dirty(self) -> bool:
         """True while a save would write something new (see the module docstring)."""
-        plane = self.history.plane
-        if plane is None:
+        if not self.is_open():
             return False
         if self._opened_unsaved or self._ticked != self._saved_ticked:
             return True
         if not np.array_equal(self._counts, self._saved_counts):
             return True  # other ids: no pixel compare needed
-        if self._same_revision != self._revision:
-            self._same, self._same_revision = _same_plane(plane, self._baseline), self._revision
-        return not self._same
+        return not self._plane_saved()
 
     def is_read_only(self) -> bool:
         """True while ``gt/classes.json`` is invalid: nothing can be edited or saved."""
@@ -138,10 +109,6 @@ class ClassesDocument:
     def lossy_remap(self) -> bool:
         """True from an open that sent unknown classes to Ignore until a save writes it."""
         return bool(self.warnings)
-
-    def unloaded_file(self) -> bool:
-        """True while the labels file was found but not loaded and nothing was written."""
-        return bool(self._not_loaded)
 
     def status(self) -> LayerStatus:
         """Read-only > not saved (to the next edit) > unsaved > not shown > GT > none."""
@@ -247,13 +214,10 @@ class ClassesDocument:
             return ()
         return (file_stamp(self.gt_path), file_stamp(self._registry_path))
 
-    def write_stamps(self) -> tuple:
-        """``DiskGuardedLayer``: ``gt/<stem>.png``, the one file a save replaces."""
-        return (file_stamp(self.gt_path),) if self.image_path else ()
-
     def matches_disk(self) -> bool:
         """True when :meth:`open` would now open the saved state (it reads the files)."""
-        if self._baseline is None:
+        baseline = self._baseline.plane
+        if baseline is None:
             return False
         read = self.read(self.image_path, self._size)
         remapped = read.changed and not read.registry_error
@@ -261,9 +225,9 @@ class ClassesDocument:
         if found != (self._not_loaded, self.registry_error, self.registry, self._remapped):
             return False
         tracing = read.tracing
-        plane = np.zeros_like(self._baseline) if tracing is None else tracing.ids
+        plane = np.zeros_like(baseline) if tracing is None else tracing.ids
         ticks = frozenset() if tracing is None else tracing.reviewed
-        return ticks == self._saved_ticked and _same_plane(plane, self._baseline)
+        return ticks == self._saved_ticked and planes_equal(plane, baseline)
 
     def read_back(self, stamps: tuple) -> ClassesRead | None:
         """The labels as :meth:`read` would read them (the plane not copied), with the
@@ -325,19 +289,6 @@ class ClassesDocument:
         self._counts = np.zeros(N_IDS, np.int64)
         self._restart()
 
-    def revert(self) -> None:
-        """Discard: the ids and the ticks go back to the saved state; the history is cleared."""
-        plane, baseline = self.history.plane, self._baseline
-        if plane is None or baseline is None:
-            return
-        if plane.shape == baseline.shape:
-            np.copyto(plane, baseline)  # in place: holders of the plane stay valid
-        else:
-            plane = baseline.copy()
-        self.history.reset(plane)
-        self._ticked, self._counts = set(self._saved_ticked), self._saved_counts.copy()
-        self._restart()
-
     def save(self) -> ClassesSaveResult:
         """Write the file (also empty), ``gt/classes.json`` first when missing; a failure keeps
         the old files, stays dirty and is the status until the next edit."""
@@ -354,13 +305,22 @@ class ClassesDocument:
             gt.write_tracing(self.gt_path, Tracing(plane, reviewed), self.registry)
         except (OSError, gt.GtFileError) as exc:
             logger.warning("Could not save the class labels to %s: %s", self.gt_path, exc)
-            self._save_error, self._error_revision = str(exc), self._revision
-            return ClassesSaveResult(False, self.gt_path, str(exc))
+            return ClassesSaveResult(False, self.gt_path, self._save_failed(exc))
         self._ticked, self.has_saved_file, self.warnings = set(reviewed), True, ()
         self._not_loaded, self._remapped, self._opened_unsaved = "", False, False
         self._save_error = ""
         self._remember()
         return ClassesSaveResult(True, self.gt_path)
+
+    def outcome(self, result: ClassesSaveResult) -> SaveOutcome:
+        """A :meth:`save` result as the workspace reports it."""
+        if result.ok:
+            return SaveOutcome(CLASSES, ok=True, path=result.path)
+        if self.is_read_only():
+            message = f"Not saved: gt/classes.json is invalid ({self.registry_error})"
+        else:
+            message = f"Could not save class labels to {result.path}: {result.error}"
+        return SaveOutcome(CLASSES, ok=False, message=message, kind="danger")
 
     # ------------------------------------------------------------------ internals
     def _use_registry(self, registry: Registry) -> None:
@@ -369,20 +329,16 @@ class ClassesDocument:
         if not self.set_active_class(self.active_key):
             self.active_key = _default_key(registry)
 
+    def _reverted(self) -> None:
+        """Discard: the ticks and the counts go back to the saved ones too."""
+        self._ticked, self._counts = set(self._saved_ticked), self._saved_counts.copy()
+
     def _restart(self) -> None:
-        """A new plane was adopted (open, revert, close): a new revision, the saved state."""
-        self.touch()
-        self._save_error, self._opened_unsaved = "", False
-        self._remember()
+        """A new plane was adopted (open, revert, close): the remap is no longer unsaved."""
+        self._opened_unsaved = False
+        super()._restart()
 
     def _remember(self) -> None:
         """The plane, the ticks and the counts now are the saved state (clean, no compare)."""
-        plane = self.history.plane
-        if plane is None:
-            self._baseline = None
-        elif self._baseline is not None and self._baseline.shape == plane.shape:
-            np.copyto(self._baseline, plane)
-        else:
-            self._baseline = plane.copy()
+        super()._remember()
         self._saved_ticked, self._saved_counts = frozenset(self._ticked), self._counts.copy()
-        self._same, self._same_revision = True, self._revision
