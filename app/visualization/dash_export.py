@@ -86,18 +86,22 @@ def growth_over_time(cache, tubes: Sequence[Any], *, field_average: bool) -> pd.
                 }
             )
         )
-    for tube in tubes:
-        totals = cache.get_tube_totals(tube)
-        if totals.empty:
-            continue
+    # The per-tube totals of every measured selected tube in one frame (one frame per tube
+    # was 26 ms for 170 tubes): .loc keeps the selection's order and repeats, and each
+    # tube's dates ascending, as cache.get_tube_totals gives them.
+    groups = cache.tube_date_groups
+    measured = set(groups.index.unique(level="Tube"))
+    wanted = [tube for tube in tubes if tube in measured]
+    if wanted:
+        rows = groups.loc[wanted]
         parts.append(
             pd.DataFrame(
                 {
-                    "Series": f"Tube {int(tube)}",
-                    "Date": totals.index.strftime(DATE_FORMAT),
-                    total: totals.to_numpy(),
+                    "Series": [f"Tube {int(t)}" for t in rows.index.get_level_values("Tube")],
+                    "Date": rows.index.get_level_values("Date").strftime(DATE_FORMAT),
+                    total: rows.to_numpy(),
                     sd: float("nan"),
-                    "Tubes": pd.array([pd.NA] * len(totals), dtype="Int64"),
+                    "Tubes": pd.array([pd.NA] * len(rows), dtype="Int64"),
                 }
             )
         )

@@ -15,14 +15,10 @@ The page chrome comes from :mod:`.dash_shell`, hover thumbnails from
 are a contract with the renderer and the embedding window: keep them stable.
 """
 
-import logging
 from typing import Any
 
 import dash_bootstrap_components as dbc
-import pandas as pd
 from dash import html
-
-from app.config import DASH_HOST, DASH_LENGTH_PORT
 
 from . import dash_export, theme
 from . import dash_length_callbacks as length_callbacks
@@ -35,8 +31,6 @@ from .dash_shell import DashboardShell, create_dash_app, exclusions_note, tube_o
 from .dash_visualizations import DashVisualizations
 
 theme.use("sprouts")
-
-logger = logging.getLogger(__name__)
 
 # Defined here before the dashboard was split into modules (CQ-07); still importable.
 _SHOWN = length_layout.SHOWN
@@ -79,14 +73,6 @@ class DashApp(DashVisualizations):
         self._setup_callbacks()
         # Parsed while the page loads, not by the first Depth Profile view (~95 ms).
         self.available_images.parse_in_background()
-
-    def get_encoded_image(self, tube: int, position: int, date: pd.Timestamp) -> str:
-        """Hover thumbnail as a ``data:image/jpeg`` URL (``""`` if unavailable)."""
-        try:
-            key = (tube, position, date.strftime("%Y.%m.%d"))
-        except (AttributeError, ValueError):
-            return ""
-        return self.available_images.thumbnails.data_url(key)
 
     # ---- layout (dash_length_layout) ---------------------------------------------
 
@@ -164,15 +150,3 @@ class DashApp(DashVisualizations):
     def _setup_callbacks(self) -> None:
         """Register every callback of the dashboard."""
         length_callbacks.register_callbacks(self)
-
-    def run_server(self):
-        """Run the Dash server (legacy entry point; the app uses DashServerThread).
-
-        Errors are logged (with traceback) and re-raised so the caller is not
-        left silently without a running server (F-008).
-        """
-        try:
-            self.app.run(debug=False, host=DASH_HOST, port=DASH_LENGTH_PORT, threaded=True)
-        except Exception:
-            logger.exception("Dash length-visualization server failed to run")
-            raise

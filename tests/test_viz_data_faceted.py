@@ -162,7 +162,7 @@ def test_x_ticks_keep_a_readable_scale(value, tickvals, ticktext):
     assert list(axis.ticktext) == ticktext
 
 
-# ---- R-VIZ X4: the grid skeleton is built once per shape ---------------------------
+# ---- R-VIZ X4: the grid is make_subplots' grid, without make_subplots ---------------
 
 
 def _make_subplots_layout(column_titles, row_titles) -> dict:
@@ -188,8 +188,12 @@ def _make_subplots_layout(column_titles, row_titles) -> dict:
     return layout
 
 
-@pytest.mark.parametrize("rows, cols", [(1, 1), (1, 6), (4, 3), (11, 6), (24, 6)])
-def test_the_cached_grid_is_the_make_subplots_grid(rows, cols):
+@pytest.mark.parametrize(
+    "rows, cols",
+    [(1, 1), (1, 6), (2, 2), (3, 5), (4, 3), (6, 6), (11, 6), (24, 6), (40, 6)],
+)
+def test_the_grid_layout_is_the_make_subplots_grid(rows, cols):
+    # make_subplots is the oracle: a plotly upgrade that changes its grid shows up here.
     import json
 
     from app.visualization.faceted_profile import grid_layout
@@ -204,11 +208,56 @@ def test_the_cached_grid_is_the_make_subplots_grid(rows, cols):
     assert [a["text"] for a in again["annotations"]][:cols] == [
         f"Tube {c + 11}" for c in range(cols)
     ]
-    first["xaxis"]["range"] = [0, 1]  # a caller's change never reaches the cache
+    first["xaxis"]["range"] = [0, 1]  # every call returns a fresh layout
     assert "range" not in grid_layout(columns, dates)["xaxis"]
 
 
-def test_the_faceted_figure_is_unchanged_by_the_cached_grid(cache, monkeypatch):
+@pytest.mark.parametrize("rows, cols", [(202, 1), (3, 127), (0, 1), (1, 0)])
+def test_a_grid_make_subplots_refuses_fails_with_its_message(rows, cols):
+    # 202 or more dates with data: make_subplots' spacing check, so the dashboard shows
+    # the same "Error: ..." as before instead of drawing panels with inverted domains.
+    from plotly.subplots import make_subplots
+
+    from app.visualization.faceted_profile import grid_layout
+
+    with pytest.raises(ValueError) as expected:
+        make_subplots(
+            rows=rows, cols=cols, shared_yaxes=True, vertical_spacing=0.005,
+            horizontal_spacing=0.008,
+        )  # fmt: skip
+    with pytest.raises(ValueError) as got:
+        grid_layout([f"Tube {c + 1}" for c in range(cols)], [f"d{r}" for r in range(rows)])
+    assert str(got.value) == str(expected.value)
+
+
+def test_the_faceted_figure_is_what_validation_makes_of_its_dicts(cache, monkeypatch):
+    # The figure is built with validation off (go.Figure(..., _validate=False)): the
+    # browser must get what a validating go.Figure makes of the same dicts (a misspelt
+    # property raises there), with the template itself, not its name: plotly.js ignores
+    # a template given as a string.
+    import json
+
+    import plotly.graph_objects as go
+    from dash._utils import to_json
+
+    from app.visualization import theme
+
+    profile = build_faceted_profile(cache, [1, 3])
+    unvalidated = json.loads(to_json(faceted_profile_figure(profile)))
+    init = go.Figure.__init__
+
+    def validating(self, *args, **kwargs):
+        kwargs.pop("_validate", None)
+        init(self, *args, **kwargs)
+
+    monkeypatch.setattr(go.Figure, "__init__", validating)
+    validated = json.loads(to_json(faceted_profile_figure(profile)))
+
+    assert unvalidated == validated
+    assert unvalidated["layout"]["template"]["layout"]["paper_bgcolor"] == theme.BG_0
+
+
+def test_the_faceted_figure_is_unchanged_by_the_direct_grid(cache, monkeypatch):
     import json
 
     from dash._utils import to_json

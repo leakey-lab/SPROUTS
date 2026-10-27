@@ -396,3 +396,149 @@ def test_a_valid_tube_choice_is_kept_when_returning_to_lines(length_app):
         changed=["view-selector.value"],
     )
     assert status == 204  # no update: the user's tube stays selected
+
+
+@pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
+def test_a_view_that_cannot_be_drawn_shows_why_in_either_dashboard(tmp_path, builder):
+    from app.visualization import theme
+
+    dashboard = builder(tmp_path)
+
+    def broken():
+        raise RuntimeError("no totals")
+
+    dashboard.create_stacked_bar_chart = broken
+    _, out = call_callback(
+        dashboard.app,
+        "main-graph.figure",
+        {"view-selector.value": "stacked"},
+        changed=["view-selector.value"],
+    )
+
+    (note,) = out["main-graph"]["figure"]["layout"]["annotations"]
+    assert note["text"] == "Error generating visualization: no totals"
+    assert note["font"] == {"color": theme.DANGER, "size": 16}
+    assert out["click-data"]["children"] == "An error occurred while rendering this view."
+    assert out["tube-selector"] == {"style": {"display": "none"}}  # its options are kept
+    assert out["main-graph"]["style"] == {"height": "100%", "width": "100%", "overflow": "hidden"}
+    if builder is build_length_app:
+        assert out["image-container"]["style"] == {"display": "none"}
+
+
+@pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
+def test_a_released_dashboard_is_not_kept_alive_by_dash(tmp_path, builder):
+    # Dash keeps the newest app in a module global (for dash.get_app and Dash Pages): the
+    # last dashboard built stayed in memory with its data (about 20 MB on a 46k-row trial)
+    # after its window was released, until another dashboard was built.
+    import gc
+    import threading
+    import weakref
+
+    dashboard = builder(tmp_path)
+    answers = []
+
+    def ask(app):
+        values = {"view-selector.value": "stacked"}
+        answers.append(call_callback(app, "main-graph.figure", values, ["view-selector.value"])[0])
+
+    # werkzeug answers each request on a thread of its own
+    request = threading.Thread(target=ask, args=(dashboard.app,))
+    request.start()
+    request.join(30)
+    assert answers == [200]
+    alive = weakref.ref(dashboard)
+
+    del dashboard, request
+    gc.collect()
+
+    assert alive() is None
+
+
+# ---- a memoized figure is converted for the browser once --------------------------
+
+
+def test_browser_figure_is_what_dash_sends_of_the_figure(length_app):
+    from dash import Patch, no_update
+    from dash._utils import to_json
+
+    from app.visualization.dash_shell import browser_figure, with_uirevision
+
+    figure = with_uirevision(length_app.show_growth_over_time([1, 2], True, True, None), "time")
+    kept = browser_figure(figure)
+
+    assert to_json(kept) == to_json(figure)  # byte for byte
+    assert browser_figure(figure) is kept  # converted once
+    with_uirevision(figure, "time", "again")
+    assert browser_figure(figure)["layout"]["uirevision"] == "time:again"
+    assert to_json(browser_figure(figure)) == to_json(figure)
+    patch = Patch()
+    assert browser_figure(patch) is patch
+    assert browser_figure(no_update) is no_update
+
+
+def _raw_response(dash, values, changed) -> bytes:
+    """The response bytes of the main-graph callback (call_callback parses them)."""
+    from tests.viz_dash_helpers import _split_output_key, find_callback_key
+
+    key = find_callback_key(dash, "main-graph.figure")
+    spec = dash.callback_map[key]
+
+    def fill(items):
+        return [
+            {"id": i["id"], "property": i["property"],
+             "value": values.get(f"{i['id']}.{i['property']}")}
+            for i in items
+        ]  # fmt: skip
+
+    payload = {
+        "output": key,
+        "outputs": _split_output_key(key),
+        "inputs": fill(spec["inputs"]),
+        "state": fill(spec["state"]),
+        "changedPropIds": list(changed),
+    }
+    resp = dash.server.test_client().post(
+        "/_dash-update-component",
+        data=json.dumps(payload),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    return resp.data
+
+
+SHOWN_AGAIN = [
+    ("length", {"view-selector.value": "time", "selected-tubes-store.data": [1, 2, 3],
+                "growth-viz-options.value": ["show_field_avg", "show_field_var"]}),
+    ("length", {"view-selector.value": "faceted", "faceted-tubes-store.data": [1, 2],
+                "faceted-dates-store.data": []}),
+    ("length", {"view-selector.value": "lines", "tube-selector.value": 1}),
+    ("length", {"view-selector.value": "stacked"}),
+    ("area", {"view-selector.value": "time"}),
+    ("area", {"view-selector.value": "profile", "tube-selector.value": 1}),
+    ("area", {"view-selector.value": "stacked"}),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "dashboard, values",
+    SHOWN_AGAIN,
+    ids=[f"{d}-{v['view-selector.value']}" for d, v in SHOWN_AGAIN],
+)
+def test_a_view_shown_again_sends_the_same_figure(tmp_path, monkeypatch, dashboard, values):
+    # The second request is a FigureMemo hit served from the kept browser JSON: it must
+    # send the bytes of the first, and both what Dash makes of the figure itself.
+    from app.visualization import dash_app_area, dash_length_callbacks
+
+    builder = build_length_app if dashboard == "length" else build_area_app
+    built = builder(tmp_path)
+    view = ["view-selector.value"]
+
+    first = _raw_response(built.app, values, view)
+    again = _raw_response(built.app, values, view)
+    for module in (dash_length_callbacks, dash_app_area):
+        monkeypatch.setattr(module, "browser_figure", lambda figure: figure)
+    (tmp_path / "plain").mkdir()
+    plain = _raw_response(builder(tmp_path / "plain").app, values, view)
+
+    assert again == first
+    assert plain == first

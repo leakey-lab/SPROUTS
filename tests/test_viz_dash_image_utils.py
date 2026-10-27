@@ -94,6 +94,29 @@ def test_index_can_be_parsed_ahead_on_a_background_thread(images, monkeypatch):
     assert len(threads) == len(images)  # parsed once, by the background thread
 
 
+def test_index_lets_go_of_the_name_snapshot_once_parsed(images, monkeypatch):
+    # Only the parse reads the name -> path snapshot; for 46k names it kept 2.5 MB alive
+    # while the dashboard stayed open. A failed parse keeps it, to parse again.
+    real = diu.ImageIndex._parse
+    failures = [RuntimeError("interrupted")]
+
+    def parse_once_failing(names):
+        if failures:
+            raise failures.pop()
+        return real(names)
+
+    monkeypatch.setattr(diu.ImageIndex, "_parse", staticmethod(parse_once_failing))
+    index = diu.build_available_images_map(FakeImageManager(images))
+    with pytest.raises(RuntimeError):
+        len(index)
+    assert len(index._names) == len(images)
+
+    assert (1, 11, "2024.07.18") in index
+
+    assert index._names == {}
+    assert dict(index) == {key: images[name] for name, key in NAMES.items()}
+
+
 def test_dashboard_parses_its_image_index_in_the_background(tmp_path, monkeypatch):
     from tests.viz_dash_helpers import build_length_app
 

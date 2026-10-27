@@ -6,18 +6,17 @@ Plotly): one :class:`FacetCell` per (date row, tube column), each holding the
 tube's per-interval means next to the field average (all tubes) of the same
 intervals. ``faceted_profile_figure`` renders that grid.
 
-The figure is assembled as plain dicts on top of a ``make_subplots`` skeleton
-and validated ONCE by ``go.Figure`` (PV-08). Adding one shape per subplot with
-``fig.add_shape`` re-validates the whole shapes tuple on every call, which made
-the build O(subplots²): 3 s for 6 tubes x 24 dates. The skeleton only depends on
-the grid's shape, so it is built once per shape (``make_subplots`` validates a
-whole figure: 80 ms of a 140 ms build for 11 dates x 6 tubes, R-VIZ X4).
+The figure is assembled as plain dicts and handed to ``go.Figure`` without validation
+(PV-08; ``tests/test_viz_data_faceted.py`` compares it with the validated figure). Adding
+one shape per subplot with ``fig.add_shape`` re-validates the whole shapes tuple on every
+call, which made the build O(subplots²): 3 s for 6 tubes x 24 dates.
+The grid's axes and titles are what ``make_subplots`` gives such a grid, computed
+directly (:func:`grid_layout`): ``make_subplots`` builds and validates a whole figure,
+4-160 ms at every new grid shape (R-VIZ X4).
 """
 
 from __future__ import annotations
 
-import copy
-import functools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import plotly.io as pio
 
 from . import theme
 
@@ -164,49 +163,99 @@ def _axis_suffix(subplot: int) -> str:
     return "" if subplot == 1 else str(subplot)
 
 
-def _column_placeholder(col: int) -> str:
-    return f"\x00column {col}\x00"
+# The grid's make_subplots arguments: spacing between panels (fractions of the plot),
+# and the width the columns share (make_subplots keeps 2 % free for the row titles).
+_V_SPACING = 0.005
+_H_SPACING = 0.008
+_MAX_WIDTH = 0.98
 
 
-def _row_placeholder(row: int) -> str:
-    return f"\x00row {row}\x00"
+def _check_grid(n_rows: int, n_cols: int) -> None:
+    """``make_subplots``' checks of the grid, with its messages: a grid of 202 or more
+    dates still fails as before (the dashboard shows "Error: ...")."""
+    for name, size in (("rows", n_rows), ("cols", n_cols)):
+        if size <= 0:
+            raise ValueError(
+                f"\nThe '{name}' argument to make_subplots must be an int greater than 0.\n"
+                f"    Received value of type {type(size)}: {size!r}"
+            )
+    for size, spacing, name, var, dim in (
+        (n_cols, _H_SPACING, "Horizontal", "cols", "columns"),
+        (n_rows, _V_SPACING, "Vertical", "rows", "rows"),
+    ):
+        if size > 1 and spacing > 1.0 / float(size - 1):
+            raise ValueError(
+                f"{name} spacing cannot be greater than (1 / ({var} - 1)) = "
+                f"{1.0 / float(size - 1):f}.\n"
+                f"The resulting plot would have {size} {dim} ({var}={size})."
+            )
 
 
-@functools.lru_cache(maxsize=16)
-def _grid_skeleton(n_rows: int, n_cols: int) -> dict:
-    """``make_subplots``' layout of an ``n_rows`` x ``n_cols`` grid, titles as placeholders.
+def _clamp(value: float) -> float:
+    """``make_subplots``' rounding of a y domain end just outside [0, 1] (float error)."""
+    if -0.01 < value < 0.0:
+        return 0.0
+    if 1.0 < value < 1.01:
+        return 1.0
+    return value
 
-    Read-only: :func:`grid_layout` copies it. The template is left out (the figure
-    sets its own).
-    """
-    skeleton = make_subplots(
-        rows=n_rows,
-        cols=n_cols,
-        shared_xaxes=False,
-        shared_yaxes=True,
-        vertical_spacing=0.005,
-        horizontal_spacing=0.008,
-        subplot_titles=[
-            _column_placeholder(col) if row == 0 else ""
-            for row in range(n_rows)
-            for col in range(n_cols)
-        ],
-        row_titles=[_row_placeholder(row) for row in range(n_rows)],
+
+def _grid_title(text: str, x: float, y: float, *, row: bool) -> dict:
+    """A column title (above the top panel) or a row title (right of the last panel)."""
+    title: dict[str, Any] = {"font": {"size": 16}, "showarrow": False, "text": text}
+    if row:
+        title["textangle"] = 90
+    title.update(
+        x=x,
+        xanchor="left" if row else "center",
+        xref="paper",
+        y=y,
+        yanchor="middle" if row else "bottom",
+        yref="paper",
     )
-    layout = skeleton.layout.to_plotly_json()
-    layout.pop("template", None)
-    return layout
+    return title
 
 
 def grid_layout(column_titles: Sequence[str], row_titles: Sequence[str]) -> dict:
     """The layout ``make_subplots`` gives a grid titled ``column_titles`` (on top) and
-    ``row_titles`` (right), from the cached skeleton of its shape: axes, domains and
-    title annotations, template excluded. A fresh dict, free to change."""
-    layout = copy.deepcopy(_grid_skeleton(len(row_titles), len(column_titles)))
-    titles = {_column_placeholder(col): text for col, text in enumerate(column_titles)}
-    titles.update({_row_placeholder(row): text for row, text in enumerate(row_titles)})
-    for annotation in layout.get("annotations", []):
-        annotation["text"] = titles[annotation["text"]]
+    ``row_titles`` (right): axes, domains and title annotations, template excluded. A
+    fresh dict, free to change.
+
+    Computed with make_subplots' own arithmetic for this grid (top-left start, y axes
+    shared per row), in the same key order; ``tests/test_viz_data_faceted.py`` compares
+    the two.
+    """
+    n_rows, n_cols = len(row_titles), len(column_titles)
+    _check_grid(n_rows, n_cols)
+    widths = [(_MAX_WIDTH - _H_SPACING * (n_cols - 1)) / n_cols] * n_cols
+    heights = [(1.0 - _V_SPACING * (n_rows - 1)) / n_rows] * n_rows
+    x_domains = []
+    for col in range(n_cols):
+        start = sum(widths[:col]) + col * _H_SPACING
+        x_domains.append([start, start + widths[col]])
+    layout: dict[str, Any] = {}
+    y_domains = []
+    for row in range(n_rows):  # the top row first
+        below = n_rows - 1 - row
+        start = sum(heights[:below]) + below * _V_SPACING
+        y_domain = [_clamp(start), _clamp(start + heights[-1 - row])]
+        y_domains.append(y_domain)
+        for col in range(n_cols):
+            suffix = _axis_suffix(row * n_cols + col + 1)
+            layout[f"xaxis{suffix}"] = {"anchor": f"y{suffix}", "domain": list(x_domains[col])}
+            yaxis = {"anchor": f"x{suffix}", "domain": list(y_domain)}
+            if col:  # the row's first y axis carries the tick labels for the whole row
+                yaxis["matches"] = f"y{_axis_suffix(row * n_cols + 1)}"
+                yaxis["showticklabels"] = False
+            layout[f"yaxis{suffix}"] = yaxis
+    top = y_domains[0][1]
+    layout["annotations"] = [
+        _grid_title(text, sum(x_domains[col]) / 2.0, top, row=False)
+        for col, text in enumerate(column_titles)
+    ] + [
+        _grid_title(text, x_domains[-1][1], sum(y_domains[row]) / 2.0, row=True)
+        for row, text in enumerate(row_titles)
+    ]
     return layout
 
 
@@ -254,7 +303,8 @@ class _FacetedFigureAssembler:
         _merge(layout, self._layout_updates())
         for annotation in layout.get("annotations", []):
             _merge(annotation, {"font": {"size": 12}})
-        return go.Figure(data=self._traces(), layout=layout)
+        # Validating the dicts was 60 % of the build (6 x 3 panels: 21 -> 8 ms).
+        return go.Figure(data=self._traces(), layout=layout, _validate=False)
 
     # -- traces -----------------------------------------------------------
     def _traces(self) -> list[dict]:
@@ -367,7 +417,9 @@ class _FacetedFigureAssembler:
         y_ticktext = ["" if v in (0, y_max) else str(v) for v in y_tickvals]
 
         updates: dict[str, Any] = {
-            "template": "sprouts",
+            # The template itself: without validation a name is not looked up, and
+            # plotly.js ignores a template given as a string.
+            "template": pio.templates["sprouts"],
             "title": {"text": TITLE, "y": 0.985, "yanchor": "top", "font": {"size": 16}},
             "showlegend": True,
             "autosize": True,

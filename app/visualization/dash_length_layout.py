@@ -15,7 +15,7 @@ from typing import Any
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from .dash_shell import DashboardShell, ShellSpec, ViewOption, count_label
+from .dash_shell import DashboardShell, ShellSpec, ViewOption, count_label, legend_store
 from .faceted_profile import MAX_TUBES
 
 LENGTH_SHELL = ShellSpec(
@@ -67,7 +67,7 @@ def page(
             dcc.Store(id="selected-tubes-store", data=[]),
             # None: automatic (shown up to AUTO_LEGEND_MAX_TUBES tubes); the
             # toggle stores the user's choice.
-            dcc.Store(id="legend-visible-store", data=None),
+            legend_store(),
             dcc.Store(id="faceted-tubes-store", data=[]),
             dcc.Store(id="faceted-dates-store", data=[]),
         ],

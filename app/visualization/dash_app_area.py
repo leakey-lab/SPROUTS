@@ -22,8 +22,6 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html
 from dash.exceptions import PreventUpdate
 
-from app.config import DASH_AREA_PORT, DASH_HOST
-
 from . import dash_export, theme
 from .dash_data_cache import DataCache
 from .dash_shell import (
@@ -33,16 +31,19 @@ from .dash_shell import (
     DashboardShell,
     ShellSpec,
     ViewOption,
+    browser_figure,
     clientside_js,
     create_dash_app,
+    error_outputs,
     exclusions_note,
     legend_patch,
     legend_shown,
     legend_store,
+    plotted_tube,
     tube_options,
     with_uirevision,
 )
-from .dash_visualizations import AUTO_LEGEND_MAX_TUBES, auto_legend
+from .dash_visualizations import AUTO_LEGEND_MAX_TUBES, auto_legend, stacked_bar_figure
 from .figure_memo import FigureMemo
 
 theme.use("sprouts")
@@ -157,10 +158,7 @@ class DashAppArea:
 
     def _profile_tube(self, selected_tube):
         """The tube the profile view plots: the dropdown's, else the first."""
-        tubes = [int(t) for t in self.data_cache.tubes]
-        if selected_tube in tubes:
-            return int(selected_tube)
-        return tubes[0] if tubes else None
+        return plotted_tube(self.data_cache.tubes, selected_tube)
 
     def _controls_summary(self, view, tube) -> str:
         """One line for the collapsed control strip (PV-15)."""
@@ -232,7 +230,9 @@ class DashAppArea:
         )
         def update_visualization(view_type, selected_tube, legend=None):
             keep = dash.no_update  # tube-selector options are static (see layout)
-            if _triggered_ids() == {LEGEND_STORE_ID}:
+            # A press always stores True or False. None is the page load: the store
+            # re-sends its data as it mounts, and Dash then names only that trigger.
+            if _triggered_ids() == {LEGEND_STORE_ID} and legend is not None:
                 # "Toggle Legend": flip the legend of the time view in place.
                 if view_type != "time":
                     raise PreventUpdate
@@ -244,26 +244,20 @@ class DashAppArea:
                         logger.warning("profile view: no tubes available")
                         raise PreventUpdate
                     figure = with_uirevision(self.show_area_profile(tube), "profile", tube)
-                    return figure, "", _SHOWN, keep, _GRAPH_STYLE
-                if view_type == "time":
+                    tube_style = _SHOWN
+                elif view_type == "time":
                     figure = with_uirevision(self.show_growth_over_time(legend), "time")
-                    return figure, "", _HIDDEN, keep, _GRAPH_STYLE
-                figure = with_uirevision(self.create_stacked_bar_chart(), "stacked")
-                return figure, "", _HIDDEN, keep, _GRAPH_STYLE
+                    tube_style = _HIDDEN
+                else:
+                    figure = with_uirevision(self.create_stacked_bar_chart(), "stacked")
+                    tube_style = _HIDDEN
             except PreventUpdate:
                 raise
             except Exception as exc:  # noqa: BLE001 -- show the failure instead of a stale chart
                 logger.exception("update_visualization(%s): unexpected error", view_type)
-                figure = theme.message_figure(
-                    f"Error generating visualization: {exc}", color=theme.DANGER, size=16
-                )
-                return (
-                    figure,
-                    "An error occurred while rendering this view.",
-                    _HIDDEN,
-                    keep,
-                    _GRAPH_STYLE,
-                )
+                return (*error_outputs(exc), _HIDDEN, keep, _GRAPH_STYLE)
+            # Outside the try, as Dash converted the figure after the callback returned.
+            return browser_figure(figure), "", tube_style, keep, _GRAPH_STYLE
 
     # ---- figures (memoized; treat returned figures as read-only) ---------------
 
@@ -275,36 +269,8 @@ class DashAppArea:
         return self._memoized(("stacked",), self._stacked_bar_figure)
 
     def _stacked_bar_figure(self) -> go.Figure:
-        cache = self.data_cache
-        tubes = list(cache.tubes)
-        # NaN (no bar, left out of the hover) where a tube was not measured.
-        pivot = cache.tube_date_groups.unstack("Date").reindex(index=tubes, columns=cache.dates)
-        labels = [f"Tube {int(tube)}" for tube in tubes]
-        ramp = theme.date_colors(len(cache.dates))
-        traces = []
-        for date, colour in zip(cache.dates, ramp, strict=True):
-            values = pivot[date].to_numpy()
-            day = date.strftime("%Y-%m-%d")
-            traces.append(
-                go.Bar(
-                    name=day,
-                    marker_color=colour,
-                    x=labels,
-                    y=values,
-                    **theme.bar_labels(theme.value_labels(values), len(tubes)),
-                    hovertemplate=theme.hover("%{x}", [("Date", day), ("Area", "%{y:.2f} mm²")]),
-                )
-            )
-        fig = go.Figure(data=traces)
-        fig.update_layout(
-            barmode="stack",
-            title_text="Root Area by Tube and Date",
-            xaxis_title_text="Tube",
-            yaxis_title_text="Total Area (mm²)",
-            legend_title_text="Measurement date",
-            hovermode="x unified",
-        )
-        return fig
+        processor = self.data_processor
+        return stacked_bar_figure(self.data_cache, processor.metric_label, processor.unit)
 
     def show_area_profile(self, selected_tube) -> go.Figure:
         """Mean root area per position for one tube, one bar group per date."""
@@ -356,8 +322,9 @@ class DashAppArea:
     def _growth_over_time_figure(self, show_legend: bool = True) -> go.Figure:
         """The time view's figure; shown, the legend is the theme's (the figure as before
         the toggle), hidden it leaves no empty band beside the plot."""
-        # Plain dicts validated once by go.Figure (add_trace validated every trace
-        # and then the figure again: 57 -> ~20 ms for 160 tubes); the same JSON.
+        # Plain dicts, not validated (_validate=False): add_trace validated every trace and
+        # then the figure again (57 ms for 160 tubes), the dicts validated once 18 ms, now
+        # 6 ms. The same JSON (tests/test_viz_data_time_view.py compares it).
         hovertemplate = theme.hover(
             "Tube %{fullData.name}",
             [("Date", "%{x|%Y-%m-%d}"), ("Total Area", "%{y:.2f} mm²")],
@@ -383,13 +350,4 @@ class DashAppArea:
         if not show_legend:
             layout["showlegend"] = False
             layout["margin"] = {"r": theme.margin_right(False)}
-        return go.Figure(data=traces, layout=layout)
-
-    def run_server(self):
-        """Run the Dash server (legacy entry point — use DashServerThreadArea in production)."""
-        try:
-            self.app.run(debug=False, port=DASH_AREA_PORT, host=DASH_HOST, threaded=True)
-        except OSError as exc:
-            logger.error("run_server: port %d unavailable: %s", DASH_AREA_PORT, exc)
-        except Exception:  # noqa: BLE001
-            logger.exception("run_server: unexpected error")
+        return go.Figure(data=traces, layout=layout, _validate=False)

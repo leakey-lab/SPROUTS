@@ -7,6 +7,9 @@ dispatch (Flask test client), figures through the dashboards' own builders.
 from __future__ import annotations
 
 import os
+import tracemalloc
+
+import pytest
 
 from tests.viz_dash_helpers import (
     AREA_COLUMN,
@@ -108,6 +111,46 @@ def test_stacked_bars_leave_out_dates_a_tube_was_not_measured_on(tmp_path):
         assert values["2024-07-18"]["Tube 1"] == 4.0  # 1.5 + 2.5
 
 
+def test_stacked_bars_reach_the_browser_with_null_for_a_date_a_tube_missed(tmp_path):
+    # Tube 1 was imaged on the first and third dates, not the second. The area chart sent
+    # its bars as a typed array; plotly.js stacks the NaN inside one and restarted the
+    # tube's later dates at 0 (Totals by Tube drew 162 of 170 real tubes too short). A
+    # JSON null is left out of the stack.
+    from app.data_processing.data_processor import DataProcessor
+    from app.data_processing.data_processor_area import DataProcessorArea
+    from app.visualization.dash_app import DashApp
+    from app.visualization.dash_app_area import DashAppArea
+    from tests.viz_dash_helpers import LENGTH_COLUMN, FakeImageManager
+
+    rows = (
+        ("T001_L005_2024.07.18", 1, 5, "2024.07.18", 1.5),
+        ("T001_L005_2024.08.27", 1, 5, "2024.08.27", 2.5),
+        ("T002_L005_2024.07.18", 2, 5, "2024.07.18", 1.0),
+        ("T002_L005_2024.08.07", 2, 5, "2024.08.07", 2.0),
+        ("T002_L005_2024.08.27", 2, 5, "2024.08.27", 3.0),
+    )
+    length_csv = write_metric_csv(os.path.join(tmp_path, "root_lengths.csv"), LENGTH_COLUMN, rows)
+    area_csv = write_metric_csv(os.path.join(tmp_path, "root_areas.csv"), AREA_COLUMN, rows)
+    dashboards = {
+        "length": DashApp(DataProcessor(length_csv), str(tmp_path), FakeImageManager()),
+        "area": DashAppArea(DataProcessorArea(area_csv), str(tmp_path)),
+    }
+    for name, dashboard in dashboards.items():
+        _, out = call_callback(
+            dashboard.app,
+            "main-graph.figure",
+            {"view-selector.value": "stacked"},
+            changed=["view-selector.value"],
+        )
+        bars = {trace["name"]: trace["y"] for trace in out["main-graph"]["figure"]["data"]}
+
+        assert bars == {
+            "2024-07-18": [1.5, 1.0],
+            "2024-08-07": [None, 2.0],
+            "2024-08-27": [2.5, 3.0],
+        }, name
+
+
 def test_typed_or_ranged_tubes_without_data_are_not_selected(tmp_path):
     # "2-9" on a trial with tubes 1-3 said "8 tubes selected" (and the CSV export's
     # provenance listed 8 tubes) while the chart could only plot two of them.
@@ -133,3 +176,75 @@ def test_typed_or_ranged_tubes_without_data_are_not_selected(tmp_path):
 
     assert typed["selected-tubes-store"]["data"] == [2, 3]
     assert ranged["selected-tubes-store"]["data"] == [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    "values, trigger, expected",
+    [
+        ({"tube-manual-entry.value": "2-2000000"}, "tube-manual-entry.value", [2, 3]),
+        (
+            {"add-range-btn.n_clicks": 1, "tube-range-from.value": 1,
+             "tube-range-to.value": 2_000_000},
+            "add-range-btn.n_clicks",
+            [1, 2, 3],
+        ),
+    ],
+    ids=["typed", "ranged"],
+)  # fmt: skip
+def test_a_wide_tube_span_is_matched_against_the_trial_not_expanded(
+    tmp_path, values, trigger, expected
+):
+    # A typo with extra digits ("1-100000000") listed every number of the span before
+    # the trial's tubes were kept: gigabytes and seconds on the Dash server thread, which
+    # holds the GIL, so the whole app froze. (Two million here: a regression fails this
+    # test instead of exhausting the machine.)
+    dashboard = build_length_app(tmp_path)  # tubes 1, 2 and 3
+
+    tracemalloc.start()
+    try:
+        _, out = call_callback(
+            dashboard.app,
+            "selected-tubes-store.data",
+            {**values, "selected-tubes-store.data": []},
+            changed=[trigger],
+        )
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert out["selected-tubes-store"]["data"] == expected
+    assert peak < 16 * 2**20, f"{peak / 2**20:.0f} MiB at peak for a 2-million span"
+
+
+@pytest.mark.parametrize(
+    "low, high, expected",
+    [(2.1, 2.9, [2]), (2.9, 2.1, []), (-5, 2, [1, 2]), (3, 3, [3]), (4, 9, [])],
+)
+def test_add_range_truncates_its_bounds_and_needs_from_up_to_to(tmp_path, low, high, expected):
+    dashboard = build_length_app(tmp_path)  # tubes 1, 2 and 3
+
+    _, out = call_callback(
+        dashboard.app,
+        "selected-tubes-store.data",
+        {
+            "add-range-btn.n_clicks": 1,
+            "tube-range-from.value": low,
+            "tube-range-to.value": high,
+            "selected-tubes-store.data": [],
+        },
+        changed=["add-range-btn.n_clicks"],
+    )
+
+    assert out["selected-tubes-store"]["data"] == expected
+
+
+def test_parse_tube_selection_keeps_only_the_given_tubes():
+    from app.visualization.dash_visualizations import parse_tube_selection
+
+    assert parse_tube_selection("3,1-2000000", within={2, 7, 500}) == [2, 7, 500]
+    assert parse_tube_selection("7, 9, 400-600, x", within={2, 7, 500}) == [7, 500]
+    assert parse_tube_selection("5-3", within={4}) == []
+    # Without ``within``: every number the text names, as before.
+    assert parse_tube_selection("1,3,5,10-12") == [1, 3, 5, 10, 11, 12]
+    assert parse_tube_selection("1,foo,3") == [1, 3]  # F-037: a malformed part is skipped
+    assert parse_tube_selection("  ") == []

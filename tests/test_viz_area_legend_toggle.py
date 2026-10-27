@@ -150,6 +150,29 @@ def test_a_choice_made_elsewhere_changes_nothing_on_another_view(many):
     assert status == 204
 
 
+@pytest.mark.parametrize(
+    "view, title",
+    [
+        ("stacked", "Root Area by Tube and Date"),
+        ("time", "Root Area Growth Over Time"),
+        ("profile", "Root Area Depth Profile - Tube 1"),
+    ],
+)
+def test_the_page_load_call_draws_the_chart(many, view, title):
+    # On page load the legend store (data None) re-sends its data as it mounts, and Dash
+    # then names it as the only trigger. That is no press: the view must be drawn (the
+    # Totals by Tube chart stayed empty at every open).
+    values = {"view-selector.value": view, f"{LEGEND_STORE_ID}.data": None}
+    status, out = call_callback(many.app, FIGURE, values, [f"{LEGEND_STORE_ID}.data"])
+
+    assert status == 200
+    figure = out["main-graph"]["figure"]
+    assert "__dash_patch_update" not in figure  # the whole figure, not a legend Patch
+    assert figure["data"]
+    assert figure["layout"]["title"]["text"] == title
+    assert out == call_callback(many.app, FIGURE, values, [])[1]  # as an untriggered draw
+
+
 def test_the_choice_is_kept_when_the_view_comes_back(many):
     _, out = _time_view(many, legend=True)  # chosen earlier, then another view, then back
     assert _layout(out).get("showlegend") in (None, True)

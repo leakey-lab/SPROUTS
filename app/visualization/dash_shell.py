@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
 from dash import Dash, Input, Output, Patch, State, dcc, html
 from dash.exceptions import PreventUpdate
 
@@ -154,7 +156,7 @@ def create_dash_app(import_name: str, title: str = "SPROUTS") -> Dash:
     (17 ms here, up to 300 ms measured) and answered revalidations with a full 200
     instead of 304 (PV-02).
     """
-    return Dash(
+    app = Dash(
         import_name,
         title=title,
         assets_folder=ASSETS_DIR,
@@ -162,6 +164,12 @@ def create_dash_app(import_name: str, title: str = "SPROUTS") -> Dash:
         update_title=None,
         compress=False,
     )
+    # Dash keeps the newest app in a module global for dash.get_app() (Dash Pages). The
+    # dashboards never use it, and it kept a released dashboard and its data alive.
+    holder = sys.modules.get("dash._get_app")
+    if getattr(holder, "APP", None) is app:
+        holder.APP = None
+    return app
 
 
 def graph_config(plot_filename: str) -> dict[str, Any]:
@@ -207,12 +215,51 @@ def tube_options(tubes: Sequence[Any]) -> list[dict[str, Any]]:
     return [{"label": f"Tube {int(tube)}", "value": int(tube)} for tube in tubes]
 
 
+def plotted_tube(tubes: Sequence[Any], selected_tube: Any) -> int | None:
+    """The tube a per-tube view plots: the dropdown's, else the first.
+
+    ``tubes`` are the dataset's tube numbers (``DataCache.tubes``).
+    """
+    tubes = [int(t) for t in tubes]
+    if selected_tube in tubes:
+        return int(selected_tube)
+    return tubes[0] if tubes else None
+
+
+def error_outputs(exc: BaseException) -> tuple[go.Figure, str]:
+    """(figure, message) shown when a view could not be drawn: the failure instead of a
+    stale chart."""
+    figure = theme.message_figure(
+        f"Error generating visualization: {exc}", color=theme.DANGER, size=16
+    )
+    return figure, "An error occurred while rendering this view."
+
+
 def with_uirevision(figure, *key: Any):
     """Tag ``figure`` so Plotly keeps the user's zoom, pan and legend clicks
     across re-renders of the same view (PV-07). A different ``key`` (another
     view or tube) starts from the figure's own axes again."""
     figure.update_layout(uirevision=":".join(str(part) for part in key))
     return figure
+
+
+def browser_figure(figure: Any) -> Any:
+    """What Dash sends of ``figure`` (``figure.to_plotly_json()``), kept on the figure.
+
+    A memoized figure shown again is then not converted again: the conversion copies
+    every trace and base64-encodes every array (13 of 15 ms for a 170-tube time view).
+    The kept dict stays valid because memoized figures are read-only except their
+    ``uirevision`` (:func:`with_uirevision`), which it is kept with. Anything that is
+    not a figure (a Patch, ``no_update``) is returned as it is.
+    """
+    if not isinstance(figure, go.Figure):
+        return figure
+    revision = figure.layout.uirevision
+    kept = getattr(figure, "_sprouts_browser_json", None)
+    if kept is None or kept[0] != revision:
+        kept = (revision, figure.to_plotly_json())
+        figure._sprouts_browser_json = kept
+    return kept[1]
 
 
 # ---- the Growth Over Time legend toggle ------------------------------------------
@@ -447,10 +494,10 @@ class DashboardShell:
             def select_plotted_tube(view, current):
                 # The per-tube chart opens on the first tube; show that choice in
                 # the dropdown instead of its placeholder, but keep a valid pick.
-                available = [int(t) for t in tubes()]
-                if view != spec.tube_view or not available or current in available:
+                tube = plotted_tube(tubes(), current)
+                if view != spec.tube_view or tube is None or tube == current:
                     raise PreventUpdate
-                return available[0]
+                return tube
 
         app.clientside_callback(
             _REFIT_GRAPH_JS,

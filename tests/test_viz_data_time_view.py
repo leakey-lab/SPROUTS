@@ -1,8 +1,8 @@
 """viz-data: the Growth Over Time figures (R-VIZ X3, X4).
 
-X4: the time views are assembled as plain dicts and validated once by ``go.Figure``.
-Building one ``go.Scatter`` per tube and validating everything again in
-``go.Figure(data=traces)`` took 80 ms for 160 tubes (29 ms now; area 57 -> ~20 ms), on
+X4: the time views are assembled as plain dicts and handed to ``go.Figure`` without
+validation. Building one ``go.Scatter`` per tube and validating everything again in
+``go.Figure(data=traces)`` took 80 ms for 160 tubes (8 ms now; area 57 -> 6 ms), on
 the server thread and holding the GIL. The browser must get the same figure: the
 Dash JSON of each view is compared with the one the object-built figure produced.
 
@@ -206,7 +206,9 @@ def test_the_area_time_figure_is_unchanged(area):
 
 
 def test_the_time_figures_are_plotly_figures_the_memo_and_callers_can_use(charts, area):
-    # Built from dicts and validated once by go.Figure (a misspelt property raises).
+    # Built from dicts without validation (go.Figure(..., _validate=False)): the tests
+    # above compare the JSON with the validated object-built figures, so a misspelt
+    # property fails them.
     for fig in (
         charts._growth_over_time_figure((1, 2), True, True, True),
         area.show_growth_over_time(),

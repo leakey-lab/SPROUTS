@@ -1,21 +1,14 @@
 """
 SPROUTS visualization theme — a single source of truth for the Plotly look.
 
-Drop-in module. Importing it registers two Plotly templates:
-
-    "sprouts"        — dark, matches the SPROUTS desktop shell (default)
-    "sprouts_light"  — light variant (same geometry, light surfaces)
-
-and exposes small helpers so chart code stops re-declaring 40-line layout
-dicts in every method.
+Drop-in module. Importing it registers the dark "sprouts" Plotly template, which
+matches the SPROUTS desktop shell, and exposes small helpers so chart code stops
+re-declaring 40-line layout dicts in every method.
 
 Usage
 -----
-    from app.visualization import theme           # registers templates on import
+    from app.visualization import theme           # registers the template on import
     theme.use("sprouts")                           # make it the global default
-
-    fig = go.Figure(...)
-    theme.style(fig, title="Root Length by Tube")  # apply title + sane margins
 
     # build hover text without emoji / fragile inline <span> colours:
     hovertemplate = theme.hover("Tube %{x}", [
@@ -64,7 +57,6 @@ SKEL = _tokens.SKEL  # warm — skeleton
 
 # Fonts (loaded via assets/, falls back to system)
 FONT_SANS = "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif"
-FONT_MONO = "IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace"
 
 # Categorical palette for multi-series (tubes / dates). Ten hues, all chosen to
 # stay legible on a dark plot ground and to stay distinct from each other.
@@ -129,20 +121,6 @@ MAX_LABELLED_BARS = 30
 MARGIN_RIGHT_LEGEND = 180
 MARGIN_RIGHT_NO_LEGEND = 24
 
-# Light-variant surface overrides (geometry is shared with the dark template).
-_LIGHT = {
-    "paper": "#ffffff",
-    "plot": "#ffffff",
-    "text": "#1f2430",
-    "muted": "#5b6172",
-    "grid": "#e7e9f0",
-    "zero": "#c7cad6",
-    "line": "#aeb2c2",
-    "hover_bg": "#ffffff",
-    "hover_border": "#c7cad6",
-    "legend_bg": "rgba(255,255,255,0.92)",
-}
-
 
 # ---------------------------------------------------------------------------
 # Template construction
@@ -169,19 +147,12 @@ def _axis(grid: str, zero: str, line: str, tick: str) -> dict:
     )
 
 
-def _build(dark: bool) -> go.layout.Template:
-    if dark:
-        paper, plot = BG_0, BG_2
-        text, muted = TEXT, TEXT_MUTED
-        grid, zero, line = "rgba(255,255,255,0.06)", BORDER_STRONG, BORDER
-        hover_bg, hover_border = BG_3, BORDER_STRONG
-        legend_bg = "rgba(33,35,46,0.92)"
-    else:
-        paper, plot = _LIGHT["paper"], _LIGHT["plot"]
-        text, muted = _LIGHT["text"], _LIGHT["muted"]
-        grid, zero, line = _LIGHT["grid"], _LIGHT["zero"], _LIGHT["line"]
-        hover_bg, hover_border = _LIGHT["hover_bg"], _LIGHT["hover_border"]
-        legend_bg = _LIGHT["legend_bg"]
+def _build() -> go.layout.Template:
+    paper, plot = BG_0, BG_2
+    text, muted = TEXT, TEXT_MUTED
+    grid, zero, line = "rgba(255,255,255,0.06)", BORDER_STRONG, BORDER
+    hover_bg, hover_border = BG_3, BORDER_STRONG
+    legend_bg = "rgba(33,35,46,0.92)"
 
     template = go.layout.Template()
 
@@ -234,8 +205,7 @@ def _build(dark: bool) -> go.layout.Template:
 
 
 # Register on import so a bare `import theme` is enough.
-pio.templates["sprouts"] = _build(dark=True)
-pio.templates["sprouts_light"] = _build(dark=False)
+pio.templates["sprouts"] = _build()
 
 
 # ---------------------------------------------------------------------------
@@ -250,28 +220,6 @@ def use(name: str = "sprouts") -> None:
     afterwards inherits the theme, so individual charts only set title + data.
     """
     pio.templates.default = name
-
-
-def style(
-    fig: go.Figure,
-    *,
-    title: str | None = None,
-    height: int | None = None,
-    template: str = "sprouts",
-    **layout_kwargs,
-) -> go.Figure:
-    """Apply the theme to a figure in one call.
-
-    Use for figures where you want to be explicit instead of relying on the
-    global default (e.g. figures built before `use()` runs, or subplots from
-    make_subplots which do not inherit the default template cleanly).
-    """
-    fig.update_layout(template=template, **layout_kwargs)
-    if title is not None:
-        fig.update_layout(title_text=title)
-    if height is not None:
-        fig.update_layout(height=height)
-    return fig
 
 
 def hover(title: str, rows: list[tuple[str, str]], *, with_extra: bool = True) -> str:

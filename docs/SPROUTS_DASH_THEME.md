@@ -57,7 +57,7 @@ the app root. Because both dashboards do `Dash(__name__, ...)` from inside
 `assets_folder` to be safe (step 2). If you prefer, set
 `assets_folder=os.path.join(os.path.dirname(__file__), "assets")`.
 
-Fonts: `style.css` and `theme.py` ask for **IBM Plex Sans / Mono**. The fonts are
+Fonts: `style.css` asks for **IBM Plex Sans / Mono**, `theme.py` for IBM Plex Sans. The fonts are
 vendored in `app/assets/fonts/`; nothing is fetched from the internet
 (`app/assets/THIRD_PARTY.md`). They degrade to `system-ui` if absent.
 
@@ -68,7 +68,7 @@ vendored in `app/assets/fonts/`; nothing is fetched from the internet
 In `dash_app.py` and `dash_app_area.py`, at the top:
 
 ```python
-from . import theme           # registers "sprouts" + "sprouts_light" on import
+from . import theme           # registers "sprouts" on import
 theme.use("sprouts")          # make it the global Plotly default
 ```
 
@@ -165,7 +165,7 @@ once, then keep your existing per-axis range/tick logic (that's data-driven, kee
 ```python
 fig = make_subplots(rows=num_dates, cols=num_tubes, ...)
 ...
-theme.style(fig, title="Depth Profile Grid - Field Average (Left) vs Tube (Right)")
+fig.update_layout(template="sprouts", title_text="Depth Profile Grid - Field Average (Left) vs Tube (Right)")
 ```
 
 For the manual `fig.add_shape` background rectangles in the faceted view, change
@@ -367,15 +367,10 @@ categorical `COLORWAY`, and the faceted bars keep Plasma (depth).
 Above about seven dates neighbouring ramp colours are close. The legend order (oldest first) and
 the hover (which names the date) carry the date then, not the colour alone.
 
-To produce a **light** build instead (e.g. for print/export), call
-`theme.use("sprouts_light")` — identical geometry, light surfaces — and skip the
-DARKLY swap / dark `style.css` classes.
-
 ## API quick reference (`theme.py`)
 
 ```python
 theme.use("sprouts")                  # set global default template
-theme.style(fig, title=..., height=...)   # explicit apply (subplots, pre-default figs)
 theme.hover("Tube %{x}", [("Date","%{x}"), ("Length","%{y:.2f} mm")])  # clean hovertemplate
 theme.color(i)                        # categorical colour by series index
 theme.date_colors(n)                  # n blues from DATE_RAMP: oldest darkest, newest lightest
@@ -408,9 +403,25 @@ no data changes):
   for the legend only when it is shown. The area view takes these pieces from `dash_shell`
   (`legend_store`, `legend_shown`, `flip_legend`, `legend_patch`,
   `DashboardShell.register_legend_toggle`); its *Toggle Legend* floats over the chart's
-  top-left margin on the time view only, so that view keeps no control strip.
+  top-left margin on the time view only, so that view keeps no control strip. The length
+  view takes `legend_store`, `flip_legend` and `legend_patch` (its toggle keeps its own
+  registration, which fires on page load).
 - **Message figures.** `theme.message_figure` is text only (no axes, transparent plot area),
   so a hint no longer looks like an empty chart.
+- **Figures without validation (2026-10-27).** The Growth Over Time views and the Depth
+  Profile Grid are plain dicts passed to `go.Figure(..., _validate=False)`; tests compare
+  their JSON with validated figures. A template in such a dict must be the template object
+  (`pio.templates["sprouts"]`), not its name: plotly.js ignores a template given as a
+  string. The grid no longer calls `make_subplots` (section 3's example is history):
+  `faceted_profile.grid_layout` computes the same axes, domains and titles.
+- **Figures converted once.** `dash_shell.browser_figure` keeps what Dash sends of a
+  memoized figure (its `to_plotly_json()`) on the figure, with its `uirevision`, so a view
+  shown again is not converted again.
+- **Totals by Tube, one builder (2026-10-27).** Both dashboards draw it with
+  `dash_visualizations.stacked_bar_figure`, which sends each date's totals as a list:
+  plotly.js leaves the `null` of a date a tube was not measured on out of the stack. A NaN
+  inside a typed array (a numpy `y`) is stacked instead and restarted the tube's later dates
+  at 0; the area chart used to draw that way.
 - **Section 6, further.** The strip's open state, its caret and the length view's option
   cards are clientside callbacks (ids and outputs unchanged; the tests run the JavaScript in
   QJSEngine through `tests/viz_dash_helpers.call_clientside`). The whole strip

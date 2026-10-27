@@ -48,8 +48,6 @@ DASH_APP_OWN = {
     "_thumbnail": ("function", ("self", "tube", "position", "date_str")),
     "_tube_selection_card": ("function", ("self",)),
     "_viz_options_card": ("staticmethod", ()),
-    "get_encoded_image": ("function", ("self", "tube", "position", "date")),
-    "run_server": ("function", ("self",)),
 }  # fmt: skip
 # Inherited from DashVisualizations (the figures); unchanged by the split.
 DASH_APP_INHERITED = {

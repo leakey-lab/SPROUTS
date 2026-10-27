@@ -44,33 +44,6 @@ Builder = Callable[[], tuple[object, object]]
 _SERVER_JOIN_MS = 2000
 
 
-# True once this session's QtWebEngine is up (see prewarm_web_engine).
-_web_engine_warm = False
-
-
-def prewarm_web_engine(page_factory: Callable[[], QObject] | None = None) -> bool:
-    """Start QtWebEngine now, on the GUI thread; once per session.
-
-    The first browser page of a session starts QtWebEngine: ~0.4 s during which
-    the GUI thread holds the GIL, so neither the GUI nor a dashboard's build
-    worker runs. The first dashboard open used to pay it; call this at a quiet
-    moment instead. The engine outlives the throwaway page (a later page takes
-    ~1 ms). Returns True when this call started the engine; a failure is logged
-    and left to the first dashboard, which reports it.
-    """
-    global _web_engine_warm
-    if _web_engine_warm:
-        return False
-    try:
-        page = (page_factory or QWebEnginePage)()
-    except Exception:  # noqa: BLE001 -- a prewarm must never break the caller
-        logger.exception("Could not start Qt WebEngine ahead of the dashboards")
-        return False
-    _web_engine_warm = True
-    page.deleteLater()
-    return True
-
-
 def prewarm_imports() -> None:
     """Import the dashboard stack (dash, plotly, pandas; 0.7-1 s): run it off the GUI thread.
 
@@ -112,6 +85,15 @@ def _disconnect(signal, slot=None) -> None:
         pass
 
 
+def _error_text(exc: BaseException) -> str:
+    """The message of *exc*, or its type name when it has none (or cannot be printed)."""
+    try:
+        text = str(exc)
+    except Exception:  # noqa: BLE001 -- a broken __str__ must not break the error path
+        text = ""
+    return text or type(exc).__name__
+
+
 class DashInitWorker(QThread):
     """Runs a dashboard build (CSV -> processor -> Dash app) off the GUI thread."""
 
@@ -125,9 +107,10 @@ class DashInitWorker(QThread):
     def run(self) -> None:
         try:
             processor, dash_app = self._build()
-        except Exception as exc:  # noqa: BLE001 -- reported to the window, never raised
+        except BaseException as exc:  # noqa: BLE001 -- SystemExit too: reported, never raised
+            # Unreported, the window would show "Loading data…" until it was released.
             logger.exception("Dashboard initialisation failed")
-            self.failed.emit(str(exc) or type(exc).__name__)
+            self.failed.emit(_error_text(exc))
             return
         self.built.emit(processor, dash_app)
 

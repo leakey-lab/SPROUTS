@@ -68,6 +68,20 @@ def test_page_load_draws_the_default_chart(length_app):
     assert figure["data"], "the stacked chart must be drawn on page load"
 
 
+@pytest.mark.parametrize("view", ["stacked", "time"])
+def test_a_load_call_triggered_by_the_legend_store_alone_draws_the_chart(length_app, view):
+    """The legend store holds None until the first press, and a press always stores True
+    or False: a call that only the store triggered while it holds None is a page load."""
+    values = {"view-selector.value": view, "legend-visible-store.data": None,
+              "selected-tubes-store.data": [1, 2], "growth-viz-options.value": ["show_field_avg"]}  # fmt: skip
+    figure = _figure(length_app.app, values, ["legend-visible-store.data"])
+
+    assert "__dash_patch_update" not in figure  # the whole figure, not a legend Patch
+    assert figure["data"]
+    if view == "time":
+        assert figure["layout"]["showlegend"] is True  # automatic for two tubes
+
+
 LENGTH_VIEWS = [
     ("stacked", {}),
     ("time", {"selected-tubes-store.data": [1], "growth-viz-options.value": ["show_field_avg"]}),

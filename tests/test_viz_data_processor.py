@@ -129,3 +129,42 @@ def test_area_processor_maps_a_mangled_legacy_area_header(tmp_path):
     dp = DataProcessorArea(str(path))
 
     assert dp.df["Area (mm²)"].tolist() == [3.25]
+
+
+_HEADER = b"Image,Tube,Position,Date,Time,Length (mm),Error\n"
+_MEASURED = "Feldé_T001_L005_2024.07.18_120000_001,1,5,2024.07.18,120000,1.5,\n"
+_BAD_NAME_ROW = b"IMG_0002,,5,2024.07.18,120000,2.0,\n"
+
+
+def test_a_legacy_csv_that_is_not_utf8_is_read_as_latin1(tmp_path):
+    path = tmp_path / "root_lengths.csv"
+    path.write_bytes(_HEADER + _MEASURED.encode("cp1252") + _BAD_NAME_ROW)
+
+    dp = DataProcessor(str(path))
+
+    assert dp.df["Length (mm)"].tolist() == [1.5]
+    assert dp.exclusions == RowExclusions(bad_name=1)
+
+
+def test_a_damaged_utf8_csv_keeps_its_header_and_names(tmp_path):
+    # A NUL byte before a byte UTF-8 cannot decode: "utf-8-sig" refuses the file, the exact
+    # "utf-8" attempt reads it (pandas' C parser stops each field at the NUL) and strips the
+    # BOM. Read as latin-1, the header would start with "ï»¿" and the Image column be lost.
+    path = tmp_path / "root_lengths.csv"
+    damaged = b"IMG_0001,1,5,2024.07.18,120000,,x\x00\xff\n"
+    path.write_bytes(b"\xef\xbb\xbf" + _HEADER + _MEASURED.encode() + damaged + _BAD_NAME_ROW)
+
+    dp = DataProcessor(str(path))
+
+    assert dp.df["Length (mm)"].tolist() == [1.5]
+    assert dp.exclusions == RowExclusions(failed=1, bad_name=1)
+
+
+def test_the_frame_keeps_only_the_columns_the_charts_read(tmp_path):
+    # Image, Time and Error are read once, to count the left-out rows; kept in the frame
+    # they were 80 % of its memory for as long as the dashboard stayed open.
+    dp = DataProcessor(_write(tmp_path / "l.csv", GOOD + [FAILED, BAD_NAME]))
+
+    assert list(dp.df.columns) == ["Date", "Tube", "Position", "Length (mm)"]
+    assert dp.df["Position"].tolist() == [10, 11]
+    assert dp.exclusions == RowExclusions(failed=1, bad_name=1)

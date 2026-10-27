@@ -19,7 +19,6 @@ import pandas as pd
 from dash import Input, Output, State, html
 from dash.exceptions import PreventUpdate
 
-from . import theme
 from .dash_length_layout import (
     GRAPH_STYLE,
     HIDDEN,
@@ -36,7 +35,7 @@ from .dash_length_views import (
     lines_tube,
     render_view,
 )
-from .dash_shell import clientside_js
+from .dash_shell import browser_figure, clientside_js, error_outputs, flip_legend
 from .dash_visualizations import GROWTH_LINES_INTERVAL, auto_legend, parse_tube_selection
 
 logger = logging.getLogger(__name__)
@@ -162,13 +161,16 @@ def register_callbacks(dash_app) -> None:
         if trigger_id == "tube-multiselect":
             # The dropdown replaces the selection; an emptied one clears it.
             selected = set(multiselect_values or [])
+        # Only tubes with data: "1-200" on a 160-tube trial said "200 tubes selected".
+        # A span is matched against them, never expanded: "1-100000000" was gigabytes.
+        available = {int(tube) for tube in dash_app.data_cache.tubes}
         if trigger_id == "add-range-btn" and range_from is not None and range_to is not None:
             if range_from <= range_to:
-                selected.update(range(int(range_from), int(range_to) + 1))
+                low, high = int(range_from), int(range_to)
+                selected.update(tube for tube in available if low <= tube <= high)
         if trigger_id == "tube-manual-entry" and manual_entry:
-            selected.update(parse_tube_selection(manual_entry))
-        # Only tubes with data: "1-200" on a 160-tube trial said "200 tubes selected".
-        return sorted(selected & {int(tube) for tube in dash_app.data_cache.tubes})
+            selected.update(parse_tube_selection(manual_entry, within=available))
+        return sorted(selected & available)
 
     @dash_app.app.callback(
         Output("selected-tubes-display", "children"),
@@ -195,10 +197,7 @@ def register_callbacks(dash_app) -> None:
     )
     def toggle_legend(n_clicks, current_state, selected_tubes):
         """Flip the Growth Over Time legend: from what is shown, automatic or chosen."""
-        if not n_clicks:
-            return current_state
-        shown = auto_legend(selected_tubes) if current_state is None else bool(current_state)
-        return not shown
+        return flip_legend(n_clicks, current_state, auto_legend(selected_tubes))
 
     @dash_app.app.callback(
         [
@@ -237,10 +236,11 @@ def register_callbacks(dash_app) -> None:
         if changed == {"main-graph"}:
             # A click selects nothing; re-sending the figure only reset the zoom (PV-07).
             raise PreventUpdate
-        if changed == {"legend-visible-store"}:
+        # A press always stores True or False; None (automatic) is a page load: draw.
+        if changed == {"legend-visible-store"} and legend_visible is not None:
             return legend_patch(view_type, legend_visible)
         try:
-            return render_view(
+            figure, *rest = render_view(
                 dash_app,
                 view_type,
                 selected_tube,
@@ -252,11 +252,9 @@ def register_callbacks(dash_app) -> None:
             )
         except Exception as exc:  # noqa: BLE001 -- show the failure instead of a stale chart
             logger.exception("Error in visualization callback")
-            figure = theme.message_figure(
-                f"Error generating visualization: {exc}", color=theme.DANGER, size=16
-            )
-            message = "An error occurred while rendering this view."
-            return figure, message, HIDDEN, dash.no_update, GRAPH_STYLE, HIDDEN
+            return (*error_outputs(exc), HIDDEN, dash.no_update, GRAPH_STYLE, HIDDEN)
+        # Outside the try, as Dash converted the figure after the callback returned.
+        return (browser_figure(figure), *rest)
 
     @dash_app.app.callback(
         Output("image-container", "children"),

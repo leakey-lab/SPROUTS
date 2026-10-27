@@ -98,9 +98,9 @@ class MetricDataProcessor:
     classes; they now share this base, parameterized only by the metric column
     and its display label/unit.
 
-    After loading, ``df`` holds one row per measured image with ``Date``
-    (datetime64), ``Tube``/``Position`` (int64) and ``value_column`` (float64);
-    rows missing any of them are dropped and counted in ``exclusions``.
+    After loading, ``df`` holds one row per measured image and only the columns
+    ``Date`` (datetime64), ``Tube``/``Position`` (int64) and ``value_column``
+    (float64); rows missing any of them are dropped and counted in ``exclusions``.
     """
 
     #: name of the numeric metric column in the CSV (e.g. "Length (mm)")
@@ -139,28 +139,17 @@ class MetricDataProcessor:
         self._unique_positions = (
             sorted(self.df["Position"].unique()) if "Position" in self.df.columns else []
         )
-        self._unique_treatments = (
-            sorted(self.df["Treatment"].astype(str).unique())
-            if "Treatment" in self.df.columns
-            else []
-        )
-        self._unique_genotypes = (
-            sorted(self.df["Genotype"].astype(str).unique())
-            if "Genotype" in self.df.columns
-            else []
-        )
 
     def _read_csv(self):
         """Read the metric CSV; writers emit UTF-8 (see write_metric_csv)."""
-        last_error = None
-        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        # Exact "utf-8" is not redundant: pandas hands its raw bytes to the C parser, which
+        # reads some damaged files (a NUL byte in a field) that "utf-8-sig" rejects.
+        for encoding in ("utf-8-sig", "utf-8"):
             try:
                 return pd.read_csv(self.csv_path, encoding=encoding)
-            except UnicodeDecodeError as exc:
-                last_error = exc
-        if last_error is not None:
-            raise last_error
-        return pd.read_csv(self.csv_path)
+            except UnicodeDecodeError:
+                pass
+        return pd.read_csv(self.csv_path, encoding="latin-1")  # decodes any byte
 
     def _resolve_value_column(self, df):
         """Map the metric column when legacy encodings mangled the header."""
@@ -213,7 +202,9 @@ class MetricDataProcessor:
             df.dropna(subset=required, inplace=True)
             df["Tube"] = df["Tube"].astype("int64")
             df["Position"] = df["Position"].astype("int64")
-            return df
+            # Only what the charts read: the Image, Time and Error text was 80 % of the
+            # frame's memory, kept for as long as the dashboard stayed open.
+            return df[required]
         except Exception as exc:
             logger.exception("Failed to load CSV %s", self.csv_path)
             self._load_problem = f"The CSV could not be read: {exc}"
@@ -230,14 +221,6 @@ class MetricDataProcessor:
     def get_unique_positions(self):
         """Sorted depth positions (L numbers) present in ``df``."""
         return self._unique_positions
-
-    def get_unique_treatments(self):
-        """Sorted treatment labels, or ``[]`` when the CSV has no Treatment column."""
-        return self._unique_treatments
-
-    def get_unique_genotypes(self):
-        """Sorted genotype labels, or ``[]`` when the CSV has no Genotype column."""
-        return self._unique_genotypes
 
 
 class DataProcessor(MetricDataProcessor):

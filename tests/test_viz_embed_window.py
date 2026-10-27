@@ -8,6 +8,7 @@ stand-in served by the real server thread on 127.0.0.1.
 from __future__ import annotations
 
 import http.client
+import logging
 import os
 import threading
 import time
@@ -319,6 +320,60 @@ def test_unreadable_data_is_reported_in_place_and_starts_no_server(make_window):
     assert window.web_view.loads == []
 
 
+class _NotAnError(BaseException):
+    """A BaseException that is neither SystemExit nor KeyboardInterrupt."""
+
+
+class _Unprintable(Exception):
+    def __str__(self):
+        raise RuntimeError("no text")
+
+
+@pytest.mark.parametrize(
+    "exc, text",
+    [
+        (SystemExit("a library called sys.exit"), "a library called sys.exit"),
+        (SystemExit(), "SystemExit"),
+        (KeyboardInterrupt(), "KeyboardInterrupt"),
+        (_NotAnError(), "_NotAnError"),
+        (_Unprintable(), "_Unprintable"),
+    ],
+    ids=["exit", "bare-exit", "interrupt", "other", "unprintable"],
+)
+def test_a_build_ending_in_any_exception_is_reported(qapp, exc, text):
+    # Only an Exception was caught: a SystemExit (from a library) left run(), neither built
+    # nor failed was sent, and the dashboard said "Loading data…" until it was released.
+    from app.visualization.viz_window import DashInitWorker
+
+    def build():
+        raise exc
+
+    worker = DashInitWorker(build)
+    reports = []
+    worker.failed.connect(reports.append)
+    escaped = None
+    try:
+        worker.run()  # on this thread: what escapes here escaped the worker thread
+    except BaseException as error:  # noqa: BLE001 -- the test reports it instead
+        escaped = error
+
+    assert escaped is None, f"{type(escaped).__name__} escaped the worker"
+    assert reports == [text]
+
+
+def test_a_build_that_exits_is_reported_in_place_with_its_traceback(make_window, caplog):
+    def exiting():
+        raise SystemExit("a library called sys.exit")
+
+    with caplog.at_level(logging.ERROR, logger="app.visualization.viz_window"):
+        window = make_window(build=exiting)
+        assert wait_until(lambda: window.failed)
+
+    assert "a library called sys.exit" in window.loading_label.text()
+    assert window.server_thread is None
+    assert "Traceback" in caplog.text
+
+
 def test_an_unchartable_csv_is_reported_with_the_processors_reason():
     # "No data found in CSV file" was all a user saw, also for a CSV whose
     # measurements had all failed or that lacked a column.
@@ -469,38 +524,6 @@ def test_only_completed_exports_are_announced(make_window, tmp_path):
 # --------------------------------------------------------------------------- #
 #  Prewarm (PKG-VIZ, V2): what the first open of a session used to wait for
 # --------------------------------------------------------------------------- #
-def test_prewarm_web_engine_starts_the_engine_once_with_a_throwaway_page(qapp, monkeypatch):
-    # A real QWebEnginePage needs a working Chromium (never started in tests).
-    import app.visualization.viz_window as vw
-
-    made = []
-
-    class Page(QObject):
-        def __init__(self):
-            super().__init__()
-            made.append(self)
-
-    monkeypatch.setattr(vw, "_web_engine_warm", False)
-
-    assert vw.prewarm_web_engine(page_factory=Page) is True
-    assert vw.prewarm_web_engine(page_factory=Page) is False  # once per session
-    assert len(made) == 1
-    pump(0.05)  # the page itself is not kept: the engine outlives it
-
-
-def test_a_failing_web_engine_prewarm_is_logged_not_raised(qapp, monkeypatch, caplog):
-    import app.visualization.viz_window as vw
-
-    def broken():
-        raise RuntimeError("no GPU")
-
-    monkeypatch.setattr(vw, "_web_engine_warm", False)
-
-    assert vw.prewarm_web_engine(page_factory=broken) is False
-    assert "no GPU" in caplog.text
-    assert vw._web_engine_warm is False  # the first dashboard retries (and reports) it
-
-
 def test_prewarm_imports_loads_the_dashboard_stack():
     import sys
 

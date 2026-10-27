@@ -10,7 +10,7 @@ dashboard is open (see DataCache); ``data_cache.refresh()`` invalidates them.
 
 import logging
 import math
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Collection, Hashable
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -38,11 +38,11 @@ def auto_legend(tubes) -> bool:
 
 
 def _scatter(x, y, **properties) -> dict:
-    """A scatter trace as a plain dict (validated once, with its figure)."""
+    """A scatter trace as a plain dict (its figure is built without validation)."""
     return {"type": "scatter", "x": x, "y": y, **properties}
 
 
-def parse_tube_selection(text: str) -> list[int]:
+def parse_tube_selection(text: str, within: Collection[int] | None = None) -> list[int]:
     """
     Parse tube selection string like '1,3,5,10-15' into list [1,3,5,10,11,12,13,14,15].
 
@@ -51,6 +51,8 @@ def parse_tube_selection(text: str) -> list[int]:
 
     Args:
         text: Comma-separated string containing tube numbers and ranges
+        within: When given, only these tubes are kept, and a range is matched
+            against them instead of expanded (a typed "1-100000000" listed every number)
 
     Returns:
         Sorted list of unique tube numbers
@@ -70,16 +72,70 @@ def parse_tube_selection(text: str) -> list[int]:
                 if len(range_parts) == 2:
                     start, end = int(range_parts[0].strip()), int(range_parts[1].strip())
                     if start <= end:
-                        tubes.extend(range(start, end + 1))
+                        if within is None:
+                            tubes.extend(range(start, end + 1))
+                        else:
+                            tubes.extend(tube for tube in within if start <= tube <= end)
             else:
                 # Handle single number
-                tubes.append(int(part))
+                number = int(part)
+                if within is None or number in within:
+                    tubes.append(number)
         except (ValueError, AttributeError):
             # Skip this malformed part but keep any valid ones already parsed.
             logger.debug("Skipping unparseable tube-selection part: %r", part)
             continue
 
     return sorted(set(tubes))
+
+
+def stacked_bar_figure(cache, label: str, unit: str) -> go.Figure:
+    """Totals by Tube of either dashboard: each tube's total per date, stacked by date.
+
+    Args:
+        cache: the dashboard's DataCache.
+        label: the metric's name, e.g. "Length" or "Area".
+        unit: its unit, e.g. "mm" or "mm²".
+    """
+    tubes, dates = list(cache.tubes), list(cache.dates)
+    x = [f"Tube {int(tube)}" for tube in tubes]
+    traces = []
+    if tubes and dates:
+        # tube x date totals in one pivot. NaN (no bar, left out of the hover)
+        # where a tube was not measured: a 0.00 read as "no roots that day".
+        grid = cache.tube_date_groups.unstack("Date").reindex(index=tubes, columns=dates)
+        for date, colour in zip(dates, theme.date_colors(len(dates)), strict=True):
+            # A list, so the browser gets null where a tube was not measured: plotly.js
+            # leaves null out of the stack, while a NaN in a typed array (a numpy y) is
+            # stacked and restarts the tube's later dates at 0.
+            values = grid[date].tolist()
+            traces.append(
+                go.Bar(
+                    name=date.strftime("%Y-%m-%d"),
+                    marker_color=colour,
+                    x=x,
+                    y=values,
+                    **theme.bar_labels(theme.value_labels(values), len(tubes)),
+                    hovertemplate=theme.hover(
+                        "%{x}",
+                        [
+                            ("Date", date.strftime("%Y-%m-%d")),
+                            (label, f"%{{y:.2f}} {unit}"),
+                        ],
+                    ),
+                )
+            )
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        barmode="stack",
+        title_text=f"Root {label} by Tube and Date",
+        xaxis_title_text="Tube",
+        yaxis_title_text=f"Total {label} ({unit})",
+        legend_title_text="Measurement date",
+        hovermode="x unified",
+    )
+    return fig
 
 
 class DashVisualizations:
@@ -257,9 +313,10 @@ class DashVisualizations:
     def _growth_over_time_figure(
         self, tubes: tuple, show_field_average: bool, show_field_variance: bool, show_legend: bool
     ) -> go.Figure:
-        # Plain dicts validated once by go.Figure: one go.Scatter per tube, validated
-        # again by go.Figure(data=...), took 80 ms for 160 tubes (29 ms now), on the
-        # server thread and holding the GIL. The browser gets the same JSON.
+        # Plain dicts, not validated (_validate=False): one go.Scatter per tube, validated
+        # again by go.Figure(data=...), took 80 ms for 160 tubes, validating the dicts once
+        # 29 ms, now 8 ms, on the server thread and holding the GIL. The browser gets the
+        # same JSON (tests/test_viz_data_time_view.py compares it).
         label, unit = self._metric_text()
         traces = []
         if show_field_average:
@@ -297,7 +354,7 @@ class DashVisualizations:
             "margin": {"r": theme.margin_right(show_legend)},
             "hovermode": "closest",
         }
-        return go.Figure(data=traces, layout=layout)
+        return go.Figure(data=traces, layout=layout, _validate=False)
 
     def _field_average_traces(self, show_variance: bool, label: str, unit: str) -> list[dict]:
         """Field-average line (+ optional +-1 SD band) across tubes, dates merged (F-034)."""
@@ -370,45 +427,7 @@ class DashVisualizations:
             return go.Figure()
 
     def _stacked_bar_figure(self) -> go.Figure:
-        label, unit = self._metric_text()
-        tubes, dates = list(self.data_cache.tubes), list(self.data_cache.dates)
-        x = [f"Tube {int(tube)}" for tube in tubes]
-        traces = []
-        if tubes and dates:
-            # tube x date totals in one pivot. NaN (no bar, left out of the hover)
-            # where a tube was not measured: a 0.00 read as "no roots that day".
-            grid = self.data_cache.tube_date_groups.unstack("Date").reindex(
-                index=tubes, columns=dates
-            )
-            for date, colour in zip(dates, theme.date_colors(len(dates)), strict=True):
-                values = grid[date].tolist()
-                traces.append(
-                    go.Bar(
-                        name=date.strftime("%Y-%m-%d"),
-                        marker_color=colour,
-                        x=x,
-                        y=values,
-                        **theme.bar_labels(theme.value_labels(values), len(tubes)),
-                        hovertemplate=theme.hover(
-                            "%{x}",
-                            [
-                                ("Date", date.strftime("%Y-%m-%d")),
-                                (label, f"%{{y:.2f}} {unit}"),
-                            ],
-                        ),
-                    )
-                )
-
-        fig = go.Figure(data=traces)
-        fig.update_layout(
-            barmode="stack",
-            title_text=f"Root {label} by Tube and Date",
-            xaxis_title_text="Tube",
-            yaxis_title_text=f"Total {label} ({unit})",
-            legend_title_text="Measurement date",
-            hovermode="x unified",
-        )
-        return fig
+        return stacked_bar_figure(self.data_cache, *self._metric_text())
 
     # -- Depth Profile Grid -----------------------------------------------
     def create_faceted_depth_profile(

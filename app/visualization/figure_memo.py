@@ -9,6 +9,8 @@ dashboards, F-012) and put a data version in the key so a refresh invalidates.
 
 Memoized figures are shared: callers must treat them as read-only. (Setting a
 layout value that depends only on the key, e.g. ``uirevision``, is idempotent.)
+:func:`.dash_shell.browser_figure` relies on this: it keeps what Dash sends of a
+figure on the figure, with its ``uirevision``.
 """
 
 from __future__ import annotations

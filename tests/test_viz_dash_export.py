@@ -302,3 +302,81 @@ def test_the_export_takes_the_project_root_when_the_caller_knows_it(tmp_path):
     assert _header(text)["calibration"].endswith("; this project uses 18.00 x 13.00 mm")
     # Without it, the CSV's own folders hold no project file: the app's default, the same.
     assert "uses" not in dash_export.calibration_line(str(source))
+
+
+# ---- the time view's table is built in one pass -------------------------------------
+
+
+def _growth_over_time_per_tube(cache, tubes, *, field_average):
+    """The time view's table as it was built before: one frame per tube (a frozen copy)."""
+    total = f"Total {cache.value_column}"
+    sd = f"SD ({dash_export._unit(cache.value_column)})"
+    columns = ["Series", "Date", total, sd, "Tubes"]
+    parts = []
+    if field_average:
+        stats = cache.get_field_growth()
+        parts.append(
+            pd.DataFrame(
+                {
+                    "Series": dash_export.FIELD_AVERAGE_SERIES,
+                    "Date": stats["Date"].dt.strftime(dash_export.DATE_FORMAT),
+                    total: stats["mean"],
+                    sd: stats["std"],
+                    "Tubes": stats["count"].astype("Int64"),
+                }
+            )
+        )
+    for tube in tubes:
+        totals = cache.get_tube_totals(tube)
+        if totals.empty:
+            continue
+        parts.append(
+            pd.DataFrame(
+                {
+                    "Series": f"Tube {int(tube)}",
+                    "Date": totals.index.strftime(dash_export.DATE_FORMAT),
+                    total: totals.to_numpy(),
+                    sd: float("nan"),
+                    "Tubes": pd.array([pd.NA] * len(totals), dtype="Int64"),
+                }
+            )
+        )
+    if not parts:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(parts, ignore_index=True)[columns]
+
+
+def _gappy_rows():
+    """50 tubes on 3 dates; some tubes skip a date, tube 7 is measured once."""
+    rows = []
+    for tube in range(1, 51):
+        for d, date in enumerate(("2024.06.03", "2024.07.16", "2024.08.30")):
+            if (tube + d) % 4 == 0 or (tube == 7 and d):
+                continue
+            for position in (5, 15):
+                stem = f"T{tube:03d}_L{position:03d}_{date}"
+                rows.append((stem, tube, position, date, round((tube * 3 + d + position) / 7, 3)))
+    return rows
+
+
+@pytest.mark.parametrize("field_average", [True, False])
+@pytest.mark.parametrize("rows", ["fixture", "gappy"])
+def test_the_time_table_is_the_per_tube_table(tmp_path, rows, field_average):
+    from app.data_processing.data_processor import DataProcessor
+    from app.visualization.dash_data_cache import DataCache
+    from tests.viz_dash_helpers import LENGTH_COLUMN, ROWS, write_metric_csv
+
+    rows = _gappy_rows() if rows == "gappy" else ROWS
+    cache = DataCache(DataProcessor(write_metric_csv(tmp_path / "l.csv", LENGTH_COLUMN, rows)))
+    tubes = [int(t) for t in cache.tubes]
+    selections = [[], [999], [5], [7], [3, 1, 2], [2, 2], [1, 999, 2], [3, 1, 3, 2, 1],
+                  tubes, tubes[::-1]]  # fmt: skip
+
+    for selection in selections:
+        got = dash_export.growth_over_time(cache, selection, field_average=field_average)
+        want = _growth_over_time_per_tube(cache, selection, field_average=field_average)
+
+        pd.testing.assert_frame_equal(got, want, check_exact=True)
+        assert got.to_csv(index=False, lineterminator="\n") == want.to_csv(
+            index=False, lineterminator="\n"
+        )

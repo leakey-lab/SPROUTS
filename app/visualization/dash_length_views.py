@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 
 import dash
 import pandas as pd
-from dash import Patch
 from dash.exceptions import PreventUpdate
 
 from . import dash_export, theme
@@ -30,7 +29,8 @@ from .dash_length_layout import (
     LENGTH_SHELL,
     SHOWN,
 )
-from .dash_shell import NO_OPTIONS_SUMMARY, count_label, with_uirevision
+from .dash_shell import NO_OPTIONS_SUMMARY, count_label, plotted_tube, with_uirevision
+from .dash_shell import legend_patch as figure_legend_patch
 from .dash_visualizations import GROWTH_LINES_INTERVAL
 from .faceted_profile import MAX_TUBES, build_faceted_profile
 
@@ -53,15 +53,8 @@ if TYPE_CHECKING:
 DATE_TOKEN = re.compile(r"\d{4}\.\d{2}\.\d{2}")
 
 
-def lines_tube(tubes, selected_tube: Any) -> int | None:
-    """The tube the Depth Profile view plots: the dropdown's, else the first.
-
-    ``tubes`` are the dataset's tube numbers (``DataCache.tubes``).
-    """
-    tubes = [int(t) for t in tubes]
-    if selected_tube in tubes:
-        return int(selected_tube)
-    return tubes[0] if tubes else None
+#: The tube the Depth Profile view plots: the dropdown's, else the first.
+lines_tube = plotted_tube
 
 
 def controls_summary(
@@ -149,10 +142,7 @@ def legend_patch(view: str, visible: bool) -> tuple:
     """Flip the legend in place: a Patch instead of re-sending every trace (PV-07)."""
     if view != "time":
         raise PreventUpdate
-    patch = Patch()
-    patch["layout"]["showlegend"] = bool(visible)
-    patch["layout"]["margin"]["r"] = theme.margin_right(bool(visible))
-    return (patch, *([dash.no_update] * 5))
+    return (figure_legend_patch(visible), *([dash.no_update] * 5))
 
 
 # ---- export (PV-16) --------------------------------------------------------------

@@ -150,6 +150,7 @@ class ImageIndex(Mapping[ImageKey, str]):
             with self._lock:
                 if self._paths is None:
                     self._paths = self._parse(self._names)
+                    self._names = {}  # the snapshot is read only here (2.5 MB for 46k names)
                 paths = self._paths
         return paths
 
