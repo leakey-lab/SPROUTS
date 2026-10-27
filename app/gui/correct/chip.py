@@ -12,6 +12,8 @@ import os
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
+from app.gui.correct.layer import title  # re-exported: the page imports it from here
+
 if TYPE_CHECKING:  # pragma: no cover
     from app.gui.correct.layer import EditLayer, LayerStatus
     from app.gui.widgets.overlays import StatusChip
@@ -19,11 +21,6 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = ["ChipView", "chip_content", "show_on_chip", "title"]
 
 _RANK = {"none": 0, "clean": 1, "dirty": 2, "error": 3}  # the chip shows the worst layer state
-
-
-def title(noun: str) -> str:
-    """``"mask"`` -> ``"Mask"``."""
-    return f"{noun[:1].upper()}{noun[1:]}"
 
 
 def chip_content(

@@ -186,14 +186,15 @@ class MaskDocument(PlaneDocument):
         return LayerStatus("none", "No mask")
 
     def file_stamps(self) -> tuple:
-        """The GT mask, then every name the prediction may have, stamped or absent.
+        """The GT mask, then every name the prediction may have, stamped or absent, then the
+        prediction found at open when it has none of those names (O7).
 
         ``(path, mtime_ns, size)`` for an existing file, ``(path, None)`` otherwise. Read
         afresh on each call (compare two results with ``==``); ``()`` while closed.
         """
         if self._layout is None or not self.image_path:
             return ()
-        return mask_stamps(self._layout, self.gt_path, self.image_path)
+        return mask_stamps(self._layout, self.gt_path, self.image_path, self.prediction_path)
 
     def read_back(self, stamps: tuple) -> MaskRead | None:
         """The saved mask as :meth:`read` would read it again, with the session's ``stamps``
@@ -257,11 +258,10 @@ class MaskDocument(PlaneDocument):
         """
         layout = ProjectLayout.for_image(image_path)
         gt_path = gt_mask_of(layout, image_path)  # looked up once per open
-        current = mask_stamps(layout, gt_path, image_path)
         if read is None or (read.image_path, tuple(read.size), read.stamps) != (
             image_path,
             tuple(size),
-            current,
+            mask_stamps(layout, gt_path, image_path, read.prediction_path),
         ):
             read = self.read(image_path, size, gt_path=gt_path)
         width, height = size

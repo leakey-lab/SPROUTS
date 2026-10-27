@@ -245,15 +245,19 @@ class MaskStore:
         """The existing mask file of ``stem`` (``.png`` first), else ``None``."""
         return self.layout.find_mask(stem)
 
-    def read(self, stem: str) -> np.ndarray | None:
+    def read(self, stem: str, *, path: str | None = None) -> np.ndarray | None:
         """The saved mask as an ``(h, w)`` bool array; ``None`` when there is none.
 
-        Raises :class:`MaskFileError` when a file exists but cannot be decoded.
+        ``path``: the file :meth:`find` already found, read without a second lookup (None
+        when it is gone since). Raises :class:`MaskFileError` when a file exists but cannot
+        be decoded.
         """
-        path = self.find(stem)
-        if path is None:
+        found = path or self.find(stem)
+        if found is None:
             return None
-        on = read_mask_file(path)  # None also when the file is gone or locked
+        on = read_mask_file(found)  # None also when the file is gone or locked
         if on is None:
-            raise MaskFileError(f"cannot decode {path}")
+            if path is not None and not os.path.isfile(path):
+                return None  # gone since the lookup, as a second lookup would have said
+            raise MaskFileError(f"cannot decode {found}")
         return on

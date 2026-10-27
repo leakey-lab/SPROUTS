@@ -6,7 +6,8 @@ edit one ``uint8`` plane through a patch history and keep the plane as last open
 
 - :func:`planes_equal`: the one exact comparison of two planes.
 - :class:`SavedPlane`: a plane as last opened or saved; the edited plane is compared with it
-  at most once per revision, and Discard copies it back in place.
+  at most once per revision, and Discard copies it back in place (the skeleton model,
+  ``app.gui.skeleton_graph_model``, keeps its saved skeleton in one too).
 - :class:`PlaneDocument`: what both raster documents share: the history, the revision that
   :meth:`~PlaneDocument.touch` bumps after each change, the saved plane, a failed save's
   error (shown until the next edit), the GT file a save writes and whether the file chosen at

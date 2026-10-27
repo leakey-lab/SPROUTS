@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 
 from app.editing.history import UNDO_BYTES, UNDO_STEPS, SnapshotHistory
+from app.editing.planes import SavedPlane, planes_equal
 from app.editing.thinning import (
     _ensure_uint8_binary,
     _skeletonize_uint8,
@@ -100,12 +101,6 @@ def _plain(mask: np.ndarray) -> np.ndarray:
     if mask.ndim != 2:
         raise ValueError("Expected a 2D binary mask.")
     return mask
-
-
-def _equal_uint8(a: np.ndarray, b: np.ndarray) -> bool:
-    """Whether two plain uint8 arrays of one shape are equal (one cv2 pass, no temporary:
-    0.05 ms at 2048 x 1536 against 0.5 ms for ``np.array_equal``)."""
-    return cv2.norm(a, b, cv2.NORM_INF) == 0
 
 
 def _patch_edges(patch: Patch) -> tuple[int, int, int, int]:
@@ -385,13 +380,12 @@ class SkeletonCorrectionModel:
         self._base: np.ndarray | None = None  # the mask at the last history call
         self._open: _Step | None = None  # the action since push_undo(), not yet recorded
         self._revision = 0
-        # "Unsaved" means: differs from this baseline (the last load or save).
-        self._saved_mask: np.ndarray | None = None
-        self._saved_revision = 0
+        # "Unsaved" means: differs from this baseline (the last load or save), compared at
+        # most once per revision.
+        self._saved = SavedPlane()
         # Derived data, dropped by every mutation (see _touch).
         self._topologies: dict[float, SkeletonTopology] = {}
         self._endpoints: list[Point] | None = None
-        self._unsaved: bool | None = None
         # Pixels that may have changed since take_changed_box() (x0, y0, x1, y1);
         # None: unknown (the whole mask may have changed).
         self._changed: tuple[int, ...] | None = None
@@ -467,15 +461,7 @@ class SkeletonCorrectionModel:
         An exact pixel comparison, memoized per revision: undoing back to the
         saved state, or erasing empty background, reads as clean.
         """
-        if self._mask is None or self._revision == self._saved_revision:
-            return False
-        if self._unsaved is None:
-            saved, mask = self._saved_mask, self._mask
-            if saved is None or saved.shape != mask.shape:
-                self._unsaved = True
-            else:
-                self._unsaved = not _equal_uint8(saved, mask)
-        return self._unsaved
+        return self._mask is not None and self._saved.differs(self._mask, self._revision)
 
     def is_empty(self) -> bool:
         """True when no pixel is set, or no mask is loaded. Exact for any dtype; about 10x
@@ -484,21 +470,19 @@ class SkeletonCorrectionModel:
 
     @property
     def saved_mask(self) -> np.ndarray | None:
-        """The mask as last loaded or saved (read-only: compare with it, never change it)."""
-        return self._saved_mask
+        """The mask as last loaded or saved (read-only: compare with it, never change it or
+        keep it; the next :meth:`mark_saved` writes over it)."""
+        return self._saved.plane
 
     def mark_saved(self) -> None:
         """Take the current mask as the saved state (call after a successful save)."""
-        self._saved_mask = None if self._mask is None else self._mask.copy()
-        self._saved_revision = self._revision
-        self._unsaved = False
+        self._saved.take(self._mask, self._revision)
 
     def _touch(self) -> None:
         """Record a (possible) mask change: new revision, derived data dropped."""
         self._revision += 1
         self._topologies.clear()
         self._endpoints = None
-        self._unsaved = None
 
     def _note_change(self, x0: int, y0: int, x1: int, y1: int, *, display: bool = True) -> None:
         """Pixels in ``[x0, x1) x [y0, y1)`` may have changed (clipped to the mask).
@@ -644,7 +628,7 @@ class SkeletonCorrectionModel:
         """``(x0, y0, x1, y1)`` around the pixels where the mask differs from ``base``
         (of the mask's shape); None when there are none."""
         mask = self._mask
-        if _equal_uint8(base, mask):  # the usual case at a history call: 5x cheaper
+        if planes_equal(base, mask):  # the usual case at a history call: 5x cheaper
             return None
         x, y, w, h = cv2.boundingRect(cv2.compare(base, mask, cv2.CMP_NE, dst=self._scratch()))
         return None if w == 0 or h == 0 else (x, y, x + w, y + h)

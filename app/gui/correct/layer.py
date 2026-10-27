@@ -28,12 +28,15 @@ Rules every layer follows:
   ``matches_disk`` tell the session when a file a save would overwrite changed on disk
   since the layer opened or saved it.
 - Optional (``GuardedSaveLayer``): ``save_needs_prompt()`` True makes PgDn ask, not save.
+
+The words the prompts, toasts and panels share live here too, so the Qt-free session uses
+them as well: :func:`project_label` (a file), :func:`join_nouns` and :func:`title` (layers).
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -341,6 +344,20 @@ def project_label(path: str, root: str) -> str:
     except ValueError:  # another drive
         pass
     return path.replace(os.sep, "/")
+
+
+def join_nouns(nouns: Sequence[str]) -> str:
+    """``["mask"]`` -> ``"mask"``; ``["mask", "skeleton"]`` -> ``"mask and skeleton"``."""
+    nouns = list(nouns)
+    if len(nouns) < 2:
+        return "".join(nouns)
+    return f"{', '.join(nouns[:-1])} and {nouns[-1]}"
+
+
+def title(noun: str) -> str:
+    """``"mask"`` -> ``"Mask"``: the first letter only (``"class labels"`` -> ``"Class
+    labels"``)."""
+    return f"{noun[:1].upper()}{noun[1:]}"
 
 
 def _declared_members(protocol: type) -> dict[str, bool]:

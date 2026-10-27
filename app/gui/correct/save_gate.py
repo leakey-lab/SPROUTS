@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.gui.correct.layer import EditLayer, SaveOutcome, project_label
+from app.gui.correct.layer import EditLayer, SaveOutcome, project_label, title
 from app.gui.key_text import platform_keys
 
 __all__ = [
@@ -115,11 +115,7 @@ def matches_disk_of(layer: object) -> bool:
 
 def reloaded_message(noun: str) -> str:
     """The notice of a layer read again because its file changed on disk."""
-    return f"{_title(noun)} reloaded: the file changed on disk"
-
-
-def _title(noun: str) -> str:
-    return f"{noun[:1].upper()}{noun[1:]}"
+    return f"{title(noun)} reloaded: the file changed on disk"
 
 
 def _declined(layer_id: str, message: str, kind: str) -> SaveOutcome:
@@ -177,7 +173,7 @@ class SaveGate:
                 return _declined(layer_id, message, "warn")
             answer = self._prompts.ask_replace_unloaded(self._parent(), layer.noun, label)
             if answer != REPLACE:
-                message = f"{_title(layer.noun)} not saved: {label} was kept"
+                message = f"{title(layer.noun)} not saved: {label} was kept"
                 return _declined(layer_id, message, "info")
         return self._changed_on_disk(layer_id, layer, ask=ask)
 
@@ -204,5 +200,5 @@ class SaveGate:
         if answer == RELOAD:
             self._reopen(layer_id)
             return _declined(layer_id, reloaded_message(layer.noun), "info")
-        message = f"{_title(layer.noun)} not saved: {label} changed on disk"
+        message = f"{title(layer.noun)} not saved: {label} changed on disk"
         return _declined(layer_id, message, "info")

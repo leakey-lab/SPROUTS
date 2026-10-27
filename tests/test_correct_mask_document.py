@@ -21,7 +21,6 @@ import pytest
 from app.editing import planes
 from app.gui.correct.layer import LayerStatus, Notice
 from app.gui.correct.mask_document import MaskDocument, MaskSaveResult
-from app.gui.correct.read_back import mask_read_back
 from app.inference import metrics
 from app.io_utils import imread_unicode, imwrite_unicode
 from app.masks import write_mask_file
@@ -317,7 +316,7 @@ def test_a_hand_back_keeps_the_size_a_prediction_was_stretched_from(tmp_path):
     doc = MaskDocument()
     doc.open(_image(tmp_path), (80, 60))
 
-    handed = mask_read_back(doc, (80, 60), doc.file_stamps())
+    handed = doc.read_back(doc.file_stamps())
 
     assert handed.resized_from == (40, 30) and handed.source == "prediction"
     again = MaskDocument()

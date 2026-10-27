@@ -9,6 +9,10 @@ Qt-free editing core shared by the editors.
 - ``thinning``: ``thin_raster`` (a skeleton file thinned as Correct opens it),
   ``is_generated_as_opened`` and the lazy scikit-image import (numpy and cv2; imported
   on its own, not by this package).
+- ``planes``: ``planes_equal``, ``SavedPlane`` and ``PlaneDocument``, the plane compare and
+  the saved state the Correct mask and class-label documents share (the skeleton model
+  keeps its saved skeleton in a ``SavedPlane`` too; numpy and cv2; imported on its own, not
+  by this package).
 
 The package imports neither PyQt6 nor torch, so it is unit-testable without a
 QApplication and ``app.inference`` may import it. ``history``, ``journal`` and

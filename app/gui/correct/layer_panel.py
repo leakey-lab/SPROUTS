@@ -31,7 +31,7 @@ from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPainterPath, 
 from PyQt6.QtWidgets import QFrame, QGridLayout, QLabel, QWidget
 
 from app.gui import shortcuts
-from app.gui.correct.layer import CLASSES, LAYER_IDS, EditLayer, LayerStatus
+from app.gui.correct.layer import CLASSES, LAYER_IDS, EditLayer, LayerStatus, title
 from app.gui.key_text import platform_keys
 from app.gui.widgets import IconButton, keep_canvas_focus, tokens
 from app.gui.widgets.icons import load_icon
@@ -156,7 +156,7 @@ class LayerRow(QFrame):
         self.swatch.setStyleSheet(
             f"background-color: {layer.color}; border-radius: 2px; border: none;"
         )
-        name = _ROW_NAMES.get(layer.layer_id, f"{layer.noun[:1].upper()}{layer.noun[1:]}")
+        name = _ROW_NAMES.get(layer.layer_id, title(layer.noun))
         self.setAccessibleName(f"{name} layer")
         self.name_label = _label(name, f"color: {tokens.TEXT}; font-size: 12.5px;")
         self.eye_button = _EyeButton(layer.noun)

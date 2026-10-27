@@ -46,7 +46,8 @@ class MaskRead:
     """The mask of one image, read ahead on a worker thread (:func:`read_mask`).
 
     ``stamps`` are the mask files' stamps taken before the read (:func:`mask_stamps`: the
-    GT mask, then the prediction's names); ``plane`` is the 0/1 plane of the chosen file
+    GT mask, the prediction's names, then the prediction found under none of those names,
+    if it was); ``plane`` is the 0/1 plane of the chosen file
     at ``size`` (None: no usable file); ``not_loaded``: why the chosen file was not
     loaded, ``"size"`` (another size) or ``"unreadable"`` (undecodable), else ``""`` (the
     open warns about it). ``source``: ``"gt"``, ``"prediction"`` or None (no file);
@@ -83,10 +84,14 @@ def read_mask(image_path: str, size: tuple[int, int], *, gt_path: str | None = N
     ``gt_path``: the GT mask path already looked up (:func:`gt_mask_of`), else looked up."""
     layout = ProjectLayout.for_image(image_path)
     gt_path = gt_path or gt_mask_of(layout, image_path)
-    stamps = mask_stamps(layout, gt_path, image_path)
+    stamps = mask_stamps(layout, gt_path, image_path)  # before the lookup and the reads
     has_gt = stamps[0][1:] != (None,)  # a GT mask exists: it is the one shown, or not shown
     store = MaskStore(layout)
-    found, prediction, why, stretched = _read_prediction(store, image_path, size, quiet=has_gt)
+    found = store.find(image_path)  # the one lookup of the prediction
+    stamps += _variant_stamp(layout.mask_candidates(image_path), found)  # before its read
+    found, prediction, why, stretched = _read_prediction(
+        store, found, image_path, size, quiet=has_gt
+    )
     common = {
         "prediction_plane": prediction,
         "gt_path": gt_path,
@@ -109,11 +114,21 @@ def gt_mask_of(layout: ProjectLayout, image_path: str) -> str:
     return layout.find_gt_mask(image_path) or layout.gt_mask_path(image_path)
 
 
-def mask_stamps(layout: ProjectLayout, gt_path: str, image_path: str) -> tuple:
+def mask_stamps(
+    layout: ProjectLayout, gt_path: str, image_path: str, prediction_path: str | None = None
+) -> tuple:
     """The GT mask's stamp, then those of every name the prediction may have, in lookup
-    order (:func:`~app.io_utils.file_stamp` each)."""
+    order, then ``prediction_path``'s when the prediction was found under none of those
+    names (:func:`~app.io_utils.file_stamp` each)."""
     candidates = layout.mask_candidates(image_path)
-    return (file_stamp(gt_path), *(file_stamp(path) for path in candidates))
+    stamps = (file_stamp(gt_path), *(file_stamp(path) for path in candidates))
+    return stamps + _variant_stamp(candidates, prediction_path)
+
+
+def _variant_stamp(candidates: tuple[str, ...], path: str | None) -> tuple:
+    """``(file_stamp(path),)`` for a prediction found under none of ``candidates`` (its stem
+    or extension in another case, on a case-sensitive disk: O7), else ``()``."""
+    return () if path is None or path in candidates else (file_stamp(path),)
 
 
 def zero_one_plane(on: np.ndarray) -> np.ndarray:
@@ -128,20 +143,24 @@ def zero_one_plane(on: np.ndarray) -> np.ndarray:
 
 
 def _read_prediction(
-    store: MaskStore, image_path: str, size: tuple[int, int], *, quiet: bool = False
+    store: MaskStore,
+    path: str | None,
+    image_path: str,
+    size: tuple[int, int],
+    *,
+    quiet: bool = False,
 ) -> tuple[str | None, np.ndarray | None, str, tuple[int, int] | None]:
     """``(path found, plane at size, why not loaded, size stretched from)`` of the prediction
-    of ``image_path``.
+    of ``image_path``, found at ``path`` (``store.find``; None: there is none).
 
     A prediction of another size is stretched to ``size`` with nearest neighbour (O8): the
     last item is then the file's ``(w, h)``, else None. ``quiet``: a GT mask is shown instead,
     so a prediction that cannot be read is logged at debug level only (it would be logged on
     every open)."""
-    path = store.find(image_path)
     if path is None:
         return None, None, "", None
     try:
-        on = store.read(image_path)
+        on = store.read(image_path, path=path)
     except MaskFileError as exc:
         level = logging.DEBUG if quiet else logging.WARNING
         logger.log(level, "Failed to load existing mask: %s", exc)

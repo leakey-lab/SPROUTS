@@ -18,14 +18,10 @@ leave that layer's read to the GUI thread at the next open.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
 
 from app.gui.correct.read_ahead import AheadImage
 
-if TYPE_CHECKING:  # pragma: no cover
-    from app.gui.correct.mask_document import MaskDocument, MaskRead
-
-__all__ = ["closed_image", "mask_read_back", "read_back"]
+__all__ = ["closed_image", "read_back"]
 
 
 def closed_image(
@@ -57,8 +53,3 @@ def read_back(layer: object, stamps: tuple | None) -> object | None:
         return None
     hook = getattr(layer, "read_back", None)
     return hook(stamps) if callable(hook) else None
-
-
-def mask_read_back(document: MaskDocument, size: tuple[int, int], stamps: tuple) -> MaskRead | None:
-    """``MaskDocument.read_back`` (``size``, the image's, is the open plane's already)."""
-    return document.read_back(stamps)

@@ -24,19 +24,12 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from app.editing.history import UNDO_STEPS
 from app.editing.journal import EditJournal
 from app.gui.correct import save_gate
-from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome
+from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome, join_nouns
 from app.gui.correct.save_gate import CANCEL, DISCARD, KEEP, SAVE, Prompts, SaveGate, SaveReport
 from app.gui.correct.stamps import ImageStamps
 
 # The answers, Prompts and SaveReport live in save_gate; the session's callers import them here.
 __all__ = ["CANCEL", "DISCARD", "KEEP", "SAVE", "CorrectSession", "Prompts", "SaveReport"]
-
-
-def _join_nouns(nouns: Sequence[str]) -> str:
-    """``["mask"]`` -> "mask"; ``["mask", "skeleton"]`` -> "mask and skeleton"."""
-    if len(nouns) < 2:
-        return "".join(nouns)
-    return f"{', '.join(nouns[:-1])} and {nouns[-1]}"
 
 
 def _by_id(layers: Sequence[EditLayer]) -> dict[str, EditLayer]:
@@ -314,7 +307,7 @@ class CorrectSession:
         name = os.path.basename(self.image_path)
         written = [self.layers[o.layer_id].noun for o in outcomes if o.ok and o.path]
         if written:
-            self._on_notice(f"Saved {_join_nouns(written)} · {name}", "success")
+            self._on_notice(f"Saved {join_nouns(written)} · {name}", "success")
         for outcome in outcomes:
             if outcome.ok and outcome.message:
                 self._on_notice(outcome.message, outcome.kind)
@@ -367,7 +360,7 @@ class CorrectSession:
         return True
 
     def _nouns(self, layer_ids: Sequence[str]) -> str:
-        return _join_nouns([self.layers[layer_id].noun for layer_id in layer_ids])
+        return join_nouns([self.layers[layer_id].noun for layer_id in layer_ids])
 
     def _revert(self, layer_ids: Sequence[str]) -> None:
         """Discard: each layer back to its saved state; one whose files changed on disk

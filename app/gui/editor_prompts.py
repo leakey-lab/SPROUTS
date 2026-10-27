@@ -13,9 +13,10 @@ Keep editing / Keep it). Each box is freed once answered.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from PyQt6.QtWidgets import QMessageBox, QWidget
+
+# Qt-free, so the session words its prompts with them too; join_nouns is re-exported here.
+from app.gui.correct.layer import join_nouns, title
 
 __all__ = [
     "CANCEL",
@@ -36,14 +37,6 @@ SAVE, DISCARD, CANCEL, KEEP, REPLACE = "save", "discard", "cancel", "keep", "rep
 OVERWRITE, RELOAD = "overwrite", "reload"
 
 _Button = QMessageBox.StandardButton
-
-
-def join_nouns(nouns: Sequence[str]) -> str:
-    """``["mask"]`` -> ``"mask"``; ``["mask", "skeleton"]`` -> ``"mask and skeleton"``."""
-    nouns = list(nouns)
-    if len(nouns) < 2:
-        return "".join(nouns)
-    return f"{', '.join(nouns[:-1])} and {nouns[-1]}"
 
 
 def _ask(
@@ -107,7 +100,7 @@ def ask_after_failed_save(parent: QWidget | None, noun: str, name: str) -> str:
     choice = _ask(
         parent,
         QMessageBox.Icon.Warning,
-        f"{noun[:1].upper()}{noun[1:]} not saved",
+        f"{title(noun)} not saved",
         f"The {noun} for {name} could not be saved.",
         "Discard the edits, or keep editing? Discarded edits are lost.",
         _Button.Discard | _Button.Cancel,
@@ -145,7 +138,7 @@ def ask_changed_on_disk(parent: QWidget | None, noun: str, label: str) -> str:
     choice = _ask(
         parent,
         QMessageBox.Icon.Warning,
-        f"{noun[:1].upper()}{noun[1:]} changed on disk",
+        f"{title(noun)} changed on disk",
         f"{label} changed on disk after you opened it.",
         "Overwrite it with your edits, reload it from disk (your edits are lost), or cancel.",
         _Button.Save | _Button.Discard | _Button.Cancel,

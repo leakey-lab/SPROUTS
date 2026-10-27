@@ -25,7 +25,6 @@ from app.gt import files as gt_files  # noqa: E402
 from app.gui.correct import mask_document  # noqa: E402
 from app.gui.correct.layer import MASK, SKELETON, LayerStatus  # noqa: E402
 from app.gui.correct.mask_document import MaskDocument  # noqa: E402
-from app.gui.correct.read_back import mask_read_back  # noqa: E402
 from app.inference import metrics  # noqa: E402
 from app.io_utils import imread_unicode  # noqa: E402
 from app.masks import write_mask_file  # noqa: E402
@@ -454,7 +453,7 @@ def test_a_hand_back_after_load_prediction_and_save_says_the_stretch_again(make_
     editor.load_prediction()
     assert editor.save() is True and not os.path.exists(gt_mask(project))
 
-    handed = mask_read_back(document, (W, H), document.file_stamps())
+    handed = document.read_back(document.file_stamps())
 
     assert document.resized_from == (80, 60) and handed.resized_from == (80, 60)
     fresh = MaskDocument()

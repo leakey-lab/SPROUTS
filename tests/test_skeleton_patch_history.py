@@ -363,3 +363,20 @@ def test_clear_history_and_a_new_document_free_the_base_copy():
     model.push_undo()
     model.set_empty((64, 48))
     assert model.history_nbytes == 0 and not model.can_undo
+
+
+def test_the_saved_skeleton_is_one_buffer_a_save_copies_into():
+    model = SkeletonCorrectionModel()
+    model.set_empty((64, 48))
+    held = model.saved_mask
+    assert held is not None and held is not model.mask
+    model.push_undo()
+    model.draw_polyline([(1, 1), (60, 40)], thickness=1)
+    assert model.has_unsaved_changes() and not model.saved_mask.any()
+
+    model.mark_saved()
+
+    assert model.saved_mask is held and np.array_equal(held, model.mask)  # no new frame
+    assert held is not model.mask and not model.has_unsaved_changes()
+    model.set_empty((32, 24))  # another size: a new buffer
+    assert model.saved_mask.shape == (24, 32) and not model.saved_mask.any()
