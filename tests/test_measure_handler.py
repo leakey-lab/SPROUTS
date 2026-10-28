@@ -74,8 +74,9 @@ def test_measure_length_runs_as_named_job_with_feedback(tmp_path, qapp):
     _wait_idle(handler, qapp)
 
     assert handler.calculator_thread is None
-    # RB-08: waited for, then deleteLater()'d; deleting a still-running QThread would
-    # abort the process ("QThread: Destroyed while thread is still running").
+    # RB-08: released (app.workers.release_qthread): deleted once Qt says it finished;
+    # deleting a still-running QThread would abort the process ("QThread: Destroyed while
+    # thread is still running").
     assert sip.isdeleted(thread)
     names = mw.feedback.names()
     assert names[0] == "task_started" and "task_finished" in names

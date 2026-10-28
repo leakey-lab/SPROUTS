@@ -20,6 +20,7 @@ from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 from app import gt
+from app.dialogs import run_modal
 from app.gt.files import GtRemoveError, gt_files, remove_gt
 from app.gui.correct.classes_document import REGISTRY_LABEL
 from app.gui.correct.layer import CLASSES, MASK, SKELETON, SaveOutcome, project_label
@@ -54,11 +55,7 @@ def ask_remove_gt(parent: QWidget | None, name: str, detail: str) -> bool:
     cancel = box.addButton(QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(cancel)
     box.setEscapeButton(cancel)
-    try:
-        box.exec()
-        return box.clickedButton() is remove
-    finally:
-        box.deleteLater()  # a parented box would otherwise live as long as its parent
+    return run_modal(box, lambda answered: answered.clickedButton() is remove)
 
 
 class PageActions(QObject):
@@ -116,12 +113,8 @@ class PageActions(QObject):
             return
         from app.gui.class_editor_dialog import ClassEditorDialog  # its first use loads it
 
-        dialog = ClassEditorDialog(layer.registry(), editor)
-        try:
-            dialog.exec()
-            registry = dialog.result_registry()
-        finally:
-            dialog.deleteLater()  # parented to the long-lived page: free it
+        dialog = ClassEditorDialog(layer.registry(), editor)  # deleted once answered
+        registry = run_modal(dialog, lambda answered: answered.result_registry())
         editor.graphics_view.setFocus()
         if registry is None:
             return

@@ -8,13 +8,16 @@ runs, plus ``export_saved`` and ``failed``. No browser and no Dash server start.
 
 from __future__ import annotations
 
+import gc
 import os
 from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtCore import QCoreApplication, Qt, pyqtSignal
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, pyqtSignal
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QPushButton,
     QStackedWidget,
@@ -445,6 +448,131 @@ def test_opengl_is_not_forced_on_when_it_was_off_before(env):
     vm.close_root_length_visualization(mw)
 
     assert True not in mw.gl_calls
+
+
+# --------------------------------------------------------------------------- #
+#  A released dashboard leaves the window before OpenGL returns (flicker, Part A).
+#  Qt picks the window's surface from its children: a dying dashboard still in the
+#  window made it Direct3D once more, so the release recreated the window twice.
+# --------------------------------------------------------------------------- #
+def _where_at_gl_return(mw, dashboards):
+    """Spy on the OpenGL return: for each dashboard, (hidden, parentless, in the panel,
+    deleted) when ``set_opengl_viewports_enabled(True)`` runs."""
+    seen = []
+    real = mw.set_opengl_viewports_enabled
+
+    def spy(enabled):
+        if enabled:
+            seen.extend(
+                (
+                    board.isHidden(),
+                    board.parent() is None,
+                    mw.right_panel.indexOf(board) != -1,
+                    sip.isdeleted(board),
+                )
+                for board in dashboards
+            )
+        real(enabled)
+
+    mw.set_opengl_viewports_enabled = spy
+    return seen
+
+
+def test_a_closed_dashboard_is_out_of_the_window_when_opengl_returns(env_gl):
+    mw = env_gl.mw
+    vm.show_root_length_visualization(mw)
+    dashboard = mw.root_length_viz
+    seen = _where_at_gl_return(mw, [dashboard])
+
+    vm.close_root_length_visualization(mw)
+
+    assert seen == [(True, True, False, False)]  # hidden, no parent, not in the panel, alive
+    assert mw.gl_calls == [False, True]
+
+
+def test_the_release_takes_every_dashboard_out_before_opengl_returns(env_gl):
+    mw = env_gl.mw
+    vm.show_root_length_visualization(mw)
+    vm.show_root_area_visualization(mw)
+    boards = [mw.root_length_viz, mw.root_area_viz]
+    seen = _where_at_gl_return(mw, boards)
+
+    vm.release_all_visualizations(mw)
+
+    assert seen == [(True, True, False, False)] * 2
+
+
+def test_a_replaced_dashboard_leaves_the_window_too(env):
+    mw = env.mw
+    vm.show_root_length_visualization(mw)
+    old = mw.root_length_viz
+    _touch_newer(env.project / "skeletons" / "root_lengths.csv", "Image,Length (mm)\n")
+
+    vm.show_root_length_visualization(mw)  # rebuilt: the stale one is discarded
+
+    assert old.isHidden() and old.parent() is None
+    assert mw.right_panel.indexOf(old) == -1
+
+
+def _alive(name: str) -> bool:
+    """True while a widget of that object name exists in C++ (no Python reference needed)."""
+    return any(widget.objectName() == name for widget in QApplication.allWidgets())
+
+
+def test_a_released_dashboard_is_destroyed_by_the_deferred_delete_not_earlier(env_gl):
+    mw = env_gl.mw
+    vm.show_root_length_visualization(mw)
+    mw.root_length_viz.setObjectName("released-dashboard")
+    StubLength.made = []  # no reference left but the window's, as in the app
+    alive_at_gl_return = []
+    real = mw.set_opengl_viewports_enabled
+    mw.set_opengl_viewports_enabled = lambda on: (
+        alive_at_gl_return.append(_alive("released-dashboard")),
+        real(on),
+    )
+
+    vm.release_all_visualizations(mw)
+    gc.collect()  # a collection before the deferred delete (any thread may run one)
+
+    assert alive_at_gl_return == [True]
+    assert _alive("released-dashboard")  # its Python wrapper may go; the widget stays
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not _alive("released-dashboard")
+
+
+class _ShowCounter(QObject):
+    def __init__(self):
+        super().__init__()
+        self.shows = 0
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt's name
+        if event.type() == QEvent.Type.Show:
+            self.shows += 1
+        return False
+
+
+@pytest.mark.parametrize("release", ["close", "release_all"])
+def test_a_released_dashboard_is_never_shown_as_a_window_of_its_own(env, release):
+    mw = env.mw
+    mw.show()
+    vm.show_root_length_visualization(mw)  # on screen
+    dashboard = mw.root_length_viz
+    counter = _ShowCounter()
+    dashboard.installEventFilter(counter)
+    try:
+        if release == "close":
+            vm.close_root_length_visualization(mw)
+        else:
+            vm.release_all_visualizations(mw)
+
+        assert not dashboard.isVisible()
+        assert dashboard.windowHandle() is None  # no native window was made for it
+        QCoreApplication.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(dashboard)
+        assert counter.shows == 0
+    finally:
+        mw.hide()
 
 
 # --------------------------------------------------------------------------- #

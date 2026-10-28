@@ -105,6 +105,8 @@ APP_MODULES = [
     "app.handlers.generation_base",
     "app.handlers.job_registry",
     "app.workers",
+    "app.settings",
+    "app.dialogs",
     "app.inference.batch_engine",
     "app.inference.batch_pipeline",
     "app.inference.mask_inference",

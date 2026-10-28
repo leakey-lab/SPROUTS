@@ -32,6 +32,9 @@ from typing import Any
 from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QWidget
 
+from app.settings import app_settings
+from app.workers import start_pool_job
+
 from . import shell_chrome
 
 logger = logging.getLogger(__name__)
@@ -98,28 +101,20 @@ def _flag(value: Any) -> bool | None:
     return None
 
 
-def _app_settings():
-    from PyQt6.QtCore import QSettings
-
-    from app import APP_NAME, ORGANIZATION_NAME
-
-    return QSettings(ORGANIZATION_NAME, APP_NAME)
-
-
 def device_check_enabled(settings: Any = None, environ: Mapping[str, str] | None = None) -> bool:
     """Whether to resolve the device at start-up (on by default).
 
     :data:`DEVICE_CHECK_ENV` wins over the setting :data:`DEVICE_CHECK_SETTING`; an unset or
     unreadable value of either means "no opinion". ``settings``: anything with
-    ``value(key, default)``, the app's QSettings when ``None``; ``environ``: ``os.environ``
-    when ``None``.
+    ``value(key, default)``, the app's store (:func:`app.settings.app_settings`) when
+    ``None``; ``environ``: ``os.environ`` when ``None``.
     """
     env = os.environ if environ is None else environ
     flag = _flag(env.get(DEVICE_CHECK_ENV))
     if flag is not None:
         return flag
     try:
-        store = _app_settings() if settings is None else settings
+        store = app_settings() if settings is None else settings
         flag = _flag(store.value(DEVICE_CHECK_SETTING, None))
     except Exception:  # noqa: BLE001 - a broken settings backend must not stop the app
         logger.warning("Could not read the %s setting", DEVICE_CHECK_SETTING, exc_info=True)
@@ -278,7 +273,7 @@ class DeviceCheck(QObject):
             except RuntimeError:
                 pass  # the window is gone
 
-        QThreadPool.globalInstance().start(work)
+        start_pool_job(work, QThreadPool.globalInstance())
 
     def _on_resolved(self, result) -> None:
         """The chip names the device (a guess, or the resolved runtime), or says it is

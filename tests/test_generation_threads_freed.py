@@ -17,26 +17,14 @@ from __future__ import annotations
 import gc
 import weakref
 
-import pytest
-
 from app.feedback import NullFeedback
 from app.handlers import generate_skeleton_handler as gsh
 from app.handlers import generation_base
 from app.handlers import mask_generation_handler as mgh
 from app.inference.mask_origin import OverwritePolicy
 from app.workers import GuardedThread
+from tests.leak_census import assert_freed, no_gc_fixture  # noqa: F401
 from tests.test_generation_handlers import _wait, project  # noqa: F401
-
-
-@pytest.fixture
-def no_gc():
-    """The automatic cyclic GC off for the test: only reference counting frees."""
-    enabled = gc.isenabled()
-    gc.collect()
-    gc.disable()
-    yield
-    if enabled:
-        gc.enable()
 
 
 def _collect_the_first_imports() -> None:
@@ -66,7 +54,7 @@ def test_a_finished_mask_run_frees_its_thread_once_the_next_run_starts(
     assert handler.generate_masks()
     _wait(handler.generation_thread, qapp)
 
-    assert first() is None, "the first mask run's thread is still alive"
+    assert_freed(first, "the first mask run's thread")
     assert handler.generation_thread.completed  # the run that replaced it is kept
 
 
@@ -87,7 +75,7 @@ def test_a_finished_skeleton_run_frees_its_thread_once_the_next_run_starts(
     assert handler.generate_skeleton()
     _wait(handler._thread, qapp)
 
-    assert first() is None, "the first skeleton run's thread is still alive"
+    assert_freed(first, "the first skeleton run's thread")
     assert len(project.window.loaded) == 2
 
 

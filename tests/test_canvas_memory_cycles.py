@@ -11,7 +11,6 @@ GC off, show each item in a view (tiles made, idle warm-up run), drop it, and ch
 through a weak reference that it is gone.
 """
 
-import gc
 import weakref
 
 import numpy as np
@@ -37,6 +36,7 @@ from app.gui.display_controller import DisplayController
 from app.gui.image_manager import ImageManager
 from app.gui.skeleton_overlay import DotsItem
 from app.imaging.pyramid import ImagePyramid
+from tests.leak_census import assert_freed, no_gc_fixture  # noqa: F401
 from tests.qt_wait import wait_until
 
 W, H = 1400, 1000
@@ -60,17 +60,6 @@ def view(app, monkeypatch):
     view.close()
     view.deleteLater()
     app.processEvents()
-
-
-@pytest.fixture
-def no_gc():
-    """The automatic cyclic GC off for the test: only reference counting frees."""
-    enabled = gc.isenabled()
-    gc.collect()
-    gc.disable()
-    yield
-    if enabled:
-        gc.enable()
 
 
 @pytest.fixture(autouse=True)
@@ -119,7 +108,7 @@ def test_a_photo_item_removed_from_its_scene_is_freed_at_once(view, no_gc):
     ref = weakref.ref(item)
     scene.removeItem(item)
     del item
-    assert ref() is None
+    assert_freed(ref)
 
 
 def test_a_photo_item_goes_with_its_scene(view, no_gc):
@@ -130,8 +119,8 @@ def test_a_photo_item_goes_with_its_scene(view, no_gc):
     del item
     view.setScene(QGraphicsScene())
     QTest.qWait(10)
-    assert ref() is None
-    assert levels() is None  # with its tile pixmaps
+    assert_freed(ref)
+    assert_freed(levels, "its levels")  # with its tile pixmaps
 
 
 def test_a_new_image_lets_the_old_levels_go_at_once(view, no_gc):
@@ -140,7 +129,7 @@ def test_a_new_image_lets_the_old_levels_go_at_once(view, no_gc):
     scene = _show(view, item)
     levels = weakref.ref(item._levels)
     item.set_image(np.zeros((H, W, 3), np.uint8))
-    assert levels() is None
+    assert_freed(levels, "the old image's levels")
     view.viewport().repaint()
     assert item.built_tiles()  # the new image draws
     scene.removeItem(item)
@@ -163,7 +152,7 @@ def test_a_raster_item_with_coverage_tiles_is_freed_at_once(view, no_gc):
     ref = weakref.ref(item)
     scene.removeItem(item)
     del item
-    assert ref() is None
+    assert_freed(ref)
 
 
 def test_a_raster_item_goes_with_its_scene(view, no_gc):
@@ -175,7 +164,7 @@ def test_a_raster_item_goes_with_its_scene(view, no_gc):
     del item
     view.setScene(QGraphicsScene())
     QTest.qWait(10)
-    assert ref() is None
+    assert_freed(ref)
 
 
 @pytest.mark.parametrize("vectors", [True, False], ids=["correct", "library"])
@@ -197,7 +186,7 @@ def test_a_skeleton_item_is_freed_at_once(view, no_gc, vectors):
     ref = weakref.ref(item)
     scene.removeItem(item)
     del item
-    assert ref() is None
+    assert_freed(ref)
 
 
 def test_a_dots_item_is_freed_at_once(view, no_gc):
@@ -211,7 +200,7 @@ def test_a_dots_item_is_freed_at_once(view, no_gc):
     ref = weakref.ref(item)
     scene.removeItem(item)
     del item
-    assert ref() is None
+    assert_freed(ref)
 
 
 class _Window:
@@ -272,7 +261,8 @@ def test_the_library_lets_the_previous_image_go_at_once(app, tmp_path, monkeypat
         shown = [weakref.ref(i) for i in view.scene().items() if isinstance(i, kinds)]
         assert len(shown) == (1 if mode == "Single Image" else 2)
         controller.display_selected_image_by_name("B")
-        assert [r() for r in shown] == [None] * len(shown)
+        for ref in shown:
+            assert_freed(ref, "an item of the previous image")
     finally:
         controller.read_ahead.close()
         host.close()
@@ -287,4 +277,4 @@ def test_a_pyramid_is_freed_at_once(no_gc):
     pyramid.level(3)
     ref = weakref.ref(pyramid)
     del pyramid
-    assert ref() is None
+    assert_freed(ref)

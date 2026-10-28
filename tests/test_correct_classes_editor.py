@@ -194,6 +194,9 @@ def fake_class_editor(monkeypatch, result: Registry | None, seen: list | None = 
         def deleteLater(self):  # noqa: N802 - Qt API
             pass
 
+        def testAttribute(self, _attribute):  # noqa: N802 - Qt API (run_modal asks)
+            return False
+
     fake = types.ModuleType("app.gui.class_editor_dialog")
     fake.ClassEditorDialog = _FakeDialog
     monkeypatch.setitem(sys.modules, "app.gui.class_editor_dialog", fake)

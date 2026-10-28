@@ -18,7 +18,6 @@ import os
 from functools import partial
 from typing import Any
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from app.calibration import (
@@ -28,6 +27,7 @@ from app.calibration import (
     fov_label,
     load_project_calibration,
 )
+from app.dialogs import show_transient
 from app.feedback import UiFeedback
 from app.handlers.deps import SAVED_PATH_STATUS_MS, HandlerDependencies, folder_label
 from app.handlers.job_registry import JobRegistry
@@ -47,6 +47,7 @@ from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 from app.inference.metric_thread import MetricCalculatorThread
 from app.masks.store import MASK_THRESHOLD
 from app.project_layout import ProjectLayout, project_layout_of
+from app.workers import release_qthread
 
 from .generate_skeleton_handler import GenerateSkeletonHandler
 
@@ -420,7 +421,6 @@ class SkeletonHandler(HandlerDependencies):
         n = len(job.images)
         name = os.path.basename(job.csv_path)
         box = QMessageBox(self._parent())
-        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("Measure")
         box.setText("Nothing changed since the last measurement. Measure again?")
@@ -430,9 +430,8 @@ class SkeletonHandler(HandlerDependencies):
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         box.button(QMessageBox.StandardButton.Yes).setText("Measure again")
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        box.finished.connect(partial(self._on_again_answer, job, box))
         self._again_box = box
-        box.open()
+        show_transient(box, partial(self._on_again_answer, job, box))
 
     def _on_again_answer(self, job: MeasureRun, box: QMessageBox, result: int) -> None:
         if self._again_box is box:  # an older prompt's answer keeps the newer box
@@ -460,16 +459,14 @@ class SkeletonHandler(HandlerDependencies):
         open prompt, cleared only by that prompt's own answer.
         """
         box = QMessageBox(self._parent())
-        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Could not save the results")
         box.setText(message)
         box.setInformativeText("The measurements are kept. Press Retry to save them again.")
         box.setStandardButtons(QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(QMessageBox.StandardButton.Retry)
-        box.finished.connect(partial(self._on_retry_answer, kind, box))
         self._retry_box = box
-        box.open()
+        show_transient(box, partial(self._on_retry_answer, kind, box))
 
     def _on_retry_answer(self, kind: str, box: QMessageBox, result: int) -> None:
         if self._retry_box is box:  # an older prompt's answer keeps the newer box (RB-16)
@@ -481,17 +478,16 @@ class SkeletonHandler(HandlerDependencies):
 
     # ------------------------------------------------------------------ helpers
     def _release(self, thread: MetricCalculatorThread) -> None:
-        """Drop our reference only once the thread has fully finished (RB-08).
+        """Let the thread go; it is deleted once it has fully finished (RB-08).
 
-        The result signals are emitted inside ``run()``, so the thread is still
-        running when their slots start; ``wait()`` returns as soon as ``run()``
-        has returned.
+        The result signals are emitted inside ``run()``, so the thread is still running
+        when their slots start: ``release_qthread`` holds it until Qt's own finished
+        instead of waiting for it on the GUI thread.
         """
-        thread.wait()
         attr = _THREAD_ATTRS[thread.spec.kind]
         if getattr(self, attr, None) is thread:
             setattr(self, attr, None)
-        thread.deleteLater()
+        release_qthread(thread)
 
     @staticmethod
     def _running(thread: Any) -> bool:

@@ -38,7 +38,9 @@ Fit
 Pan
     Sticky pan mode (the rail's hand button), holding Space, or dragging with
     the middle button, whatever the tool. Scroll bars stay hidden. PageUp and
-    PageDown are left to the parent widgets instead of scrolling the canvas.
+    PageDown are left to the parent widgets instead of scrolling the canvas. A held
+    Space ends when the view loses the keyboard (its release goes elsewhere) or on
+    :meth:`end_holds`.
 
 Pixel grid
     Off by default; :meth:`set_pixel_grid` / :meth:`toggle_pixel_grid` (the
@@ -617,6 +619,17 @@ class CanvasViewMixin:
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        # The keyboard left (another widget, a popup, another window): a held Space is
+        # released there, so this view would keep panning.
+        super().focusOutEvent(event)
+        self.end_holds()
+
+    def end_holds(self) -> None:
+        """End the holds of keys whose release this view will not see (Space)."""
+        if self.space_pan:
+            self.set_space_pan(False)
 
     def _canvas_key_press(self, event: QKeyEvent) -> bool:
         """Handle the canvas keys; ``True`` when ``event`` was consumed (or ignored on purpose)."""

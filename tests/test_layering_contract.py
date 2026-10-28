@@ -65,7 +65,7 @@ def test_lower_layers_do_not_import_gui_or_handlers(package: str) -> None:
     assert offenders == {}
 
 
-@pytest.mark.parametrize("module", ["feedback.py", "workers.py"])
+@pytest.mark.parametrize("module", ["dialogs.py", "feedback.py", "settings.py", "workers.py"])
 def test_neutral_modules_do_not_import_gui_or_handlers(module: str) -> None:
     assert _upward(_app_imports(ROOT / "app" / module)) == []
 

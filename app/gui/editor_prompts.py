@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
+from app.dialogs import run_modal
+
 # Qt-free, so the session words its prompts with them too; join_nouns is re-exported here.
 from app.gui.correct.layer import join_nouns, title
 
@@ -61,10 +63,7 @@ def _ask(
     box.setEscapeButton(_Button.Cancel)
     for button, label in (rename or {}).items():
         box.button(button).setText(label)
-    try:
-        result = box.exec()
-    finally:
-        box.deleteLater()  # a parented box would otherwise live as long as its parent
+    result = run_modal(box)  # deleted once answered
     try:
         return _Button(result)
     except ValueError:

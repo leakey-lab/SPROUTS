@@ -34,7 +34,8 @@ Each warm-up runs on a thread of its own, never on a QThreadPool thread that ano
 reuses later: once torch's C++ code has run on a pool thread, the next job on that thread
 that enters it (importing torchvision, say) waited forever for the interpreter lock it
 already held (a stale thread state; reproduced 4 of 4 times, never with a fresh thread).
-Only the keys the caller names ``pooled`` (the start-up scikit-image import) use the pool.
+Only the keys the caller names ``pooled`` (the start-up scikit-image import) use the pool;
+a torch warm-up started there fails at once instead (``app.workers.refuse_pool_thread``).
 
 Garbage collection (:mod:`app.gc_policy`): while a warm-up imports, automatic full
 collections are held (they rescanned the growing heap again and again); when it is done,
@@ -58,6 +59,7 @@ from typing import Any
 from PyQt6.QtCore import QEvent, QObject, Qt, QThreadPool, QTimer, pyqtSignal
 
 from app import gc_policy
+from app.workers import refuse_pool_thread, start_pool_job
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,7 @@ _KEYBOARD_FOCUS = (
 # --------------------------------------------------------------------------- #
 def _warm_up_runtime(models: bool) -> str:
     try:
+        refuse_pool_thread("torch")  # it deadlocked there (dc11edf): a fresh thread only
         from app.inference import runtime
 
         runtime.warm_up(models=models)
@@ -332,7 +335,7 @@ class WarmupQueue(QObject):
                 pass  # the window is gone
 
         if key in self._pooled:
-            (self._pool or QThreadPool.globalInstance()).start(work)
+            start_pool_job(work, self._pool or QThreadPool.globalInstance())
             return
         # Not a daemon: the process never exits under an import that is half done.
         thread = threading.Thread(target=work, name=f"warm-up {key}")

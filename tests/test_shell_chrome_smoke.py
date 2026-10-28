@@ -211,6 +211,9 @@ def test_export_gt_dataset_opens_dialog(main_window, monkeypatch, tmp_path):
         def deleteLater(self):  # noqa: N802 - Qt API
             pass
 
+        def testAttribute(self, _attribute):  # noqa: N802 - Qt API (run_modal asks)
+            return False
+
     fake = types.ModuleType("app.gui.export_dataset_dialog")
     fake.ExportDatasetDialog = _FakeDialog
     monkeypatch.setitem(sys.modules, "app.gui.export_dataset_dialog", fake)
@@ -253,6 +256,9 @@ def test_export_uses_the_folders_registry(main_window, monkeypatch, tmp_path):
 
         def deleteLater(self):  # noqa: N802 - Qt API
             pass
+
+        def testAttribute(self, _attribute):  # noqa: N802 - Qt API (run_modal asks)
+            return False
 
     fake = types.ModuleType("app.gui.export_dataset_dialog")
     fake.ExportDatasetDialog = _FakeDialog

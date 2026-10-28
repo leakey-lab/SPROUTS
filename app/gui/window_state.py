@@ -6,7 +6,8 @@ directory). On the first run, or when the stored state is unreadable, the window
 gets :func:`initial_geometry`: 90% of the screen's available area, never smaller
 than the window's minimum size, centred and kept on screen.
 
-Settings live under ``QSettings("LeakeyLab", "SPROUTS")`` next to
+Settings live in the app's store (:func:`app.settings.app_settings`:
+``QSettings("LeakeyLab", "SPROUTS")``, memory on the ``offscreen`` platform) next to
 ``recent_projects``; tests inject an ini-file ``QSettings``.
 """
 
@@ -15,9 +16,8 @@ from __future__ import annotations
 from PyQt6.QtCore import QByteArray, QRect, QSettings, QSize
 from PyQt6.QtWidgets import QSplitter, QWidget
 
-from app import ORGANIZATION_NAME
+from app.settings import app_settings
 
-_APP = "SPROUTS"
 _GEOMETRY = "window/geometry"
 _SPLITTER = "window/body_splitter"
 _LAST_FOLDER = "window/last_folder"
@@ -49,7 +49,7 @@ class WindowStateStore:
     """Save / restore a window's geometry, its splitter state and the last folder."""
 
     def __init__(self, settings: QSettings | None = None) -> None:
-        self._settings = settings if settings is not None else QSettings(ORGANIZATION_NAME, _APP)
+        self._settings = settings if settings is not None else app_settings()
 
     # ------------------------------------------------------------ geometry
     def restore(self, window: QWidget, splitter: QSplitter | None = None) -> bool:

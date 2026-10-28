@@ -7,9 +7,9 @@ exactly the format ``MainWindow._record_recent_project`` has always written, so
 existing lists keep working.
 
 The store itself is Qt-free: ``settings`` is anything with ``value(key,
-default)`` / ``setValue(key, value)``; only the default constructs a
-``QSettings`` (lazily). :class:`MemorySettings` keeps a list for the process only
-(a headless window without settings must not write the user's list).
+default)`` / ``setValue(key, value)``; only the default is the app's store, imported
+lazily (:func:`app.settings.app_settings`): memory on the ``offscreen`` platform, so a
+headless window or test never reads or writes the user's list.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from app.io_utils import same_file
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "MemorySettings",
     "RecentProject",
     "RecentProjectsStore",
     "SETTINGS_KEY",
@@ -42,20 +41,6 @@ class _Settings(Protocol):
     def value(self, key: str, default: Any = None) -> Any: ...
 
     def setValue(self, key: str, value: Any) -> None: ...  # noqa: N802 - Qt API name
-
-
-class MemorySettings:
-    """``value`` / ``setValue`` over a dict that lives as long as this object: nothing is
-    persisted."""
-
-    def __init__(self) -> None:
-        self._values: dict[str, Any] = {}
-
-    def value(self, key: str, default: Any = None) -> Any:
-        return self._values.get(key, default)
-
-    def setValue(self, key: str, value: Any) -> None:  # noqa: N802 - Qt API name
-        self._values[key] = value
 
 
 @dataclass(frozen=True)
@@ -82,11 +67,9 @@ class RecentProjectsStore:
 
     def __init__(self, settings: _Settings | None = None, *, max_entries: int = MAX_ENTRIES):
         if settings is None:
-            from PyQt6.QtCore import QSettings
+            from app.settings import app_settings
 
-            from app import APP_NAME, ORGANIZATION_NAME
-
-            settings = QSettings(ORGANIZATION_NAME, APP_NAME)
+            settings = app_settings()
         self.settings = settings
         self.max_entries = max_entries
 

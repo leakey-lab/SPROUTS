@@ -32,9 +32,9 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QLabel, QMainWindow, QStackedLayout, QWidget
 
 from app.design import tokens
-from app.workers import GuardedThread
+from app.workers import GuardedThread, keep, release_qthread
 
-from ._viz_server import DASH_HOST, _DashServerThreadBase, join_qthread, release_qthread
+from ._viz_server import DASH_HOST, _DashServerThreadBase, join_qthread
 
 logger = logging.getLogger(__name__)
 
@@ -234,8 +234,10 @@ class DashVizWindow(QMainWindow):
         self.loading_label.raise_()
 
     # ------------------------------------------------------------------ start-up
+    # Neither thread has a parent: deleting a dashboard while one runs would destroy it
+    # (the abort of app.log.1:7831); the keeper of app.workers holds them until they end.
     def _start_build(self) -> None:
-        worker = DashInitWorker(self._dashboard_builder(), self)
+        worker = DashInitWorker(self._dashboard_builder())
         worker.setObjectName(f"{type(self).__name__}Init")
         worker.built.connect(self._on_built)
         worker.failed.connect(self._on_build_failed)
@@ -251,11 +253,11 @@ class DashVizWindow(QMainWindow):
         self._stage = _Stage.STARTING
         self._set_status("Starting the dashboard server…")
         thread = self.server_thread_class(dash_app, self.port)
-        thread.setParent(self)
         thread.port_assigned.connect(self._on_server_ready)
         thread.error.connect(self._on_server_error)
         self.server_thread = thread
         self._startup_timer.start(self.startup_timeout_ms)
+        keep(thread)
         thread.start()
 
     def _on_build_failed(self, message: str) -> None:
@@ -344,16 +346,19 @@ class DashVizWindow(QMainWindow):
     def cleanup_server(self) -> None:
         """Stop the dashboard for good: blank the page and release its threads.
 
-        Idempotent. Emits ``server_closed`` once, when it stopped a running server.
+        Idempotent. Emits ``server_closed`` once, when it stopped a running server. The
+        threads are stopped even when blanking the page fails (the error is raised after).
         """
         self._stage = _Stage.CLOSED
         self._startup_timer.stop()
-        if self.web_view is not None:
-            _disconnect(self._page.profile().downloadRequested, self.handle_download)
-            self.web_view.setUrl(QUrl("about:blank"))
-            self.web_view.hide()
-        if self._stop_background_work():
-            self.server_closed.emit()
+        try:
+            if self.web_view is not None:
+                _disconnect(self._page.profile().downloadRequested, self.handle_download)
+                self.web_view.setUrl(QUrl("about:blank"))
+                self.web_view.hide()
+        finally:
+            if self._stop_background_work():
+                self.server_closed.emit()
 
     def closeEvent(self, event) -> None:
         try:

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QSettings
 from app.gui.correct.editor import CorrectEditor
 from app.gui.correct.layer import MASK, SKELETON
 from app.gui.correct.layer_prefs import LayerPrefs
+from app.settings import MemorySettings
 from tests.correct_support import new_project, settle
 from tests.qt_teardown import delete_widgets
 
@@ -115,7 +116,7 @@ def test_unreadable_values_leave_the_defaults(pages, ini, opacity, visible):
 def test_a_page_without_settings_on_the_offscreen_platform_keeps_nothing(pages, monkeypatch):
     made = []
     monkeypatch.setattr(
-        "app.gui.correct.layer_prefs.QSettings",
+        "app.settings.QSettings",
         lambda *args, **kwargs: made.append(args) or pytest.fail("QSettings made"),
     )
 
@@ -123,4 +124,6 @@ def test_a_page_without_settings_on_the_offscreen_platform_keeps_nothing(pages, 
     page.set_layer_visible(MASK, False)
     restart(page)
 
-    assert made == [] and LayerPrefs.for_app(None).settings is None
+    assert made == [] and isinstance(LayerPrefs.for_app(None).settings, MemorySettings)
+    again = pages()  # a fresh store: nothing of the first page was kept
+    assert again.layers[MASK].is_visible()

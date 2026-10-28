@@ -6,7 +6,7 @@ recent-projects list, unlike the window state and the layer preferences.
 
 from __future__ import annotations
 
-from app.gui.recent_projects import MemorySettings
+from app.settings import MemorySettings
 from tests.qt_teardown import delete_widgets
 
 

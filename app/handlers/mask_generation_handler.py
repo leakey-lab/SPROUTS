@@ -28,6 +28,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
+from app.dialogs import run_modal
 from app.feedback import UiFeedback
 from app.handlers.deps import SAVED_PATH_STATUS_MS, folder_label
 from app.handlers.generation_base import GenerationHandlerBase, GenerationThread, thread_slot
@@ -122,11 +123,8 @@ def ask_overwrite_policy(
     cancel = box.addButton(QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(keep)
     box.setEscapeButton(cancel)
-    try:
-        box.exec()
-        clicked = box.clickedButton()  # read the answer before the box is freed
-    finally:
-        box.deleteLater()  # parented to the window: free it once answered (RB-16)
+    # The answer is read before the box is freed (RB-16).
+    clicked = run_modal(box, lambda answered: answered.clickedButton())
     if clicked is keep:
         return OverwritePolicy.KEEP_EXISTING
     if clicked is None or clicked is cancel:

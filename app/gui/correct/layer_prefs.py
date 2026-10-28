@@ -18,10 +18,9 @@ import math
 from collections.abc import Iterable
 
 from PyQt6.QtCore import QSettings
-from PyQt6.QtGui import QGuiApplication
 
-from app import APP_NAME, ORGANIZATION_NAME
 from app.gui.correct.layer import EditLayer
+from app.settings import app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +57,9 @@ class LayerPrefs:
 
     @classmethod
     def for_app(cls, settings: QSettings | None) -> LayerPrefs:
-        """``settings``, else the app's QSettings; none on the ``offscreen`` platform."""
-        if settings is None and QGuiApplication.platformName() != "offscreen":
-            settings = QSettings(ORGANIZATION_NAME, APP_NAME)
-        return cls(settings)
+        """``settings``, else the app's store (:func:`app.settings.app_settings`: memory on
+        the ``offscreen`` platform, so nothing is kept)."""
+        return cls(settings if settings is not None else app_settings())
 
     def restore(self, layers: Iterable[EditLayer]) -> None:
         """Give each layer its stored opacity and visibility (unreadable: its default)."""

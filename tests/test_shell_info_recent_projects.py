@@ -6,7 +6,8 @@ import json
 import os
 from datetime import datetime
 
-from app.gui.recent_projects import MemorySettings, RecentProject, RecentProjectsStore
+from app.gui.recent_projects import RecentProject, RecentProjectsStore
+from app.settings import MemorySettings
 
 
 class _FakeSettings:
@@ -76,14 +77,19 @@ def test_exists_reports_missing_folders(tmp_path):
     assert RecentProject(str(tmp_path / "gone"), "x").exists() is False
 
 
-def test_default_store_uses_the_app_qsettings_scope():
+def test_default_store_uses_the_app_qsettings_scope(monkeypatch):
+    """Without settings the store is the app's (``app.settings.app_settings``): the user's
+    ``QSettings("LeakeyLab", "SPROUTS")`` on a screen, memory when headless (C5-04). The
+    user's registry is never opened here."""
+    import app.settings as factory
     from app import APP_NAME, ORGANIZATION_NAME
 
-    settings = RecentProjectsStore().settings
-    assert (settings.organizationName(), settings.applicationName()) == (
-        ORGANIZATION_NAME,
-        APP_NAME,
-    )
+    assert isinstance(RecentProjectsStore().settings, MemorySettings)  # the suite is headless
+    made = []
+    monkeypatch.setattr(factory, "headless", lambda: False)
+    monkeypatch.setattr(factory, "QSettings", lambda *args: made.append(args) or "the user's")
+    assert RecentProjectsStore().settings == "the user's"
+    assert made == [(ORGANIZATION_NAME, APP_NAME)]
 
 
 def test_memory_settings_keep_the_list_for_this_object_only(tmp_path):

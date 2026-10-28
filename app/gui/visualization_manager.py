@@ -519,6 +519,12 @@ class DashboardController:
             dashboard.cleanup_server()
         finally:
             mw.right_panel.removeWidget(dashboard)
+            # Out of the window before OpenGL returns: Qt picks the window's surface from its
+            # children, and a dying dashboard's browser made it Direct3D once more (the release
+            # recreated the window twice instead of once). deleteLater() hands it to Qt, so it
+            # is still destroyed by the deferred delete, never earlier.
+            dashboard.hide()
+            dashboard.setParent(None)
             dashboard.deleteLater()
             if not keep_opengl_off:
                 self._gl.release(spec.kind)

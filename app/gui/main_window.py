@@ -17,12 +17,14 @@ import time
 
 from PyQt6.QtCore import QSettings, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox
+from PyQt6.QtWidgets import QMainWindow, QMessageBox
 
 from app import APP_NAME
+from app.dialogs import run_modal
 from app.gt import RegistryError, load_registry
 from app.handlers.job_registry import JobRegistry
 from app.project_layout import project_layout_of
+from app.settings import headless
 
 from . import (
     file_tree_manager,
@@ -38,7 +40,7 @@ from .device_check import DeviceCheck
 from .display_controller import DisplayController
 from .empty_state import ShortcutsDialog
 from .image_manager import ImageManager
-from .recent_projects import MemorySettings, RecentProjectsStore
+from .recent_projects import RecentProjectsStore
 from .stage_status import StageStatus
 from .window import (
     _common,
@@ -120,14 +122,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME}[*]")  # "<project> — SPROUTS" once a folder loads
 
+        # Without settings, each store opens the app's (app.settings.app_settings): memory
+        # when headless, so neither the geometry nor the recent projects are the user's.
         self.window_state = WindowStateStore(settings)
-        self._persist_window_state = (
-            settings is not None or QApplication.platformName() != "offscreen"
-        )
-        # Headless without settings: the recent projects live in memory, never the user's.
-        self.recent_projects = RecentProjectsStore(
-            settings if self._persist_window_state else MemorySettings()
-        )
+        self._persist_window_state = settings is not None or not headless()
+        self.recent_projects = RecentProjectsStore(settings)
         # The metrics bar and the measurement CSVs behind it. Its pool job reports to the
         # window's slot: on the GUI thread, and to nothing once the window is destroyed.
         self.metrics = MetricsController(self)
@@ -137,9 +136,9 @@ class MainWindow(QMainWindow):
         self.stage_status.changed.connect(self._refresh_idle_text)
         self._job_button_tooltips: dict[str, str] = {}
         if detect_device is None:
-            detect_device = QApplication.platformName() != "offscreen"
+            detect_device = not headless()
         if warm_up is None:
-            warm_up = QApplication.platformName() != "offscreen"
+            warm_up = not headless()
         self._warm_ups = bool(warm_up)
         # Warm-ups wait while a folder loads and a little after (see _warmup_blocked).
         self._loading_project = False
@@ -432,15 +431,13 @@ class MainWindow(QMainWindow):
             current_scope=shortcuts.scope_for_stage(self._current_stage()),
             on_about=self.show_about,
         )
-        # WA_DeleteOnClose: exec() deletes the dialog before it returns, so it must not
-        # be touched afterwards (a deleteLater() here raised on every close, RB-16).
-        dialog.exec()
+        run_modal(dialog)  # WA_DeleteOnClose: exec() deletes it (RB-16)
 
     def show_about(self) -> None:
         """About SPROUTS: version, calibration, runtime, models and how to cite."""
         from app.gui.about_dialog import AboutDialog
 
-        AboutDialog(self).exec()  # WA_DeleteOnClose: exec() deletes it (RB-16)
+        run_modal(AboutDialog(self))  # WA_DeleteOnClose: exec() deletes it (RB-16)
 
     # ==================== Stages (window/stages.py) ====================
 
@@ -713,7 +710,4 @@ class MainWindow(QMainWindow):
         from .export_dataset_dialog import ExportDatasetDialog
 
         dialog = ExportDatasetDialog(folder, dict(self.image_manager.images), registry, self)
-        try:
-            dialog.exec()  # cannot close while its export thread runs
-        finally:
-            dialog.deleteLater()  # parented to the window: free it
+        run_modal(dialog)  # cannot close while its export thread runs; deleted once closed
