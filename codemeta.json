@@ -30,9 +30,9 @@
   "programmingLanguage": {
     "@type": "ComputerLanguage",
     "name": "Python",
-    "version": "3.10"
+    "version": "3.14"
   },
-  "runtimePlatform": "Python 3.10",
+  "runtimePlatform": "Python 3.14",
   "operatingSystem": ["Windows", "Linux", "macOS"],
   "applicationCategory": "Plant phenotyping / image analysis",
   "keywords": [

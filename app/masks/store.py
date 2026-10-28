@@ -184,7 +184,7 @@ def _read_bytes(path: str) -> bytes | None:
     when it cannot be read (gone, locked), where that returns None too."""
     try:
         return np.fromfile(path, np.uint8).tobytes()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 

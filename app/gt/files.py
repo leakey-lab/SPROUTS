@@ -106,7 +106,7 @@ def _list_gt(folder: str) -> tuple[set[str], bool]:
     cannot be listed (a file check may still find a file)."""
     try:
         names = os.listdir(os.path.join(folder, GT_DIRNAME))
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return set(), True
     except OSError:
         return set(), False
@@ -203,5 +203,5 @@ def image_size(path: str) -> tuple[int, int] | None:
     try:
         with Image.open(path) as image:
             return image.size
-    except (OSError, ValueError, Image.DecompressionBombError):
+    except OSError, ValueError, Image.DecompressionBombError:
         return None

@@ -232,7 +232,7 @@ class TaskProgressWidget(QWidget):
         """Update the percentage (clamped to 0..100) and refresh the label."""
         try:
             pct = max(0, min(100, int(value)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return
         self._advance(pct, f"{pct}%", pct / 100.0)
 
@@ -240,7 +240,7 @@ class TaskProgressWidget(QWidget):
         """Show ``done / total`` items (thousands separators) and the matching percent."""
         try:
             done, total = int(done), int(total)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return
         pct = progress_percent(done, total)
         fraction = done / total if total > 0 else 1.0

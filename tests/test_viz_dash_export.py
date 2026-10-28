@@ -13,7 +13,7 @@ import hashlib
 import io
 import math
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -218,7 +218,7 @@ def test_render_csv_round_trips_the_table(tmp_path):
     source.write_text("Image,Tube\n", encoding="utf-8")
     frame = pd.DataFrame({"Tube": [1, 2], "Date": ["2024-07-18", "2024-08-07"], "v": [0.1, 2.5]})
     table = dash_export.ExportTable(frame, description="demo rows", filters={"tubes": "all"})
-    when = datetime(2026, 9, 28, 17, 45, 12, tzinfo=timezone.utc)
+    when = datetime(2026, 9, 28, 17, 45, 12, tzinfo=UTC)
     text = dash_export.render_csv(
         table,
         source_csv=str(source),

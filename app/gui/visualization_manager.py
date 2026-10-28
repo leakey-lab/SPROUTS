@@ -244,7 +244,7 @@ def _disconnect(signal, slot) -> None:
         return
     try:
         signal.disconnect(slot)
-    except (TypeError, RuntimeError):
+    except TypeError, RuntimeError:
         pass
 
 

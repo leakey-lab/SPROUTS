@@ -48,7 +48,7 @@ def test_build_record_shape():
     assert record["kind"] == "root_length"
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", record["created_utc"])
     created = dt.datetime.strptime(record["created_utc"], "%Y-%m-%dT%H:%M:%SZ")
-    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     assert abs((now - created).total_seconds()) < 120
     assert record["app"] == app_info()
     assert record["app"]["version"] == app.__version__

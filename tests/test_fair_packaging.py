@@ -18,7 +18,7 @@ from __future__ import annotations
 import ast
 import glob
 import os
-import sys
+import tomllib
 import warnings
 from pathlib import Path
 
@@ -28,11 +28,6 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 import app
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 # Installed per CUDA/CPU build (README "Installation"); pip must never pull them in.

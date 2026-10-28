@@ -306,7 +306,7 @@ def test_every_image_is_decided_through_the_given_map(gt_project):
 
     def recording_map(fn, *columns):
         calls.append((fn, [list(column) for column in columns]))
-        return map(fn, *columns)
+        return map(fn, *columns, strict=False)
 
     serial = _length(layout, images)
     args = (layout, images, layout.scan_skeletons(), layout.scan_gt_skeletons())

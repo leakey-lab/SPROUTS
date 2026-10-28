@@ -548,7 +548,7 @@ class WelcomeWidget(QWidget):
             if dt.tzinfo is not None:
                 dt = dt.astimezone().replace(tzinfo=None)
             secs = (datetime.now() - dt).total_seconds()
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             return ""
         if secs < 60:
             return "just now"

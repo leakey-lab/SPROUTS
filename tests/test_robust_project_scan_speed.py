@@ -26,7 +26,7 @@ def _pre_r6_scan(directory, key_of):
                 key = key_of(entry.name)
                 if key is not None and entry.is_file():
                     yield key, entry.path
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return
 
 

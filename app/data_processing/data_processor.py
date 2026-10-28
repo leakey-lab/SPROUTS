@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 KEY_COLUMNS = ("Date", "Tube", "Position")
 #: Image-name convention the Measure step reads (see app.naming.parse_image_name).
 NAME_FORMAT_HINT = "<field>_T<tube>_L<position>_YYYY.MM.DD_HHMMSS_..."
+#: A UTF-8 byte-order mark (EF BB BF) read as latin-1.
+_LATIN1_BOM = "\u00ef\u00bb\u00bf"
 
 
 def _plural(count: int, noun: str) -> str:
@@ -23,6 +25,19 @@ def _plural(count: int, noun: str) -> str:
 def _join(parts: list[str]) -> str:
     """'a', 'a and b', 'a, b and c'."""
     return parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
+def _parse_dates(text: pd.Series) -> pd.Series:
+    """``YYYY.MM.DD`` cells as nanosecond timestamps; anything else is NaT.
+
+    As before pandas 3, which parses dates to microseconds: nanoseconds keep the figures'
+    date strings and the dashboards' dtypes as they were, and a date outside the
+    nanosecond range (years 1677-2262, e.g. a mistyped year in a file name) is NaT, so only
+    its row is left out (counted as unreadable), not the whole CSV.
+    """
+    dates = pd.to_datetime(text, format="%Y.%m.%d", errors="coerce")
+    inside = dates.between(pd.Timestamp.min, pd.Timestamp.max)
+    return dates.where(inside).astype("datetime64[ns]")
 
 
 @dataclass(frozen=True)
@@ -142,14 +157,21 @@ class MetricDataProcessor:
 
     def _read_csv(self):
         """Read the metric CSV; writers emit UTF-8 (see write_metric_csv)."""
-        # Exact "utf-8" is not redundant: pandas hands its raw bytes to the C parser, which
-        # reads some damaged files (a NUL byte in a field) that "utf-8-sig" rejects.
+        # Exact "utf-8" is not redundant: pandas 2 and 3.0 hand its raw bytes to the C parser,
+        # which reads some damaged files (a NUL byte in a field) that "utf-8-sig" rejects.
         for encoding in ("utf-8-sig", "utf-8"):
             try:
                 return pd.read_csv(self.csv_path, encoding=encoding)
             except UnicodeDecodeError:
                 pass
-        return pd.read_csv(self.csv_path, encoding="latin-1")  # decodes any byte
+        df = pd.read_csv(self.csv_path, encoding="latin-1")  # decodes any byte
+        # pandas 3.1 decodes such a damaged UTF-8 file in full, so it is read here: its BOM
+        # then reads as _LATIN1_BOM and would hide the first column (Image) from the row
+        # counts.
+        first = str(df.columns[0]) if len(df.columns) else ""
+        if first.startswith(_LATIN1_BOM):
+            df = df.rename(columns={df.columns[0]: first[len(_LATIN1_BOM) :]})
+        return df
 
     def _resolve_value_column(self, df):
         """Map the metric column when legacy encodings mangled the header."""
@@ -190,7 +212,7 @@ class MetricDataProcessor:
             # is open nor copied by the steps below (dropna copies every column).
             chart = pd.DataFrame(
                 {
-                    "Date": pd.to_datetime(df["Date"], format="%Y.%m.%d", errors="coerce"),
+                    "Date": _parse_dates(df["Date"]),
                     # No integer downcast: int8 positions overflow in the depth-interval
                     # arithmetic (124 -> interval end 130 wraps to -126, PV-01).
                     "Tube": pd.to_numeric(df["Tube"], errors="coerce"),
@@ -206,7 +228,7 @@ class MetricDataProcessor:
             )
             if self.exclusions.total:
                 logger.warning("%s: %s", self.csv_path, self.exclusions.message())
-            chart.dropna(inplace=True)
+            chart = chart.dropna()
             chart["Tube"] = chart["Tube"].astype("int64")
             chart["Position"] = chart["Position"].astype("int64")
             return chart

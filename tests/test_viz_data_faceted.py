@@ -188,12 +188,32 @@ def _make_subplots_layout(column_titles, row_titles) -> dict:
     return layout
 
 
+def _assert_equal_up_to_rounding(got, expected, path="layout"):
+    """The same keys, texts and integers; floats within 1e-12. Python 3.12's ``sum()``
+    adds make_subplots' floats with compensation, up to 4 units in the last place away from
+    the plain sums the grid keeps (``PYTHON_310_GRIDS``)."""
+    if isinstance(expected, dict):
+        assert isinstance(got, dict) and sorted(got) == sorted(expected), path
+        for key, value in expected.items():
+            _assert_equal_up_to_rounding(got[key], value, f"{path}.{key}")
+    elif isinstance(expected, list):
+        assert isinstance(got, list) and len(got) == len(expected), path
+        for i, (item, value) in enumerate(zip(got, expected, strict=True)):
+            _assert_equal_up_to_rounding(item, value, f"{path}[{i}]")
+    elif isinstance(expected, float):
+        assert isinstance(got, int | float) and not isinstance(got, bool), path
+        assert math.isclose(got, expected, rel_tol=0.0, abs_tol=1e-12), (path, got, expected)
+    else:
+        assert type(got) is type(expected) and got == expected, path
+
+
 @pytest.mark.parametrize(
     "rows, cols",
     [(1, 1), (1, 6), (2, 2), (3, 5), (4, 3), (6, 6), (11, 6), (24, 6), (40, 6)],
 )
 def test_the_grid_layout_is_the_make_subplots_grid(rows, cols):
-    # make_subplots is the oracle: a plotly upgrade that changes its grid shows up here.
+    # make_subplots is the oracle: a plotly upgrade that changes its grid shows up here
+    # (up to rounding: the grid keeps Python 3.10's float sums, pinned below).
     import json
 
     from app.visualization.faceted_profile import grid_layout
@@ -204,12 +224,53 @@ def test_the_grid_layout_is_the_make_subplots_grid(rows, cols):
     first = grid_layout(columns, dates)
     again = grid_layout([f"Tube {c + 11}" for c in range(cols)], dates)
 
-    assert json.loads(json.dumps(first)) == _make_subplots_layout(columns, dates)
+    _assert_equal_up_to_rounding(
+        json.loads(json.dumps(first)), _make_subplots_layout(columns, dates)
+    )
     assert [a["text"] for a in again["annotations"]][:cols] == [
         f"Tube {c + 11}" for c in range(cols)
     ]
     first["xaxis"]["range"] = [0, 1]  # every call returns a fresh layout
     assert "range" not in grid_layout(columns, dates)["xaxis"]
+
+
+#: SHA-256 of ``json.dumps(grid_layout(...), sort_keys=True)`` as Python 3.10.11 gave it
+#: (``sum()`` adding floats left to right). With Python 3.12's compensated ``sum()``
+#: every one of these grids had other floats in the last place (panel domains, titles).
+PYTHON_310_GRIDS = {
+    (9, 1): "c4bbfd2b1d23b2cf91994716e7b6cebf4689798dfd0f95c1fd924ec801b419be",
+    (9, 6): "4c303bb074995771e3b41582fa908e079ad47101ef442c816c7c4ff4e1b8ffa0",
+    (11, 6): "6a21e7e33d403f4133052f59951dc484f48381755df50d3ebe086af72525ceda",
+    (12, 3): "68904fac89a1404e50b3a035f24bfb295b0ec923aeea2e14a8bd9704d8d2cb5f",
+    (17, 5): "112161441ed1470e26a2ca2cae6e503197d57e928091b42b6f08eb8b14b17690",
+    (25, 6): "36824683d6f702d999e50ff408c73f5b6357ada857d15756590d82b16a1ed7ac",
+    (40, 6): "afc73f0d4bec832243409e227431f08b5f8bdfd98af6a82fed90d24b04725258",
+}
+
+
+@pytest.mark.parametrize("rows, cols", list(PYTHON_310_GRIDS))
+def test_the_grid_layout_is_the_json_python_3_10_gave(rows, cols):
+    # The Depth Profile Grid's figure JSON must not change with the Python version.
+    import hashlib
+    import json
+
+    from app.visualization.faceted_profile import grid_layout
+
+    columns = [f"Tube {c + 1}" for c in range(cols)]
+    dates = [f"2024-06-{r + 1:02d}" for r in range(rows)]
+    text = json.dumps(grid_layout(columns, dates), sort_keys=True)
+
+    assert hashlib.sha256(text.encode()).hexdigest() == PYTHON_310_GRIDS[rows, cols]
+
+
+def test_a_nine_date_grid_places_its_panels_as_python_3_10_did():
+    # Python 3.12's sum() gives 0.9466666666666667 and 0.8933333333333333 here.
+    from app.visualization.faceted_profile import grid_layout
+
+    layout = grid_layout(["Tube 1"], [f"2024-06-{r + 1:02d}" for r in range(9)])
+
+    assert layout["annotations"][1]["y"] == 0.9466666666666668  # the first date's title
+    assert layout["yaxis"]["domain"] == [0.8933333333333334, 1.0]
 
 
 @pytest.mark.parametrize("rows, cols", [(202, 1), (3, 127), (0, 1), (1, 0)])

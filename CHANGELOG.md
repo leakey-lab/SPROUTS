@@ -11,8 +11,14 @@ produced before and after the change can be told apart.
 
 ## [Unreleased]
 
-Six passes, not yet released:
+Seven passes, not yet released:
 
+- **Python 3.14 and the newest dependencies** (branch `feat/unified-correct-editor`,
+  2026-10-27; the owner's decision: "Use python 3.14 i accept gpu cudnn changes. Upgrade to
+  most latest versions"): built and checked in an isolated worktree and venv. The GPU
+  outputs of the new PyTorch build were measured and accepted (*Scientific output
+  changes*); the CPU outputs, Measure, the Correct saves and every dashboard figure and
+  Export CSV were compared with the old stack and are identical.
 - **Redundancy and speed pass** (branch `feat/unified-correct-editor`, audit 2026-10-26,
   built 2026-10-27 in `89965f5`..`9ad0d96`): a read-only audit for repeated code, dead
   code, bugs and speed, each finding checked by adversarial verifiers, then built in lanes
@@ -613,6 +619,66 @@ Six passes, not yet released:
   app version, commit, model SHA-256, calibration and runtime precision.
 
 ### Changed
+- **Python 3.14 and the newest dependencies (2026-10-27, owner decision).** Python 3.14
+  (from 3.10: `requires-python >= 3.14`, CI on 3.14, ruff `py314`); PyTorch 2.14.1 and
+  torchvision 0.29.1 from the CUDA 13.2 index (`cu132`, NVIDIA driver of the 580 series or
+  newer; CPU wheels from `/whl/cpu`, macOS 14+ from PyPI) instead of 2.8.0+cu128; numpy
+  2.5.4, scipy 1.18.1, scikit-image 0.26.0, opencv-python-headless 5.0.0.93, pillow 13.0.0,
+  pandas 3.1.0, dash 4.4.1, plotly 7.1.0 with the vendored plotly.js basic bundle 4.1.1;
+  PyQt6 6.11.0 runs on the Qt 6.11.2 runtime with PyQt6-sip 13.13.0; development tools
+  pytest 9.2 (run with `-p no:dash`: Dash's pytest plugin, which the suite does not use,
+  marks a hook the way pytest 10 removes), ruff 0.17.3, pre-commit 4.7 (ruff-pre-commit
+  v0.17.3 with the `ruff-check` hook, pre-commit-hooks v6.0.0), packaging 26.3, setuptools
+  84.2 (`tomli` dropped: the FAIR tests read `pyproject.toml` with the standard library's
+  `tomllib`); CI on `actions/checkout` and `actions/setup-python` v7 (Node 24). Supported
+  NVIDIA GPUs are now Turing (RTX 20 series, GTX 16xx) and newer (owner decision,
+  2026-10-28): the CUDA 13 builds have no kernels for Maxwell, Pascal or Volta GPUs (GTX
+  9xx / 10xx, Titan V, V100), which torch 2.7.1+cu128 still had; such a machine uses the CPU
+  build (README "Requirements"). The GPU outputs change
+  (*Scientific output changes*); everything the dashboards show and export is as before,
+  through these adaptations:
+  - pandas 3: the dashboards' dates stay nanosecond timestamps (pandas 3 parses to
+    microseconds), and a date outside 1677-2262 (a mistyped year in a file name) leaves out
+    its own row, as pandas 2 did, instead of emptying the dashboard. A UTF-8 CSV damaged by
+    a NUL byte keeps its header and image names (pandas 3.1 reads it as latin-1).
+  - pandas 3.1 sums the rows of a key-sorted frame without Kahan compensation, which moved
+    117 of 478 length and 196 of 478 area tube x date totals of the owner's trial in the
+    last digit (Export CSV `297.54` -> `297.53999999999996`, the field average
+    `218.3259375` -> `218.32593749999995`). `dash_data_cache.group_sum` / `group_mean` run the
+    compensated sums of pandas 2 / 3.0 (pinned against pandas' own kernels), so every total,
+    field mean, figure value and export value is unchanged.
+  - plotly.js 4 defaults set back to plotly.js 3's: no "Upload to Cloud" modebar button (it
+    would post a chart to cloud.plotly.com) and a 300 ms double-click (4.1 waits 500 ms)
+    (`dash_shell.graph_config`); bar value labels keep their colour where plotly.js 4's WCAG
+    rule picks white instead of dark grey (the fourth date-ramp blue `#4f97d1` and the
+    blends next to it: trials with 5, 8-10, 12 or more dates; `theme.inside_label_colour`).
+  - Dash 4.4.1 dropped a zoom when Select All or Clear All redrew Growth Over Time with the
+    same `uirevision` (plotly/dash#4093): `app/assets/sprouts-uirevision.js` keeps it. In a
+    browser check (QtWebEngine) of 23 states over drag and wheel zoom, pan, double-click
+    reset, Toggle Legend, a view option, Select All, Clear All and view switches on both
+    dashboards, every axis range equals Dash 4.1.0's.
+  - Python 3.12's `sum()` adds floats with compensation (Neumaier), which moved the Depth
+    Profile Grid's panel domains and title positions by up to 4 units in the last place
+    (`0.9466666666666668` -> `0.9466666666666667`) in 837 of the 900 grids of 1-60 dates x
+    1-15 tubes (nothing visible or exported). `faceted_profile.grid_layout` adds the panel
+    sizes up left to right, as `sum()` did on Python 3.10, so all 900 grids' JSON is
+    unchanged (`tests/test_viz_data_faceted.py` pins seven of them to Python 3.10's JSON).
+  - Python 3.14 code style (ruff `py314`): `datetime.UTC`, PEP 695 generics
+    (`SnapshotHistory[T]`, `PrefetchIterator[T]`, `run_modal`, `show_transient`, `_scan`,
+    `key_to_stems`), `except A, B:` without parentheses (PEP 758), `map(..., strict=False)`
+    in one test. Quoted annotations stay: `inspect.signature` evaluates annotations, and the
+    window parts annotate with names imported only for type checking (UP037 ignored).
+    Tools that parse the sources must run on Python 3.14, as Python 3.13 and older reject
+    `except A, B:` (graphify's uv tool, for one: `docs/KNOWN_ISSUES.md` U5).
+  - Provenance records name the new runtime (`runtime.python` 3.14.10, and on Windows 11
+    `runtime.platform` `Windows-11-...` where Python 3.10 wrote `Windows-10-...`), and the
+    About dialog's system line reads `Windows 11` where it read `Windows 10` (Python 3.12's
+    `platform.release()` returns `11` on Windows 11); metadata and display text only.
+  - pre-commit's end-of-file-fixer leaves `app/assets/plotly-basic.min.js` alone (upstream
+    has no final newline), and `.gitattributes` checks it out with LF line endings whatever
+    `core.autocrlf` says, so the committed file and every checkout of it stay
+    byte-identical to upstream (its SHA-256 in `app/assets/THIRD_PARTY.md`, which
+    `tests/test_viz_dash_plotly_bundle.py` checks).
 - **Redundancy and speed pass (2026-10-26).** Code structure, interfaces and log records; no
   CSV value, output pixel or visible behaviour changes.
   - New Qt-free modules: `app/editing/planes.py` (`PlaneDocument`, `SavedPlane`,
@@ -1021,6 +1087,57 @@ Six passes, not yet released:
   as pre-commit already ran it.
 
 ### Scientific output changes
+- **GPU predictions: PyTorch 2.14.1 with cuDNN 9.24 (2026-10-27, accepted by the owner).**
+  Generate on the GPU (RTX 5070 Ti, TF32, deterministic cuDNN, default batch policy) moves a
+  few pixels. Before: torch `2.8.0.dev20250325+cu128` (cuDNN 9.7.1.26, CUDA 12.8); after:
+  torch `2.14.1+cu132` (cuDNN 9.24.0.43, CUDA 13.2; the `cu130` build gives the same
+  outputs bit for bit). Measured pixel by pixel on the science harness's 40 Generate photos
+  (every third of 120 real photos of the owner's trial), against the outputs of torch
+  2.7.1+cu128, whose cuDNN 9.7.1 reproduces the published baseline bit for bit:
+  - **Masks** (`mask/<stem>.png`, 640 x 480, 0 / 255): 11 of 40 differ, in 16 pixels in all.
+    3 pixels in `24EFCAM1_T151_L043_2024.08.27_085149_003_SMM` (2 root pixels lost, 1
+    gained: 2573 -> 2572 root pixels) and 4 in `24EFCAM2_T098_L052_2024.08.27_114928_003_SMM`
+    (3 lost, 1 gained: 17833 -> 17831); 1 pixel in each of the other 9:
+    `24EFCAM1_T010_L028_2024.07.18_103003_001_SMM` (861 -> 860),
+    `24EFCAM1_T036_L076_2024.07.18_145933_001_SMM` (1095 -> 1094),
+    `24EFCAM1_T055_L066_2024.08.26_094641_003_SMM` (798 -> 799),
+    `24EFCAM1_T068_L040_2024.08.07_113400_002_SMM` (3857 -> 3856),
+    `24EFCAM1_T100_L042_2024.07.19_162448_001_SCW` (2189 -> 2188),
+    `24EFCAM1_T161_L069_2024.08.08_095605_002_SMM` (9482 -> 9483),
+    `24EFCAM2_T006_L077_2024.08.07_104704_002_SMM` (8060 -> 8059),
+    `24EFCAM2_T017_L032_2024.08.26_095103_003_SMM` (3121 -> 3120),
+    `24EFCAM2_T088_L055_2024.08.27_084033_003_SMM` (2866 -> 2865).
+  - **Raw skeleton predictions** (`skeletons/<stem>_fake.png`, 341 x 256, 3 channels): 6 of
+    40 differ, in 72 pixels in all, each by 1 of 255 in one colour channel (in two or three
+    channels for 3 of T006's pixels): `24EFCAM1_T068_L040_2024.08.07_113400_002_SMM` 5 pixels,
+    `24EFCAM1_T100_L042_2024.07.19_162448_001_SCW` 8,
+    `24EFCAM1_T161_L069_2024.08.08_095605_002_SMM` 15,
+    `24EFCAM1_T175_L089_2024.08.08_111719_002_SMM` 1,
+    `24EFCAM2_T006_L077_2024.08.07_104704_002_SMM` 18,
+    `24EFCAM2_T098_L052_2024.08.27_114928_003_SMM` 25. Their thinned skeletons (what
+    Measure reads), step counts and lengths are identical: `root_lengths.csv` is
+    byte-identical.
+  - **`root_areas.csv`**: 3 of 40 rows change by 0.01 mm² (default field of view; the
+    cells as written): `24EFCAM1_T151_L043_2024.08.27_085149_003_SMM` `2.04` -> `2.03`,
+    `24EFCAM2_T006_L077_2024.08.07_104704_002_SMM` `6.38` -> `6.37`,
+    `24EFCAM2_T098_L052_2024.08.27_114928_003_SMM` `14.11` -> `14.1`. The other 8 changed
+    masks keep their rounded areas.
+  - 94 harness entries in all: those 17 output files, the 3 CSV rows, 44 estimator entries
+    (the binarised hash, root pixels and two unrounded areas of each of the 11 masks) and 30
+    size / SHA-256 entries of the CSVs' inputs records (19 of `root_areas.csv`, 11 of
+    `root_lengths.csv`). Two runs give the same outputs (deterministic), and the harness's
+    GPU baseline is re-recorded with this build (`science_manifest_py314.json`).
+
+  Unchanged: Generate on the CPU (torch 2.14.1 reproduces the nightly's CPU outputs bit
+  for bit), Measure on existing masks and skeletons (the harness's two fixed projects,
+  GT-first decisions included), the saved Correct pixels (goldens) and every dashboard
+  figure and Export CSV (the owner's 46,178-row CSVs and the harness CSVs). Python 3.14,
+  numpy 2.5, scipy 1.18, scikit-image 0.26, OpenCV 5.0 and Pillow 13 change no output; the
+  difference is the cuDNN of the PyTorch build (bisected on 2026-10-27: torch 2.7.0 and
+  2.7.1 with cuDNN 9.7.1 are identical; 2.8.0 and 2.9.0 with cuDNN 9.10.2 already differ in
+  6 masks and 5 skeleton predictions, no CSV value, counted from the harness's hashes, the
+  pixels not diffed; `docs/MODELS.md`). GPU results made before and after this change can
+  differ in these ways; generate both with the same build to compare them.
 - **Redundancy and speed pass (2026-10-26): one corner case, otherwise none.** The pass's
   science harness found every generated mask and skeleton (GPU and CPU), every CSV row,
   provenance and inputs record and every GT-first decision identical to `f392a85` (80

@@ -136,14 +136,14 @@ def label_of(row: dict) -> str:
     """``T001 L044`` from the tube and the position, else the image name."""
     try:
         return f"T{int(row['Tube']):03d} L{int(row['Position']):03d}"
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return row.get("Image", "")
 
 
 def number(row: dict, column: str) -> float:
     try:
         return float(row[column])
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return 0.0
 
 

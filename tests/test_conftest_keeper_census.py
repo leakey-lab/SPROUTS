@@ -56,7 +56,8 @@ def test_a_kept_thread_left_running_is_named_once_and_fails_nothing(tmp_path):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "tests.conftest", "-p", "no:cacheprovider"]
-        + ["-o", "addopts=", "--rootdir", str(tmp_path), str(tmp_path / "test_child.py")],
+        + ["-p", "no:dash", "-o", "addopts="]  # pyproject's addopts minus -q (see there)
+        + ["--rootdir", str(tmp_path), str(tmp_path / "test_child.py")],
         cwd=ROOT,
         env=env,
         capture_output=True,

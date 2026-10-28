@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _section(text: str, name: str) -> str:
-    """Body of one TOML table (stdlib tomllib is py3.11+, CI runs py3.10)."""
+    """Body of one TOML table (a regex: the test needs no TOML parser)."""
     match = re.search(rf"^\[{re.escape(name)}\]\n(.*?)(?=^\[|\Z)", text, re.M | re.S)
     assert match, f"[{name}] missing from pyproject.toml"
     return match.group(1)
@@ -30,7 +30,7 @@ def test_pyproject_configures_only_ruff():
     )
     ruff = _section(text, "tool.ruff")
     assert re.search(r"^line-length\s*=\s*100$", ruff, re.M)
-    assert re.search(r'^target-version\s*=\s*"py310"$', ruff, re.M)
+    assert re.search(r'^target-version\s*=\s*"py314"$', ruff, re.M)
     select = re.search(r"^select\s*=\s*\[(.*?)\]", _section(text, "tool.ruff.lint"), re.M)
     assert select and '"I"' in select.group(1), "ruff must own import sorting"
 

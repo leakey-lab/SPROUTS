@@ -21,9 +21,6 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from typing import Generic, TypeVar
-
-T = TypeVar("T")
 
 # The depth and memory of each Correct layer's own history (mask and class labels: the
 # patch history; skeleton: the model's), and the undo timeline keeps as many per layer.
@@ -41,7 +38,7 @@ def _nbytes(snapshot: object) -> int:
         ) from None
 
 
-class SnapshotHistory(Generic[T]):
+class SnapshotHistory[T]:
     """Undo and redo stacks of snapshots, with an entry cap and an optional byte cap.
 
     With a ``byte_budget``, the oldest undo snapshots are dropped first, then

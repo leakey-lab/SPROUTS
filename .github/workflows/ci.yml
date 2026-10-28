@@ -20,11 +20,11 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.10"
+          python-version: "3.14"
 
       - name: Install system libs for Qt/OpenCV (headless)
         if: runner.os == 'Linux'
@@ -35,7 +35,7 @@ jobs:
       - name: Install PyTorch (CPU)
         # Same release as the recommended GPU build (README "Installation"), CPU wheels:
         # CI only needs the inference modules to import and run on CPU.
-        run: pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         run: |
@@ -55,11 +55,11 @@ jobs:
     name: wheel builds and installs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.10"
+          python-version: "3.14"
 
       - name: Build the wheel
         run: python -m pip wheel --no-deps -w dist .
@@ -93,7 +93,7 @@ jobs:
     name: CITATION.cff is valid
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate CITATION.cff (Citation File Format 1.2.0)
         uses: citation-file-format/cffconvert-github-action@2.0.0

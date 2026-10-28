@@ -65,6 +65,23 @@ def test_kept_rows_keep_their_csv_row_numbers_and_types(tmp_path):
     assert dp.exclusions == RowExclusions(failed=1, bad_name=1)
 
 
+def test_a_date_outside_the_nanosecond_range_leaves_out_only_its_row(tmp_path):
+    # pandas 3 parses 3024.07.18 (microseconds); the chart frame keeps nanoseconds, as
+    # pandas 2 did, so such a row is unreadable instead of the whole CSV failing to load.
+    rows = [
+        *GOOD,
+        _row("CAM_T001_L013_3024.07.18_120000_001", 1, 13, "3024.07.18"),
+        _row("CAM_T001_L014_1601.01.01_120000_001", 1, 14, "1601.01.01"),
+        LATER,
+    ]
+    dp = DataProcessor(_write(tmp_path / "l.csv", rows))
+
+    assert dp.empty_reason() is None
+    assert dp.df.index.tolist() == [0, 1, 4]
+    assert str(dp.df["Date"].dtype) == "datetime64[ns]"
+    assert dp.exclusions == RowExclusions(unreadable=2)
+
+
 def test_a_csv_without_left_out_rows_keeps_its_default_row_numbers(tmp_path):
     dp = DataProcessor(_write(tmp_path / "l.csv", [*GOOD, LATER]))
 

@@ -239,7 +239,7 @@ class ZoomCluster(CornerPanel):
         if self._view is not None:
             try:
                 self._view.zoom_changed.disconnect(self.set_zoom_factor)
-            except (TypeError, RuntimeError):  # already gone
+            except TypeError, RuntimeError:  # already gone
                 pass
         self._view = view
         self._fit = fit

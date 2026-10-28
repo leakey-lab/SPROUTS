@@ -67,7 +67,7 @@ def fetch(
             _remove(part)
             return ModelStatus("mismatch", final, digest)
         os.replace(part, final)
-    except (OSError, http.client.HTTPException):  # URLError and HTTPError are OSErrors
+    except OSError, http.client.HTTPException:  # URLError and HTTPError are OSErrors
         _remove(part)
         return ModelStatus("missing", final, None)
     return ModelStatus("ok", final, digest)

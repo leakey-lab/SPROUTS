@@ -288,13 +288,14 @@ class DashAppArea:
         ramp = theme.date_colors(len(days))
         fig = go.Figure()
         for day, rows in means.groupby("Date", sort=True):
+            colour = ramp[days.index(day)]
             fig.add_trace(
                 go.Bar(
                     x=[f"L{int(pos)}" for pos in rows["Position"]],
                     y=rows[value],
                     name=day,
-                    marker_color=ramp[days.index(day)],
-                    **theme.bar_labels(rows[value].round(2), bars),
+                    marker_color=colour,
+                    **theme.bar_labels(rows[value].round(2), bars, colour),
                     hovertemplate=theme.hover(
                         "Position: %{x}", [("Area", "%{y:.2f} mm²"), ("Date", day)]
                     ),

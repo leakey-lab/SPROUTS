@@ -148,7 +148,7 @@ def _gt_skipped_of(record: dict[str, Any] | None) -> dict[str, str]:
     try:
         skipped = record["inputs"]["gt"]["skipped"]
         return {stem_key(str(item["stem"])): str(item["reason"]) for item in skipped}
-    except (KeyError, TypeError):
+    except KeyError, TypeError:
         return {}
 
 

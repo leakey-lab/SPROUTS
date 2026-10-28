@@ -340,7 +340,7 @@ def sweep_stale_temp_files(
                     logger.warning("Could not delete stale temp file %s: %s", entry.path, exc)
                     continue
                 removed.append(entry.path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         logger.debug("No folder %s to sweep for stale temp files", folder)
     except OSError as exc:
         logger.warning("Could not sweep %s for stale temp files: %s", folder, exc)
@@ -359,7 +359,7 @@ def imread_unicode(path: str | os.PathLike[str], flags: int | None = None) -> np
 
     try:
         data = np.fromfile(os.fspath(path), dtype=np.uint8)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return imdecode_bytes(data, cv2.IMREAD_COLOR if flags is None else flags)
 

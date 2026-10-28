@@ -406,7 +406,7 @@ def test_a_surrogate_escaped_name_is_written_atomically(tmp_path):
     target = tmp_path / "a\udcff.png"
     try:
         atomic_write_bytes(target, b"data")
-    except (OSError, UnicodeError):
+    except OSError, UnicodeError:
         pytest.skip("this file system cannot hold a non-UTF-8 name")
     assert target.read_bytes() == b"data"
     assert _leftovers(tmp_path) == [target.name]

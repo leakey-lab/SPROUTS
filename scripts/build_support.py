@@ -159,7 +159,7 @@ def _git_state(root: Path) -> tuple[str | None, bool | None]:
             timeout=10,
             check=True,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None, None
     return head.stdout.strip() or None, bool(status.stdout.strip())
 

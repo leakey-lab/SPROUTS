@@ -289,7 +289,7 @@ def cuda_usable(torch_module: Any = None) -> bool:
         import torch as torch_module
     try:
         return bool(torch_module.cuda.is_available()) and torch_module.cuda.device_count() > 0
-    except (RuntimeError, AssertionError):
+    except RuntimeError, AssertionError:
         return False
 
 
@@ -315,16 +315,16 @@ def get_runtime() -> RuntimeConfig:
         device = torch.device("cuda")
         try:
             device_name = torch.cuda.get_device_name(device)
-        except (RuntimeError, AssertionError):
+        except RuntimeError, AssertionError:
             device_name = "cuda"
         try:
             cc = torch.cuda.get_device_capability(device)
             compute_capability = (int(cc[0]), int(cc[1]))
-        except (RuntimeError, AssertionError):
+        except RuntimeError, AssertionError:
             compute_capability = None
         try:
             bf16_supported = bool(torch.cuda.is_bf16_supported())
-        except (RuntimeError, AssertionError):
+        except RuntimeError, AssertionError:
             bf16_supported = False
         # TF32 for float32 matmuls (the mask model's DualAttention bmm); cuDNN
         # convolutions already default to allow_tf32=True. Only Ampere+ has TF32.

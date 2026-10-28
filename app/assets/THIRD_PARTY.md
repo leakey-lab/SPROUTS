@@ -2,9 +2,10 @@
 
 Dash serves this folder at `/assets/` and auto-includes every `.css` / `.js` file in
 alphabetical order, so the vendored stylesheets are prefixed `00_` / `01_` and the
-SPROUTS theme (`style.css`) is applied last. The SPROUTS script `sprouts-autosize.js`
-must sort after `plotly-basic.min.js`, which it extends. Nothing here is fetched from the
-internet at runtime: the dashboards render identically on an offline lab or field PC.
+SPROUTS theme (`style.css`) is applied last. The SPROUTS scripts `sprouts-autosize.js` and
+`sprouts-uirevision.js` must sort after `plotly-basic.min.js`, which they extend. Nothing
+here is fetched from the internet at runtime: the dashboards render identically on an
+offline lab or field PC.
 
 | File | Upstream | Version | License | SHA-256 (as vendored) |
 |---|---|---|---|---|
@@ -14,14 +15,19 @@ internet at runtime: the dashboards render identically on an offline lab or fiel
 | `fonts/IBMPlexSans-SemiBold-Latin1.woff2` | same | @ibm/plex-sans 1.1.0 | SIL OFL 1.1 | `fff0ab3a88b0b4aa0b693e4f0201359a15183b08e3fa5696d1918d8f0ade8ad5` |
 | `fonts/IBMPlexMono-Regular-Latin1.woff2` | https://cdn.jsdelivr.net/npm/@ibm/plex-mono@2.5.0/fonts/split/woff2/ | @ibm/plex-mono 2.5.0 | SIL OFL 1.1 | `e8993d946649b9d01abb1ed06d574b19d8ea3e66b5c3948602db335c44c18e56` |
 | `fonts/IBMPlexMono-Medium-Latin1.woff2` | same | @ibm/plex-mono 2.5.0 | SIL OFL 1.1 | `41201b658a328b9d00368215c2f1102770f80b15952ab82631e4006255e6365d` |
-| `plotly-basic.min.js` | https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@3.5.0/plotly-basic.min.js (plotly.js "basic" partial bundle: scatter, bar and pie traces) | plotly.js 3.5.0 | MIT — `licenses/plotly.js-MIT.txt` (the licences of the libraries it bundles are kept in the file's comments) | `5bd80f6d8fdd7bc055f8e48099403355fc7223a47f95b1d9193da24c0bab6b55` |
+| `plotly-basic.min.js` | https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js (plotly.js "basic" partial bundle: scatter, bar and pie traces; byte-identical to the npm tarball, `sha512-1oNF8PeQx2hv/y7tqEVWKD3JGwn/MGEMQ8mL9HUwsaqG9FGy/OU5FHUHvzqbqxN4mnwZGI9abTiE775C4kkjMQ==`) | plotly.js 4.1.1 | MIT — `licenses/plotly.js-MIT.txt` (the licences of the libraries it bundles are kept in the file's comments) | `99784e3abfb07b142a15e521a439e6d9addceadb3f79553fd24c72774f0649ba` |
+
+The SHA-256 values are those of the committed files. `.gitattributes` checks
+`plotly-basic.min.js` out with LF line endings whatever `core.autocrlf` says, so the copy
+Dash serves and a PyInstaller build packs has these bytes on Windows too;
+`tests/test_viz_dash_plotly_bundle.py` compares the file with its row's SHA-256.
 
 ## Why a plotly.js bundle is vendored
 
 dcc.Graph uses `window.Plotly` when the page already defines it. Without this file it
 fetched the full 4.8 MB `plotly.min.js` (served by plotly.py) after the page had
 rendered and spent ~0.3 s evaluating it on every dashboard open; the basic bundle is
-1.1 MB and is loaded with the page. On a 46k-row synthetic trial the first chart of an
+1.2 MB and is loaded with the page. On a 46k-row synthetic trial the first chart of an
 open came 208-291 ms sooner in every pairing measured (cold and warm opens, with and
 without the prewarm; median of 5 each). It must be the plotly.js version plotly.py
 builds figures for, and the dashboards may only use its trace types:
@@ -49,7 +55,11 @@ fails if any served stylesheet references a remote host.
 After a plotly.py upgrade, download `plotly.js-basic-dist-min@<version>` for the
 plotly.js version `plotly.offline.get_plotlyjs_version()` reports, replace
 `plotly-basic.min.js` unmodified, update its row and run
-`pytest tests/test_viz_dash_plotly_bundle.py`. If a dashboard needs a trace type the
-basic bundle lacks, delete the file instead: dcc.Graph then loads the full bundle.
+`pytest tests/test_viz_dash_plotly_bundle.py tests/test_viz_dash_autosize_guard.py
+tests/test_viz_dash_uirevision.py`. Read plotly.js's release notes for changed defaults: the
+dashboards set plotly.js 3's back where plotly.js 4 changed them (`showSendToCloud` and
+`doubleClickDelay` in `dash_shell.graph_config`, the bar label colours in
+`theme.inside_label_colour`). If a dashboard needs a trace type the basic bundle lacks,
+delete the file instead: dcc.Graph then loads the full bundle.
 
 Code outside this folder: see `THIRD_PARTY_NOTICES.md` at the repository root.

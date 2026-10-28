@@ -30,7 +30,6 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sized
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import TypeVar
 
 from app.config import (
     GT_CLASSES_FILENAME,
@@ -69,9 +68,6 @@ MASK_EXTENSIONS = IMAGE_EXTENSIONS
 # matter on case-sensitive file systems.
 _MASK_LOOKUP = tuple(v for ext in MASK_EXTENSIONS for v in (ext, ext.upper()))
 
-_K = TypeVar("_K")
-_V = TypeVar("_V")
-
 _TEST_LATEST = "test_latest"
 _LEGACY_MASK_DIR = ("output", MASK_DIRNAME)
 _LEGACY_SKELETON_DIRS = (
@@ -83,7 +79,7 @@ _LEGACY_SKELETON_DIRS = (
 _LEGACY_GT_TEMP_SUFFIX = ".tmp"
 
 
-def _scan(directory: str, key_of: Callable[[str], _K | None]) -> Iterator[tuple[_K, str]]:
+def _scan[K](directory: str, key_of: Callable[[str], K | None]) -> Iterator[tuple[K, str]]:
     """Yield ``(key, path)`` for files in ``directory`` whose name ``key_of`` accepts.
 
     One ``os.scandir``; a missing folder yields nothing.
@@ -94,7 +90,7 @@ def _scan(directory: str, key_of: Callable[[str], _K | None]) -> Iterator[tuple[
                 key = key_of(entry.name)
                 if key is not None and entry.is_file():
                     yield key, entry.path
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return
 
 
@@ -158,7 +154,7 @@ def _scan_ranked(
                         skips.losers.append((key, held[1]))
                 elif skips is not None:
                     skips.losers.append((key, name))
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return {}
     return {stem: path for _, _, stem, path in best.values()}
 
@@ -219,7 +215,7 @@ def _find_without_case(
     started = time.time_ns()
     try:
         st = os.stat(directory)  # before the listing: a change during it shows next time
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return None
     stamp = (st.st_dev, st.st_ino, st.st_mtime_ns)
     listed = _LISTED_KEYS.get(memo)
@@ -247,7 +243,7 @@ def _find_without_case(
                         continue
                     if best is None or (r, name) < best[:2]:
                         best = (r, name, entry.path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return None
     if keys is not None:
         if len(_LISTED_KEYS) >= _LISTED_MAX:
@@ -273,7 +269,7 @@ def few_keys(found: Sized, stems: Sized) -> bool:
     return 8 * len(found) < len(stems)
 
 
-def key_to_stems(found: Mapping[str, _V], stems: Iterable[str]) -> dict[str, _V]:
+def key_to_stems[V](found: Mapping[str, V], stems: Iterable[str]) -> dict[str, V]:
     """``found`` with each key replaced by the stem of ``stems`` with the same
     :func:`~app.naming.stem_key` (``{"a": m}`` with stems ``["A"]`` -> ``{"A": m}``).
 

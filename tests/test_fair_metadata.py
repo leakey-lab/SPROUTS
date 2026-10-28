@@ -11,17 +11,12 @@ from __future__ import annotations
 import ast
 import json
 import re
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
 import app
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 yaml = pytest.importorskip("yaml")
 

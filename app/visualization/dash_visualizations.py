@@ -81,7 +81,7 @@ def parse_tube_selection(text: str, within: Collection[int] | None = None) -> li
                 number = int(part)
                 if within is None or number in within:
                     tubes.append(number)
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             # Skip this malformed part but keep any valid ones already parsed.
             logger.debug("Skipping unparseable tube-selection part: %r", part)
             continue
@@ -115,7 +115,7 @@ def stacked_bar_figure(cache, label: str, unit: str) -> go.Figure:
                     marker_color=colour,
                     x=x,
                     y=values,
-                    **theme.bar_labels(theme.value_labels(values), len(tubes)),
+                    **theme.bar_labels(theme.value_labels(values), len(tubes), colour),
                     hovertemplate=theme.hover(
                         "%{x}",
                         [

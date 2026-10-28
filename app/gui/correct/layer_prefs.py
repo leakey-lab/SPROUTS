@@ -33,7 +33,7 @@ _TRUE, _FALSE = ("true", "1", "yes"), ("false", "0", "no")
 def _opacity(value: object) -> float | None:
     try:
         number = float(value)  # an INI / registry value may come back as text
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return number if math.isfinite(number) and 0.0 <= number <= 1.0 else None
 

@@ -1,7 +1,7 @@
 """viz-dash: the dashboards load plotly.js's "basic" bundle (PKG-VIZ, V2).
 
 dcc.Graph uses ``window.Plotly`` when the page already defines it. The dashboards'
-assets define it with the basic bundle (scatter, bar and pie traces; 1.1 MB) instead
+assets define it with the basic bundle (scatter, bar and pie traces; 1.2 MB) instead
 of the full 4.8 MB bundle that dcc.Graph fetched after the page had rendered and
 that took ~0.3 s to evaluate on every dashboard open. These tests pin the bundle to
 the plotly.js version plotly.py builds figures for and every dashboard figure to the
@@ -10,6 +10,7 @@ trace types the bundle has (a new trace type must switch back to the full bundle
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 
@@ -21,6 +22,7 @@ from app.visualization.dash_shell import ASSETS_DIR
 from tests.viz_dash_helpers import build_area_app, build_length_app
 
 BUNDLE = os.path.join(ASSETS_DIR, "plotly-basic.min.js")
+THIRD_PARTY = os.path.join(ASSETS_DIR, "THIRD_PARTY.md")
 #: Trace types in plotly.js's basic bundle.
 BASIC_TRACES = {"scatter", "bar", "pie"}
 
@@ -33,6 +35,25 @@ def test_the_bundle_is_the_plotly_js_version_plotly_py_targets():
     assert match.group(1) == get_plotlyjs_version(), (
         "plotly.py was upgraded: vendor the matching plotly.js-basic-dist-min "
         "(see app/assets/THIRD_PARTY.md)"
+    )
+
+
+def test_the_bundle_has_the_bytes_third_party_md_records():
+    # Upstream's bytes, unmodified: the SHA-256 in the file's THIRD_PARTY.md row. A copy
+    # with CRLF line endings (a one-step `git apply` on a core.autocrlf=true checkout) passes
+    # every other test here; .gitattributes checks the file out with LF on every system.
+    with open(THIRD_PARTY, encoding="utf-8") as fh:
+        row = next(line for line in fh if line.startswith("| `plotly-basic.min.js` |"))
+    recorded = re.findall(r"`([0-9a-f]{64})`", row)
+    assert len(recorded) == 1, row
+    with open(BUNDLE, "rb") as fh:
+        data = fh.read()
+    assert b"\r" not in data, (
+        "plotly-basic.min.js has CRLF line endings: delete it and check it out again "
+        "(git checkout -- app/assets/plotly-basic.min.js), so .gitattributes writes it with LF"
+    )
+    assert hashlib.sha256(data).hexdigest() == recorded[0], (
+        "plotly-basic.min.js is not the file app/assets/THIRD_PARTY.md records"
     )
 
 

@@ -211,7 +211,7 @@ def load_project_calibration(
     path = os.path.abspath(project_file_path(project_root))
     try:
         st = os.stat(path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return default_calibration()
     except OSError:
         return replace(default_calibration(), problem="it could not be read")

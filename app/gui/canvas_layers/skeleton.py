@@ -690,7 +690,7 @@ def _probe_layout(cls: type, width: int) -> bool:
             return False
         view[:] = np.arange(1.0, width + 1.0)
         return np.array_equal(_values(probe[0]), view)
-    except (TypeError, ValueError, BufferError):
+    except TypeError, ValueError, BufferError:
         return False
 
 

@@ -271,7 +271,7 @@ def register_callbacks(dash_app) -> None:
             point = hover_data["points"][0]
             date_str = hover_date(point)
             end = int(point["y"])
-        except (KeyError, IndexError, TypeError, ValueError):
+        except KeyError, IndexError, TypeError, ValueError:
             return []
         tube = lines_tube(dash_app.data_cache.tubes, selected_tube)
         if not date_str or tube is None:

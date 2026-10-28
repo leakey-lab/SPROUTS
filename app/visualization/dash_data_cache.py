@@ -70,6 +70,69 @@ def _bin_statistics(values: np.ndarray) -> tuple[float, float, float, float]:
     return float(mean), float(values.min()), float(values.max()), std
 
 
+def _kahan_group_reduce(
+    values: np.ndarray, codes: np.ndarray, ngroups: int, *, mean: bool
+) -> np.ndarray:
+    """Per-group Kahan-compensated sum (``mean``: divided by the count) in row order.
+
+    ``codes`` holds each row's group number (``0 .. ngroups - 1``; ``-1`` leaves the row
+    out); NaN values are skipped. The steps are those of pandas' Cython ``group_sum`` /
+    ``group_mean`` kernels, so the results equal pandas 2.x / 3.0 ``groupby().sum()`` /
+    ``.mean()`` bit for bit. pandas 3.1 sums key-sorted rows with ``np.add.reduceat``
+    instead, without compensation: tube x date totals then differ in the last digit
+    (297.54 -> 297.53999999999996 in an export). Groups run side by side, so the loop
+    makes as many steps as the largest group has rows.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    codes = np.asarray(codes, dtype=np.intp)
+    rows = np.flatnonzero((codes >= 0) & ~np.isnan(values))
+    rows = rows[np.argsort(codes[rows], kind="stable")]  # by group, row order kept inside
+    counts = np.bincount(codes[rows], minlength=ngroups)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1])).astype(np.intp)
+    by_size = np.argsort(-counts, kind="stable")  # largest groups first: a prefix is active
+    sizes, firsts, ordered = counts[by_size], starts[by_size], values[rows]
+    total = np.zeros(ngroups)
+    compensation = np.zeros(ngroups)
+    active = len(sizes)
+    with np.errstate(invalid="ignore"):  # inf - inf: the kernels raise no warning either
+        for step in range(int(sizes[0]) if len(sizes) else 0):
+            while active and sizes[active - 1] <= step:
+                active -= 1
+            y = ordered[firsts[:active] + step] - compensation[:active]
+            t = total[:active] + y
+            c = (t - total[:active]) - y
+            c[np.isnan(c)] = 0.0  # an infinite value leaves no NaN compensation (GH#53606)
+            compensation[:active] = c
+            total[:active] = t
+    out = np.empty(ngroups)
+    out[by_size] = total
+    if mean:
+        counted = counts.astype(np.float64)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.where(counts > 0, out / counted, np.nan)
+    return out
+
+
+def group_sum(values: pd.Series, by: Any = None, *, level: Any = None) -> pd.Series:
+    """``values.groupby(by or level).sum()`` as pandas < 3.1 computes it (Kahan, see
+    :func:`_kahan_group_reduce`): the same index and name, the same last bit."""
+    return _compensated(values, by, level, mean=False)
+
+
+def group_mean(values: pd.Series, by: Any = None, *, level: Any = None) -> pd.Series:
+    """``values.groupby(by or level).mean()`` as pandas < 3.1 computes it (Kahan sum / count)."""
+    return _compensated(values, by, level, mean=True)
+
+
+def _compensated(values: pd.Series, by: Any, level: Any, *, mean: bool) -> pd.Series:
+    grouped = values.groupby(by, level=level)
+    index = grouped.size().index  # the groups as sum() / mean() list them
+    codes = grouped.ngroup().to_numpy(dtype=np.float64)  # NaN: a dropped NA key
+    codes = np.where(np.isnan(codes), -1, codes).astype(np.intp)
+    out = _kahan_group_reduce(values.to_numpy(dtype=np.float64), codes, len(index), mean=mean)
+    return pd.Series(out, index=index, name=values.name)
+
+
 def _interval_stats(
     end: int,
     interval_size: int,
@@ -174,7 +237,7 @@ class DataCache:
         self.dates = tuple(sorted(self.data_processor.get_unique_dates()))
 
         df = self.data_processor.df
-        self.tube_date_groups = df.groupby(["Tube", "Date"])[self.value_column].sum()
+        self.tube_date_groups = group_sum(df[self.value_column], [df["Tube"], df["Date"]])
         # Invalidate everything derived from the previous frame.
         self._tube_tables.clear()
         self._field_tables.clear()
@@ -258,8 +321,10 @@ class DataCache:
             totals = self.tube_date_groups.rename("total").reset_index()
             mapping = merge_nearby_dates(totals.groupby("Date").size(), merge_window_days)
             totals["Date"] = totals["Date"].map(mapping)
-            per_tube = totals.groupby(["Date", "Tube"])["total"].mean()
-            field = per_tube.groupby(level="Date").agg(["mean", "std", "count"]).reset_index()
+            per_tube = group_mean(totals["total"], [totals["Date"], totals["Tube"]])
+            field = per_tube.groupby(level="Date").agg(["mean", "std", "count"])
+            field["mean"] = group_mean(per_tube, level="Date")  # pandas 3.1: see group_sum
+            field = field.reset_index()
             self._field_growth[merge_window_days] = field
         return field.copy()
 

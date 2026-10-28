@@ -82,7 +82,7 @@ def _disconnect(signal, slot=None) -> None:
             signal.disconnect()
         else:
             signal.disconnect(slot)
-    except (TypeError, RuntimeError):
+    except TypeError, RuntimeError:
         pass
 
 

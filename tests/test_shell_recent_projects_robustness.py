@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from PyQt6.QtCore import QSettings
@@ -54,7 +54,7 @@ def _info(widget: WelcomeWidget) -> list[str]:
 
 
 def test_a_timestamp_with_an_offset_shows_a_relative_date(app):
-    stamp = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    stamp = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
     raw = json.dumps([{"path": "C:/data", "name": "data", "count": 3, "ts": stamp}])
     widget = _welcome(_store(raw))
     assert _info(widget) == ["3 images  ·  3h ago"]

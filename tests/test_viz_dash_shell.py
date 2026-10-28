@@ -141,6 +141,19 @@ def test_graph_config_offers_no_dead_modebar_buttons(tmp_path, builder):
 
 
 @pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
+def test_graph_config_keeps_the_plotly_js_3_defaults(tmp_path, builder):
+    """plotly.js 4 shows an "Upload to Cloud" button (it posts the chart to
+    cloud.plotly.com) and waits 500 ms for a double-click: both are set back."""
+    graph = _find(
+        _served_layout(builder(tmp_path).app),
+        lambda n: n.get("props", {}).get("id") == "main-graph",
+    )
+    config = graph["props"]["config"]
+    assert config["showSendToCloud"] is False
+    assert config["doubleClickDelay"] == 300
+
+
+@pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
 def test_chart_loading_wrapper_is_a_flex_container(tmp_path, builder):
     """PV-05: dcc.Loading's two wrapper divs must carry the class the stylesheet
     stretches (``viz-loading``), otherwise the chart collapses to Plotly's 450 px."""

@@ -8,7 +8,7 @@ name = "root-mask-and-skeletons"
 dynamic = ["version"]
 description = "SPROUTS: plant-root phenotyping from minirhizotron images (root masks, skeletons, correction editors, calibrated root length and area, dashboards)."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 # TODO(owner): ORCIDs and maintainers (kept in sync with CITATION.cff).
 authors = [{ name = "Kinjalk Parth" }, { name = "Sebastian Varela" }, { name = "Andrew D. B. Leakey" }]
 license = "GPL-3.0-or-later"
@@ -32,7 +32,7 @@ classifiers = [
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Scientific/Engineering :: Image Recognition",
@@ -44,15 +44,15 @@ classifiers = [
 dependencies = [
     "PyQt6~=6.11",
     "PyQt6-WebEngine~=6.11",
-    "numpy~=2.2",
-    "scipy~=1.15",
-    "scikit-image~=0.25",
-    "opencv-python-headless~=4.13",
-    "pillow~=12.2",
-    "pandas~=2.3",
-    "dash~=4.1",
+    "numpy~=2.5",
+    "scipy~=1.18",
+    "scikit-image~=0.26",
+    "opencv-python-headless~=5.0",
+    "pillow~=13.0",
+    "pandas~=3.1",
+    "dash~=4.4",
     "dash-bootstrap-components~=2.0",
-    "plotly~=6.7",
+    "plotly~=7.1",
     "requests~=2.34",
 ]
 
@@ -83,15 +83,25 @@ resources = ["themes/**/*", "icons/**/*", "app_icon.ico", "app_icon.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# -p no:dash: Dash's pytest plugin (dash.testing, browser fixtures this suite does not use)
+# marks a hook the old way; pytest 9.2 warns it is removed in pytest 10, which would stop the
+# suite from starting. Not loading it changes no test.
+addopts = "-q -p no:dash"
 filterwarnings = ["ignore::DeprecationWarning"]
 
 # Ruff is the single lint + import-sort ("I") + format tool (pre-commit and CI run it).
 # Do not add [tool.black] / [tool.isort] back: the formatters disagree on some lines.
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py314"
+# ruff 0.16+ also formats the Python blocks of Markdown files; the docs keep their examples
+# as written.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
-ignore = ["E501"]
+# UP037: keep quoted annotations. Python 3.14 evaluates annotations lazily, but
+# inspect.signature() and typing.get_type_hints() still evaluate them, and an unquoted name
+# imported only under TYPE_CHECKING (the window parts' "MainWindow") then raises NameError
+# (tests/test_shell_window_split_surface.py signs every window method).
+ignore = ["E501", "UP037"]

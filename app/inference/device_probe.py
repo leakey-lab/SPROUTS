@@ -154,7 +154,7 @@ def _function(lib: Any, name: str, argtypes: list) -> Callable | None:
     try:
         function.argtypes = argtypes
         function.restype = ctypes.c_int
-    except (AttributeError, TypeError):  # a stand-in without ctypes attributes
+    except AttributeError, TypeError:  # a stand-in without ctypes attributes
         pass
     return function
 
@@ -287,7 +287,7 @@ def torch_build(
     """
     try:
         spec = find_spec("torch")
-    except (ImportError, ValueError):
+    except ImportError, ValueError:
         spec = None
     if spec is None:
         return TorchBuild(installed=False)
@@ -298,7 +298,7 @@ def torch_build(
     for folder in folders:
         try:
             build = _parse_version_file(read_text(os.path.join(folder, "version.py")))
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
         if build is not None:
             return build
@@ -314,7 +314,7 @@ def torch_build(
 def _major(version: str | None) -> int | None:
     try:
         return int(str(version).split(".")[0])
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

@@ -66,9 +66,20 @@ _SLOT_AND_THREAD_SCRIPT = textwrap.dedent("""
     button = QPushButton("save")
     button.clicked.connect(slot)
     worker = Worker()
+
+    def finish():
+        worker.wait()
+        print("STILL ALIVE", flush=True)
+        sys.stderr.flush()
+        # Leave from inside the event loop, without app.quit() and the interpreter's
+        # teardown: either can end the process in an access violation (about 1 run in 60
+        # on Python 3.10 and 3.14 alike, all after this point). What the test checks has
+        # happened by now.
+        os._exit(0)
+
     QTimer.singleShot(50, button.click)
     QTimer.singleShot(80, worker.start)
-    QTimer.singleShot(800, lambda: (worker.wait(), print("STILL ALIVE", flush=True), app.quit()))
+    QTimer.singleShot(800, finish)
     app.exec()
     """)
 

@@ -1,1 +1,4 @@
 docs/examples/** -text
+# Vendored unmodified (app/assets/THIRD_PARTY.md): LF in every checkout, whatever
+# core.autocrlf says, so the copy Dash serves and a PyInstaller build packs is upstream's.
+app/assets/plotly-basic.min.js text eol=lf

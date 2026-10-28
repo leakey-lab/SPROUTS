@@ -193,7 +193,7 @@ def _has_source_column(csv_path: str) -> bool:
     try:
         with open(csv_path, newline="", encoding="utf-8-sig") as fh:
             header = next(csv.reader(fh), [])
-    except (OSError, UnicodeDecodeError, csv.Error):
+    except OSError, UnicodeDecodeError, csv.Error:
         return True
     return SOURCE_COLUMN in header
 

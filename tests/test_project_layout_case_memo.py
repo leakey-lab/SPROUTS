@@ -76,7 +76,7 @@ def _listed_today(directory, stem, endings, fold_endings):
                         continue
                     if best is None or (r, name) < best[:2]:
                         best = (r, name, entry.path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return None
     return best[2] if best is not None else None
 

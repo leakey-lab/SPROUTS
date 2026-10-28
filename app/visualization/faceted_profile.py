@@ -200,6 +200,21 @@ def _clamp(value: float) -> float:
     return value
 
 
+def _starts(sizes: Sequence[float], spacing: float) -> list[float]:
+    """Where each panel starts: ``sum(sizes[:i]) + i * spacing``, make_subplots' formula,
+    with the sizes added up left to right as ``sum()`` adds floats on Python 3.10 and 3.11.
+
+    Python 3.12's ``sum()`` compensates its rounding (Neumaier), which moves panel edges
+    and title positions by up to 4 units in the last place (837 of the 900 grids of 1-60
+    rows x 1-15 columns): the figure JSON would change with the Python version.
+    """
+    starts, before = [], 0.0
+    for i, size in enumerate(sizes):
+        starts.append(before + i * spacing)
+        before += size
+    return starts
+
+
 def _grid_title(text: str, x: float, y: float, *, row: bool) -> dict:
     """A column title (above the top panel) or a row title (right of the last panel)."""
     title: dict[str, Any] = {"font": {"size": 16}, "showarrow": False, "text": text}
@@ -222,22 +237,23 @@ def grid_layout(column_titles: Sequence[str], row_titles: Sequence[str]) -> dict
     fresh dict, free to change.
 
     Computed with make_subplots' own arithmetic for this grid (top-left start, y axes
-    shared per row), in the same key order; ``tests/test_viz_data_faceted.py`` compares
-    the two.
+    shared per row), in the same key order, and with Python 3.10's float sums
+    (:func:`_starts`); ``tests/test_viz_data_faceted.py`` compares the two and pins a few
+    grids to the JSON Python 3.10 gave.
     """
     n_rows, n_cols = len(row_titles), len(column_titles)
     _check_grid(n_rows, n_cols)
     widths = [(_MAX_WIDTH - _H_SPACING * (n_cols - 1)) / n_cols] * n_cols
     heights = [(1.0 - _V_SPACING * (n_rows - 1)) / n_rows] * n_rows
-    x_domains = []
-    for col in range(n_cols):
-        start = sum(widths[:col]) + col * _H_SPACING
-        x_domains.append([start, start + widths[col]])
+    x_domains = [
+        [start, start + width]
+        for start, width in zip(_starts(widths, _H_SPACING), widths, strict=True)
+    ]
+    y_starts = _starts(heights, _V_SPACING)  # the bottom row first
     layout: dict[str, Any] = {}
     y_domains = []
     for row in range(n_rows):  # the top row first
-        below = n_rows - 1 - row
-        start = sum(heights[:below]) + below * _V_SPACING
+        start = y_starts[n_rows - 1 - row]
         y_domain = [_clamp(start), _clamp(start + heights[-1 - row])]
         y_domains.append(y_domain)
         for col in range(n_cols):
@@ -250,10 +266,10 @@ def grid_layout(column_titles: Sequence[str], row_titles: Sequence[str]) -> dict
             layout[f"yaxis{suffix}"] = yaxis
     top = y_domains[0][1]
     layout["annotations"] = [
-        _grid_title(text, sum(x_domains[col]) / 2.0, top, row=False)
+        _grid_title(text, (x_domains[col][0] + x_domains[col][1]) / 2.0, top, row=False)
         for col, text in enumerate(column_titles)
     ] + [
-        _grid_title(text, x_domains[-1][1], sum(y_domains[row]) / 2.0, row=True)
+        _grid_title(text, x_domains[-1][1], (y_domains[row][0] + y_domains[row][1]) / 2.0, row=True)
         for row, text in enumerate(row_titles)
     ]
     return layout

@@ -385,12 +385,18 @@ theme.message_figure(text, color=...) # text-only figure for hints, empty states
 The dashboards follow this guide; the UX and speed pass changed these parts (display only,
 no data changes):
 
-- **plotly.js bundle.** `app/assets/plotly-basic.min.js` (plotly.js basic 3.5.0, MIT,
+- **plotly.js bundle.** `app/assets/plotly-basic.min.js` (plotly.js basic 4.1.1, MIT,
   `app/assets/licenses/plotly.js-MIT.txt`) is served before the Dash renderer, and
   `dcc.Graph` uses it through `window.Plotly` instead of fetching the full 4.8 MB bundle.
   It must match plotly.py's plotly.js version, and the dashboards may use only its trace
   types (scatter, bar, pie): `tests/test_viz_dash_plotly_bundle.py` fails otherwise, and
-  `app/assets/THIRD_PARTY.md` says how to update it.
+  `app/assets/THIRD_PARTY.md` says how to update it. The plotly.js 3 defaults that
+  plotly.js 4 changed are set back: no "Upload to Cloud" modebar button, a 300 ms
+  double-click (`dash_shell.graph_config`) and the bar label colours
+  (`theme.inside_label_colour`).
+- **Zoom through Dash 4.4.1.** `app/assets/sprouts-uirevision.js` keeps a zoom when a
+  callback redraws the view with the same `uirevision` (Select All, Clear All): Dash 4.4.1
+  lost it (plotly/dash#4093).
 - **`style.css`.** The chart card (`.viz-chart-card`) uses the paper colour `--bg-0` and
   `scrollbar-gutter: stable`, so a scrollbar appearing under the tall faceted grid no longer
   narrows the chart and redraws it. The control strip collapses without a transition

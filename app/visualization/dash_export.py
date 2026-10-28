@@ -17,7 +17,7 @@ import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -209,7 +209,7 @@ def provenance_lines(
 ) -> list[str]:
     """``# key: value`` header lines describing where the rows come from (``project_root``:
     the project of ``source_csv`` when known, for its field of view; :func:`calibration_line`)."""
-    when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    when = (generated_at or datetime.now(UTC)).astimezone(UTC)
     info = app_info()
     commit = git_commit()
     fields = [

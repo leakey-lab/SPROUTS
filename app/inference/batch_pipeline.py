@@ -35,11 +35,9 @@ from collections import deque
 from collections.abc import Callable, Hashable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 #: Default bound on AsyncWriter tasks submitted but not yet finished.
 DEFAULT_MAX_PENDING = 256
@@ -68,7 +66,7 @@ def progress_percent(done: int, total: int | None) -> int:
     return max(0, min(100, pct))
 
 
-class PrefetchIterator(Iterator[T], Generic[T]):
+class PrefetchIterator[T](Iterator[T]):
     """Run zero-argument tasks ahead of the consumer; yield results in order.
 
     Up to ``depth`` tasks run (or wait) on ``workers`` background threads while

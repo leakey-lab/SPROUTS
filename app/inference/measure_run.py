@@ -191,7 +191,7 @@ def scan_png_files(folder: str) -> tuple[dict[str, str], list[tuple[str, str]]]:
                 stem = png_stem(entry.name)
                 if stem is not None and entry.is_file():
                     files.append((stem, entry.path))
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return {}, []
     return group_by_stem(files)
 

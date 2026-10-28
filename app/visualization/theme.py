@@ -281,16 +281,64 @@ def value_labels(values) -> list[str]:
     return ["" if value != value else f"{value:.2f}" for value in values]
 
 
-def bar_labels(text, bars: int) -> dict:
+def bar_labels(text, bars: int, colour: str | None = None) -> dict:
     """``go.Bar`` label arguments: ``text`` shown inside the bars only when readable.
 
     Args:
         text: the per-bar labels.
         bars: bars side by side on the x axis (see :data:`MAX_LABELLED_BARS`).
+        colour: the bars' ``#rrggbb`` colour: a label inside them keeps the text colour
+            it had before plotly.js 4 (see :func:`inside_label_colour`).
     """
     if bars > MAX_LABELLED_BARS:
         return {"textposition": "none"}
-    return {"text": text, "textposition": "auto"}
+    labels = {"text": text, "textposition": "auto"}
+    kept = inside_label_colour(colour) if colour else None
+    if kept is not None:
+        labels["insidetextfont"] = {"color": kept}
+    return labels
+
+
+#: What plotly.js writes on a bar without a text colour of its own (Color.contrast): its
+#: background colour on a dark bar, its default line colour on a light one.
+_LABEL_ON_DARK, _LABEL_ON_LIGHT = "#fff", "#444"
+
+
+def _channels(hex_colour: str) -> tuple[int, int, int]:
+    h = hex_colour.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _wcag_luminance(hex_colour: str) -> float:
+    def linear(channel: int) -> float:
+        c = channel / 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (linear(c) for c in _channels(hex_colour))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _wcag_ratio(a: str, b: str) -> float:
+    high, low = sorted((_wcag_luminance(a), _wcag_luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def inside_label_colour(colour: str) -> str | None:
+    """The label colour plotly.js 3 picked for a bar of ``colour``, where plotly.js 4 picks
+    another one; ``None`` where both pick the same.
+
+    plotly.js 3 called a colour dark below a brightness of 128 (tinycolor:
+    ``(299 r + 587 g + 114 b) / 1000``); plotly.js 4 calls it dark when white contrasts
+    with it more than the default line colour does (WCAG ratio). The two disagree on some
+    mid-blue date colours (the fourth ``DATE_RAMP`` stop, ``#4f97d1``, and the colours
+    blended next to it), whose labels would turn from dark grey to white.
+    """
+    r, g, b = _channels(colour)
+    dark_before = (r * 299 + g * 587 + b * 114) / 1000 < 128
+    dark_now = _wcag_ratio(colour, "#ffffff") > _wcag_ratio(colour, "#444444")
+    if dark_before == dark_now:
+        return None
+    return _LABEL_ON_DARK if dark_before else _LABEL_ON_LIGHT
 
 
 def sequential_color(fraction: float) -> str:

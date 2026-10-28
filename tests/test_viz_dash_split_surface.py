@@ -114,12 +114,13 @@ def _run(code: str) -> subprocess.CompletedProcess:
 def test_split_modules_load_no_package_the_dashboard_did_not_load():
     # First what dash_app imported before the split (what the moved code already paid
     # for), then the split modules and dash_app: no new top-level module may appear,
-    # and none of the heavy stacks the dashboard never needed.
+    # and none of the heavy stacks the dashboard never needed. dash_app imports flask
+    # itself; since Dash 4.2 ``import dash`` no longer does.
     result = _run(
         """
         import sys
 
-        import dash, dash.exceptions, dash_bootstrap_components, pandas
+        import dash, dash.exceptions, dash_bootstrap_components, flask, pandas
         import app.config
         from app.visualization import (
             dash_data_cache, dash_export, dash_image_utils, dash_shell,

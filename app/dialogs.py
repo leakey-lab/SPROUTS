@@ -21,18 +21,14 @@ Layer-neutral: it imports only PyQt6, so ``app.handlers`` and ``app.gui`` both u
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QDialog
 
 __all__ = ["run_modal", "show_transient"]
 
-D = TypeVar("D", bound=QDialog)
-T = TypeVar("T")
 
-
-def run_modal(dialog: D, read: Callable[[D], T] | None = None) -> T | int:
+def run_modal[D: QDialog, T](dialog: D, read: Callable[[D], T] | None = None) -> T | int:
     """Run ``dialog`` modally (``exec()``) and free it once answered.
 
     Returns ``read(dialog)``, called after ``exec()`` returned and before the dialog is freed
@@ -51,7 +47,7 @@ def run_modal(dialog: D, read: Callable[[D], T] | None = None) -> T | int:
         dialog.deleteLater()
 
 
-def show_transient(
+def show_transient[D: QDialog](
     box: D, on_answer: Callable[[int], object] | None = None, *, modal: bool = True
 ) -> D:
     """Show ``box`` without waiting for it; it is deleted once closed (``WA_DeleteOnClose``).

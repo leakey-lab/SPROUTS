@@ -281,7 +281,7 @@ def _read_inputs_record(csv_path: str) -> tuple[InputsRecord | None, bool]:
             data = json.load(fh)
     except OSError:
         return None, False
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return None, True
     if not isinstance(data, dict):
         return None, True

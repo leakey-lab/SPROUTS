@@ -1,6 +1,6 @@
 # CLAUDE.md — Root-Mask-and-Skeletons
 
-Desktop app (**PyQt6 + PyTorch**, Python 3.10) for **plant-root phenotyping**
+Desktop app (**PyQt6 + PyTorch**, Python 3.14) for **plant-root phenotyping**
 from minirhizotron images. Two model branches, both from the ORIGINAL image
 (the skeletonizer never reads masks, so mask corrections change area only):
 
@@ -32,6 +32,16 @@ follow.
 - PyTorch is installed **separately** from `requirements.txt` so the build
   matches the local CUDA toolkit (pip won't silently swap in a CPU wheel). See
   README "Installation".
+- The venv is Python 3.14 with torch 2.14.1+cu132 (cuDNN 9.24). Its GPU predictions differ
+  from the published results' (nightly 2.8.0.dev20250325+cu128, cuDNN 9.7.1): on the 40
+  test photos, 11 masks in 1-4 pixels and 6 raw skeleton predictions in up to 25 pixels by
+  one intensity level, the measured skeletons unchanged, 3 areas by 0.01 mm² (CHANGELOG
+  "Scientific output changes" lists the files). On the CPU it reproduces the nightly's CPU
+  outputs bit for bit; Measure and the dashboards are identical. Supported GPUs: Turing
+  (RTX 20 series) and newer only (owner decision 2026-10-28; the CUDA 13 builds have no
+  older kernels). The previous venv is kept as `./venv-py310`: Python 3.10.11 with the
+  nightly torch 2.8.0.dev20250325+cu128 that produced the published results (no longer
+  downloadable). Never delete it; the RQv2 benchmark's re-runs need it too.
 
 ---
 
@@ -44,7 +54,7 @@ follow.
 # Tests (Qt needs an offscreen platform in headless/CI)
 $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
 
-# Lint + import sort + format: ruff only (pyproject.toml — line-length 100, py310).
+# Lint + import sort + format: ruff only (pyproject.toml — line-length 100, py314).
 # Same tools pre-commit runs; black/isort are not used (they fight ruff format).
 ./venv/Scripts/python.exe -m ruff check --fix .
 ./venv/Scripts/python.exe -m ruff format .
@@ -157,6 +167,11 @@ Graph at `graphify-out/` (built AST-only, no API cost).
   the area.
 - After editing code this session, run `graphify update .` to refresh the graph
   (check staleness: graph header lists its build commit vs `git rev-parse HEAD`).
+- graphify, like every tool that parses the sources, must run on Python 3.14: an older
+  Python cannot parse the PEP 758 `except A, B:` lines, and graphify's import-alias pass
+  then silently skips those files (`docs/KNOWN_ISSUES.md` U5). The uv tool is the owner's
+  (shared by every project): ask before reinstalling it on 3.14 with
+  `uvx uv@0.13.6 tool install --python 3.14.10 --reinstall graphifyy`.
 - `/graphify` for a fresh build of any input.
 
 ---

@@ -27,11 +27,16 @@ column in [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 
 ## Requirements
 
-- Windows 10/11, Linux x86_64 (glibc 2.34 or newer: Ubuntu 22.04+, Debian 12+) or macOS 13+
+- Windows 10/11, Linux x86_64 (glibc 2.34 or newer: Ubuntu 22.04+, Debian 12+) or macOS 14+
   on Apple silicon only; Intel Macs are not supported (PyTorch publishes no Intel macOS
-  wheels). Python 3.10.
-- An NVIDIA GPU is used on Windows and Linux (CUDA 12.8 build); CPU works everywhere and is
-  the only mode on macOS, but is slow.
+  wheels). Python 3.14.
+- An NVIDIA GPU is used on Windows and Linux (CUDA 13.2 build, NVIDIA driver of the 580
+  series or newer); CPU works everywhere and is the only mode on macOS, but is slow.
+- Supported NVIDIA GPUs: Turing (RTX 20 series, GTX 16xx) and newer. Older ones (Maxwell,
+  Pascal, Volta: GTX 9xx / 10xx, Titan V, V100) are not supported: the CUDA 13 builds have
+  no kernels for them. PyTorch only warns, the app still picks such a GPU, and Generate then
+  fails on it (CUDA error "no kernel image is available for execution on the device"); use
+  the CPU build on such a machine.
 
 ## Installation
 
@@ -39,13 +44,14 @@ PyTorch is installed **first and separately**, from the PyTorch index that match
 GPU driver, so pip can never silently replace it with a CPU-only wheel:
 
 ```powershell
-py -3.10 -m venv venv
+py -3.14 -m venv venv
 .\venv\Scripts\activate
 
-# 1. PyTorch: CUDA 12.8 build (needed for RTX 50-series GPUs; driver 570 or newer)
-pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-#    Other drivers: the same versions from .../whl/cu126 or .../whl/cu129
-#    No NVIDIA GPU:  the same versions from .../whl/cpu
+# 1. PyTorch: CUDA 13.2 build (Turing - GTX 16xx, RTX 20xx - and newer GPUs, RTX 50-series
+#    included; driver of the 580 series or newer)
+pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu132
+#    Same results: the same versions from .../whl/cu130 (also Turing and newer, driver 580+)
+#    No NVIDIA GPU, or one older than Turing: the same versions from .../whl/cpu
 
 # 2. Application dependencies (the exact versions the app is tested with)
 pip install -r requirements.txt
@@ -61,31 +67,38 @@ before installing the requirements (`pip uninstall -y opencv-python`), because i
 `opencv-python-headless` write the same `cv2` folder.
 
 Results published so far were produced with a PyTorch nightly
-(`torch 2.8.0.dev20250325+cu128`) that is no longer downloadable; torch 2.8.0 above is
-the matching stable release. GPU results can differ from another build or from CPU in
-the last decimal of the CSVs (see `docs/MODELS.md`).
+(`torch 2.8.0.dev20250325+cu128`, cuDNN 9.7.1) that is no longer downloadable. On the CPU,
+torch 2.14.1 above reproduces the nightly's CPU outputs bit for bit. On the GPU every later
+build moves a few pixels through its cuDNN: with torch 2.14.1 (cuDNN 9.24), 11 of 40 test
+masks differ in 1 to 4 pixels (the root pixel count by 1 or 2), 6 of 40 raw skeleton
+predictions in up to 25 pixels by one intensity level (their thinned skeletons, which
+Measure reads, and so the lengths do not change), and 3 of 40 areas by 0.01 mm²
+(CHANGELOG, "Scientific output changes", lists the files). GPU and CPU outputs also differ
+from each other in the last decimal of the CSVs (see `docs/MODELS.md`, "GPU
+reproducibility").
 
 ### Installation (Linux / macOS)
 
 Same order: PyTorch first, then the application dependencies.
 
 ```bash
-# 0. Python 3.10 and a virtual environment, by system:
-#    Ubuntu 22.04:         sudo apt install python3.10 python3.10-venv
-#                          python3.10 -m venv venv
-#    Ubuntu 24.04 / Debian 12 (no python3.10 package): with uv (https://docs.astral.sh/uv/)
-#                          uv python install 3.10 && uv venv -p 3.10 venv
-#    macOS (Homebrew):     brew install python@3.10
-#                          python3.10 -m venv venv
+# 0. Python 3.14 and a virtual environment, by system:
+#    Linux (any distribution; Ubuntu 22.04 / 24.04 and Debian 12 / 13 package no 3.14):
+#                          with uv (https://docs.astral.sh/uv/)
+#                          uv python install 3.14 && uv venv -p 3.14 --seed venv
+#    macOS (Homebrew):     brew install python@3.14
+#                          python3.14 -m venv venv
 source venv/bin/activate
 
 # 1. PyTorch, one of:
-#    Linux + NVIDIA GPU (CUDA 12.8 build; driver 570 or newer):
-pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-#    Linux, CPU only (without --index-url pip pulls about 3 GB of CUDA wheels):
-pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
-#    macOS (Apple silicon, CPU):
-pip install torch==2.8.0 torchvision==0.23.0
+#    Linux + NVIDIA GPU (CUDA 13.2 build; Turing - GTX 16xx, RTX 20xx - and newer GPUs;
+#    driver of the 580 series or newer):
+pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu132
+#    Linux, CPU only, also for an NVIDIA GPU older than Turing (without --index-url pip
+#    pulls about 3 GB of CUDA wheels):
+pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
+#    macOS 14+ (Apple silicon, CPU):
+pip install torch==2.14.1 torchvision==0.29.1
 
 # 2. Application dependencies, then optionally the development tooling
 pip install -r requirements.txt

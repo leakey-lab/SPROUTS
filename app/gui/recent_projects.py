@@ -80,7 +80,7 @@ class RecentProjectsStore:
         raw = self.settings.value(SETTINGS_KEY, "[]")
         try:
             items = json.loads(raw) if isinstance(raw, str) else list(raw or [])
-        except (ValueError, TypeError, RecursionError):  # RecursionError: nested too deep (R4)
+        except ValueError, TypeError, RecursionError:  # RecursionError: nested too deep (R4)
             logger.warning("Ignoring an unreadable recent-projects list")
             return []
         if not isinstance(items, list):

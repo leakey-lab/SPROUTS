@@ -197,11 +197,15 @@ def graph_config(plot_filename: str) -> dict[str, Any]:
 
     Only buttons that do something are shown: Plotly.js has no 'downloadCsv'
     button (the data export is the header's "Export CSV", PV-16) and box / lasso
-    select had no callback behind them.
+    select had no callback behind them. Two plotly.js 4 defaults are set back to
+    plotly.js 3's: no "Upload to Cloud" button (it posts the chart to cloud.plotly.com;
+    nothing leaves this app), and a double-click within 300 ms (4.1 waits 500 ms).
     """
     return {
         "scrollZoom": True,
         "doubleClick": "reset",
+        "doubleClickDelay": 300,
+        "showSendToCloud": False,
         "showTips": False,
         "displayModeBar": True,
         "displaylogo": False,

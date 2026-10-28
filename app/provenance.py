@@ -375,7 +375,7 @@ def build_record(
     return {
         "schema": SCHEMA,
         "kind": kind,
-        "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "created_utc": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "app": app_info(),
         "git_commit": git_commit(PROJECT_ROOT),
         "calibration": calibration_info() if calibration is None else dict(calibration),
@@ -399,7 +399,7 @@ def minimal_record(kind: str, *, outputs: Mapping[str, Any], reason: str) -> dic
     return {
         "schema": SCHEMA,
         "kind": kind,
-        "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "created_utc": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "app": app_info(),
         "git_commit": None,
         "calibration": calibration_info(),
@@ -423,7 +423,7 @@ def read_sidecar(output_path: str | os.PathLike[str]) -> dict[str, Any] | None:
     try:
         with open(sidecar_path(output_path), encoding="utf-8") as fh:
             record = json.load(fh)
-    except (OSError, ValueError, RecursionError):  # ValueError: bad JSON or bad UTF-8
+    except OSError, ValueError, RecursionError:  # ValueError: bad JSON or bad UTF-8
         return None
     return record if isinstance(record, dict) else None
 

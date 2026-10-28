@@ -11,7 +11,8 @@ history") except E11, accepted. The redundancy and speed pass changed no scienti
 except one corner case (S01-06, `CHANGELOG.md`); the IDs its code cites are in the second
 table of "Resolved history", and its owner questions, none built, are under "Details and
 history". Table 2 lists the engineering items still open: accepted limits and work not
-built now. Built items are in
+built now; rows U1, U2, U3, U5 and U7 are the open follow-ups of the Python 3.14 upgrade
+(2026-10-27, `CHANGELOG.md`; U4 is resolved, U6 closed by the owner). Built items are in
 "Resolved history" with their commits; table 3 lists what was closed as accepted. The
 text below the tables is the record: the entries keep their original wording and their
 "Open" / "Resolved" labels as of the pass that wrote them, so read the tables for the
@@ -75,6 +76,11 @@ present state.
 | P2 | | First image read on the GUI thread | not built now (only for images larger than 640 x 480): W6-T1 |
 | P3 | | Deflate in the skeleton history | not built now (only for large images): W6-T2 |
 | D2 | | Pre-Generate scan as a warm-up | O28, W6-T3 (optional); the scan now costs about 0.16 s at 46k, and closing D2 is an owner question (S11-07, 2026-10-27) |
+| U1 | Python 3.14 upgrade | `app/assets/sprouts-uirevision.js` stops Dash 4.4.1's redraw after a zoom is synced into the figure, which dropped the Growth Over Time zoom on Select All / Clear All (plotly/dash#4093). Remove it and `tests/test_viz_dash_uirevision.py` once a Dash release fixes #4093; that test's pin on the sync markers in dcc's `async-graph.js` fails when a Dash upgrade changes them | open: re-check at every Dash upgrade (Python 3.14 upgrade, 2026-10-27) |
+| U2 | Python 3.14 upgrade | The PyInstaller app bundle has not been built or started on Python 3.14; only `tests/test_fair_build.py` ran (18 of 18 with PyInstaller 6.22.3) | open: build and smoke-test it before the next release (owner question, 2026-10-27) |
+| U3 | Python 3.14 upgrade | CI (`.github/workflows/ci.yml`: Ubuntu, Windows, macOS) has not run on Python 3.14, as the branch is not pushed; the wheels of every pin resolve on the three systems (uv, wheels only) | open: the first push runs it |
+| U5 | Python 3.14 upgrade | ruff format writes `except A, B:` without parentheses (PEP 758, 28 files), which Python 3.13 and older cannot parse. The graphify uv tool runs on Python 3.12: its import-alias pass (`graphify.symbol_resolution.parse_python_import_aliases`, `ast.parse`) silently returns no alias for those 28 files (395 aliases in all; the files include `app/calibration.py`, `app/io_utils.py`, `app/project_layout.py`, `app/provenance.py` and `app/inference/runtime.py`), while graphifyy 0.9.96 and 0.9.97 on Python 3.14.10 read all 581 files. Today that costs no edge: `graphify update .` of the upgraded tree gives the same graph on Python 3.12 and 3.14 (18,172 nodes, 50,066 edges, edge for edge), because the main extractor already resolves those calls; a later call that only the alias pass resolves would be missing on 3.12. The app is not affected. Every tool that parses the sources (graphify, pre-commit hooks such as `debug-statements`, linters) must run on Python 3.14 | open: before the next `graphify update .`, reinstall the tool on Python 3.14 (`uvx uv@0.13.6 tool install --python 3.14.10 --reinstall graphifyy`) and run pre-commit from the project's 3.14 venv (owner question, 2026-10-28) |
+| U7 | Python 3.14 upgrade | PyTorch 2.15 is scheduled for 2026-10-28 (pytorch `RELEASE.md`: Python 3.11 or newer, CUDA 13.2 and 13.4, cuDNN 9.26.0.51); at 07:37 UTC on 2026-10-28, when the upgrade was committed, PyPI and download.pytorch.org still listed torch 2.14.1 / torchvision 0.29.1 as the newest | open: adopting 2.15 means re-running the GPU science harness and recording a new GPU baseline, as for 2.14.1 (owner question, 2026-10-28) |
 
 ## Closed on 2026-10-25 (accepted, nothing to build)
 
@@ -96,6 +102,7 @@ present state.
 | R8 (O17, incremental part) | No incremental Measure | a safe reuse has to verify content, which costs as much as measuring (17 to 21 s for 46k) |
 | E5 | Exact windowed pick not built | 11 ms per pick on a real 640 x 480 skeleton (master section 1.1) |
 | X4 | Generate overwriting a mask saved during a run: dropped | Generate never writes `gt/`; a mask saved during a run is GT (master section 1.1) |
+| U6 | Turing and newer only (owner, 2026-10-28) | The torch 2.14.1 CUDA 13 builds have kernels for Turing and newer only (sm_75 to sm_120; torch 2.7.1+cu128 had sm_50 to sm_120). The owner supports the RTX 20 series and newer only, so Generate gets no capability check and no CPU fallback; README "Requirements" and `requirements.txt` send an older GPU to the CPU build |
 
 ## Resolved history
 
@@ -155,6 +162,7 @@ stay below under "Details and history", with their original wording.
 | FR5 | final review S1 | A GT mask of another size than its photo was measured as GT, although *Correct* refuses it | Not used, reason `size`, the prediction is measured (science entry in `CHANGELOG.md`): FR-B, a7adee8 |
 | FR6 | final review D4 | A project's `gt/` folder opened as a project let Generate's *Replace all predictions* overwrite the GT masks | Refused unless the folder shows a project's markers: FR-B, a7adee8 |
 | FR7 | final review C3, S2, S4, X1-X4 | A six-stage docstring, the 127 threshold filed outside the science section, a stale 0.8 % figure, two tests that failed on macOS, Windows-only install commands | 8c59fce (the docstring figure in a7adee8) |
+| U4 | Python 3.14 upgrade | `CLAUDE.md` said Python 3.10 and ruff `py310` | Updated with the upgrade (owner: "Use python 3.14", 2026-10-27): Python 3.14, `py314`, the venv's torch build and its GPU differences, graphify on Python 3.14: the Python 3.14 upgrade commit |
 
 The redundancy and speed pass (audit 2026-10-26, built 2026-10-27 in `89965f5`..`9ad0d96`):
 the finding IDs the code and the tests cite, the review and deferred items they name, and
