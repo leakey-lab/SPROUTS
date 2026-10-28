@@ -70,6 +70,9 @@ class _WheelEatingSink:
     def canvas_pan_changed(self, panning) -> None:
         pass
 
+    def canvas_focus_lost(self) -> None:
+        pass
+
 
 @pytest.fixture
 def make_view(app, monkeypatch):

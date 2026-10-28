@@ -8,6 +8,7 @@ import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import (
     QColor,
+    QFocusEvent,
     QMouseEvent,
     QPainter,
     QPixmap,
@@ -81,6 +82,9 @@ class FakeSink:
 
     def canvas_pan_changed(self, panning) -> None:
         self.calls.append(("pan", panning))
+
+    def canvas_focus_lost(self) -> None:
+        self.calls.append(("focus_lost",))
 
 
 @pytest.fixture
@@ -292,6 +296,31 @@ def test_leaving_the_canvas_is_reported(make_view):
     view = make_view(sink)
     QApplication.sendEvent(view, QEvent(QEvent.Type.Leave))
     assert sink.calls == [("left",)]
+
+
+# --------------------------------------------------------------------------- holds
+def test_a_lost_keyboard_ends_the_sinks_holds_then_space(make_view):
+    """The releases will not come: the sink ends its holds (B), then the view its Space."""
+    sink = FakeSink()
+    view = make_view(sink)
+    QTest.keyPress(view, Qt.Key.Key_Space)
+    assert view.space_pan
+    sink.calls.clear()
+    QApplication.sendEvent(
+        view, QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.ActiveWindowFocusReason)
+    )
+    assert sink.calls == [("focus_lost",), ("pan", False)] and not view.space_pan
+
+
+def test_end_holds_ends_the_sinks_holds_and_space_on_request(make_view):
+    sink = FakeSink()
+    view = make_view(sink)
+    view.end_holds()  # nothing held here: the sink's own hold decides
+    assert sink.calls == [("focus_lost",)] and not view.space_pan
+    QTest.keyPress(view, Qt.Key.Key_Space)
+    sink.calls.clear()
+    view.end_holds()
+    assert sink.calls == [("focus_lost",), ("pan", False)] and not view.space_pan
 
 
 # --------------------------------------------------------------------------- wheel

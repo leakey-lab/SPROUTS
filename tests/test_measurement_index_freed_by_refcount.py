@@ -8,27 +8,16 @@ and GT listings for the rest of the session (about 35 MiB for two 46k-row CSVs).
 
 from __future__ import annotations
 
-import gc
 import weakref
-
-import pytest
 
 from app.config import LENGTH_CSV_HEADERS
 from app.data_processing.measurement_index import MeasurementIndex
 from app.inference.metrics import write_metric_csv
+from tests.leak_census import assert_freed, no_gc_fixture  # noqa: F401
 
 STEM = "24EFCAM1_T001_L044_2024.07.18_111530_001_SMM"
 #: A legacy folder that only the ``test_latest`` walk finds.
 WALKED = ("results", "run1", "test_latest", "images")
-
-
-@pytest.fixture
-def refcount_only():
-    """The cyclic garbage collector off: only refcounting frees an object."""
-    gc.collect()
-    gc.disable()
-    yield
-    gc.enable()
 
 
 def _write_lengths(folder) -> None:
@@ -38,14 +27,14 @@ def _write_lengths(folder) -> None:
     write_metric_csv([row], str(folder / "root_lengths.csv"), LENGTH_CSV_HEADERS)
 
 
-def test_a_new_index_is_freed_by_refcount(tmp_path, refcount_only):
+def test_a_new_index_is_freed_by_refcount(tmp_path, no_gc):
     index = MeasurementIndex(str(tmp_path))
     ref = weakref.ref(index)
     del index
-    assert ref() is None
+    assert_freed(ref, "a new measurement index")
 
 
-def test_an_index_that_walked_and_parsed_is_freed_by_refcount(tmp_path, refcount_only):
+def test_an_index_that_walked_and_parsed_is_freed_by_refcount(tmp_path, no_gc):
     _write_lengths(tmp_path.joinpath(*WALKED))
     index = MeasurementIndex(str(tmp_path))
     index.prewarm()  # the worker's search: walks, keeps what the walk found, parses
@@ -54,4 +43,4 @@ def test_an_index_that_walked_and_parsed_is_freed_by_refcount(tmp_path, refcount
     index.invalidate()  # a Measure job end
     ref = weakref.ref(index)
     del index
-    assert ref() is None
+    assert_freed(ref, "a walked and parsed measurement index")

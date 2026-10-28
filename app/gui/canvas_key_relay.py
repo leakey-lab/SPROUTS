@@ -10,11 +10,11 @@ arrows go on browsing. Other typing selects nothing there: the tree's type-ahead
 while an editor page is on screen (``ui_panels.LibraryTree``, V5).
 
 A key held when the tree loses the keyboard ends its hold the way the canvas ends one
-when it loses the keyboard itself (a ``FocusOut``), unless the canvas took the keyboard
-(a press on it during a Space pan): the release then reaches the canvas. The release of a
-relayed key goes to its canvas whatever is held by then (Ctrl down before Space up); when
-that canvas's page left the screen meanwhile (a stage switch leaves the keyboard on the
-tree), it ends the holds with a ``FocusOut`` too.
+when it loses the keyboard itself (its ``end_holds()``), unless the canvas took the
+keyboard (a press on it during a Space pan): the release then reaches the canvas. The
+release of a relayed key goes to its canvas whatever is held by then (Ctrl down before
+Space up); when that canvas's page left the screen meanwhile (a stage switch leaves the
+keyboard on the tree), it ends the holds that way too.
 """
 
 from __future__ import annotations
@@ -24,14 +24,15 @@ from functools import cache
 
 from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QObject, Qt
-from PyQt6.QtGui import QFocusEvent, QKeyEvent, QKeySequence
+from PyQt6.QtGui import QKeyEvent, QKeySequence
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from app.gui import shortcuts
 
 __all__ = ["CanvasKeyRelay", "canvas_keys"]
 
-#: ``target()``: the canvas of the editor on screen and its registry scope, or None.
+#: ``target()``: the canvas of the editor on screen (a canvas view: ``end_holds()``) and its
+#: registry scope, or None.
 Target = Callable[[], "tuple[QWidget, str] | None"]
 
 _COMMAND = (
@@ -114,7 +115,7 @@ class CanvasKeyRelay(QObject):
             return True
         self._held.clear()
         self._held_by = None
-        self._end_holds(canvas)
+        canvas.end_holds()
         event.accept()
         return True
 
@@ -140,13 +141,4 @@ class CanvasKeyRelay(QObject):
         if not held or canvas is None or sip.isdeleted(canvas):
             return  # nothing held (or the window is being torn down)
         if QApplication.focusWidget() is not canvas:  # else the canvas gets the releases
-            self._end_holds(canvas)
-
-    @staticmethod
-    def _end_holds(canvas: QWidget) -> None:
-        """End ``canvas``'s holds (B, Space) the way it ends them when it loses the keyboard."""
-        QApplication.sendEvent(
-            canvas, QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason)
-        )
-        if getattr(canvas, "space_pan", False):
-            canvas.set_space_pan(False)
+            canvas.end_holds()  # B and Space, as when the canvas loses the keyboard

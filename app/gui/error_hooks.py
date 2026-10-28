@@ -43,6 +43,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMessageBox
 
+from app.dialogs import show_transient
 from app.logging_config import current_log_file
 from app.workers import describe_error
 
@@ -195,8 +196,9 @@ class CrashDialogPresenter(QObject):
                 self._dialog.setInformativeText(self._informative_text())
                 return
             self._extra = 0
-            self._dialog = self._build_dialog(summary, details)
-            self._dialog.show()
+            self._dialog = show_transient(
+                self._build_dialog(summary, details), self._on_dialog_finished, modal=False
+            )
         except Exception:
             self._muted = True  # a broken dialog must not turn every error into another
             logger.exception("Could not show the error dialog; further errors are only logged")
@@ -214,8 +216,6 @@ class CrashDialogPresenter(QObject):
         # then dereferences a deleted widget (access violation on relayout).
         box.setCheckBox(QCheckBox("Don't show error dialogs again this session", box))
         box.setWindowModality(Qt.WindowModality.NonModal)
-        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        box.finished.connect(self._on_dialog_finished)
         return box
 
     def _informative_text(self) -> str:

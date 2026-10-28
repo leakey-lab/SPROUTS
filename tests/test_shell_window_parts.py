@@ -307,6 +307,21 @@ def test_one_parse_at_a_time_in_the_pool(monkeypatch):
     assert index.prewarmed == 1 and reported == [index]
 
 
+def test_the_parse_runs_as_a_marked_pool_job(monkeypatch):
+    """Started by app.workers.start_pool_job: marked as a pool job (torch refuses there)."""
+    from app.workers import in_pool_job
+
+    pool = Pool()
+    monkeypatch.setattr(metrics, "QThreadPool", pool)
+    controller = MetricsController(metrics_window(bar=Bar()))
+    controller.index = index = Index(needs_load=True)
+    marks = []
+    index.prewarm = lambda: marks.append(in_pool_job())
+    controller.prewarm()
+    pool.jobs[0]()
+    assert marks == [True] and in_pool_job() is False
+
+
 def test_a_parse_of_a_replaced_project_refreshes_nothing():
     bar, checks = Bar(), []
     controller = MetricsController(metrics_window(bar=bar, stage="Measure", checks=checks))

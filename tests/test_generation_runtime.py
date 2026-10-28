@@ -97,7 +97,8 @@ def test_describe_runtime_after_resolution(fresh_runtime, monkeypatch, tmp_path)
     assert "mask model missing" in summary.text
 
 
-def test_get_mask_model_reports_missing_weights(monkeypatch, tmp_path):
+def test_get_mask_model_reports_missing_weights(fresh_runtime, monkeypatch, tmp_path):
+    # fresh_runtime: get_mask_model resolves the runtime first; it must not stay resolved
     runtime.get_mask_model.cache_clear()
     monkeypatch.setattr(runtime, "mask_weights_path", lambda: str(tmp_path / "nope.pth"))
     with pytest.raises(runtime.ModelUnavailableError, match="nope.pth"):

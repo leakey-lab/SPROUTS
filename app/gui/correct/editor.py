@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, QRectF, QSettings, QSize, pyqtSignal
+from PyQt6.QtCore import QRectF, QSettings, QSize, pyqtSignal
 from PyQt6.QtWidgets import QGraphicsScene, QVBoxLayout, QWidget
 
 from app.gui import editor_prompts, shortcuts
@@ -128,8 +128,7 @@ class CorrectEditor(PagingApi, QWidget):
             on_b_hold=self.b_key_status_changed.emit,
             on_layer_shown=self._shown,
         )
-        view.set_sink(self.router)
-        view.installEventFilter(self)  # focus-out ends the hold keys (eventFilter)
+        view.set_sink(self.router)  # a lost keyboard ends its B hold (the view's end_holds)
         self.paging = Neighbours(self, self.layers)  # library position, read-ahead
 
     def _build_overlays(self) -> None:
@@ -179,15 +178,6 @@ class CorrectEditor(PagingApi, QWidget):
         """Hidden (another stage, or the app quits): keep the layers' opacity and visibility."""
         super().hideEvent(event)
         self._prefs.store(self.layers.values())
-
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt override
-        """The canvas lost the keyboard: B and Space, if held, will not see their release."""
-        view = getattr(self, "graphics_view", None)  # None while the page is being torn down
-        if watched is view and event.type() == QEvent.Type.FocusOut:
-            self.router.canvas_focus_lost()
-            if view.space_pan:
-                view.set_space_pan(False)
-        return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------ MainWindow API
     @property

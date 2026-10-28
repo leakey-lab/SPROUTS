@@ -24,6 +24,9 @@ Design rules (all enforced here so the two paths can never drift):
     decode / prefetch / save threads of a batch run (``batch_torch_threads``).
   * torch is imported lazily: importing this module (e.g. for the status line's
     ``describe_runtime()``) never loads torch or creates a CUDA context.
+  * Never on a QThreadPool thread: resolving the runtime, the warm-up and building a model
+    raise ``RuntimeError`` in a pool job (``app.workers.refuse_pool_thread``; torch there
+    deadlocked the next job on that thread, dc11edf). No Qt import here for it.
 
 Public API:
   get_runtime() -> RuntimeConfig          (cached, resolves the device)
@@ -106,6 +109,17 @@ class ModelUnavailableError(RuntimeError):
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _refuse_pool_thread() -> None:
+    """Raise ``RuntimeError`` inside a QThreadPool job (``app.workers.refuse_pool_thread``).
+
+    Read through ``sys.modules`` so this module never imports Qt: a process that has not
+    loaded ``app.workers`` started no pool job through it.
+    """
+    workers = sys.modules.get("app.workers")
+    if workers is not None:
+        workers.refuse_pool_thread("torch")
 
 
 def mask_weights_path() -> str:
@@ -286,6 +300,7 @@ def get_runtime() -> RuntimeConfig:
     Auto-detects CUDA vs CPU and applies the global cuDNN/TF32 policy described
     in the module docstring. Never hardcodes a GPU index; always falls back to CPU.
     """
+    _refuse_pool_thread()  # before torch: the first resolve is the one that enters it
     import torch
 
     benchmark = _env_flag(CUDNN_BENCHMARK_ENV)
@@ -373,6 +388,7 @@ def warm_up(*, models: bool = True) -> RuntimeConfig:
     No checkpoint is read. Settings and outputs are those of a job that resolves the
     runtime itself.
     """
+    _refuse_pool_thread()  # also when the runtime is resolved already (the imports below)
     config = get_runtime()
     if models:
         for name in _FIRST_JOB_MODULES:
@@ -460,6 +476,7 @@ def get_skeleton_model(device: torch.device | None = None):
     process, on the runtime device, in eval mode and (on CUDA) channels_last.
     Imported lazily to avoid a circular import with skeleton_inference.
     """
+    _refuse_pool_thread()
     import torch
 
     from app.inference.skeleton_inference import SkeletonModel  # local import
@@ -489,6 +506,7 @@ def get_mask_model(device: torch.device | None = None):
     so the weights are copied once. Raises ``ModelUnavailableError`` when the
     checkpoint is missing or does not load.
     """
+    _refuse_pool_thread()
     import torch
 
     from app.mask_model.model import ResNetSkeleton

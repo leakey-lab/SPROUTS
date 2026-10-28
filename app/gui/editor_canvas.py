@@ -14,6 +14,8 @@ positions already floored to an image pixel and clamped to the image:
   PageUp / PageDown left to the parents);
 * leaving the canvas and every pan-state change (sticky pan, Space) are reported, so the
   sink can hide its brush ring;
+* a lost keyboard ends the holds whose release the view will not see (``end_holds``, also
+  on request): the sink's (B) first, then the mixin's Space;
 * while a drag is in progress the wheel is ignored and the view never scrolls (the stroke
   would smear). :meth:`EditorCanvasView.end_gesture` forgets a drag the editor has ended
   itself (open, layer switch, navigation): the rest of it arrives as hover and its release
@@ -86,6 +88,10 @@ class InputSink(Protocol):
 
     def canvas_pan_changed(self, panning: bool) -> None:
         """A left drag now pans (sticky pan mode or Space held), or no longer does."""
+        ...
+
+    def canvas_focus_lost(self) -> None:
+        """The releases of held keys will not reach the canvas: end the holds (B)."""
         ...
 
 
@@ -243,6 +249,16 @@ class EditorCanvasView(CanvasViewMixin, QGraphicsView):
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+    def end_holds(self) -> None:
+        """End the holds whose release this view will not see: the sink's (B), then Space.
+
+        Runs when the view loses the keyboard (the mixin's ``focusOutEvent``) and when the
+        library tree's key relay asks for it.
+        """
+        if self._sink is not None:
+            self._sink.canvas_focus_lost()
+        super().end_holds()
 
     # ------------------------------------------------------------------ hover / pan state
     def refresh_cursor(self) -> None:

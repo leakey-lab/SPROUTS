@@ -300,10 +300,11 @@ def test_a_stopped_run_frees_its_tasks_by_refcount(monkeypatch):
     """A task still in the queue of finished tasks when a stopped run returns refers to that
     queue through its done callback: a cycle, which a ``gc.freeze()`` (``app.gc_policy``,
     after a warm-up) before the next full collection would keep for the rest of the session."""
-    import gc
     import threading
     import weakref
     from concurrent.futures import ThreadPoolExecutor
+
+    from tests.leak_census import assert_freed, refcount_only
 
     tasks = []
 
@@ -323,17 +324,13 @@ def test_a_stopped_run_frees_its_tasks_by_refcount(monkeypatch):
         return {"Image": name}
 
     images = {f"{i:04d}": "p" for i in range(3000)}
-    gc.collect()
-    gc.disable()
-    try:
+    with refcount_only():
         rows = metrics.run_metric_pool(images, worker, should_stop=lambda: measured[0] >= 600)
         assert len(rows) < len(images)  # stopped with tasks left over
         del rows
-        alive = sum(ref() is not None for ref in tasks)
-    finally:
-        gc.enable()
-    assert len(tasks) > 1
-    assert alive == 0
+        assert len(tasks) > 1
+        for ref in tasks:
+            assert_freed(ref, "a task of the stopped run")
 
 
 def test_an_error_in_a_worker_ends_the_pool_without_measuring_the_rest():

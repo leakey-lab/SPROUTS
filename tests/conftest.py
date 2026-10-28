@@ -6,8 +6,9 @@
 - The user's config folder is never read or written: ``SPROUTS_CONFIG_DIR`` names a temp
   folder of the session (removed at its end; module fixtures and subprocesses use it too),
   and every test has its own folder in it (made when the app first writes there), so
-  Enhance defaults a test saves never reach a later test. QSettings are not redirected: a
-  store given no settings object uses the user's (``QSettings("LeakeyLab", "SPROUTS")``).
+  Enhance defaults a test saves never reach a later test. Nor the user's QSettings: a store
+  given no settings object gets a memory store on the offscreen platform
+  (``app.settings.app_settings``).
 - One QApplication, as in a full run: ``AA_ShareOpenGLContexts`` is set before it exists,
   the canvases default to raster viewports (``ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0``), and
   the session fixtures ``app`` and ``qapp`` make it on first use and keep it until exit.
@@ -20,6 +21,9 @@
   free the widget it yielded itself (pytest keeps the value until after the teardown), and a
   dead wrapper left for the next test can make sip hand out a wrapper of the wrong type
   there (see ``qt_teardown``).
+- Then a thread the keeper holds (``app.workers.kept_threads``) that still runs is named in
+  a warning (:class:`KeptThreadRunning`; once per thread, never a failure): a test left a
+  job running, which a later test or the end of the session meets.
 - ``gc.freeze()`` after the collection and after each test file: the objects alive then
   (the test modules and everything they imported, torch, dash and pandas among them, about
   530,000 after the collection) are taken out of the collector's sight, so a full
@@ -44,8 +48,11 @@ import gc
 import itertools
 import os
 import shutil
+import sys
 import tempfile
 import time
+import warnings
+import weakref
 
 import pytest
 
@@ -83,6 +90,25 @@ SLOW_FLUSH_S = 0.02
 _slow_freeze_allowed = [True]  # False once refused in a file, until the file ends
 _test_numbers = itertools.count()
 _SESSION_APP: list = []  # the QApplication of the app / qapp fixtures, kept until exit
+_named_threads: weakref.WeakSet = weakref.WeakSet()  # kept threads a warning named already
+
+
+class KeptThreadRunning(UserWarning):
+    """A thread the keeper holds still runs after a test ended (a job was left running)."""
+
+
+def _census_kept_threads(item) -> None:
+    """Warn about the kept threads still running after ``item`` (each one once)."""
+    workers = sys.modules.get("app.workers")
+    if workers is None:
+        return  # nothing imported the keeper: no thread was kept
+    running = [t for t in workers.kept_threads() if t.isRunning() and t not in _named_threads]
+    if running:
+        _named_threads.update(running)
+        names = ", ".join(t.objectName() or type(t).__name__ for t in running)
+        warnings.warn(
+            KeptThreadRunning(f"still running after {item.nodeid}: {names}"), stacklevel=2
+        )
 
 
 def _no_qt_object_in_sight() -> bool:
@@ -114,6 +140,7 @@ def pytest_runtest_protocol(item, nextitem):
     started = time.perf_counter()
     if QCoreApplication.instance() is not None:
         flush_deleted()
+        _census_kept_threads(item)
     elif last_of_file:
         gc.collect()
     if last_of_file:

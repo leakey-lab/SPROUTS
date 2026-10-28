@@ -106,6 +106,55 @@ def test_a_torch_warmup_started_in_the_pool_fails_at_once(app, pool, monkeypatch
         delete_widgets(made, close=False)
 
 
+def test_the_runtime_refuses_a_pool_job_before_it_touches_torch(pool, monkeypatch):
+    """Resolving the runtime, its warm-up and building a model refuse in a pool job, before
+    torch is imported (the job fails at once instead of hanging the next one there)."""
+    from app.inference import runtime
+
+    monkeypatch.setitem(sys.modules, "torch", None)  # any import of torch fails loudly
+    runtime.get_runtime.cache_clear()  # unresolved: its body runs
+    calls = {
+        "get_runtime": runtime.get_runtime,
+        "warm_up": runtime.warm_up,
+        # a device no call used: a cache miss (a model built before stays cached)
+        "get_skeleton_model": lambda: runtime.get_skeleton_model("pool-job-test"),
+        "get_mask_model": lambda: runtime.get_mask_model("pool-job-test"),
+    }
+    errors: dict[str, BaseException] = {}
+
+    def job():
+        for name, call in calls.items():
+            try:
+                call()
+            except BaseException as exc:  # noqa: BLE001 - recorded for the asserts
+                errors[name] = exc
+
+    start_pool_job(job, pool)
+    assert pool.waitForDone(5000)
+    assert sorted(errors) == sorted(calls)
+    for name, exc in errors.items():
+        assert isinstance(exc, RuntimeError), (name, exc)
+        assert "must not run on a QThreadPool thread" in str(exc), name
+    assert runtime.peek_runtime() is None  # nothing was resolved there
+
+
+def test_the_runtime_checks_pool_jobs_without_loading_qt():
+    """runtime reads app.workers only when a process has loaded it (no Qt import there)."""
+    code = textwrap.dedent(
+        """
+        import sys
+        from app.inference import runtime
+        runtime._refuse_pool_thread()  # no app.workers: nothing to check, nothing loaded
+        print("app.workers" in sys.modules, any(m.startswith("PyQt6") for m in sys.modules))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip() == "False False"
+
+
 def _pool_starts(path: Path) -> list[int]:
     """Lines of ``path`` that start a job on a ``QThreadPool`` themselves."""
     lines = []
@@ -118,11 +167,6 @@ def _pool_starts(path: Path) -> list[int]:
     return lines
 
 
-#: Pool starts not on start_pool_job yet (their modules are outside this lane); the list only
-#: shrinks.
-KNOWN_DIRECT_STARTS = {"app/gui/stage_status.py", "app/gui/window/metrics.py"}
-
-
 def test_every_pool_job_is_started_by_start_pool_job():
     home = ROOT / "app" / "workers.py"
     direct = {
@@ -130,7 +174,7 @@ def test_every_pool_job_is_started_by_start_pool_job():
         for path in sorted((ROOT / "app").rglob("*.py"))
         if path != home and _pool_starts(path)
     }
-    assert direct == KNOWN_DIRECT_STARTS
+    assert direct == set()
     assert _pool_starts(home)  # the helper itself (the check finds a start)
 
 

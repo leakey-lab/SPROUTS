@@ -20,7 +20,15 @@ import threading
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QEventLoop, QTimer, qInstallMessageHandler, qWarning
+from PyQt6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QEventLoop,
+    Qt,
+    QTimer,
+    qInstallMessageHandler,
+    qWarning,
+)
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.gui import error_hooks
@@ -320,6 +328,33 @@ def test_an_error_queued_while_the_box_closes_keeps_one_dialog(qapp, monkeypatch
     finally:
         if presenter.dialog is not None and not sip.isdeleted(presenter.dialog):
             presenter.dialog.close()
+        _pump()
+
+
+def test_the_box_is_a_modeless_transient_box_that_frees_itself(qapp, monkeypatch):
+    """Shown by app.dialogs.show_transient (modeless, never exec()), deleted once closed."""
+    monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: None))
+    real, modes = error_hooks.show_transient, []
+
+    def recording(box, on_answer=None, *, modal=True):
+        modes.append(modal)
+        return real(box, on_answer, modal=modal)
+
+    monkeypatch.setattr(error_hooks, "show_transient", recording)
+    presenter = CrashDialogPresenter(log_file=None)
+    presenter.report("ValueError: x", "tb")
+    _pump()
+    box = presenter.dialog
+    try:
+        assert modes == [False] and box.isVisible()
+        assert box.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        assert box.windowModality() == Qt.WindowModality.NonModal and not box.isModal()
+        box.close()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(box) and presenter.dialog is None
+    finally:
+        if not sip.isdeleted(box):
+            box.close()
         _pump()
 
 

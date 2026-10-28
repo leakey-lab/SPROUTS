@@ -59,7 +59,7 @@ from typing import Any
 from PyQt6.QtCore import QEvent, QObject, Qt, QThreadPool, QTimer, pyqtSignal
 
 from app import gc_policy
-from app.workers import refuse_pool_thread, start_pool_job
+from app.workers import start_pool_job
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +129,7 @@ _KEYBOARD_FOCUS = (
 # --------------------------------------------------------------------------- #
 def _warm_up_runtime(models: bool) -> str:
     try:
-        refuse_pool_thread("torch")  # it deadlocked there (dc11edf): a fresh thread only
-        from app.inference import runtime
+        from app.inference import runtime  # warm_up() refuses a pool thread (dc11edf deadlock)
 
         runtime.warm_up(models=models)
     except Exception as exc:  # noqa: BLE001 - the first Generate reports it again

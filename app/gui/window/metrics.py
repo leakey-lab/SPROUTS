@@ -31,6 +31,7 @@ from app.data_processing.measurement_index import Measurement, MeasurementIndex
 from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.inference.measure_sources import SIZE, UNEDITED, UNREADABLE
 from app.project_layout import project_layout_of
+from app.workers import start_pool_job
 
 from ..library_index import status_text
 from ..metrics_bar import differs_from_current, fov_owner_tip, fov_text
@@ -307,7 +308,7 @@ class MetricsController:
             except RuntimeError:
                 pass  # the window is gone
 
-        QThreadPool.globalInstance().start(work)
+        start_pool_job(work, QThreadPool.globalInstance())
 
     def on_ready(self, index) -> None:
         """A pool job has parsed the CSVs of ``index``: the bar shows them, and the Measure

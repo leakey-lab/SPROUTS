@@ -154,6 +154,19 @@ def test_reset_during_a_count_voids_it_and_the_next_starts_at_once(tmp_path, poo
     assert pool.jobs == [] and len(seen) == 1
 
 
+def test_a_count_runs_as_a_marked_pool_job(tmp_path, pool, counted, status, monkeypatch):
+    """Started by app.workers.start_pool_job: marked as a pool job (torch refuses there)."""
+    from app.workers import in_pool_job
+
+    marks = []
+    monkeypatch.setattr(
+        stage_status, "load_project_calibration", lambda _root: marks.append(in_pool_job())
+    )
+    status.check(_Index(), ProjectLayout(str(tmp_path)))
+    pool.run_next()
+    assert marks == [True] and in_pool_job() is False
+
+
 def test_the_measure_text_is_the_newest_counts(tmp_path, pool, counted, status):
     layout = ProjectLayout(str(tmp_path))
     index = _Index(length=str(tmp_path / "skeletons" / "root_lengths.csv"))

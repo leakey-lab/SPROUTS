@@ -26,6 +26,7 @@ from app.calibration import load_project_calibration, method_note
 from app.inference.measure_inputs import load_inputs_record
 from app.project_layout import SKELETON_SUFFIX
 from app.provenance import read_sidecar
+from app.workers import start_pool_job
 
 from .stage_summary import Freshness, generate_text, input_freshness, measure_text
 
@@ -205,7 +206,7 @@ class StageStatus(QObject):
             except RuntimeError:
                 pass  # the window is gone
 
-        QThreadPool.globalInstance().start(work)
+        start_pool_job(work, QThreadPool.globalInstance())
 
     def _on_ready(self, token, result) -> None:
         if token is not self._token:
