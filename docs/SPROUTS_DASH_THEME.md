@@ -383,7 +383,8 @@ theme.message_figure(text, color=...) # text-only figure for hints, empty states
 ## Changes since this handoff (2026-09-30)
 
 The dashboards follow this guide; the UX and speed pass changed these parts (display only,
-no data changes):
+no data changes), and the redundancy and speed pass (2026-10-27) made the speed changes
+dated 2026-10-27, with no display or data change:
 
 - **plotly.js bundle.** `app/assets/plotly-basic.min.js` (plotly.js basic 4.1.1, MIT,
   `app/assets/licenses/plotly.js-MIT.txt`) is served before the Dash renderer, and
@@ -434,3 +435,20 @@ no data changes):
   (`viz-controls`) hides for views without settings. After a strip or view change the refit
   clears plotly.js's `_initialAutoSizeIsDone`, so the next draw measures the chart card
   instead of drawing at the old size and redrawing.
+- **Per-tube selection in the browser (2026-10-27).** When the view becomes Depth Profile,
+  the dropdown shows the tube the chart plots (the picked tube, else the first). This is a
+  clientside callback of `dash_shell`: it reads the dataset's tubes from the
+  `tube-selector` options, which list them all, so `DashboardShell.register_callbacks` no
+  longer takes `tubes`. A view switch no longer waits for a server answer before it asks
+  for the figure.
+- **Same-size relayout skipped (2026-10-27).** `app/assets/sprouts-autosize.js` (loaded
+  after `plotly-basic.min.js`: assets load in name order) answers at once the
+  `relayout({autosize: true})` that `Plotly.Plots.resize` makes after a resize or a refit,
+  when the chart already has the size plotly.js would measure. Every other relayout runs
+  as before; `tests/test_viz_dash_plotly_bundle.py` checks the plotly.js code the guard
+  mirrors.
+- **Hover-image names after the first chart (2026-10-27).** The length dashboard parses its
+  hover-image names on a background thread once its first chart has been sent
+  (`DashApp._parse_images_after_this_response`), not while the page loads: the parse held
+  the interpreter lock and delayed the page's first requests. A lookup before the parse
+  ends waits for it.

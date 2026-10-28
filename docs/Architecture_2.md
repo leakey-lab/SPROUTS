@@ -117,6 +117,11 @@ flowchart TB
    and cancel, `app/workers.py`) and `JobRegistry` runs one batch job at a time. The window
    imports the handlers, and `app.handlers` imports nothing from `app.gui`: a handler gets
    the project's layout from `project_layout_of` in `app/project_layout.py`.
+   `app/workers.py` holds every `QThread` from `start()` until Qt's own `finished` (none
+   has a parent; `stop_all` stops the running ones at quit) and starts every `QThreadPool`
+   job through `start_pool_job`, where torch refuses to run. Every `exec()` of a dialog
+   and every box that frees itself once answered goes through `app/dialogs.py`
+   (`run_modal`, `show_transient`).
 2. `app/inference/batch_engine.py` runs the batches for both models: decode on a thread
    pool, the GPU forward on the job's thread, PNG writes on an async writer. Fixed batch
    shapes keep outputs identical from run to run; `runtime.py` picks device and precision.
@@ -144,6 +149,7 @@ Root-Mask-and-Skeletons/
 │   ├── config.py, calibration.py # Constants (ports, folder names, FOV); per-project FOV
 │   ├── project_layout.py, naming.py, io_utils.py, provenance.py, models.py, user_paths.py
 │   ├── enhancement.py, feedback.py, workers.py, gc_policy.py, logging_config.py
+│   ├── settings.py, dialogs.py   # The one QSettings factory; the one exec() of a dialog
 │   ├── qt_environment.py         # Qt / Chromium start-up flags per OS (Qt-free)
 │   ├── read_ahead_cache.py       # Bounded cache of the Library and Correct read-aheads (Qt-free)
 │   ├── design/tokens.py          # SPROUTS design tokens

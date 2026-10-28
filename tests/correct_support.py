@@ -1,11 +1,12 @@
 """Helpers of the Correct page tests: photos and projects on disk, the editor factory, the
 prompt answers, input on the canvas and what the layers hold.
 
-They are the helpers that ``test_correct_editor.py`` shares with the other Correct, golden
-and perf tests. ``conftest.py`` wraps four of them in fixtures (``correct_guards``,
-``make_editor``, ``project``, ``answers``). ``install_guards`` is composed from
-``tests.guards``; the user's config needs no line here, as every test has its own config
-folder (``conftest.py``).
+This is their one copy: the test modules that use them import them from here.
+``test_correct_editor.py`` re-exports the names that two golden modules
+(``test_correct_goldens.py``, ``test_correct_classes_goldens.py``) still import from it.
+``conftest.py`` wraps four of them in fixtures (``correct_guards``, ``make_editor``,
+``project``, ``answers``). ``install_guards`` is composed from ``tests.guards``; the user's
+config needs no line here, as every test has its own config folder (``conftest.py``).
 """
 
 from __future__ import annotations

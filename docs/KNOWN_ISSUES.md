@@ -1,22 +1,23 @@
 # SPROUTS — known issues and open decisions
 
-Status of 2026-10-27 on `feat/unified-correct-editor`, after the redundancy and speed pass
-(audit 2026-10-26, built 2026-10-27 in `89965f5`..`9ad0d96`). Every owner decision of the
-2026-10-12 audit is built except O28 (the optional W6-T3); table 1 names the task and
-commit that built each (plan:
+Status of 2026-10-28 on `feat/unified-correct-editor`, after the redundancy and speed pass
+(audit 2026-10-26, built 2026-10-27 in `89965f5`..`5f0ca18`, and `011ad3f` on 2026-10-28).
+Every owner decision of the 2026-10-12 audit is built except O28 (the optional W6-T3);
+table 1 names the task and commit that built each (plan:
 `docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`). A final whole-branch
 review (2026-10-26: correctness, science, data safety, cross-platform) found one critical,
 three important and nine minor items; all are fixed (rows FR1 to FR7 of "Resolved
 history") except E11, accepted. The redundancy and speed pass changed no scientific output
 except one corner case (S01-06, `CHANGELOG.md`); the IDs its code cites are in the second
 table of "Resolved history", and its owner questions, none built, are under "Details and
-history". Table 2 lists the engineering items still open: accepted limits and work not
-built now; rows U1, U2, U3, U5 and U7 are the open follow-ups of the Python 3.14 upgrade
-(2026-10-27, `CHANGELOG.md`; U4 is resolved, U6 closed by the owner). Built items are in
-"Resolved history" with their commits; table 3 lists what was closed as accepted. The
-text below the tables is the record: the entries keep their original wording and their
-"Open" / "Resolved" labels as of the pass that wrote them, so read the tables for the
-present state.
+history" (the offenders its guard tests mark are row K1b-01 of table 2, and the dashboard
+blink that stays is row D8). Table 2 lists the engineering items still open: accepted
+limits and work not built now; rows U1, U2, U3, U5 and U7 are the open follow-ups of the
+Python 3.14 upgrade (2026-10-27, `2309d67`, `CHANGELOG.md`; U4 is resolved, U6 closed by
+the owner). Built items are in "Resolved history" with their commits; table 3 lists what
+was closed as accepted. The text below the tables is the record: the entries keep their
+original wording and their "Open" / "Resolved" labels as of the pass that wrote them, so
+read the tables for the present state.
 
 ## Decisions: asked on 2026-10-12, answered 2026-10-12 and 2026-10-25
 
@@ -73,9 +74,11 @@ present state.
 | M6 | | With no inputs record (its write failed, or the CSV was edited by hand), the Measure status line can miss a regenerated prediction under a GT file that was not used; the metrics bar flags it, and the next Measure run writes a fresh record | known, accepted (WG-T8 review) |
 | P2-01 | E11 class | On a case-sensitive disk, a file whose name differs only in case from the one a lookup asks for, created by another program, can stay unseen until its folder changes again where the folder's modification time does not move (some FUSE or object-store mounts, NFS or SMB attribute caches, a server clock more than 2 s behind, a backward clock step, tools that restore a folder's time such as `rsync -a`, `cp -a` or `touch -r`): the miss memo of `project_layout._find_without_case` answers from its last listing. Exact names, the only names the app writes, are always seen | known, accepted (redundancy and speed pass, review L3-r2) |
 | S15-01 | D41 (follow-up) | Released dashboards are collected since 09b3317, except one case: a dashboard alive while the heap is frozen (the Generate warm-ups after a Visualize visit, a job-end freeze after a run that imported torch itself, the dashboards warm-up ending during a build) stays in memory for the rest of the session once it is released, about 5-17 MiB for the length dashboard of the 46k trial. Freeing it costs a full collection of 170-350 ms on the GUI thread | owner question (2026-10-27; recommendation: keep it) |
+| K1b-01, C5-03, P1-03, S02-01, C5-02 | owner questions #50, #9, #13, #4, #14 | The guard tests of 5ab283c mark today's offenders as strict `xfail`s with these IDs: the status line's Cancel button shows no keyboard focus ring, because its own stylesheet sets a border without a `:focus` rule (K1b-01, new); Classes… and Export dataset… take the keyboard on a click, so `Space` opens the dialog again and the canvas keys stop (C5-03); with a measured image selected the window needs about 1,112-1,126 px, over the 900 px budget (P1-03); the side card keeps a stale width after a Layers row label changes (S02-01); at 125 % scaling the metrics bar's name cell paints a form one pixel too wide, cut, and an elided class name can have no tooltip (C5-02) | owner questions (none built; `tests/test_window_focus_guards.py`, `tests/test_window_width_budget.py`, `tests/test_correct_side_card_width.py`, `tests/test_text_fit_fractional_band.py`): a fix turns its test into an XPASS, which fails until the marker and this row go |
 | P2 | | First image read on the GUI thread | not built now (only for images larger than 640 x 480): W6-T1 |
 | P3 | | Deflate in the skeleton history | not built now (only for large images): W6-T2 |
 | D2 | | Pre-Generate scan as a warm-up | O28, W6-T3 (optional); the scan now costs about 0.16 s at 46k, and closing D2 is an owner question (S11-07, 2026-10-27) |
+| D8 | VG-FLICKER, owner question #42 | The dashboard blink. A dashboard's web view draws through a `QQuickWidget`, which needs a Direct3D 11 window surface on Windows, and Qt cannot change the surface of a window on screen: it recreates the main window, which is gone for 43-98 ms. With OpenGL canvases (the RTX machine's own screen) this happens at the first open and once at each reopen after the 5-minute release; with raster canvases on Windows (Remote Desktop, software OpenGL, `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0`) once per app start, at the first dashboard (Linux and macOS were not checked). Fixed: the release itself recreates the window once, not twice, and logs no D3D11 warning (K1b-D, 5ab283c). The swap to raster viewports (D3, table 3) neither causes nor avoids the recreation. No value or saved pixel is involved | open; owner decision (2026-10-27): raster sessions keep one blink per start (no hidden anchor widget); route (b), the dashboard as a native child window, is built only after the owner runs `.claude/handoff/dedup-speed-2026-10-26/console_test.ps1` at the RTX machine's own screen and it passes |
 | U1 | Python 3.14 upgrade | `app/assets/sprouts-uirevision.js` stops Dash 4.4.1's redraw after a zoom is synced into the figure, which dropped the Growth Over Time zoom on Select All / Clear All (plotly/dash#4093). Remove it and `tests/test_viz_dash_uirevision.py` once a Dash release fixes #4093; that test's pin on the sync markers in dcc's `async-graph.js` fails when a Dash upgrade changes them | open: re-check at every Dash upgrade (Python 3.14 upgrade, 2026-10-27) |
 | U2 | Python 3.14 upgrade | The PyInstaller app bundle has not been built or started on Python 3.14; only `tests/test_fair_build.py` ran (18 of 18 with PyInstaller 6.22.3) | open: build and smoke-test it before the next release (owner question, 2026-10-27) |
 | U3 | Python 3.14 upgrade | CI (`.github/workflows/ci.yml`: Ubuntu, Windows, macOS) has not run on Python 3.14, as the branch is not pushed; the wheels of every pin resolve on the three systems (uv, wheels only) | open: the first push runs it |
@@ -91,7 +94,7 @@ present state.
 | P5 | Leave the first skeleton frame | 3.75 ms once on the stress skeleton, 0.98 ms on a real one |
 | P7 | Leave the warm-up leftovers | the window is gone 15 ms after close; the 1.25 s wait is invisible, and a daemon thread risks a crash at exit |
 | D1 | Leave `refresh_outputs` on the GUI thread | 94 ms for 23k + 23k once per pass; an asynchronous scan races with saves |
-| D3 | Keep raster viewports while a dashboard lives | one graphics backend per top-level window; a separate window is a UX regression |
+| D3 | Keep raster viewports while a dashboard lives | one graphics backend per top-level window; a separate window is a UX regression. (Note 2026-10-27: the swap neither causes nor avoids the main window's recreation when a dashboard joins it; that blink is D8 in table 2.) |
 | D4 | Leave the first dashboard open | the 234 ms is the QtWebEngine start, bound to the GUI thread |
 | D6 | Keep the 30-bar label limit | a zoom-following callback costs a second full draw on the largest trials |
 | E6 (bicubic) | Bicubic refine not planned | bicubic sharpens the JPEG blocks; pinch is built in WX-T3 |
@@ -162,33 +165,47 @@ stay below under "Details and history", with their original wording.
 | FR5 | final review S1 | A GT mask of another size than its photo was measured as GT, although *Correct* refuses it | Not used, reason `size`, the prediction is measured (science entry in `CHANGELOG.md`): FR-B, a7adee8 |
 | FR6 | final review D4 | A project's `gt/` folder opened as a project let Generate's *Replace all predictions* overwrite the GT masks | Refused unless the folder shows a project's markers: FR-B, a7adee8 |
 | FR7 | final review C3, S2, S4, X1-X4 | A six-stage docstring, the 127 threshold filed outside the science section, a stale 0.8 % figure, two tests that failed on macOS, Windows-only install commands | 8c59fce (the docstring figure in a7adee8) |
-| U4 | Python 3.14 upgrade | `CLAUDE.md` said Python 3.10 and ruff `py310` | Updated with the upgrade (owner: "Use python 3.14", 2026-10-27): Python 3.14, `py314`, the venv's torch build and its GPU differences, graphify on Python 3.14: the Python 3.14 upgrade commit |
+| U4 | Python 3.14 upgrade | `CLAUDE.md` said Python 3.10 and ruff `py310` | Updated with the upgrade (owner: "Use python 3.14", 2026-10-27): Python 3.14, `py314`, the venv's torch build and its GPU differences, graphify on Python 3.14: 2309d67 |
 
-The redundancy and speed pass (audit 2026-10-26, built 2026-10-27 in `89965f5`..`9ad0d96`):
-the finding IDs the code and the tests cite, the review and deferred items they name, and
-the pass's bug fixes. Audit IDs: `S01`-`S17` code slices, `C1`-`C6` concept sweeps,
-`P1`-`P4` profilers, `T1` the test suite, `X1`-`X8` the gap audit. `D` and `E` numbers are
-deferred items of waves 1 and 2; `L1-r2 (a)` is item (a) of the second review of lane L1. A
-lane step built each row: `L1a` to `L12a` (wave 1), `M1a` to `M4a` (wave 2), `T1a` and
-`T8a` (wave 3); the commit is its lane's. `CHANGELOG.md` lists every change of the pass;
-the reports, verdicts and harnesses are in `.claude/handoff/dedup-speed-2026-10-26/`
-(git-ignored).
+The redundancy and speed pass (audit 2026-10-26, built 2026-10-27 in `89965f5`..`5f0ca18`,
+and `011ad3f` on 2026-10-28): the finding IDs the code and the tests cite, the review and
+deferred items they name, and the pass's bug fixes. Audit IDs: `S01`-`S17` code slices,
+`C1`-`C6` concept sweeps, `P1`-`P4` profilers, `T1` the test suite, `X1`-`X8` the gap
+audit. `D` and `E` numbers are deferred items of waves 1 and 2, two-digit `G` numbers
+those of wave 5; `L1-r2 (a)` is item (a) of the second review of lane L1. Waves 5 and 6
+built the dashboard items of an investigation of the dashboard flicker and of the GPU
+(`VG-FLICKER`, `VG-GPU_GRAPHS`) and an in-house Qt layer from an inventory of the app's Qt
+workarounds ("Qt toolkit item N" in the tests is item N of `notes/qt-toolkit-answer.md` in
+the handoff folder named below); `K1a-B` is item B of lane step K1a, and `K1b-01` is an
+owner question that step K1b found. The lane steps are `L1a` to `L12a` (wave 1,
+`89965f5`..`4af5b15`), `M1a` to `M4a` (wave 2, `e3bdd79`..`ea205a9`), `T1a` and `T8a`
+(wave 3a, `0285836` and `9ad0d96`), `T2a` to `T7a` (wave 3b, `2f67663`..`56a2a1f`, with
+the documents in `e511a7d`), `F1a`, `K1a` and `K1b` (wave 5, `234ca54` and `5ab283c`),
+`Q1a` and `Q2a` (wave 6, `5f55019` and `5f0ca18`); each row names the step that built it,
+with its lane's commit. `CHANGELOG.md` lists every change of the pass; the reports,
+verdicts and harnesses are in `.claude/handoff/dedup-speed-2026-10-26/` (git-ignored).
 
 | ID | Also known as | Item | Resolved by |
 |---|---|---|---|
 | C1-04 | D02 (skeleton rule) | The Measure status line listed other files than Measure reads: hidden names such as `._a.png` were measured but not counted, and skeleton names were matched without the case of the `_fake.png` suffix | It counts with Measure's own name rules (`input_split.png_stem`, `project_layout.skeleton_stem`): L1a, 89965f5 (masks, GT files); M1b, e3bdd79 (skeletons). Measuring case variants of the suffix is an owner question |
 | C3-05 | | A finished generation thread was freed only by the cyclic garbage collector, and never once a `gc.freeze()` had caught it alive | Its outcome slots hold it weakly (`generation_base.thread_slot`), so it is freed when the next run starts: L2b, c8d01e9 |
 | C4-01 | | The 256-entry undo journal filled with entries the layers had already dropped, so a busy layer pushed another layer's live steps out of reach | `EditJournal(per_layer=100)`: each layer's newest 100 actions stay on the timeline: L5b, 5c6e8d9 |
-| C5-04 | X8-01 | A headless `MainWindow()` without settings wrote its recent projects into the user's QSettings (the audit's own scripts filled the owner's list) | `MemorySettings` for such windows: L12a and the lead, 4af5b15. Removing the scratch rows from the owner's list is the owner's (X8-01) |
+| C5-04 | X8-01 | A headless `MainWindow()` without settings wrote its recent projects into the user's QSettings (the audit's own scripts filled the owner's list) | `MemorySettings` for such windows: L12a and the lead, 4af5b15; every store made without a settings object gets one from `app.settings.app_settings()`, the only `QSettings` constructor, which is memory on the offscreen platform: K1a, 5ab283c. Removing the scratch rows from the owner's list is the owner's (X8-01) |
 | C5-05 | S05-05, D17 | Dead UI helpers: the `ui_panels` factories, the `app/utils` icons, `IconButton.set_icon_name`, two `CanvasViewMixin` aliases, the `TypeError` branch of `_stage_icon` | Removed: L3b, 2b9b3bf; L7a, ae16881; M1b, e3bdd79 |
 | C6-02 | D11 (part 4) | A run in which many inputs fail flooded `app.log`: one record per input and a multi-MB summary | `batch_pipeline.LogLimiter`: the first 20 records of each kind, then one count: L2a, c8d01e9 (Generate); M1b, e3bdd79 (Measure rows with an Error) |
+| E18 | S10-02 | `ExportThread` kept its own copy of the thread error boundary | It is a `GuardedThread` (`work()`, `describe()`), like `DashInitWorker`; texts and outcomes unchanged, the log record is "ExportThread failed" by `app.handlers.worker_base`: T7a, 56a2a1f |
+| G06 | Qt toolkit item 2 | The dashboards' server thread caught only `Exception`: a `SystemExit` in it ended the app, and a `KeyboardInterrupt` or another `BaseException` escaped the thread without reaching the page | `_DashServerThreadBase` is a `GuardedThread`; its `error` signal relays `failed` on the server thread, and the page says "The dashboard server stopped: …": Q1a, 5f55019 |
+| K1a-B | Qt toolkit item 2 | "QThread: Destroyed while thread ... is still running" aborted the app (exit 0xC0000409, no traceback; a session of 2026-09-29 ended so, `app.log.1:7831`, `DashServerThreadArea`): the dashboards' threads had the dashboard as parent, so deleting a dashboard whose server still ran destroyed it, and a thread object dropped right after its start was destroyed too | The thread keeper of `app/workers.py`: every `QThread` is held from `start()` until Qt's own `finished` and never has a parent, `release_qthread` never blocks, and `stop_all` runs on the quit; `cleanup_server` stops the threads even when blanking the page fails: K1a, 5ab283c. The Library's scan and the dashboards' server threads on `GuardedThread`, one keeper and one `base_finished` (G05 to G08): Q1a, 5f55019 |
+| K1a-C1 | Qt toolkit item 8 | A held `Space` kept panning the Library display after the keyboard had left it: only the Correct page ended a hold on focus loss | `CanvasViewMixin.focusOutEvent` and `end_holds()`: K1a, 5ab283c; the tree's key relay and the editor canvas end both holds through `end_holds()` (G12, G13): Q2a, 5f0ca18 |
+| K1b-D | VG-FLICKER (release) | With OpenGL canvases the 5-minute dashboard release recreated the main window twice and logged "... 'D3D11' is not compatible with QOpenGLWidget": Qt found the dying dashboards' browsers before the canvases and made the window a Direct3D one again | A released dashboard leaves the window before the canvases get OpenGL back: one recreation, ending on OpenGL (`tests/test_visualization_manager_release_native.py`): K1b, 5ab283c. The first open and each reopen: D8 in table 2 |
 | L1-r2 (a) | review of lane L1 | Once the Measure pool ran images in tasks (wave 1), Cancel waited for a task of up to 32 images | `run_metric_pool` asks `should_stop` every 20 ms while no task ends: M1b, e3bdd79 |
 | L3-r2 (b) | review of lane L3 | The "an eighth of the stems" remap rule was written twice | One `project_layout.few_keys`: M1b, e3bdd79 |
 | L4-r1 (c) | review of lane L4 | A Measure run end parsed its CSV twice when the slot's own parse also searched the legacy folders (wave 1) | The extra located search runs only when the slot's own parse does not search: M1b, e3bdd79 |
 | P2-01 | C3-06, S03-07, D22 | On case-sensitive disks every exact-name miss listed the whole folder, several times per Correct open, re-entry and read-ahead plan | A key set per settled folder in `project_layout._find_without_case`: one `os.stat` per repeated miss: L3a, 2b9b3bf. Its residual limit is in table 2 |
-| P3-01 | D10 | Idle Intel OpenMP workers spun on 10-20 cores during Generate | `main.py` sets `KMP_BLOCKTIME=0` before torch loads, unless the user set it: L2a, c8d01e9; `tests/conftest.py` too: T1a, 0285836 |
+| P3-01 | D10 | Idle Intel OpenMP workers spun on 10-20 cores during Generate | `main.py` sets `KMP_BLOCKTIME=0` before torch loads, unless the user set it: L2a, c8d01e9; `tests/conftest.py` too: T1a, 0285836; a value the user set is tested to win: T7a, 56a2a1f |
 | S01-06 | O7 leftover | A mask prediction found only by the case-folded lookup (its stem or extension in another case, on a case-sensitive disk) was shown but not stamped: a rewrite of it by another program was missed by the save rule (a save of a plane equal to the prediction removed the GT file), by Discard, by the same image opened again and by the read-ahead and hand-back | `read_mask` stamps the case variant it found before reading it, and `MaskDocument.file_stamps` includes it; the prediction is looked up once per read: M2a, f4f02fa (science entry in `CHANGELOG.md`) |
 | S01-07 | C2-03 | GT masks in Correct were decoded on the slow reference path | `app.masks.read_mask_file`: the exact fast path, as for predictions: L1c, 89965f5 |
+| S02-02 | | The metrics-badge test of `tests/test_correct_main_window.py` failed when the 60 ms read-ahead timer fired inside its wait (a slow save) | It waits for the read-ahead first: T2a, 2f67663 |
 | S03-05 | P2-02 (a) | Every skeleton save thinned the whole frame again, and the 0/255 thinning wrapper cost as much as scikit-image | A lean wrapper; `render_to_size` at the mask's own size copies the thinned plane: L5a, 5c6e8d9 |
 | S06-01 | D21, C1-03 | Any job end dropped a legacy-located `root_lengths.csv` from the metrics bar | A job end other than Generate runs the located search in the pool: L4a, 5dafa69; both fixed legacy CSVs stay candidates of the fast search: M1a, e3bdd79 |
 | S06-05 | P1-02 (3), D01 | Each Measure entry started another freshness count (3.6 s at 46k), several ran at once, and the end of a Measure run on the Measure stage counted twice | One count at a time, the newest request kept: L1a, 89965f5; one count per Measure run end: M1b, e3bdd79 |
@@ -206,11 +223,14 @@ the reports, verdicts and harnesses are in `.claude/handoff/dedup-speed-2026-10-
 | S16-02 | C1-03 (part D) | Measure Length on a legacy `test_latest` layout found by the folder walk wrote a CSV that no reader found | The walked folder's `images/` CSV, where Measure writes, ranks before the older `test_latest/` CSV: M1a, e3bdd79 |
 | S16-05 | D06 | `MaskStore.write` and `MaskStore.remove` had no caller and would write or delete predictions in `mask/` | Removed: L1c, 89965f5; the `mask_path` docstring corrected: M1b, e3bdd79 |
 | S17-04 | | `read_tracing` let Pillow's refusals escape: class labels with a header over 2 x `MAX_IMAGE_PIXELS` (`DecompressionBombError`) or a broken chunk (`SyntaxError`) made *Correct* raise in the middle of the open, leaving the previous image's photo and labels on screen under the unexpected-error dialog, and a broken chunk ended the whole dataset export | Both are a `GtFileError`: *Correct* opens such labels empty with the *Saved class labels could not be read* notice, and the export lists them in `errors.txt`: L8a, a9a7717 |
-| T1-04 | | Test modules read the owner's real Enhance defaults and recent-projects list (and would write them on a fresh machine) | `tests/conftest.py` gives every test its own `SPROUTS_CONFIG_DIR` folder (T1a, 0285836); headless windows keep their recent projects in memory (C5-04) |
-| T1-01, T1-05 to T1-09 | | The tests repeat their app fixture, guards, windows, Correct helpers, waits and generation drains (with fixed sleeps) module by module | The shared fixtures and helpers: T1a, 0285836 (`tests/conftest.py`, `tests/guards.py`, `tests/qt_wait.py`, `tests/window_support.py`, `tests/correct_support.py`, `tests/generation_support.py`); the test modules move onto them in wave 3 |
+| T1-01, T1-05 to T1-09 | | The tests repeat their app fixture, guards, windows, Correct helpers, waits and generation drains (with fixed sleeps) module by module | The shared fixtures and helpers: T1a, 0285836 (`tests/conftest.py`, `tests/guards.py`, `tests/qt_wait.py`, `tests/window_support.py`, `tests/correct_support.py`, `tests/generation_support.py`); the test modules use them since wave 3b: T2a to T7a, 2f67663..56a2a1f (the generation handler tests wait for their thread without fixed sleeps, 12.3 -> 1.8 s: T6a, bdfb77c) |
+| T1-02 | | The canvas memory-cycle tests waited a fixed 250 ms per zoom for the idle warm-ups (22 waits) | They wait until the warm-ups ran (the file 5.9 -> 0.4 s): T5a, acdea6d |
+| T1-04 | | Test modules read the owner's real Enhance defaults and recent-projects list (and would write them on a fresh machine) | `tests/conftest.py` gives every test its own `SPROUTS_CONFIG_DIR` folder (T1a, 0285836); headless windows keep their recent projects in memory (C5-04), and every store made without a settings object is memory on the offscreen platform (K1a, 5ab283c) |
+| T1-10 | | Fixed waits: a released-thread subprocess test ran its event loop for 1.5 s, and the fetch-model tests waited 2 s for an unreachable server and up to 0.5 s per test-server shutdown | The loop ends when the thread is deleted (1.58 -> 0.39 s): T4a, cd26a5d; a 0.3 s timeout and a 0.05 s poll (the file 5.2 -> 0.9 s): T7a, 56a2a1f |
 | X2-03 | | Qt rebuilt a viewport-size piece of the endpoint markers' device cache on every pan step once the skeleton was larger than the view | The markers are drawn directly where Qt would keep only a partial cache and no two can overlap: M3b, 95e597c |
 | X2-04 | | The Correct canvas's raster viewport was not opaque (QSS), so every frame painted the window background under it | An opaque raster viewport that fills its own device rect: M3b, 95e597c |
 | X2-06 | | On raster canvases the translucent skeleton's joints changed brightness between full and partial repaints (under the brush or eraser ring) | A partial repaint strokes the full frame's line list: T8a, 9ad0d96 |
+| X6-02 | | The strict Correct perf budgets (`SPROUTS_PERF_TESTS=1`) timed a synthetic 45-degree line that cost 17-25 ms of thinning, and two of them failed | A Pix2Pix prediction of `docs/examples` (an open at 640 px 33-35 -> 8 ms, against a 10 ms budget): T2a, 2f67663 |
 | X7-01 | E03, E04 | `app.handlers` imported `app.gui.image_manager` for `project_layout_of` | Moved to `app/project_layout.py`; `tests/test_layering_contract.py` pins that the handlers import no `app.gui` module: M1b, e3bdd79 |
 
 ## By design (scope limits)
@@ -245,11 +265,14 @@ change to the scientific output and no visible change without the owner's permis
 read-only audit (17 code slices `S01`-`S17`, six concept sweeps `C1`-`C6`, four profilers
 `P1`-`P4`, the test suite `T1`, then a gap audit `X1`-`X8`) produced the findings, and
 adversarial verifiers checked each one. The buildable ones were built in lanes with
-disjoint files (wave 1 `L1`-`L12`, wave 2 `M1`-`M4`, wave 3 `T1`, `T8` and the test
-lanes), each reviewed and committed on its own; a science harness compared every output
-with `f392a85` after each lane. `CHANGELOG.md` lists the changes, the second table of
-"Resolved history" the IDs the code cites, and table 2 the limits accepted. The reports,
-verdicts and harnesses are in `.claude/handoff/dedup-speed-2026-10-26/` (git-ignored).
+disjoint files (wave 1 `L1`-`L12`; wave 2 `M1`-`M4`; wave 3 `T1`, `T8` and the test
+lanes; waves 5 and 6, after two owner requests of 2026-10-27, `F1`, `K1`, `Q1` and `Q2`),
+each reviewed and committed on its own. At the end of each wave a science harness compared
+the outputs with `f392a85` (Measure alone after wave 3, which changed no Generate code).
+`CHANGELOG.md` lists the changes, the second table of "Resolved history" the IDs the code
+cites, and table 2 the limits accepted and the open owner questions (rows D8 and K1b-01).
+The reports, verdicts and harnesses are in
+`.claude/handoff/dedup-speed-2026-10-26/` (git-ignored).
 
 Owner questions (none built; each needs a visible change, a science change or a decision;
 the full texts with recommendations are that folder's `notes/owner-questions.md`):
@@ -288,6 +311,16 @@ the full texts with recommendations are that folder's `notes/owner-questions.md`
   layouts (C1-03); a dashboard alive at a heap freeze (S15-01 follow-up, table 2); the
   skeleton's partial edge tiles one device pixel off the mask's at 125-175 %; endpoint
   markers one pixel off after a pan across the canvas's left or top edge.
+- Qt toolkit and dashboard blink (waves 5 and 6; that folder's `notes/qt-toolkit-answer.md`
+  and `notes/viz-flicker-gpu-answer.md`): the blink at the console (row D8 of table 2:
+  route (b) once the owner's console test passes); the status line's Cancel button has no
+  keyboard focus ring (K1b-01; guard tests mark it and S02-01, C5-03, P1-03 and C5-02 as
+  strict `xfail`s: row K1b-01 of table 2); Tab-only buttons app-wide (a click leaves the
+  keyboard where it was, Tab still reaches every button); the settings in the Windows
+  registry or in one INI file in the user config folder on every OS; the Fusion style on
+  Windows too; the Linux Chromium sandbox, off today only for root (a normal user on Ubuntu
+  24.04 may get no dashboards; not checked); the UI font (Qt does not load the IBM Plex
+  `.woff2` files, so each OS draws its own).
 - The owner's recent-projects list (X8-01): until 4af5b15 the audit's headless scripts added
   their folders to it, and 7 of its 8 rows are scratch folders to remove on the Welcome
   screen.

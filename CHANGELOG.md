@@ -20,16 +20,21 @@ Seven passes, not yet released:
   changes*); the CPU outputs, Measure, the Correct saves and every dashboard figure and
   Export CSV were compared with the old stack and are identical.
 - **Redundancy and speed pass** (branch `feat/unified-correct-editor`, audit 2026-10-26,
-  built 2026-10-27 in `89965f5`..`9ad0d96`): a read-only audit for repeated code, dead
-  code, bugs and speed, each finding checked by adversarial verifiers, then built in lanes
-  with disjoint files, each lane reviewed and committed on its own. Entries carry the
-  finding ID (for example S01-06); `docs/KNOWN_ISSUES.md` resolves the IDs the code cites.
-  Nothing visible changed without the owner: the fixes restore documented behaviour, and
-  the owner questions are not built. A science harness compared every generated mask and
+  built 2026-10-27 in `89965f5`..`5f0ca18`, and `011ad3f` on 2026-10-28): a read-only
+  audit for repeated code, dead code, bugs and speed, each finding checked by adversarial
+  verifiers, then built in lanes with disjoint files, each lane reviewed and committed on
+  its own. Waves 5 and 6 built what two owner requests of 2026-10-27 led to: dashboard
+  speed-ups and a fix of the dashboard release (from an investigation of the dashboard
+  flicker and of the GPU), and an in-house layer over the app's Qt workarounds (settings,
+  threads, dialogs, hold keys, guard tests). Entries carry the finding ID (for example
+  S01-06); `docs/KNOWN_ISSUES.md` resolves the IDs the code cites. Nothing visible changed
+  without the owner: the fixes restore documented behaviour, and the owner questions are
+  not built. At the end of each wave a science harness compared every generated mask and
   skeleton (GPU and CPU), every CSV row, provenance and inputs record and every GT-first
-  decision with `f392a85`: identical after every lane. Timings are min / median of
-  interleaved runs on a machine shared with other agents, offscreen unless stated; 46k is
-  the owner's 46,178-image project or a synthetic project of its layout.
+  decision with `f392a85` (Measure alone after wave 3, which changed no Generate code):
+  identical each time. Timings are min / median of interleaved runs on a machine shared
+  with other agents, offscreen unless stated; 46k is the owner's 46,178-image project or a
+  synthetic project of its layout.
 - **Owner-decisions build** (branch `feat/unified-correct-editor`, 2026-10-25; plan
   `docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`): the owner's answers
   to the 2026-10-12 decision sheet (O1-O38) and the follow-up answers, built task by task,
@@ -119,9 +124,32 @@ Seven passes, not yet released:
     with its traceback (S10-02, S17-06).
   - A crash dialog closed together with the dialog it sat on no longer mutes every later
     error dialog of the session: the next error shows a new one (S10-01).
+  - The app no longer aborts with "QThread: Destroyed while thread ... is still running"
+    (exit code 0xC0000409, no Python traceback; it ended a session on 2026-09-29): a
+    dashboard deleted while its server thread ran, or a thread object dropped right after
+    its start, destroyed a running thread. Every `QThread` is now held from `start()` until
+    Qt's own `finished` and never has a parent, and the quit asks the running ones to stop
+    and waits at most 2 s in all; a quit during a long folder scan can therefore keep the
+    process up to 2 s after the window has closed. The three dashboard cases and the
+    dropped thread abort on the old code and exit normally now (K1a-B).
+  - A `SystemExit`, `KeyboardInterrupt` or other `BaseException` in a dashboard's server
+    thread shows on the page ("The dashboard server stopped: …"): a `SystemExit` there ended
+    the app, and the others left the thread without reaching the page (G06).
+  - With OpenGL canvases, the 5-minute release of the dashboards recreates the main window
+    once instead of twice (one blink instead of two) and no longer logs "... 'D3D11' is not
+    compatible with QOpenGLWidget": a released dashboard leaves the window before the
+    canvases get OpenGL back (K1b-D). The first open and each reopen still recreate the
+    window once (`docs/KNOWN_ISSUES.md` D8).
+  - A held `Space` ends when the keyboard leaves a canvas (another widget, a popup or another
+    window takes it): the Library display kept panning after the focus had moved away
+    (K1a-C1).
   - A window started without a screen (tests, scripts) and without explicit settings keeps
     its recent projects in memory; it wrote every folder it opened into the user's list
-    (C5-04).
+    (C5-04). Every store made without a settings object (the recent projects, the window
+    state, the Correct layers' opacity and visibility, the device-check switch) now gets it
+    from `app.settings.app_settings()`, a memory store on such a platform: a Welcome screen
+    or a recent-projects store built in a test, and the device check, still opened the
+    user's settings (K1a-A).
   - Raster canvases (the macOS default; Windows or Linux without OpenGL, or while a
     dashboard lives): the translucent skeleton's joints no longer flicker brighter or darker
     under the brush or eraser ring, because a partial repaint draws the full frame's lines
@@ -131,7 +159,14 @@ Seven passes, not yet released:
     drawn directly, they no longer shift by a device pixel after some pans, nor drift at
     125-175 % (X2-03).
   - Tests: the oracle of `tests/test_gt_export_count_traced.py` uses the O7 case rule on
-    every OS; it failed on the Linux and macOS CI legs (S17-01).
+    every OS; it failed on the Linux and macOS CI legs (S17-01). The metrics-badge test of
+    `tests/test_correct_main_window.py` waits for the read-ahead (S02-02), and the Enhance
+    defaults test for its preview instead of a fixed 120 ms: both could fail on a busy
+    machine. The strict Correct budgets (`SPROUTS_PERF_TESTS=1`) time a Pix2Pix prediction
+    of `docs/examples`: the synthetic 45-degree line cost 17-25 ms of thinning, and two
+    budgets failed (X6-02). The wide-tube-span test keeps a trace that `PYTHONTRACEMALLOC=1`
+    started (it failed and stopped the trace), and the read-ahead cache's deadlock test fails
+    instead of hanging.
 - **GT files of an image found, saved and removed as its own (2026-10-26, final review D1,
   C1, C2, D5).**
   - An image whose name ends in two extensions (`X.png.jpg`, stem `X.png`): *Correct* opens
@@ -375,8 +410,12 @@ Seven passes, not yet released:
   - Generate on the GPU: the decode, prefetch and save threads run their tensor ops on one
     torch thread while a CUDA run lasts (each had started a 16-thread OpenMP team): 409 masks
     median 15.0 -> 7.2 s, 1227 skeletons 19.3 -> 7.0 s, process CPU about 25x lower
-    (S12-01). `main.py` sets `KMP_BLOCKTIME=0` before torch loads, unless the user set it,
-    so idle OpenMP workers sleep at once (Linux's GNU OpenMP ignores it): on the CPU
+    (S12-01). Re-measured on 2026-10-28 with less load on the machine (400 photos, three
+    interleaved runs, the old stack, `KMP_BLOCKTIME` as each version's `main.py` sets it):
+    masks 7.82 -> 7.67 s, skeletons 3.48 -> 3.00 s, process CPU 120 -> 10 s and
+    40 -> 5 s. The wall-time gain depends on how busy the CPU is; the CPU saving holds.
+    `main.py` sets `KMP_BLOCKTIME=0` before torch loads, unless the user set it, so idle
+    OpenMP workers sleep at once (Linux's GNU OpenMP ignores it): on the CPU
     fallback 300 skeletons 64 -> 51 s with about 40 % less CPU time (P3-01). The skeleton
     model loads its checkpoint without a random init (0.12 -> 0.05 s on the GPU,
     0.35 -> 0.05 s on the CPU; S12-03).
@@ -448,7 +487,18 @@ Seven passes, not yet released:
     of every installed package's entry points (5.5 -> 1.9 ms), and the data load copies no
     text column. A released dashboard is collected (Python heap held 10.2 -> 0.03 MiB;
     S15-01), and a dashboard keeps only the columns it charts (7.7 -> 1.5 MiB at 46k;
-    S15-04).
+    S15-04). The length dashboard parses its hover-image names once its first chart has
+    been sent (the first chart about 110 ms sooner per open); the autosize relayout that
+    plotly.js made after every view switch at an unchanged size is skipped
+    (`app/assets/sprouts-autosize.js`: about 230 ms of JavaScript less per ten switches,
+    charts settle about 1.3 s sooner per ten switches); the per-tube dropdown selection runs
+    in the browser (one server request less per view switch, the figure request leaves
+    7-17 ms sooner). These timings come from a browser bench in real windows. All 50
+    sampled figure responses (25 view and selection cases, length and area, 46k-row CSVs)
+    are byte-identical (F1a).
+  - Result slots no longer wait on the GUI thread for their thread to end: the end of a
+    Measure run 0.62 -> 0.003 ms, the export dialog's outcome 0.55-0.62 -> 0.03-0.04 ms
+    (medians; the thread keeper holds the thread instead; K1a-B, G09).
 - **Fix pass (2026-10-02).** Outputs are unchanged by all of these.
   - The Library read-ahead counts a decoded photo against its 192 MiB as soon as the
     decode finishes and enforces the bounds then (before, an unshown decode counted
@@ -634,7 +684,11 @@ Seven passes, not yet released:
   NVIDIA GPUs are now Turing (RTX 20 series, GTX 16xx) and newer (owner decision,
   2026-10-28): the CUDA 13 builds have no kernels for Maxwell, Pascal or Volta GPUs (GTX
   9xx / 10xx, Titan V, V100), which torch 2.7.1+cu128 still had; such a machine uses the CPU
-  build (README "Requirements"). The GPU outputs change
+  build (README "Requirements"). On the GPU, torch 2.14.1 (cuDNN 9.24) generates masks
+  about 9 % and skeletons about 4 % slower than the old build on the same code (400
+  photos, three interleaved runs: 7.67 -> 8.37 s and 3.00 -> 3.12 s); on the same code,
+  `import main` is 17 %, opening the 46k project 11 % and `PgDn` in Correct 11 % faster on
+  Python 3.14 and the new packages. The GPU outputs change
   (*Scientific output changes*); everything the dashboards show and export is as before,
   through these adaptations:
   - pandas 3: the dashboards' dates stay nanosecond timestamps (pandas 3 parses to
@@ -704,17 +758,66 @@ Seven passes, not yet released:
     (`project_layout.skeleton_stem`; C1-04) and the prompts' `join_nouns` (S02-06).
   - Interfaces: `metrics.length_row` and `area_row` take keyword-only `memo=None` and
     `log=None` (compatible); `MaskStore.read` takes a keyword-only `path=`; `GuardedThread`
-    has a `describe(exc)` hook and `DashInitWorker` is a `GuardedThread`; `CanvasViewMixin`
-    emits `viewport_changed`.
+    has a `describe(exc)` hook, and `DashInitWorker`, `ExportThread` (E18), the Library's
+    `ImageLoaderThread` and the dashboards' server threads (G06, G07) are `GuardedThread`s;
+    `CanvasViewMixin` emits `viewport_changed` and has `end_holds()`, and an `InputSink` has
+    `canvas_focus_lost()` (G13); `DashboardShell.register_callbacks` no longer takes `tubes`
+    (F1a); `MemorySettings` is `app.settings.MemorySettings` (it left
+    `app.gui.recent_projects`, no alias).
+  - Settings: `app/settings.py` `app_settings()` is the only `QSettings` constructor: the
+    user's store, or a fresh `MemorySettings` on the offscreen platform;
+    `tests/test_settings_factory.py` fails on any other (K1a-A).
+  - Threads: `app/workers.py` keeps every `QThread` from `start()` until Qt's own
+    `finished`: `keep`, which `GuardedThread.start` calls; `release_qthread`, moved from
+    `app.visualization._viz_server`, deletes a thread once it has finished without blocking
+    the caller; `stop_all` runs on `aboutToQuit`; `base_finished` is the one accessor of the
+    `finished` signal that subclasses shadow. Every `QThread` subclass of the app is a
+    `GuardedThread` without its own `run()`, and no `QThread` gets a parent
+    (`tests/test_workers_thread_keeper.py`; K1a-B, G05 to G09).
+  - Pool jobs: `app.workers.start_pool_job` starts every `QThreadPool` job and marks it;
+    resolving the runtime, the warm-up and building a model raise `RuntimeError` in such a
+    job, where torch deadlocked (dc11edf), and `app.inference.runtime` still imports no Qt
+    (`tests/test_workers_pool_jobs.py`; K1a-C2, G10, G11).
+  - Dialogs: `app/dialogs.py` has the app's one `exec()` of a dialog (`run_modal`: `exec()`,
+    the answer read, then the dialog freed) and shows every box that frees itself once
+    answered (`show_transient`). Every dialog the app builds runs through one of the two,
+    with the same modality, parents and texts; `tests/test_dialogs.py` finds no other
+    `exec()` of a dialog. The static `QMessageBox`, `QFileDialog` and `QColorDialog`
+    functions do not go through it (K1b-E, G17, G18).
+  - Hold keys: `CanvasViewMixin.end_holds()` ends a held `Space` (on the editor canvas `B`
+    first); a view's focus-out and the library tree's key relay call it, so the Correct
+    page's event filter for it and the relay's made-up focus event are gone (K1a-C1, G12,
+    G13).
   - Log records: a failed dashboard build is logged as "DashInitWorker failed" by
     `app.handlers.worker_base` (it was "Dashboard initialisation failed" by
     `app.visualization.viz_window`); a failed Correct read-ahead job by
-    `app.read_ahead_cache`; an unexpected dataset-export error with its traceback.
+    `app.read_ahead_cache`; an unexpected dataset-export error as "ExportThread failed" by
+    `app.handlers.worker_base`, with its traceback (E18; earlier in this pass it was "Dataset
+    export failed" by `app.gui.export_dataset_dialog`, S10-02); a failed folder scan as
+    "ImageLoaderThread failed" there, and the scan's "Failed to scan image folder <folder>"
+    record stays, now without the traceback, which the new record carries (G07); a
+    dashboard server's failure as "DashServerThread failed" or "DashServerThreadArea
+    failed" there (it was "DashServerThreadLength failed" or
+    "DashServerThreadArea failed" by `app.visualization._viz_server`; G06); a quit that
+    leaves a kept `QThread` running logs "Quitting with N thread(s) still running: …".
   - Tests: `tests/conftest.py` owns one session `QApplication`, a fresh config folder per
     test (no test reads or writes the user's Enhance defaults), `KMP_BLOCKTIME=0` and opt-in
     guard fixtures, with shared helpers in `tests/guards.py`, `tests/qt_wait.py`,
     `tests/window_support.py`, `tests/correct_support.py` and `tests/generation_support.py`
-    (T1-01, T1-04 to T1-09).
+    (T1-01, T1-04 to T1-09). The test modules use them since wave 3b (one copy of the
+    Correct helpers instead of two), and fixed sleeps became waits on a condition: the
+    generation handler tests 12.3 -> 1.8 s, the canvas memory-cycle tests 5.9 -> 0.4 s, a
+    released-thread test 1.58 -> 0.39 s; the fetch-model tests give up on an unreachable
+    server after 0.3 s instead of 2 s and poll their test server every 0.05 s
+    (5.2 -> 0.9 s) (T1-01, T1-02, T1-10). After each test, conftest warns about a thread
+    the keeper still holds running (G14); `tests/leak_census.py` (`assert_freed`, `no_gc`)
+    is the one leak-test helper
+    (G15). Guard tests (K1b-F) audit click focus on the Correct page, the focus ring of
+    every widget stylesheet, the 900 px window width with a measured image selected, the side
+    card's width and text fitting at 125 % scaling; today's offenders are strict `xfail`s
+    with their IDs (`docs/KNOWN_ISSUES.md`, table 2). On Windows,
+    `tests/test_visualization_manager_release_native.py` runs the dashboard release on the
+    native platform (about 25 s).
 - **Owner-decisions build (2026-10-25).** Display and wording; no CSV value or output pixel
   changes.
   - Dashboard views have one set of names (Totals by Tube, Growth Over Time, Depth Profile,
@@ -1029,10 +1132,11 @@ Seven passes, not yet released:
   - Library and widgets: `ImageManager.parse_image_name`, `get_image_names`, its folder
     dialog and `has_fake_real_pairs` (S07-06); `ui_panels.create_icon_button` and
     `create_section_label` (S08-02); the seven XML icons of `app/utils` and their lookup
-    branch (S08-03); `IconButton.set_icon_name`, `CanvasViewMixin.set_pan_mode`,
-    `update_cursor` and `_scene_pixel`, and the `TypeError` fallback of
-    `shell_chrome._stage_icon` (C5-05, S05-05); `Calibration.mean_mm_per_px` (S16-10); the
-    `Toast` / `ToastManager` re-export of `app.gui.widgets.overlays` (S10-04).
+    branch, and five icons of `resources/icons` (`calc-area.svg`, `calc-length.svg`,
+    `viz-area.svg`, `viz-length.svg`, `paint-brush.xml`; S08-03); `IconButton.set_icon_name`,
+    `CanvasViewMixin.set_pan_mode`, `update_cursor` and `_scene_pixel`, and the `TypeError`
+    fallback of `shell_chrome._stage_icon` (C5-05, S05-05); `Calibration.mean_mm_per_px`
+    (S16-10); the `Toast` / `ToastManager` re-export of `app.gui.widgets.overlays` (S10-04).
   - Generate: `SkeletonModel.run` and its DataParallel and InstanceNorm-patch paths
     (S12-03); `PercentThrottle` and the `on_done` / `should_stop` options of `AsyncWriter`
     (S12-04); the generation threads' unconnected `progress` and `error` signals (C3-07).
