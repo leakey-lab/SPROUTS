@@ -19,7 +19,7 @@ import pytest
 from tests.viz_dash_helpers import build_length_app
 
 GOLDEN_LAYOUT_SHA256 = "c0fb067a8c23e60e0d6f825154585e99cdc8e5b2f39babb2db6187cfb022f51c"
-GOLDEN_CLIENTSIDE_JS_SHA256 = "9b5e33951972d377b9efc7595e5f78097044174135651414335f57422efc3338"
+GOLDEN_CLIENTSIDE_JS_SHA256 = "1863b8b26341b720103746b6bb34d387a351178883aa2759244b69871ee5c174"
 # (output, inputs, states, prevent_initial_call, runs in the browser), in registration order.
 GOLDEN_CALLBACKS = (
     ("viz-controls-collapse.is_open", ("viz-controls-toggle.n_clicks", "view-selector.value"),
@@ -29,7 +29,8 @@ GOLDEN_CALLBACKS = (
     ("viz-controls-summary.children",
      ("view-selector.value", "tube-selector.value", "selected-tubes-store.data",
       "faceted-tubes-store.data", "faceted-dates-store.data"), (), False, False),
-    ("tube-selector.value", ("view-selector.value",), ("tube-selector.value",), True, False),
+    ("tube-selector.value", ("view-selector.value",), ("tube-selector.value", "tube-selector.options"),
+     True, True),
     ("viz-resize-dummy.data", ("viz-controls-collapse.is_open", "view-selector.value"), (),
      False, True),
     ("viz-export-download.data", ("viz-export-btn.n_clicks",),

@@ -365,6 +365,29 @@ def test_area_summary_names_the_profile_tube(area_app):
     assert out["viz-controls-summary"]["children"] == "Tube 3"
 
 
+def _select_plotted_tube(dash, view, current, options=None):
+    """The per-tube selection as the browser runs it on a view switch."""
+    if options is None:  # what the page holds: the served dropdown's options
+        options = _find(
+            _served_layout(dash), lambda n: n.get("props", {}).get("id") == "tube-selector"
+        )["props"]["options"]
+    out, _ = call_clientside(
+        dash,
+        "tube-selector.value",
+        {"view-selector.value": view, "tube-selector.value": current,
+         "tube-selector.options": options},
+        changed=["view-selector.value"],
+    )  # fmt: skip
+    return out["tube-selector"]["value"]
+
+
+@pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])
+def test_the_per_tube_selection_runs_in_the_browser(tmp_path, builder):
+    # As a server callback, every view switch waited for its answer (almost always "no
+    # change") before it asked for the new figure.
+    assert clientside_function(builder(tmp_path).app, "tube-selector.value")["clientside_function"]
+
+
 @pytest.mark.parametrize(
     "builder, view, current, expected",
     [
@@ -378,24 +401,36 @@ def test_entering_a_per_tube_view_selects_the_plotted_tube(
 ):
     """The chart shows the first tube; the dropdown must say so (it showed its
     placeholder while the chart already plotted Tube 1)."""
-    dash = builder(tmp_path).app
-    _, out = call_callback(
-        dash,
-        "tube-selector.value",
-        {"view-selector.value": view, "tube-selector.value": current},
-        changed=["view-selector.value"],
-    )
-    assert out["tube-selector"]["value"] == expected
+    assert _select_plotted_tube(builder(tmp_path).app, view, current) == expected
 
 
 def test_a_valid_tube_choice_is_kept_when_returning_to_lines(length_app):
-    status, _ = call_callback(
+    # no update: the user's tube stays selected
+    assert _select_plotted_tube(length_app.app, "lines", 2) == NO_UPDATE
+
+
+@pytest.mark.parametrize("view", ["lines", "time", "faceted", "stacked"])
+@pytest.mark.parametrize("current", [None, 1, 2, 3, 99, "2", 2.0])
+def test_the_dropdown_names_the_tube_the_chart_plots(length_app, view, current):
+    # The figure callback plots plotted_tube(tubes, dropdown value): the browser's choice
+    # is that tube, sent only when it differs (what the server callback answered).
+    from app.visualization.dash_shell import plotted_tube
+
+    tube = plotted_tube(length_app.data_cache.tubes, current)
+    expected = tube if view == "lines" and tube != current else NO_UPDATE
+    assert _select_plotted_tube(length_app.app, view, current) == expected
+
+
+@pytest.mark.parametrize("options", [[], None])
+def test_without_tubes_the_dropdown_is_left_alone(length_app, options):
+    out, _ = call_clientside(
         length_app.app,
         "tube-selector.value",
-        {"view-selector.value": "lines", "tube-selector.value": 2},
+        {"view-selector.value": "lines", "tube-selector.value": None,
+         "tube-selector.options": options},
         changed=["view-selector.value"],
-    )
-    assert status == 204  # no update: the user's tube stays selected
+    )  # fmt: skip
+    assert out["tube-selector"]["value"] == NO_UPDATE
 
 
 @pytest.mark.parametrize("builder", [build_length_app, build_area_app], ids=["length", "area"])

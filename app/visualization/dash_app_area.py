@@ -190,7 +190,6 @@ class DashAppArea:
         """Define Dash callbacks."""
         self.shell.register_callbacks(
             self.app,
-            tubes=lambda: self.data_cache.tubes,
             summary_inputs=[Input("tube-selector", "value")],
             summarize=self._controls_summary,
         )

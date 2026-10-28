@@ -2,7 +2,8 @@
 
 Dash serves this folder at `/assets/` and auto-includes every `.css` / `.js` file in
 alphabetical order, so the vendored stylesheets are prefixed `00_` / `01_` and the
-SPROUTS theme (`style.css`) is applied last. Nothing here is fetched from the
+SPROUTS theme (`style.css`) is applied last. The SPROUTS script `sprouts-autosize.js`
+must sort after `plotly-basic.min.js`, which it extends. Nothing here is fetched from the
 internet at runtime: the dashboards render identically on an offline lab or field PC.
 
 | File | Upstream | Version | License | SHA-256 (as vendored) |

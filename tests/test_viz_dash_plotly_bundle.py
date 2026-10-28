@@ -86,3 +86,42 @@ def test_the_bundle_still_has_the_autosize_flag_the_refit_clears():
     with open(BUNDLE, encoding="utf-8") as fh:
         source = fh.read()
     assert "_initialAutoSizeIsDone" in source
+
+
+# What app/assets/sprouts-autosize.js relies on: Plots.resize relayouts through the API
+# registry, Plotly.register replaces a registry entry, and relayout({autosize: true})
+# draws only when plotAutoSize measures a new size, measured as the guard does.
+AUTOSIZE_GUARD_ASSUMPTIONS = {
+    "register replaces an API method": (
+        r'case"apiMethod":var (\w+)=(\w+)\.name;\w+\.apiMethodRegistry\[\1\]=\2\.fn'
+    ),
+    "Plots.resize relayouts through the registry": (
+        r'_redrawTimer=setTimeout\(function\(\)\{.{0,200}?\.call\("relayout",\w+,\{autosize:!0\}\)'
+    ),
+    "plotAutoSize reads the computed pixel size": (
+        r"plotAutoSize=function.{0,400}?getComputedStyle\(\w+\).{0,40}?"
+        r"\w+\(\w+\.width\)\|\|\w+\(\w+\.maxWidth\)\|\|\w+\.width"
+    ),
+    "pixel sizes as the guard reads them": (
+        r'function \w+\(\w+\)\{return typeof \w+=="string"&&\w+\.slice\(-2\)==="px"'
+        r"&&parseFloat\(\w+\)\}"
+    ),
+    "a size changes by more than 1 px": (
+        r"!\w+\.width&&Math\.abs\(\w+\.width-\w+\)>1,\w+=!\w+\.height&&"
+        r"Math\.abs\(\w+\.height-\w+\)>1"
+    ),
+    "smallest width": r'width:\{valType:"number",min:10,dflt:700,',
+    "smallest height": r'height:\{valType:"number",min:10,dflt:450,',
+    "autosize itself redraws nothing": r'autosize:\{valType:"boolean",dflt:!1,editType:"none"\}',
+    "legend shapes redraw at any size": r"if\(\w+\[\w+\]\.showlegend\)\{\w+\.calc=!0;break\}",
+}
+
+
+@pytest.mark.parametrize("pattern", AUTOSIZE_GUARD_ASSUMPTIONS.values(),
+                         ids=AUTOSIZE_GUARD_ASSUMPTIONS)  # fmt: skip
+def test_the_bundle_still_resizes_the_way_the_autosize_guard_expects(pattern):
+    # A plotly.js that changed one of these would bring the redundant redraw back or,
+    # worse, have the guard skip a redraw the chart needs: re-check the guard then.
+    with open(BUNDLE, encoding="utf-8") as fh:
+        source = fh.read()
+    assert re.search(pattern, source, re.S)

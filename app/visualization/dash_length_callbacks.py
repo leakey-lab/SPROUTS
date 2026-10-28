@@ -56,7 +56,6 @@ def register_callbacks(dash_app) -> None:
     """Register every callback of the length dashboard ``dash_app`` (a DashApp)."""
     dash_app.shell.register_callbacks(
         dash_app.app,
-        tubes=lambda: dash_app.data_cache.tubes,
         summary_inputs=[
             Input("tube-selector", "value"),
             Input("selected-tubes-store", "data"),
@@ -229,6 +228,8 @@ def register_callbacks(dash_app) -> None:
         faceted_tubes,
         faceted_dates,
     ):
+        # The hover-image names are parsed once the first chart has been sent.
+        dash_app._parse_images_after_this_response()
         ctx = dash.callback_context
         # Not ctx.triggered_id: on page load this callback is triggered by the
         # stores the other initial callbacks wrote, and it must still draw.

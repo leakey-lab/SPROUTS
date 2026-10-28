@@ -18,6 +18,7 @@ are a contract with the renderer and the embedding window: keep them stable.
 from typing import Any
 
 import dash_bootstrap_components as dbc
+import flask
 from dash import html
 
 from . import dash_export, theme
@@ -45,8 +46,9 @@ _VIEW_PANELS_JS = length_callbacks.VIEW_PANELS_JS
 class DashApp(DashVisualizations):
     """The root-length dashboard: one Dash app over one root_lengths.csv.
 
-    The underscore methods below delegate to the layout and view-model modules and
-    are kept for callers of this class; the callbacks call those modules directly.
+    The underscore methods below the hover-image section delegate to the layout and
+    view-model modules and are kept for callers of this class; the callbacks call those
+    modules directly.
     """
 
     def __init__(self, data_processor: Any, save_directory: str, image_manager=None):
@@ -54,8 +56,10 @@ class DashApp(DashVisualizations):
         self.save_directory = save_directory
         self.image_manager = image_manager
 
-        # (tube, position, date) -> image path, parsed on first use (PV-17).
+        # (tube, position, date) -> image path, parsed after the first chart was sent
+        # (see _parse_images_after_this_response) or on first use (PV-17).
         self.available_images = build_available_images_map(image_manager)
+        self._images_parse_started = False
         self.data_cache = DataCache(data_processor)
         self._tube_options = tube_options(self.data_cache.tubes)
         self._date_options = [
@@ -71,8 +75,29 @@ class DashApp(DashVisualizations):
 
         self._setup_layout()
         self._setup_callbacks()
-        # Parsed while the page loads, not by the first Depth Profile view (~95 ms).
-        self.available_images.parse_in_background()
+
+    # ---- hover images --------------------------------------------------------------
+
+    def _parse_images_after_this_response(self) -> None:
+        """Parse the hover-image names once, after the response being served is sent.
+
+        The figure callback calls this, so the names (~140 ms for 46k) are parsed on a
+        background thread while the browser draws the first chart. Parsed while the
+        page loaded, they held the GIL and delayed the server's start and the page's
+        own requests by about 100 ms. Outside a request the parse starts at once.
+        """
+        if self._images_parse_started:
+            return
+        self._images_parse_started = True
+        parse = self.available_images.parse_in_background
+        if not flask.has_request_context():
+            parse()
+            return
+
+        @flask.after_this_request
+        def parse_once_sent(response):
+            response.call_on_close(parse)
+            return response
 
     # ---- layout (dash_length_layout) ---------------------------------------------
 

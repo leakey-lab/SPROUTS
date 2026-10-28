@@ -72,7 +72,7 @@ def test_index_parses_names_only_when_first_used(images, monkeypatch):
 
 def test_index_can_be_parsed_ahead_on_a_background_thread(images, monkeypatch):
     # The first Growth Lines view waited ~95 ms for 47k names; a dashboard now
-    # parses them while its page loads (PKG-VIZ).
+    # parses them ahead, once its first chart has been sent (PKG-VIZ, F1a).
     import threading
 
     threads = []
@@ -117,15 +117,118 @@ def test_index_lets_go_of_the_name_snapshot_once_parsed(images, monkeypatch):
     assert dict(index) == {key: images[name] for name, key in NAMES.items()}
 
 
-def test_dashboard_parses_its_image_index_in_the_background(tmp_path, monkeypatch):
+def _figure_request(dash) -> bytes:
+    """The body of a page load's figure request (the first chart)."""
+    import json
+
+    from tests.viz_dash_helpers import _split_output_key, find_callback_key
+
+    key = find_callback_key(dash, "main-graph.figure")
+    spec = dash.callback_map[key]
+    values = {"view-selector.value": "stacked"}
+
+    def fill(items):
+        return [
+            {"id": i["id"], "property": i["property"],
+             "value": values.get(f"{i['id']}.{i['property']}")}
+            for i in items
+        ]  # fmt: skip
+
+    payload = {"output": key, "outputs": _split_output_key(key), "inputs": fill(spec["inputs"]),
+               "state": fill(spec["state"]), "changedPropIds": []}  # fmt: skip
+    return json.dumps(payload).encode()
+
+
+def _figure_response(dash):
+    """The first chart, through Flask; the response is left open (unsent) for the caller."""
+    return dash.server.test_client().post(
+        "/_dash-update-component",
+        data=_figure_request(dash),
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def test_dashboard_parses_its_image_index_once_its_first_chart_is_sent(tmp_path, monkeypatch):
+    # Parsed while the page loaded, the names held the GIL and delayed the server's start
+    # and the page's own requests (~100 ms per open): now the browser draws the first
+    # chart while they are parsed.
     from tests.viz_dash_helpers import build_length_app
 
     started = []
     monkeypatch.setattr(diu.ImageIndex, "parse_in_background", lambda self: started.append(self))
 
     dashboard = build_length_app(tmp_path)
+    assert started == []  # not while the page loads
+
+    response = _figure_response(dashboard.app)
+    assert response.status_code == 200
+    assert started == []  # not before the chart has been sent
+    response.close()  # what the server does once it has sent the response
+    assert started == [dashboard.available_images]
+
+    _figure_response(dashboard.app).close()
+    assert started == [dashboard.available_images]  # once
+
+
+def test_dashboard_outside_a_request_parses_at_once(tmp_path, monkeypatch):
+    from tests.viz_dash_helpers import build_length_app
+
+    started = []
+    monkeypatch.setattr(diu.ImageIndex, "parse_in_background", lambda self: started.append(self))
+    dashboard = build_length_app(tmp_path)
+
+    dashboard._parse_images_after_this_response()
+    dashboard._parse_images_after_this_response()
 
     assert started == [dashboard.available_images]
+
+
+def test_the_first_chart_leaves_the_image_index_parsed(tmp_path, images, monkeypatch):
+    from tests.viz_dash_helpers import build_length_app
+
+    workers = []
+    real = diu.ImageIndex.parse_in_background
+    monkeypatch.setattr(
+        diu.ImageIndex, "parse_in_background", lambda self: workers.append(real(self))
+    )
+    dashboard = build_length_app(tmp_path, FakeImageManager(images))
+
+    _figure_response(dashboard.app).close()
+    (worker,) = workers
+    worker.join(5)
+
+    assert not worker.is_alive()
+    assert dashboard.available_images._names == {}  # parsed by that thread
+    assert dict(dashboard.available_images) == {key: images[name] for name, key in NAMES.items()}
+
+
+def test_the_dashboard_server_starts_the_parse_after_sending_the_first_chart(tmp_path, monkeypatch):
+    # werkzeug's own server, as the app runs it: it closes each response once sent.
+    import threading
+    import urllib.request
+
+    from werkzeug.serving import make_server
+
+    from tests.viz_dash_helpers import build_length_app
+
+    started = threading.Event()
+    monkeypatch.setattr(diu.ImageIndex, "parse_in_background", lambda self: started.set())
+    dashboard = build_length_app(tmp_path)
+    server = make_server("127.0.0.1", 0, dashboard.app.server, threaded=True)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/_dash-update-component"
+        req = urllib.request.Request(
+            url, data=_figure_request(dashboard.app), headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            assert resp.status == 200
+            resp.read()
+        assert started.wait(5)
+    finally:
+        server.shutdown()
+        serving.join(5)
 
 
 def test_index_without_images_is_empty():

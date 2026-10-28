@@ -73,6 +73,18 @@ function(isOpen) {
     return isOpen ? __CARET_OPEN__ : __CARET_CLOSED__;
 }
 """
+# The per-tube view plots the dropdown's tube, else the first (plotted_tube); its
+# dropdown shows that tube. In the browser: as a server callback, every view switch
+# waited for its answer (almost always "no change") before asking for the figure.
+_PLOTTED_TUBE_JS = """
+function(view, current, options) {
+    var tubes = (options || []).map(function (option) { return option.value; });
+    if (view !== __TUBE_VIEW__ || !tubes.length || tubes.indexOf(current) >= 0) {
+        return window.dash_clientside.no_update;
+    }
+    return tubes[0];
+}
+"""
 
 #: Refit the Plotly graph when the control strip opens / closes or the view
 #: changes. Targets the real Plotly div (``.js-plotly-plot``), not dcc.Graph's
@@ -84,6 +96,8 @@ function(isOpen) {
 #: followed. Clearing plotly.js's ``_initialAutoSizeIsDone`` now and after every draw
 #: makes each react (or resize) measure the card again: a new figure is drawn once.
 #: plotly.js only reads the flag; ``test_viz_dash_plotly_bundle`` checks the bundle.
+#: The resize that follows then mostly finds the chart at its size already;
+#: ``app/assets/sprouts-autosize.js`` answers that relayout at once.
 _REFIT_GRAPH_JS = """
 function(_isOpen, _view) {
     var gd = document.querySelector('#main-graph .js-plotly-plot');
@@ -438,15 +452,16 @@ class DashboardShell:
         self,
         app: Dash,
         *,
-        tubes: Callable[[], Sequence[Any]],
         summary_inputs: Sequence[Input] = (),
         summarize: Callable[..., str] | None = None,
     ) -> None:
         """Wire the strip, caret, summary, per-tube selection and graph refit.
 
+        The per-tube selection reads the dataset's tubes from the ``tube-selector``
+        options, which list them all.
+
         Args:
             app: the dashboard's Dash app.
-            tubes: returns the dataset's tube numbers (for the per-tube view).
             summary_inputs: extra Inputs the summary depends on.
             summarize: ``summarize(view, *summary_input_values) -> str``.
         """
@@ -490,20 +505,16 @@ class DashboardShell:
                 return summarize(view, *values)
 
         if spec.tube_view is not None:
-
-            @app.callback(
+            # The per-tube chart opens on the first tube; show that choice in the
+            # dropdown instead of its placeholder, but keep a valid pick.
+            app.clientside_callback(
+                clientside_js(_PLOTTED_TUBE_JS, tube_view=spec.tube_view),
                 Output("tube-selector", "value"),
                 Input("view-selector", "value"),
                 State("tube-selector", "value"),
+                State("tube-selector", "options"),
                 prevent_initial_call=True,
             )
-            def select_plotted_tube(view, current):
-                # The per-tube chart opens on the first tube; show that choice in
-                # the dropdown instead of its placeholder, but keep a valid pick.
-                tube = plotted_tube(tubes(), current)
-                if view != spec.tube_view or tube is None or tube == current:
-                    raise PreventUpdate
-                return tube
 
         app.clientside_callback(
             _REFIT_GRAPH_JS,

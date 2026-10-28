@@ -5,7 +5,7 @@ Image utilities for the Growth-Lines hover panel of the length dashboard.
   snapshots the image manager's names when the dashboard opens but parses them
   (with the shared :func:`app.naming.parse_image_name`) on first use or on a
   background thread, so opening a dashboard never waits for 46k name parses
-  (PV-17); the dashboard parses them while its page loads.
+  (PV-17); the dashboard parses them once its first chart has been sent.
 * :class:`ThumbnailCache` encodes each hovered image once as a small JPEG and keeps
   a bounded LRU of the results (PV-09: base64 PNGs of ~75 KiB each were resent on
   every hover and never evicted).
@@ -157,10 +157,10 @@ class ImageIndex(Mapping[ImageKey, str]):
     def parse_in_background(self) -> threading.Thread:
         """Parse the names on a daemon thread now instead of on first use.
 
-        A dashboard calls this once it is built: the names are parsed while its
-        page loads (the Python side is idle then) and the first Depth Profile view
-        no longer waits for them (~95 ms for 47k names). A lookup meanwhile waits
-        for the same parse (one lock), never runs a second one.
+        The length dashboard calls this once its first chart has been sent: the
+        names are parsed while the browser draws it, and the first Depth Profile
+        view no longer waits for them (~140 ms for 46k names). A lookup meanwhile
+        waits for the same parse (one lock), never runs a second one.
         """
         thread = threading.Thread(target=self._index, name="image-index", daemon=True)
         thread.start()
