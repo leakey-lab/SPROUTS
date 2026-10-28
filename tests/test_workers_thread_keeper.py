@@ -175,6 +175,44 @@ def test_release_in_a_result_slot_never_waits_for_the_thread(app):
         del thread
 
 
+def test_release_of_a_running_plain_qthread_never_blocks_and_outlives_its_references():
+    # In a child process: destroying a running QThread aborts the whole process. A thread
+    # that was not started through GuardedThread is kept from the release on.
+    result = _run_python(
+        """
+        import sys, time
+        from PyQt6.QtCore import QCoreApplication, QThread, QTimer, pyqtSignal
+        from app.workers import release_qthread
+
+        app = QCoreApplication(sys.argv)
+
+        class Sleeper(QThread):
+            finished = pyqtSignal(str)  # shadows QThread.finished, like the app's workers
+
+            def run(self):
+                time.sleep(0.3)
+                self.finished.emit("done")
+
+        destroyed = []
+        thread = Sleeper()
+        thread.destroyed.connect(lambda *_: destroyed.append(1))
+        thread.destroyed.connect(app.quit)  # quits once deleted (after the append above)
+        thread.start()
+        t0 = time.perf_counter()
+        release_qthread(thread)
+        blocked = time.perf_counter() - t0
+        del thread  # the keeper must hold the running thread itself
+        QTimer.singleShot(1500, app.quit)  # the deadline: a leaked thread ends with destroyed=0
+        app.exec()
+        print(f"blocked={blocked:.3f} destroyed={len(destroyed)}")
+        """
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    blocked, destroyed = result.stdout.split()
+    assert float(blocked.split("=")[1]) < 0.05
+    assert destroyed == "destroyed=1"
+
+
 def test_release_deletes_a_finished_thread_at_once(app):
     thread = QThread()
     thread.start()
@@ -515,28 +553,18 @@ def _chain(name: str, classes: dict) -> list[str]:
     return chain
 
 
-#: QThread subclasses not on GuardedThread yet, each with its own error boundary and run().
-#: The list only shrinks: take a class off it when it moves onto GuardedThread.
-KNOWN_UNGUARDED = {
-    "app/gui/image_manager.py:ImageLoaderThread",
-    "app/visualization/_viz_server.py:_DashServerThreadBase",
-    "app/visualization/root_area_visualization.py:DashServerThreadArea",
-    "app/visualization/root_length_visulization.py:DashServerThread",
-}
-
-
 def test_every_qthread_subclass_is_a_guarded_thread_without_its_own_run():
     classes = _classes()
     threads = {n for n in classes if n != "GuardedThread" and "QThread" in _chain(n, classes)}
-    unguarded = {
+    assert {"ImageLoaderThread", "_DashServerThreadBase", "DashServerThreadArea"} <= threads
+    unguarded = sorted(
         f"{classes[n][0]}:{n}" for n in threads if "GuardedThread" not in _chain(n, classes)
-    }
-    assert unguarded == KNOWN_UNGUARDED  # a new one, or one moved: update the list
+    )
+    assert unguarded == []  # GuardedThread is the QThread base of every thread of app/
     own_run = sorted(
         f"{classes[n][0]}:{n}"
         for n in threads
-        if f"{classes[n][0]}:{n}" not in KNOWN_UNGUARDED
-        and any(isinstance(s, ast.FunctionDef) and s.name == "run" for s in classes[n][2].body)
+        if any(isinstance(s, ast.FunctionDef) and s.name == "run" for s in classes[n][2].body)
     )
     assert own_run == []  # GuardedThread.run is the error boundary
 

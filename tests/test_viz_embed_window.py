@@ -396,19 +396,35 @@ def test_an_unchartable_csv_is_reported_with_the_processors_reason():
 
 def test_server_failure_is_reported_in_place(make_window):
     class FailingServer(AnyPortServer):
-        def run(self):
-            self.error.emit("no free port on 127.0.0.1")
+        def work(self):
+            raise OSError("no free port on 127.0.0.1")
 
     window = make_window(server_thread_class=FailingServer)
 
     assert wait_until(lambda: window.failed)
-    assert "no free port on 127.0.0.1" in window.loading_label.text()
+    assert "The dashboard server stopped:\nno free port on 127.0.0.1" in window.loading_label.text()
     assert window.web_view.loads == []
+
+
+@pytest.mark.parametrize("ending", [SystemExit(2), KeyboardInterrupt()], ids=["exit", "interrupt"])
+def test_a_server_ended_by_a_base_exception_is_reported_in_place(make_window, ending):
+    """Its run() caught ``Exception`` only: the page said "Starting the dashboard server…"
+    until the start-up timeout, and the exception went to ``sys.excepthook``."""
+
+    class EndedServer(AnyPortServer):
+        def work(self):
+            raise ending
+
+    window = make_window(server_thread_class=EndedServer)
+
+    assert wait_until(lambda: window.failed, 3.0)
+    expected = str(ending) or type(ending).__name__
+    assert f"The dashboard server stopped:\n{expected}" in window.loading_label.text()
 
 
 def test_server_that_never_listens_times_out_with_an_error(make_window):
     class SilentServer(AnyPortServer):
-        def run(self):
+        def work(self):
             self._stop_event.wait(10)  # never binds; returns when stopped
 
     window = make_window(server_thread_class=SilentServer, startup_timeout_ms=200)

@@ -21,14 +21,15 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
+from app.dialogs import show_transient
 from app.feedback import UiFeedback
 from app.handlers.deps import HandlerDependencies
 from app.handlers.job_registry import JobRegistry
 from app.project_layout import project_layout_of
-from app.workers import GuardedThread, JobCancelled
+from app.workers import GuardedThread, JobCancelled, base_finished
 
 if TYPE_CHECKING:
     from app.inference.batch_engine import BatchReport
@@ -166,11 +167,6 @@ class GenerationHandlerBase(HandlerDependencies):
 
     @staticmethod
     def _chain_on_success(thread: GuardedThread, on_success: Callable[[], None]) -> None:
-        # QThread's own finished (the subclasses shadow ``finished``) is emitted
-        # after run() returned; the registry connected to it first, so it has
-        # already cleared the job when this queued slot runs.
-        thread_finished = QThread.finished.__get__(thread, QThread)
-
         def fire(ended: GuardedThread) -> None:
             # ``completed`` stays False after any Cancel, including one that landed
             # during the last batch (the worker checks is_cancelled() itself; Qt
@@ -179,7 +175,10 @@ class GenerationHandlerBase(HandlerDependencies):
             if getattr(ended, "completed", False):
                 QTimer.singleShot(0, on_success)
 
-        thread_finished.connect(thread_slot(fire, thread))
+        # QThread's own finished (the subclasses shadow ``finished``) is emitted
+        # after run() returned; the registry connected to it first, so it has
+        # already cleared the job when this queued slot runs.
+        base_finished(thread).connect(thread_slot(fire, thread))
 
     def begin_task(self, label: str, thread: GuardedThread) -> None:
         """Show ``label`` as the running task, with Cancel wired to the worker."""
@@ -258,10 +257,7 @@ def show_failure_report(
             "The run manifest (_sprouts_run.json) there lists every failure."
         )
     box.setDetailedText("\n".join(f"{name}: {reason}" for name, reason in failed))
-    box.setModal(False)
-    box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-    box.show()
-    return box
+    return show_transient(box, modal=False)
 
 
 __all__ = [

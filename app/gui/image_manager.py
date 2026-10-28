@@ -22,7 +22,7 @@ import threading
 import weakref
 from functools import partial
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 
 from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
 from app.gui.library_index import index_names
@@ -38,7 +38,7 @@ from app.project_layout import (
     key_to_stems,
     project_layout_of,
 )
-from app.workers import describe_error
+from app.workers import GuardedThread, base_finished, describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def sweep_project_temp_files(layout: ProjectLayout) -> list[str]:
     return removed
 
 
-class ImageLoaderThread(QThread):
+class ImageLoaderThread(GuardedThread):
     """Scans ``folder_path`` for images, masks and skeletons, and builds the hierarchy.
 
     Signals:
@@ -101,7 +101,7 @@ class ImageLoaderThread(QThread):
         failed(str): the folder is missing or unreadable, or the scan failed otherwise
             (any exception, ``SystemExit`` too; ``finished`` is not emitted).
 
-    An interrupted scan (``requestInterruption()``) emits nothing. After ``finished``,
+    An interrupted scan (``cancel()``) emits nothing. After ``finished``,
     ``scan`` (the folder listing, with the files it does not list), ``hierarchy``,
     ``labels`` (library row texts), ``skeleton_stems`` and ``gt`` (the images with GT mask,
     skeleton and class labels) hold the extra results. Masks, skeletons and GT are keyed by
@@ -110,7 +110,6 @@ class ImageLoaderThread(QThread):
 
     progress = pyqtSignal(int)
     finished = pyqtSignal(dict, dict, dict, bool)
-    failed = pyqtSignal(str)
 
     def __init__(self, folder_path):
         super().__init__()
@@ -121,40 +120,37 @@ class ImageLoaderThread(QThread):
         self.skeleton_stems: set[str] = set()
         self.gt = GtStems(frozenset(), frozenset(), frozenset())
 
-    def run(self):
-        try:
-            if not os.path.isdir(self.folder_path):
-                self.failed.emit(f"Folder not found: {self.folder_path}")
-                return
-            layout = ProjectLayout(self.folder_path)
-            self.scan = layout.scan_image_folder()
-            images = self.scan.images
-            if self._stop(50):
-                return
-            masks = key_to_stems(layout.scan_masks(), images)
-            if self._stop(70):
-                return
-            self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), images)
-            self.gt = _gt_of(layout.scan_gt_stems(), images)
-            if self._stop(85):
-                return
-            self.hierarchy, self.labels = index_names(images)
-        except OSError as exc:
-            logger.exception("Failed to scan image folder %s", self.folder_path)
-            self.failed.emit(f"Cannot read {self.folder_path}: {exc.strerror or exc}")
+    def work(self):
+        if not os.path.isdir(self.folder_path):
+            self.failed.emit(f"Folder not found: {self.folder_path}")
             return
-        except BaseException as exc:  # noqa: BLE001 - SystemExit too: it must report back
-            # Unreported, neither outcome would come and the loading card would stay up.
-            logger.exception("Failed to scan image folder %s", self.folder_path)
-            self.failed.emit(f"Could not scan {self.folder_path}: {describe_error(exc)}")
+        layout = ProjectLayout(self.folder_path)
+        self.scan = layout.scan_image_folder()
+        images = self.scan.images
+        if self._stop(50):
             return
+        masks = key_to_stems(layout.scan_masks(), images)
+        if self._stop(70):
+            return
+        self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), images)
+        self.gt = _gt_of(layout.scan_gt_stems(), images)
+        if self._stop(85):
+            return
+        self.hierarchy, self.labels = index_names(images)
         if self._stop(100):
             return
         self.finished.emit(images, {}, masks, False)
 
+    def describe(self, exc: BaseException) -> str:
+        # GuardedThread has logged the traceback under the class name; this names the folder.
+        logger.error("Failed to scan image folder %s", self.folder_path)
+        if isinstance(exc, OSError):
+            return f"Cannot read {self.folder_path}: {exc.strerror or exc}"
+        return f"Could not scan {self.folder_path}: {describe_error(exc)}"
+
     def _stop(self, percent: int) -> bool:
         """Report ``percent``; True when the scan was superseded and must stop."""
-        if self.isInterruptionRequested():
+        if self.is_cancelled():
             return True
         self.progress.emit(percent)
         return False
@@ -183,11 +179,10 @@ class ImageManager:
         # The library hierarchy and row texts, built once per load (None: not built yet).
         self._hierarchy_cache = None
         self._labels_cache = None
-        # Scan bookkeeping: only the newest scan may deliver; superseded scans are kept
-        # referenced until their thread really ends (never terminate()), then let go.
+        # Scan bookkeeping: only the newest scan may deliver. A superseded scan is never
+        # terminated: app.workers keeps its thread from start() until Qt's own finished.
         self._generation = 0
         self._pending_folder = None
-        self._retired_threads: set[QThread] = set()
 
     # ------------------------------------------------------------------ loading
     def load_images(self, folder_path=None):
@@ -214,7 +209,7 @@ class ImageManager:
         thread.failed.connect(partial(self._on_scan_failed, self._generation))
         # QThread's own finished (the class shadows it with the result signal): after the
         # result, so the thread is let go once it has delivered.
-        QThread.finished.__get__(thread, QThread).connect(partial(self._on_loader_ended, ref))
+        base_finished(thread).connect(partial(self._on_loader_ended, ref))
         thread.start()
 
     @staticmethod
@@ -237,24 +232,20 @@ class ImageManager:
         threading.Thread(target=run, name="stale-temp-sweep", daemon=True).start()
 
     def _retire_loader(self):
-        """Ask the current scan to stop and keep its thread until :meth:`_on_loader_ended`
-        lets it go: also when the thread has ended already, as its result and its end may
-        still wait in the event queue."""
+        """Ask the current scan to stop and let it go. Its thread stays held (app.workers)
+        until Qt's own finished has been handled, also when it has ended already, as its
+        result and its end may still wait in the event queue."""
         old = self.loader_thread
         self.loader_thread = None
-        if old is None:
-            return
-        old.requestInterruption()
-        self._retired_threads.add(old)
+        if old is not None:
+            old.cancel()
 
     def _on_loader_ended(self, ref) -> None:
         """A scan's thread ended (it delivered, failed or was superseded): let it go. No slot
-        holds it, so it is freed now rather than by the cyclic garbage collector."""
+        holds it, so reference counting frees it once app.workers lets it go too, rather
+        than the cyclic garbage collector."""
         thread = ref()
-        if thread is None:
-            return
-        self._retired_threads.discard(thread)
-        if self.loader_thread is thread:
+        if thread is not None and self.loader_thread is thread:
             self.loader_thread = None
 
     def _on_scan_finished(self, generation, ref, images, fake_images, masks, pairs):

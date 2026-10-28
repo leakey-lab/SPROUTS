@@ -40,13 +40,13 @@ def make_window(app, tmp_path):
 def slow_scan(monkeypatch):
     """Every folder scan starts ``delay[0]`` seconds late, as on a busy machine."""
     delay = [0.3]
-    real = image_manager.ImageLoaderThread.run
+    real = image_manager.ImageLoaderThread.work
 
-    def run(self):
+    def work(self):
         time.sleep(delay[0])
         real(self)
 
-    monkeypatch.setattr(image_manager.ImageLoaderThread, "run", run)
+    monkeypatch.setattr(image_manager.ImageLoaderThread, "work", work)
     return delay
 
 

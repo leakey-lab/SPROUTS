@@ -18,6 +18,8 @@ from functools import partial
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
+from app.workers import base_finished
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,9 +55,8 @@ class JobRegistry(QObject):
                 return False
             self._release()  # ended; its queued finished signal is still in flight
         self._generation += 1
-        # Bind QThread's own finished: subclasses often shadow ``finished``.
-        base_finished = QThread.finished.__get__(thread, QThread)
-        base_finished.connect(partial(self._on_thread_finished, self._generation))
+        # QThread's own finished: subclasses often shadow ``finished``.
+        base_finished(thread).connect(partial(self._on_thread_finished, self._generation))
         self._name, self._thread = name, thread
         logger.info("Job started: %s", name)
         thread.start()

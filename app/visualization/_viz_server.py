@@ -1,10 +1,10 @@
 """
-Server thread and QThread lifetime helpers for the embedded Dash dashboards.
+Server thread of the embedded Dash dashboards, and a bounded join for a stopped one.
 
 ``_DashServerThreadBase`` serves one Dash app with werkzeug on ``DASH_HOST``
-(loopback only) from a QThread; the per-metric subclasses live next to their
-windows. ``join_qthread`` and ``release_qthread`` end QThreads without ever
-destroying one that is still running.
+(loopback only) from a ``GuardedThread``; the per-metric subclasses live next to
+their windows. ``join_qthread`` waits a bounded time for a stopped thread;
+``app.workers.release_qthread`` deletes it once it has finished.
 
 Names here are private to :mod:`app.visualization`; the public classes stay in
 their own modules.
@@ -16,7 +16,9 @@ import logging
 import socket
 import threading
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+
+from app.workers import GuardedThread
 
 try:
     from app.config import DASH_HOST
@@ -83,53 +85,16 @@ def join_qthread(thread: QThread | None, timeout_ms: int = 10000) -> bool:
     return True
 
 
-# Threads handed to release_qthread() while still running, held (strong
-# references) until Qt reports them finished. Touched on the GUI thread only.
-_finishing: set[QThread] = set()
-
-
-def release_qthread(thread: QThread | None) -> None:
-    """Delete *thread* once it has finished, without blocking the caller.
-
-    Safe in a slot of a custom "finished" signal emitted at the end of
-    ``run()`` (RB-08): that thread is still running when the slot runs, and
-    dropping its last reference there destroyed a running QThread ("QThread:
-    Destroyed while thread '' is still running", then abort). A running thread
-    is unparented and kept alive here until Qt's own ``QThread.finished`` fires
-    (reached through the base class, because subclasses shadow ``finished``
-    with their own signal); a thread that is not running is deleted at once.
-    """
-    if thread is None or thread in _finishing:
-        return
-    if thread.isRunning():
-        thread.setParent(None)
-        _finishing.add(thread)
-        QThread.finished.__get__(thread, QThread).connect(lambda: _dispose(thread))
-        if thread.isRunning():
-            return
-        # It finished between the check and the connect; the signal may be gone.
-    thread.wait()  # not running: returns at once (at most the end of finish())
-    if thread in _finishing:
-        _dispose(thread)
-    else:
-        thread.deleteLater()
-
-
-def _dispose(thread: QThread) -> None:
-    """Drop a released thread once; later calls are no-ops."""
-    if thread in _finishing:
-        _finishing.discard(thread)
-        thread.deleteLater()
-
-
-class _DashServerThreadBase(QThread):
+class _DashServerThreadBase(GuardedThread):
     """Serves one Dash app on ``host`` (loopback) until :meth:`stop`.
 
     ``port`` is the preferred port. When it is taken (another app, or a second
     SPROUTS) the server binds any free port instead (PV-10). ``port_assigned``
     announces the port actually bound; the socket already listens then, so the
     page can be loaded at once, with no readiness polling (PV-02). ``error``
-    reports a server that could not start or stopped unexpectedly.
+    reports a server that could not start or stopped unexpectedly: it relays
+    ``GuardedThread.failed`` (anything the serve loop raised, ``SystemExit`` too)
+    and is emitted on the server thread, as ``failed`` is.
     """
 
     error = pyqtSignal(str)
@@ -151,15 +116,13 @@ class _DashServerThreadBase(QThread):
         self.server = None
         self._stop_event = threading.Event()
         self._listening = threading.Event()
+        self.failed.connect(self.error, Qt.ConnectionType.DirectConnection)
 
-    def run(self) -> None:
-        try:
-            self._serve()
-        except Exception as exc:  # noqa: BLE001 -- a thread reports errors, never raises them
-            logger.exception("%s failed", self.objectName())
-            self.error.emit(str(exc) or type(exc).__name__)
+    def describe(self, exc: BaseException) -> str:
+        """The ``error`` text: the exception's message, else its type name."""
+        return str(exc) or type(exc).__name__
 
-    def _serve(self) -> None:
+    def work(self) -> None:
         server = self._bind()
         self.server = server
         server.timeout = _ACCEPT_TIMEOUT_S
@@ -191,7 +154,7 @@ class _DashServerThreadBase(QThread):
         # Wake handle_request() out of its accept wait while the socket still
         # listens (PV-03). Closing the socket first, as before, made this
         # connect fail, so every stop waited out the 0.5 s accept timeout.
-        # run() closes the socket itself once the loop has exited.
+        # work() closes the socket itself once the loop has exited.
         try:
             with socket.create_connection((self.host, self.port), timeout=_WAKE_TIMEOUT_S):
                 pass

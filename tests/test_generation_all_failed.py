@@ -15,6 +15,8 @@ import os
 import numpy as np
 import pytest
 from PIL import Image
+from PyQt6 import sip
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget
 
 from app.handlers import generate_skeleton_handler as gsh
@@ -114,6 +116,23 @@ def test_the_report_of_a_run_that_wrote_nothing_claims_no_other_outputs(qapp, tm
         assert box.detailedText().splitlines() == [f"{name}: {reason}" for name, reason in failed]
     finally:
         box.close()
+        parent.deleteLater()
+        flush_deleted()
+
+
+def test_the_report_box_shows_modeless_and_frees_itself_once_closed(qapp, tmp_path):
+    """One non-modal box (UXS-02) under the window, deleted once closed (app.dialogs)."""
+    parent = QWidget()
+    box = show_failure_report(parent, "Mask generation", str(tmp_path), [("a.jpg", "x")])
+    try:
+        assert box.isVisible() and not box.isModal()
+        assert box.windowModality() == Qt.WindowModality.NonModal
+        assert box.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        assert box.parent() is parent
+        box.close()
+        flush_deleted()
+        assert sip.isdeleted(box)
+    finally:
         parent.deleteLater()
         flush_deleted()
 

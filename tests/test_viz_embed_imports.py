@@ -43,13 +43,14 @@ def test_dashboard_modules_do_not_import_the_dash_stack():
 
 
 def test_thread_helpers_can_be_imported_after_the_qapplication_exists():
-    # Handlers import release_qthread whenever they like; that must not pull in
+    # Handlers import the thread helpers whenever they like; that must not pull in
     # QtWebEngineWidgets, which refuses to load once a QCoreApplication exists.
     result = _run_python("""
         import sys
         from PyQt6.QtCore import QCoreApplication
         app = QCoreApplication(sys.argv)
-        from app.visualization._viz_server import join_qthread, release_qthread
+        from app.visualization._viz_server import _DashServerThreadBase, join_qthread
+        from app.workers import release_qthread
         print("ok")
     """)
     assert result.returncode == 0, result.stderr[-2000:]

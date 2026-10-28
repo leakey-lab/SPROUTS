@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import weakref
 
 import numpy as np
 import pytest
@@ -23,6 +24,9 @@ from app.gt.export import ExportResult
 from app.gt.registry import default_registry
 from app.gt.store import Tracing, gt_path, write_tracing
 from app.gui.export_dataset_dialog import ExportDatasetDialog
+from app.workers import kept_threads
+from tests.qt_teardown import flush_deleted
+from tests.qt_wait import wait_until
 
 _STEMS = [
     "plot_T1_L1_2024.01.01_120000",
@@ -73,6 +77,28 @@ def blocked_export(monkeypatch):
 
     monkeypatch.setattr(mod, "export_dataset", _blocking_export)
     yield started, release
+    release.set()
+
+
+@pytest.fixture
+def lingering_worker(monkeypatch):
+    """The worker thread runs on after its outcome (its last signal) until the test releases
+    it, as every worker does for a moment after its last signal.
+
+    Returns ``(after_outcome, release)`` events (released on teardown too).
+    """
+    import app.gui.export_dataset_dialog as mod
+
+    after_outcome, release = threading.Event(), threading.Event()
+    real_work = mod.ExportThread.work
+
+    def work(self):
+        real_work(self)
+        after_outcome.set()
+        release.wait(30)
+
+    monkeypatch.setattr(mod.ExportThread, "work", work)
+    yield after_outcome, release
     release.set()
 
 
@@ -202,6 +228,45 @@ def test_close_event_during_run_is_ignored(app, tmp_path, blocked_export):
     assert dialog.result_summary is not None
     assert dialog.result_summary.exported > 0
     assert not dialog.export_thread.isRunning()  # finished before Close is offered
+
+
+@pytest.mark.parametrize("outcome", ["finished", "failed"])
+def test_the_outcome_shows_without_waiting_for_the_thread_to_end(
+    app, tmp_path, lingering_worker, outcome
+):
+    """The outcome slots waited (``wait()``) for the thread to end before showing anything.
+    The keeper of ``app.workers`` holds the thread until Qt's own finished, so the outcome
+    shows at once and the dialog may close, and be deleted, while the thread ends."""
+    after_outcome, release = lingering_worker
+    project_dir, images, registry = _build_project(tmp_path)
+    out_dir = tmp_path / f"export_out_lingering_{outcome}"
+    if outcome == "failed":  # a refused request: "Output directory is not empty"
+        out_dir.mkdir()
+        (out_dir / "existing.txt").write_text("x")
+    dialog = ExportDatasetDialog(project_dir, images, registry)
+    dialog.output_edit.setText(str(out_dir))
+    dialog.start_export()
+    thread = weakref.ref(dialog.export_thread)
+    assert after_outcome.wait(10), "the export never reached its outcome"
+
+    assert wait_until(dialog.export_button.isEnabled, timeout=2.0)
+    assert thread().isRunning()  # the outcome shows while the thread runs on
+    shown = dialog.status_label.text()
+    assert ("Exported" in shown) == (outcome == "finished") and "Exporting" not in shown
+    rejected = []
+    dialog.rejected.connect(lambda: rejected.append(1))
+    dialog.reject()
+    assert rejected == [1]  # its outcome has shown: the dialog closes
+    assert dialog.status_label.text() == shown
+
+    dialog.deleteLater()
+    del dialog
+    flush_deleted()
+    assert thread() is not None and thread().isRunning()  # the keeper holds it
+    assert thread() in kept_threads()
+    release.set()
+    assert thread().wait(5000)
+    assert wait_until(lambda: thread() is None or thread() not in kept_threads())
 
 
 def _failing_export(monkeypatch, exc: BaseException) -> None:

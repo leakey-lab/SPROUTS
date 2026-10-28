@@ -32,7 +32,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QLabel, QMainWindow, QStackedLayout, QWidget
 
 from app.design import tokens
-from app.workers import GuardedThread, keep, release_qthread
+from app.workers import GuardedThread, release_qthread
 
 from ._viz_server import DASH_HOST, _DashServerThreadBase, join_qthread
 
@@ -257,8 +257,7 @@ class DashVizWindow(QMainWindow):
         thread.error.connect(self._on_server_error)
         self.server_thread = thread
         self._startup_timer.start(self.startup_timeout_ms)
-        keep(thread)
-        thread.start()
+        thread.start()  # a GuardedThread: start() keeps it until Qt's own finished
 
     def _on_build_failed(self, message: str) -> None:
         self._release_init_worker()

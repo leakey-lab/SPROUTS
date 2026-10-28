@@ -124,6 +124,8 @@ class ExportDatasetDialog(QDialog):
         self.registry = registry
         self.result_summary: ExportResult | None = None
         self.export_thread: ExportThread | None = None
+        # True from the start of an export until its outcome (the worker's last signal) shows.
+        self._awaiting_outcome = False
         self.traced = count_traced(images)
 
         self.setWindowTitle("Export dataset")
@@ -317,6 +319,7 @@ class ExportDatasetDialog(QDialog):
         self.export_thread.progress.connect(self.progress_bar.setValue)
         self.export_thread.finished_ok.connect(self._on_finished_ok)
         self.export_thread.failed.connect(self._on_failed)
+        self._awaiting_outcome = True
         self.export_thread.start()
 
     def _set_controls_enabled(self, enabled: bool) -> None:
@@ -335,17 +338,13 @@ class ExportDatasetDialog(QDialog):
             self._sync_export_enabled()
 
     def _is_running(self) -> bool:
-        return self.export_thread is not None and self.export_thread.isRunning()
-
-    def _join_worker(self) -> None:
-        """The worker emitted its last signal: wait the few instructions until it
-        has really finished, so the dialog (and the thread object it owns) can
-        be closed and deleted right away."""
-        if self.export_thread is not None:
-            self.export_thread.wait()
+        """The export runs and its outcome has not shown yet. Once it has, the dialog may close
+        and be deleted while the thread ends: app.workers keeps it until Qt's own finished."""
+        thread = self.export_thread
+        return self._awaiting_outcome and thread is not None and thread.isRunning()
 
     def _on_finished_ok(self, result: ExportResult) -> None:
-        self._join_worker()
+        self._awaiting_outcome = False
         self.result_summary = result
         self.progress_bar.setValue(100)
         parts = [f"Exported {result.exported} image(s) ({result.train} train / {result.val} val)"]
@@ -365,7 +364,7 @@ class ExportDatasetDialog(QDialog):
         self._set_controls_enabled(True)
 
     def _on_failed(self, message: str) -> None:
-        self._join_worker()
+        self._awaiting_outcome = False
         self.result_summary = None
         self.progress_bar.setValue(0)
         self.progress_bar.hide()  # the status line carries the error
@@ -375,14 +374,10 @@ class ExportDatasetDialog(QDialog):
     # ---------------------------------------------------------- lifecycle
 
     def reject(self) -> None:
-        """Ignore Cancel / Esc while the export thread is running.
+        """Ignore Cancel / Esc while the export is running.
 
-        Letting the default ``QDialog.reject()`` proceed would hide (and,
-        once the caller drops its reference after ``.exec()`` returns, let
-        Python garbage-collect) the dialog while ``ExportThread`` is still
-        running on its own OS thread — destroying a running ``QThread`` is a
-        fatal Qt error. Refuse instead; the run always finishes on its own
-        and re-enables the controls.
+        An export cannot be stopped midway and its outcome is shown here, so the
+        dialog stays; the run always finishes on its own and re-enables the controls.
         """
         if self._is_running():
             self.status_label.setText("Export in progress — please wait…")
