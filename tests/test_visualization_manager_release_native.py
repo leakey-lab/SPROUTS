@@ -13,8 +13,9 @@ never appears and never takes the focus). The canvases are forced onto Qt's soft
 (``opengl32sw.dll``, shipped with PyQt6) in place of a GPU. Skipped off Windows, and when the
 child cannot set up (no window, no OpenGL, a dashboard that does not load).
 
-The first open of a dashboard still recreates the window once (the owner's console test of
-the native-child route decides that one).
+On Windows each dashboard is now a native child window with its own Direct3D 11 surface
+(route (b) of the dashboard blink, KNOWN_ISSUES D8): the main window keeps the canvases'
+OpenGL surface, so no step recreates it, and the canvases keep OpenGL while a dashboard lives.
 """
 
 from __future__ import annotations
@@ -321,4 +322,32 @@ def test_no_graphics_api_warning_at_the_release(release_record):
 
 def test_the_dashboards_open_again_after_the_release(release_record):
     assert release_record["steps"]["reopen"]["ok"]
-    assert release_record["steps"]["reopen"]["after"]["gl_viewports"] == [False, False]
+    assert release_record["steps"]["reopen"]["after"]["gl_viewports"] == [True, True]
+
+
+#: The steps after the window and the project are shown, in their order.
+STEPS = ("length", "area", "library", "visualize_again", "library_again", "release", "reopen")
+
+
+def test_no_step_recreates_the_main_window(release_record):
+    recreations = {step: _recreations(release_record, step) for step in STEPS}
+    assert recreations == dict.fromkeys(STEPS, 0)
+    recreating = [m for m in release_record["messages"] if "Recreating QWidgetWindow" in m["text"]]
+    assert recreating == []
+
+
+def test_the_main_window_keeps_its_native_window_and_stays_the_only_one(release_record):
+    first = release_record["steps"]["show"]["after"]
+    for step in STEPS:
+        after = release_record["steps"][step]["after"]
+        assert (after["qwindow"], after["winid"]) == (first["qwindow"], first["winid"]), step
+        assert after["visible_top_levels"] == 1, step
+    shown = [e["window"] for e in release_record["events"] if e["event"] == "Show"]
+    assert shown == [MAIN_QWINDOW]  # no dashboard ever became a window of its own
+
+
+def test_the_canvases_keep_opengl_while_a_dashboard_lives(release_record):
+    for step in ("length", "area", "visualize_again", "reopen"):
+        after = release_record["steps"][step]["after"]
+        assert after["surface"] == "OpenGLSurface", step
+        assert after["gl_viewports"] == [True, True], step

@@ -29,7 +29,7 @@ exported wins.
 from __future__ import annotations
 
 import sys
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 
 #: Desktop file name given to the application (Wayland compositors match the
 #: window to its icon through it); the same name as the ``sprouts`` script.
@@ -76,6 +76,19 @@ def configure_qt_environment(
             environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags
             applied["QTWEBENGINE_CHROMIUM_FLAGS"] = flags
     return applied
+
+
+def windows_quick_uses_direct3d(environ: Mapping[str, str]) -> bool:
+    """True when Qt Quick (a dashboard's ``QQuickWidget``) draws through Direct3D 11 on Windows.
+
+    That is the D3D11 RHI, which :func:`configure_qt_environment` sets and which is also Qt's
+    default on Windows, unless the user exported another ``QSG_RHI_BACKEND`` or a Qt Quick
+    backend other than the RHI one (``QT_QUICK_BACKEND=software``). ``viz_window`` then gives
+    each dashboard a native child window with a Direct3D surface (``docs/KNOWN_ISSUES.md`` D8).
+    """
+    if environ.get("QSG_RHI_BACKEND", "d3d11").strip().lower() != "d3d11":
+        return False
+    return environ.get("QT_QUICK_BACKEND", "").strip().lower() in ("", "rhi")
 
 
 def qt_style_for(platform: str = sys.platform) -> str | None:

@@ -564,3 +564,59 @@ def test_prewarm_imports_loads_the_dashboard_stack():
         "app.data_processing.data_processor",
     ):
         assert module in sys.modules, module
+
+
+# --------------------------------------------------------------------------- #
+#  Route (b) of the dashboard blink (KNOWN_ISSUES D8): on Windows each dashboard
+#  is a native child window with its own Direct3D 11 surface, so the main window
+#  keeps the canvases' OpenGL surface and is never recreated.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("platform", "environ", "native"),
+    [
+        ("windows", {}, True),
+        # the backend table: tests/test_startup_environment.py
+        ("windows", {"QSG_RHI_BACKEND": "opengl"}, False),  # the browser draws through OpenGL
+        ("windows", {"QT_QUICK_BACKEND": "software"}, False),  # no RHI at all
+        ("offscreen", {}, False),
+        ("minimal", {}, False),
+        ("xcb", {}, False),  # Linux and macOS were not checked: the canvases' swap stays
+        ("wayland", {}, False),
+        ("cocoa", {}, False),
+    ],
+)
+def test_only_windows_with_the_d3d11_browser_gets_native_dashboards(platform, environ, native):
+    from PyQt6.QtGui import QSurface
+
+    import app.visualization.viz_window as vw
+
+    expected = QSurface.SurfaceType.Direct3DSurface if native else None
+    assert vw.native_child_surface(platform, environ) == expected
+
+
+def test_the_suite_platform_keeps_dashboards_plain_child_widgets(make_window):
+    from PyQt6.QtCore import Qt
+
+    import app.visualization.viz_window as vw
+
+    window = make_window()
+
+    assert vw.native_child_surface() is None  # offscreen
+    assert not window.testAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+    assert window.windowHandle() is None
+
+
+def test_a_native_dashboard_gets_its_own_direct3d_window(make_window, monkeypatch):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QSurface
+
+    import app.visualization.viz_window as vw
+
+    direct3d = QSurface.SurfaceType.Direct3DSurface
+    monkeypatch.setattr(vw, "native_child_surface", lambda *a, **k: direct3d)
+
+    window = make_window()
+
+    assert window.testAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+    assert window.windowHandle() is not None
+    assert window.windowHandle().surfaceType() == direct3d

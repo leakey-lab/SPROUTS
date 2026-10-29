@@ -10,8 +10,8 @@ three important and nine minor items; all are fixed (rows FR1 to FR7 of "Resolve
 history") except E11, accepted. The redundancy and speed pass changed no scientific output
 except one corner case (S01-06, `CHANGELOG.md`); the IDs its code cites are in the second
 table of "Resolved history", and its owner questions, none built, are under "Details and
-history" (the offenders its guard tests mark are row K1b-01 of table 2, and the dashboard
-blink that stays is row D8). Table 2 lists the engineering items still open: accepted
+history" (the offenders its guard tests mark are row K1b-01 of table 2; the dashboard
+blink, row D8, is fixed on Windows since 2026-10-29). Table 2 lists the engineering items still open: accepted
 limits and work not built now; rows U1, U2, U3, U5 and U7 are the open follow-ups of the
 Python 3.14 upgrade (2026-10-27, `2309d67`, `CHANGELOG.md`; U4 is resolved, U6 closed by
 the owner). Built items are in "Resolved history" with their commits; table 3 lists what
@@ -78,7 +78,7 @@ read the tables for the present state.
 | P2 | | First image read on the GUI thread | not built now (only for images larger than 640 x 480): W6-T1 |
 | P3 | | Deflate in the skeleton history | not built now (only for large images): W6-T2 |
 | D2 | | Pre-Generate scan as a warm-up | O28, W6-T3 (optional); the scan now costs about 0.16 s at 46k, and closing D2 is an owner question (S11-07, 2026-10-27) |
-| D8 | VG-FLICKER, owner question #42 | The dashboard blink. A dashboard's web view draws through a `QQuickWidget`, which needs a Direct3D 11 window surface on Windows, and Qt cannot change the surface of a window on screen: it recreates the main window, which is gone for 43-98 ms. With OpenGL canvases (the RTX machine's own screen) this happens at the first open and once at each reopen after the 5-minute release; with raster canvases on Windows (Remote Desktop, software OpenGL, `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0`) once per app start, at the first dashboard (Linux and macOS were not checked). Fixed: the release itself recreates the window once, not twice, and logs no D3D11 warning (K1b-D, 5ab283c). The swap to raster viewports (D3, table 3) neither causes nor avoids the recreation. No value or saved pixel is involved | open; owner decision (2026-10-27): raster sessions keep one blink per start (no hidden anchor widget); route (b), the dashboard as a native child window, is built only after the owner runs `.claude/handoff/dedup-speed-2026-10-26/console_test.ps1` at the RTX machine's own screen and it passes |
+| D8 | VG-FLICKER, owner question #42 | The dashboard blink. A dashboard's web view draws through a `QQuickWidget`, which needs a Direct3D 11 window surface on Windows, and Qt cannot change the surface of a window on screen: it recreates the main window, which is gone for 43-98 ms. With OpenGL canvases (the RTX machine's own screen) this happens at the first open and once at each reopen after the 5-minute release; with raster canvases on Windows (Remote Desktop, software OpenGL, `ROOT_VIEWER_ENABLE_OPENGL_VIEWPORT=0`) once per app start, at the first dashboard (Linux and macOS were not checked). Fixed: the release itself recreates the window once, not twice, and logs no D3D11 warning (K1b-D, 5ab283c). The swap to raster viewports (D3, table 3) neither causes nor avoids the recreation. No value or saved pixel is involved | fixed on Windows (2026-10-29, route (b), after the owner's console test at the RTX screen passed): each dashboard is a native child window with its own Direct3D 11 surface (`viz_window.native_child_surface`), so no step recreates the main window and the OpenGL canvases stay on (`tests/test_visualization_manager_release_native.py`). Open: Linux and macOS keep plain child widgets and the raster swap (D3), unchecked there |
 | U1 | Python 3.14 upgrade | `app/assets/sprouts-uirevision.js` stops Dash 4.4.1's redraw after a zoom is synced into the figure, which dropped the Growth Over Time zoom on Select All / Clear All (plotly/dash#4093). Remove it and `tests/test_viz_dash_uirevision.py` once a Dash release fixes #4093; that test's pin on the sync markers in dcc's `async-graph.js` fails when a Dash upgrade changes them | open: re-check at every Dash upgrade (Python 3.14 upgrade, 2026-10-27) |
 | U2 | Python 3.14 upgrade | The PyInstaller app bundle has not been built or started on Python 3.14; only `tests/test_fair_build.py` ran (18 of 18 with PyInstaller 6.22.3) | open: build and smoke-test it before the next release (owner question, 2026-10-27) |
 | U3 | Python 3.14 upgrade | CI (`.github/workflows/ci.yml`: Ubuntu, Windows, macOS) has not run on Python 3.14, as the branch is not pushed; the wheels of every pin resolve on the three systems (uv, wheels only) | open: the first push runs it |
@@ -94,7 +94,7 @@ read the tables for the present state.
 | P5 | Leave the first skeleton frame | 3.75 ms once on the stress skeleton, 0.98 ms on a real one |
 | P7 | Leave the warm-up leftovers | the window is gone 15 ms after close; the 1.25 s wait is invisible, and a daemon thread risks a crash at exit |
 | D1 | Leave `refresh_outputs` on the GUI thread | 94 ms for 23k + 23k once per pass; an asynchronous scan races with saves |
-| D3 | Keep raster viewports while a dashboard lives | one graphics backend per top-level window; a separate window is a UX regression. (Note 2026-10-27: the swap neither causes nor avoids the main window's recreation when a dashboard joins it; that blink is D8 in table 2.) |
+| D3 | Keep raster viewports while a dashboard lives | one graphics backend per top-level window; a separate window is a UX regression. (Note 2026-10-27: the swap neither causes nor avoids the main window's recreation when a dashboard joins it; that blink is D8 in table 2.) (Note 2026-10-29: on Windows the swap is gone; each dashboard is a native child window there and the canvases keep OpenGL, D8. Linux and macOS keep the swap.) |
 | D4 | Leave the first dashboard open | the 234 ms is the QtWebEngine start, bound to the GUI thread |
 | D6 | Keep the 30-bar label limit | a zoom-following callback costs a second full draw on the largest trials |
 | E6 (bicubic) | Bicubic refine not planned | bicubic sharpens the JPEG blocks; pinch is built in WX-T3 |
@@ -313,7 +313,7 @@ the full texts with recommendations are that folder's `notes/owner-questions.md`
   markers one pixel off after a pan across the canvas's left or top edge.
 - Qt toolkit and dashboard blink (waves 5 and 6; that folder's `notes/qt-toolkit-answer.md`
   and `notes/viz-flicker-gpu-answer.md`): the blink at the console (row D8 of table 2:
-  route (b) once the owner's console test passes); the status line's Cancel button has no
+  route (b), built 2026-10-29 after the owner's console test passed); the status line's Cancel button has no
   keyboard focus ring (K1b-01; guard tests mark it and S02-01, C5-03, P1-03 and C5-02 as
   strict `xfail`s: row K1b-01 of table 2); Tab-only buttons app-wide (a click leaves the
   keyboard where it was, Tab still reaches every button); the settings in the Windows

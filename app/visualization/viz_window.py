@@ -21,17 +21,18 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from enum import Enum, auto
 
 from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QGuiApplication, QSurface
 from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QLabel, QMainWindow, QStackedLayout, QWidget
 
 from app.design import tokens
+from app.qt_environment import windows_quick_uses_direct3d
 from app.workers import GuardedThread, release_qthread
 
 from ._viz_server import DASH_HOST, _DashServerThreadBase, join_qthread
@@ -54,6 +55,34 @@ def prewarm_imports() -> None:
     import app.data_processing.data_processor_area  # noqa: F401
 
     from . import dash_app, dash_app_area  # noqa: F401
+
+
+def native_child_surface(
+    platform: str | None = None, environ: Mapping[str, str] | None = None
+) -> QSurface.SurfaceType | None:
+    """The surface of a dashboard's own native child window, or None to keep a plain child widget.
+
+    A dashboard's browser draws through a ``QQuickWidget``. On Windows that needs a Direct3D 11
+    surface (the RHI backend ``app/qt_environment.py`` sets), and Qt cannot change the surface
+    of a window on screen. As a plain child widget the dashboard made Qt recreate the
+    main window (gone for 43-98 ms at the first open, the release and each reopen), and the
+    canvases' OpenGL viewports had to be off while it lived. In a native child window of its own
+    the dashboard has its own Direct3D surface and the main window keeps the canvases' OpenGL
+    surface: route (b) of the dashboard blink (``docs/KNOWN_ISSUES.md`` D8), measured at the RTX
+    5070 Ti's own screen on 2026-10-29. Linux and macOS were not checked, nor a browser on another
+    RHI or a Qt Quick backend other than the RHI one: they keep plain child widgets.
+
+    Args:
+        platform: A Qt platform plugin name; default ``QGuiApplication.platformName()``.
+        environ: The process environment; default ``os.environ``.
+    """
+    if platform is None:
+        platform = QGuiApplication.platformName()
+    if environ is None:
+        environ = os.environ
+    if platform != "windows" or not windows_quick_uses_direct3d(environ):
+        return None
+    return QSurface.SurfaceType.Direct3DSurface
 
 
 def require_rows(processor):
@@ -161,6 +190,19 @@ class DashVizWindow(QMainWindow):
         self._init_ui()
         if self._stage is _Stage.BUILDING:
             self._start_build()
+        self._embed_natively()
+
+    def _embed_natively(self) -> None:
+        """Give the dashboard a native window of its own where :func:`native_child_surface`
+        names a surface for it (Windows). It becomes a native child of the panel it is added to,
+        and Qt makes the panel's ancestors and their siblings native too (16-18 widgets)."""
+        surface = native_child_surface()
+        if surface is None:
+            return
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.setSurfaceType(surface)
 
     # ------------------------------------------------------------------ hooks
     def _dashboard_builder(self) -> Builder:

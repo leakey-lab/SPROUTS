@@ -140,6 +140,18 @@ Seven passes, not yet released:
     compatible with QOpenGLWidget": a released dashboard leaves the window before the
     canvases get OpenGL back (K1b-D). The first open and each reopen still recreate the
     window once (`docs/KNOWN_ISSUES.md` D8).
+  - Dashboard blink (D8, route (b), 2026-10-29, after the owner's console test at the RTX
+    5070 Ti's own screen): on Windows each dashboard is a native child window with its own
+    Direct3D 11 surface (`viz_window.native_child_surface`), so the main window keeps the
+    canvases' surface and is never recreated: no blink at the first open, at the 5-minute
+    release or at a reopen (it was gone for 44-86 ms each time), and the OpenGL canvases
+    stay on while a dashboard lives (they used to switch to raster viewports, D3). The first
+    dashboard load took 1.1 s instead of 3.8 s in that test, and the canvases redrew at
+    61-62 fps with a dashboard as without one. Cost: Qt makes 16-18 widgets native (the
+    dashboard panel's ancestors and their siblings) and the app holds about 100 MB more.
+    Toasts, the loading overlay and the Correct page were pixel-identical on screen; a
+    resize no longer shows black bands for a frame. Linux and macOS keep plain child
+    widgets and the raster swap (not checked there). No CSV value or pixel is involved.
   - A held `Space` ends when the keyboard leaves a canvas (another widget, a popup or another
     window takes it): the Library display kept panning after the focus had moved away
     (K1a-C1).

@@ -12,13 +12,18 @@ runs their shared lifecycle:
 * ``close`` removes a dashboard exactly once, and ``toggle`` keeps the legacy
   open/close meaning for the old buttons. ``release_all`` closes both when
   another project is opened (they chart the previous project's CSVs).
-* OpenGL canvas viewports stay off while any dashboard embeds a browser (Qt6
-  cannot composite a QWebEngineView in a window holding a QOpenGLWidget) and
-  come back when the last one closes, but only if they were on before.
+* On Windows each dashboard is a native child window with its own Direct3D
+  surface (:func:`dashboards_embed_natively`): the canvases keep OpenGL and the
+  main window is never recreated (``docs/KNOWN_ISSUES.md`` D8). Elsewhere
+  (Linux, macOS: not checked) OpenGL canvas viewports stay off while any
+  dashboard embeds a browser (Qt6 cannot composite a QWebEngineView in a window
+  holding a QOpenGLWidget) and come back when the last one closes, but only if
+  they were on before.
 * Dashboards outlive a visit to the Visualize stage, so a revisit is instant.
   ``stage_changed`` (called by MainWindow on every stage change) closes them
-  :data:`IDLE_RELEASE_MS` after the stage was left: the canvases get OpenGL back
-  and each dashboard's browser process (~150-250 MB) is freed.
+  :data:`IDLE_RELEASE_MS` after the stage was left: each dashboard's browser
+  process (~150-250 MB) is freed, and where they were off the canvases get
+  OpenGL back.
 
 The module functions keep their historical names. The dashboard classes are
 imported on first use, so opening the app does not load the Dash stack.
@@ -72,6 +77,7 @@ __all__ = [
     "close_root_length_visualization",
     "close_visualization",
     "controller_for",
+    "dashboards_embed_natively",
     "find_test_latest_dir",
     "measurement_index_of",
     "release_all_visualizations",
@@ -239,6 +245,17 @@ def _opengl_viewports_in_use(window) -> bool:
     return bool(find_children(QOpenGLWidget))
 
 
+def dashboards_embed_natively() -> bool:
+    """True where each dashboard is a native child window with its own surface (Windows).
+
+    Its browser then composites next to the OpenGL canvases, which keep their viewports;
+    see ``viz_window.native_child_surface``.
+    """
+    from app.visualization.viz_window import native_child_surface
+
+    return native_child_surface() is not None
+
+
 def _disconnect(signal, slot) -> None:
     if slot is None:
         return
@@ -249,7 +266,8 @@ def _disconnect(signal, slot) -> None:
 
 
 class ViewportGlSuspension:
-    """Keeps OpenGL canvas viewports off while any dashboard holds a browser.
+    """Keeps OpenGL canvas viewports off while any dashboard holds a browser as a
+    plain child widget (not where :func:`dashboards_embed_natively`).
 
     The first holder switches the canvases to raster viewports; the last one
     to leave restores OpenGL, and only if it was on when the first arrived, so
@@ -477,7 +495,8 @@ class DashboardController:
 
     def _build(self, spec: DashboardSpec, csv_path: str) -> None:
         mw = self._mw
-        self._gl.acquire(spec.kind)  # before the dashboard creates its browser widget
+        if not dashboards_embed_natively():
+            self._gl.acquire(spec.kind)  # before the dashboard creates its browser widget
         try:
             cls = getattr(sys.modules[__name__], spec.class_name)
             if spec.needs_image_manager:

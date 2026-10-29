@@ -450,6 +450,32 @@ def test_opengl_is_not_forced_on_when_it_was_off_before(env):
     assert True not in mw.gl_calls
 
 
+def test_native_dashboards_leave_the_opengl_canvases_on(env_gl, monkeypatch):
+    # Route (b) of the dashboard blink (KNOWN_ISSUES D8): on Windows a dashboard is a
+    # native child window with its own Direct3D surface, which composites next to the
+    # OpenGL canvases, so the canvases are never switched to raster viewports.
+    monkeypatch.setattr(vm, "dashboards_embed_natively", lambda: True)
+    mw = env_gl.mw
+
+    vm.show_root_length_visualization(mw)
+    vm.show_root_area_visualization(mw)
+    vm.close_root_length_visualization(mw)
+    vm.release_all_visualizations(mw)
+    vm.show_root_length_visualization(mw)
+
+    assert mw.gl_calls == []
+    assert mw._gl_viewport is not None
+
+
+def test_dashboards_embed_natively_only_where_the_window_module_says_so(monkeypatch):
+    import app.visualization.viz_window as vw
+
+    monkeypatch.setattr(vw, "native_child_surface", lambda *a, **k: None)
+    assert vm.dashboards_embed_natively() is False
+    monkeypatch.setattr(vw, "native_child_surface", lambda *a, **k: object())
+    assert vm.dashboards_embed_natively() is True
+
+
 # --------------------------------------------------------------------------- #
 #  A released dashboard leaves the window before OpenGL returns (flicker, Part A).
 #  Qt picks the window's surface from its children: a dying dashboard still in the

@@ -60,6 +60,23 @@ def test_darwin_takes_metal_and_96_dpi_fonts():
     assert env == {"QT_FONT_DPI": "96"}
 
 
+@pytest.mark.parametrize(
+    ("environ", "d3d11"),
+    [
+        ({}, True),  # what configure_qt_environment sets on Windows, and Qt's Windows default
+        ({"QSG_RHI_BACKEND": "d3d11"}, True),
+        ({"QSG_RHI_BACKEND": " D3D11 "}, True),
+        ({"QSG_RHI_BACKEND": "opengl"}, False),
+        ({"QSG_RHI_BACKEND": "vulkan"}, False),
+        ({"QT_QUICK_BACKEND": "rhi"}, True),  # Qt Quick's default backend
+        ({"QT_QUICK_BACKEND": "software"}, False),  # no RHI at all
+        ({"QSG_RHI_BACKEND": "d3d11", "QT_QUICK_BACKEND": "software"}, False),
+    ],
+)
+def test_qt_quick_on_windows_draws_through_d3d11_unless_the_user_chose_otherwise(environ, d3d11):
+    assert qe.windows_quick_uses_direct3d(environ) is d3d11
+
+
 def test_style_is_native_on_windows_and_fusion_elsewhere():
     assert qe.qt_style_for("win32") is None
     assert qe.qt_style_for("linux") == qe.qt_style_for("darwin") == "Fusion"
