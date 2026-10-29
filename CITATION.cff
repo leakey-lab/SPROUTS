@@ -26,8 +26,8 @@ authors:
     family-names: Varela
   - given-names: Andrew D. B.
     family-names: Leakey
-repository-code: "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
-url: "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
+repository-code: "https://github.com/leakey-lab/SPROUTS"
+url: "https://github.com/leakey-lab/SPROUTS"
 keywords:
   - plant phenotyping
   - minirhizotron

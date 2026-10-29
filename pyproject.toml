@@ -57,10 +57,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
-Repository = "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
-Issues = "https://github.com/leakey-lab/Root-Mask-and-Skeletons/issues"
-Changelog = "https://github.com/leakey-lab/Root-Mask-and-Skeletons/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/leakey-lab/SPROUTS"
+Repository = "https://github.com/leakey-lab/SPROUTS"
+Issues = "https://github.com/leakey-lab/SPROUTS/issues"
+Changelog = "https://github.com/leakey-lab/SPROUTS/blob/main/CHANGELOG.md"
 
 [project.scripts]
 sprouts = "main:main"

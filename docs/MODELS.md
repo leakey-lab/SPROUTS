@@ -55,7 +55,7 @@ shasum -a 256 checkpoints/mask_weights/best_mask_model_V5.pth checkpoints/skelet
    (51,749,020 bytes). Check them against the table above before uploading.
 3. Description: what each model does (this card), the training data of each (the two
    `TODO(owner)` rows below are still open), the software version that runs them, and a
-   related identifier "is supplement to" `https://github.com/leakey-lab/Root-Mask-and-Skeletons`.
+   related identifier "is supplement to" `https://github.com/leakey-lab/SPROUTS`.
 4. Publish. Copy the DOI and the two file URLs (`https://zenodo.org/records/<id>/files/<name>`).
 5. In `app/models.py` set `url` and `doi` of both `ModelSpec`s; in this file fill the
    table of "Identity and verification" with the DOI; add the DOI as `references` or

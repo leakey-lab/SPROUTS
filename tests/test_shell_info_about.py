@@ -20,7 +20,7 @@ authors:
     alias: MasterKinjalk
   - given-names: Ada B.
     family-names: Lovelace
-url: "https://github.com/leakey-lab/Root-Mask-and-Skeletons"
+url: "https://github.com/leakey-lab/SPROUTS"
 version: "3.0.0"
 date-released: 2026-10-01
 doi: 10.5281/zenodo.123
@@ -59,7 +59,7 @@ def test_citation_text_without_date_or_doi_uses_nd_and_url(tmp_path):
     )
     text = about_dialog.citation_text(str(path))
     assert "(n.d.)" in text
-    assert text.endswith("https://github.com/leakey-lab/Root-Mask-and-Skeletons")
+    assert text.endswith("https://github.com/leakey-lab/SPROUTS")
 
 
 def test_citation_text_missing_file_is_none(tmp_path):

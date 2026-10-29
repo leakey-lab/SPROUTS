@@ -23,10 +23,10 @@
       "familyName": "Leakey"
     }
   ],
-  "codeRepository": "https://github.com/leakey-lab/Root-Mask-and-Skeletons",
-  "issueTracker": "https://github.com/leakey-lab/Root-Mask-and-Skeletons/issues",
-  "readme": "https://github.com/leakey-lab/Root-Mask-and-Skeletons/blob/main/README.md",
-  "releaseNotes": "https://github.com/leakey-lab/Root-Mask-and-Skeletons/blob/main/CHANGELOG.md",
+  "codeRepository": "https://github.com/leakey-lab/SPROUTS",
+  "issueTracker": "https://github.com/leakey-lab/SPROUTS/issues",
+  "readme": "https://github.com/leakey-lab/SPROUTS/blob/main/README.md",
+  "releaseNotes": "https://github.com/leakey-lab/SPROUTS/blob/main/CHANGELOG.md",
   "programmingLanguage": {
     "@type": "ComputerLanguage",
     "name": "Python",
