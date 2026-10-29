@@ -6,6 +6,12 @@ already turns malformed JSON into its own error must treat it the same way: a
 hand-broken ``gt/classes.json`` once escaped ``load_registry`` and reached the crash
 hook instead of the "invalid registry" notice (Trace GT then; the Correct page's class
 labels now).
+
+Since Python 3.14 the ``RecursionError`` comes when the C stack runs low, not at a fixed
+depth: on a big main-thread stack (the Ubuntu CI runner's; here from 64 MB) a 100,000-deep
+file parses, and the readers then reject or accept it by its type, without a crash. So every
+test here parses on a thread with a small stack (:func:`_json_on_a_small_stack`), which makes
+the ``RecursionError`` path the readers must handle the same on every OS.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 
 import cv2
 import numpy as np
@@ -30,6 +37,40 @@ NESTED = {
     "array": "[" * _DEPTH + "]" * _DEPTH,
     "object": '{"a":' * _DEPTH + "1" + "}" * _DEPTH,
 }
+#: Stack of the thread the JSON is parsed on: 100,000 levels overflow it on every OS.
+_PARSE_STACK = 2 << 20
+
+
+@pytest.fixture(autouse=True)
+def _json_on_a_small_stack(monkeypatch):
+    """``json.loads`` (and ``json.load``, which calls it) runs on a thread with a 2 MB stack.
+
+    The real parser, only on a known stack: the readers call ``json.load`` / ``json.loads``
+    through the module, so they all parse there.
+    """
+    real_loads = json.loads
+
+    def loads(*args, **kwargs):
+        outcome = {}
+
+        def parse():
+            try:
+                outcome["value"] = real_loads(*args, **kwargs)
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+                outcome["error"] = exc
+
+        previous = threading.stack_size(_PARSE_STACK)
+        try:
+            worker = threading.Thread(target=parse, name="json-small-stack")
+            worker.start()
+        finally:
+            threading.stack_size(previous)
+        worker.join()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
+    monkeypatch.setattr(json, "loads", loads)
 
 
 def test_nested_json_really_raises_recursion_error():
