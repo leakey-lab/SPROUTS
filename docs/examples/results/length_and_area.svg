@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="sans-serif">
+<title>Root length and root area of the three example images</title>
+<rect width="720" height="360" fill="#ffffff"/>
+<text x="20" y="26" font-size="15" font-weight="bold" fill="#222222">Root length (mm)</text>
+<text x="120" y="61" font-size="13" text-anchor="end" fill="#222222">T001 L050</text>
+<rect x="130" y="42" width="0.00" height="28" fill="#f0a868"><title>T001 L050: 0.0 mm</title></rect>
+<text x="138.00" y="61" font-size="13" fill="#222222">0.0 mm</text>
+<text x="120" y="101" font-size="13" text-anchor="end" fill="#222222">T001 L044</text>
+<rect x="130" y="82" width="470.00" height="28" fill="#f0a868"><title>T001 L044: 17.94 mm</title></rect>
+<text x="608.00" y="101" font-size="13" fill="#222222">17.94 mm</text>
+<text x="120" y="141" font-size="13" text-anchor="end" fill="#222222">T012 L047</text>
+<rect x="130" y="122" width="71.52" height="28" fill="#f0a868"><title>T012 L047: 2.73 mm</title></rect>
+<text x="209.52" y="141" font-size="13" fill="#222222">2.73 mm</text>
+<line x1="130" y1="36" x2="130" y2="156" stroke="#888888" stroke-width="1"/>
+<text x="20" y="202" font-size="15" font-weight="bold" fill="#222222">Root area (mm²)</text>
+<text x="120" y="237" font-size="13" text-anchor="end" fill="#222222">T001 L050</text>
+<rect x="130" y="218" width="1.65" height="28" fill="#5fd6a0"><title>T001 L050: 0.06 mm²</title></rect>
+<text x="139.65" y="237" font-size="13" fill="#222222">0.06 mm²</text>
+<text x="120" y="277" font-size="13" text-anchor="end" fill="#222222">T001 L044</text>
+<rect x="130" y="258" width="470.00" height="28" fill="#5fd6a0"><title>T001 L044: 17.04 mm²</title></rect>
+<text x="608.00" y="277" font-size="13" fill="#222222">17.04 mm²</text>
+<text x="120" y="317" font-size="13" text-anchor="end" fill="#222222">T012 L047</text>
+<rect x="130" y="298" width="246.03" height="28" fill="#5fd6a0"><title>T012 L047: 8.92 mm²</title></rect>
+<text x="384.03" y="317" font-size="13" fill="#222222">8.92 mm²</text>
+<line x1="130" y1="212" x2="130" y2="332" stroke="#888888" stroke-width="1"/>
+</svg>

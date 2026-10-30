@@ -10,6 +10,12 @@ behavior at the start of the hardening branch. The R5 scientific-correctness fix
 (arc-length calibration) will INTENTIONALLY change the length golden values; when
 that happens, update LEN_PER_PX here together with a documented justification in
 the commit message. Until then, every other phase must keep these green.
+
+O12 (W3-T8, audit X1): length moved from the Freeman weights (1 per orthogonal step,
+sqrt(2) per diagonal step), which read about 5 % long on real roots, to the corner-count
+estimator of Vossepoel & Smeulders (1982): 0.980 per orthogonal step, 1.406 per diagonal
+step, -0.091 per change of direction. The straight-line length goldens below carry those
+weights; a straight line has no corner, so an axis-parallel line reads 2.0 % short.
 """
 
 import csv
@@ -19,17 +25,17 @@ import pytest
 
 from app.data_processing.data_processor import DataProcessor
 from app.gui.skeleton_graph_model import SkeletonCorrectionModel, vectorize_skeleton
-from app.inference.root_area_inference_handler import calculate_root_area
-from app.inference.root_length_inference_handler import (
+from app.inference.metrics import (
+    calculate_root_area,
     calculate_root_length,
+    length_row,
     parse_image_name,
-    process_single_image,
 )
 
 # --- Calibration (physical field of view). Metrics are now resolution-independent:
 # they map the FOV onto the *actual* image/mask shape. See R5 / metrics.py. ---
 FOV_W_MM = 18.0
-FOV_H_MM = 13.0
+FOV_H_MM = 13.5
 
 
 def _row_skeleton(n_px, h=20, w=120):
@@ -38,15 +44,16 @@ def _row_skeleton(n_px, h=20, w=120):
     return sk
 
 
-# ---------------- Length (arc-length, R5 corrected) ----------------
+# ---------------- Length (corner-count estimator, O12) ----------------
 
 
 @pytest.mark.parametrize("n_px", [2, 10, 25, 100])
 def test_horizontal_length_uses_x_pitch(n_px):
-    # A horizontal line of n_px pixels has n_px-1 orthogonal steps of pitch 18/W mm.
+    # A horizontal line of n_px pixels has n_px-1 orthogonal steps of pitch 18/W mm,
+    # each weighted 0.98 (O12).
     w = 120
     sk = _row_skeleton(n_px, h=20, w=w)
-    assert calculate_root_length(sk) == pytest.approx((n_px - 1) * FOV_W_MM / w, rel=1e-9)
+    assert calculate_root_length(sk) == pytest.approx((n_px - 1) * 0.98 * FOV_W_MM / w, rel=1e-9)
 
 
 def test_length_empty_is_zero():
@@ -54,8 +61,9 @@ def test_length_empty_is_zero():
 
 
 def test_diagonal_uses_euclidean_step_and_exceeds_orthogonal():
-    # Arc-length fix: a diagonal of N pixels costs (N-1) Euclidean diagonal steps,
-    # which is strictly more than the old raw pixel count would have given.
+    # Arc-length fix: a diagonal of N pixels costs (N-1) Euclidean diagonal steps, each
+    # weighted 1.406 / sqrt(2) (O12), which is strictly more than the old raw pixel count
+    # would have given.
     import math
 
     n = 20
@@ -67,16 +75,17 @@ def test_diagonal_uses_euclidean_step_and_exceeds_orthogonal():
     lh = calculate_root_length(horiz)
     ld = calculate_root_length(diag)
     diag_step = math.hypot(FOV_W_MM / 40, FOV_H_MM / 40)
-    assert ld == pytest.approx((n - 1) * diag_step, rel=1e-9)
+    assert ld == pytest.approx((n - 1) * 1.406 / math.sqrt(2) * diag_step, rel=1e-9)
     assert ld > lh  # diagonals cost more than orthogonal steps (the bug fixed)
 
 
 def test_length_resolution_invariant_full_width_line():
-    # A line spanning the full width is ~FOV width regardless of resolution (F-003).
+    # A line spanning the full width is ~0.98 x FOV width regardless of resolution (F-003;
+    # 0.98: the orthogonal weight of O12).
     for w in (320, 640, 1280):
         sk = np.zeros((50, w), dtype=np.uint8)
         sk[25, :] = 255
-        assert calculate_root_length(sk) == pytest.approx(FOV_W_MM * (w - 1) / w, rel=1e-9)
+        assert calculate_root_length(sk) == pytest.approx(0.98 * FOV_W_MM * (w - 1) / w, rel=1e-9)
 
 
 # ---------------- Area (resolution-independent, R5 corrected F-002) ----------------
@@ -156,16 +165,15 @@ def test_undo_stack_is_bounded():
 # ---------------- CSV schema (length pipeline) ----------------
 
 
-def test_process_single_image_row_schema(tmp_path):
+def test_length_row_schema(tmp_path):
     import cv2
 
-    sk = _row_skeleton(40)
-    # process_single_image reads from disk; write a binary image it will threshold/skeletonize
+    # length_row reads from disk; write a binary image it will threshold/skeletonize
     img = np.zeros((20, 120), dtype=np.uint8)
     img[10, 0:40] = 255
     p = tmp_path / "x_T1_L2_2024.01.02_010203_fake.png"
     cv2.imwrite(str(p), img)
-    row = process_single_image(p.name, str(p))
+    row = length_row(p.name, str(p))
     assert set(row.keys()) >= {"Image", "Tube", "Position", "Date", "Time", "Length (mm)"}
     assert row["Tube"] == 1 and row["Position"] == 2
 

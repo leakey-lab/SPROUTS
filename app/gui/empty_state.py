@@ -1,23 +1,25 @@
 """
-Discoverability widgets: an empty-state placeholder and a shortcuts reference
-dialog.
+Discoverability widgets: an empty-state placeholder and the keyboard-shortcut
+sheet.
 
-Self-contained — styled with inline QSS matching the app's Dracula palette (no
-external theme dependency).
+Styled from :mod:`app.gui.widgets.tokens` (no private colour copies).
 
 Public API
 ----------
 - ``EmptyStateWidget(on_load, parent=None)``: a centered placeholder shown in
   the index-0 display page when no images are loaded. ``on_load`` is a 0-arg
   callable invoked when the user clicks the primary "Load Images" button
-  (``MainWindow`` passes ``main_window.load_images``).
-- ``ShortcutsDialog(parent=None)``: a modal dialog listing the real editor
-  keyboard shortcuts. Open it from a ``QShortcut`` bound to ``F1``/``?``.
+  (``MainWindow`` passes ``main_window.load_images``). ``set_loading(name)`` says
+  "Loading images…" (no button) while the first folder loads; ``None`` restores it.
+- ``ShortcutsDialog(parent=None, *, current_scope=None, on_about=None)``: the
+  F1 sheet, generated from :data:`app.gui.shortcuts.REGISTRY` with one section
+  per scope (the current stage's section first). ``on_about`` adds an
+  "About SPROUTS…" button. The dialog deletes itself when closed, so
+  ``ShortcutsDialog(self).exec()`` on every F1 no longer leaks a child.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt
@@ -28,131 +30,77 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-# SPROUTS refined-dark tokens (mirrors app.gui.widgets.tokens / dark_theme.qss).
-_BG = "#15161c"  # --bg-0
-_BG_ALT = "#21232e"  # --bg-2
-_SURFACE = "#282a37"  # --bg-3
-_SURFACE_HI = "#373a4c"  # --border-strong
-_BORDER = "#2a2c39"  # --border
-_TEXT = "#eceef5"  # --text
-_TEXT_MUTED = "#9498ad"  # --text-muted
-_ACCENT = "#c39af6"  # --accent (purple)
-_ACCENT_PRESS = "#ab87d8"
-_ACCENT_INK = "#1a1322"
-_ACCENT_CYAN = "#79c0e8"  # --info (key-cap text)
+from app.gui import shortcuts
+from app.gui.widgets import tokens
+from app.gui.widgets.buttons import ghost_button, primary_button
+from app.gui.widgets.icons import load_pixmap
 
-_PRIMARY_BUTTON_QSS = f"""
-QPushButton {{
-    background-color: {_ACCENT};
-    color: {_ACCENT_INK};
-    border: none;
-    border-radius: 7px;
-    padding: 10px 24px;
-    font-weight: 600;
-    font-size: 10pt;
-}}
-QPushButton:hover {{
-    background-color: {_ACCENT_PRESS};
-}}
-QPushButton:pressed {{
-    background-color: #9a78c6;
-}}
-"""
-
-_TEXT_BUTTON_QSS = f"""
-QPushButton {{
-    background-color: {_SURFACE};
-    color: {_TEXT};
-    border: 1px solid {_SURFACE_HI};
-    border-radius: 7px;
-    padding: 6px 14px;
-    font-size: 9pt;
-}}
-QPushButton:hover {{
-    background-color: {_BORDER};
-    border: 1px solid {_ACCENT};
-}}
-"""
-
-
-def _icon_path(icon_name: str) -> str | None:
-    """Return an absolute path to a resources/icons/<icon_name> file if present."""
-    base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    candidate = os.path.join(base_path, "resources", "icons", icon_name)
-    if os.path.exists(candidate):
-        return candidate
-    return None
-
-
-# The real editor shortcuts confirmed from mask_tracing_interface.py and
-# skeleton_correction_interface.py. Format: (keys, description).
-_SHORTCUTS = [
-    ("B", "Hold to adjust brush size with the scroll wheel (mask tracing)"),
-    ("Space", "Hold to pan the canvas"),
-    ("U", "Undo the last edit"),
-    ("Y", "Redo the last undone edit"),
-    ("Ctrl+Z", "Undo"),
-    ("Ctrl+Y", "Redo"),
-]
+_KEYCAP_QSS = (
+    f"QLabel#shortcutKeys {{ background-color: {tokens.BG_3}; color: {tokens.INFO}; "
+    f"border: 1px solid {tokens.BORDER_STRONG}; border-radius: 4px; padding: 2px 8px; "
+    f"font-family: {tokens.MONO}; font-weight: 600; font-size: 9pt; }}"
+)
+_SECTION_QSS = (
+    f"QFrame#shortcutSection {{ background-color: {tokens.BG_2}; "
+    f"border: 1px solid {tokens.BORDER}; border-radius: {tokens.RADIUS_SM}px; }}"
+)
+_KIND_HINT = {shortcuts.GESTURE: "mouse", shortcuts.KEY: ""}
 
 
 class EmptyStateWidget(QWidget):
-    """Centered placeholder shown when no images are loaded."""
+    """Centered placeholder shown when no images are loaded.
+
+    While the first folder loads it says so (:meth:`set_loading`) instead of inviting a
+    load under the loading card.
+    """
+
+    TITLE = "No images loaded"
+    SUBTITLE = "Load a folder of root images to begin."
+    LOADING_TITLE = "Loading images…"
+    #: A loading folder's name is elided beyond this width: an unbreakable long name set
+    #: the page's minimum width, and the window's with it (the tooltip keeps the name).
+    NAME_MAX_PX = 420
 
     def __init__(self, on_load: Callable[[], None], parent: QWidget | None = None):
         super().__init__(parent)
         self._on_load = on_load
         self.setObjectName("emptyState")
-        self.setStyleSheet(f"QWidget#emptyState {{ background-color: {_BG}; }}")
+        self.setStyleSheet(f"QWidget#emptyState {{ background-color: {tokens.BG_0}; }}")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
         outer.addStretch(1)
 
-        # --- Icon (SPROUTS leaf logo) ---
         icon_label = QLabel()
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        try:
-            from app.gui.widgets import load_pixmap
-
-            icon_label.setPixmap(load_pixmap("sprouts_logo", _ACCENT, 72))
-        except Exception:
-            icon_label.setText("\U0001f331")
-            icon_label.setStyleSheet(f"color: {_ACCENT}; font-size: 56pt;")
+        icon_label.setPixmap(load_pixmap("sprouts_logo", tokens.ACCENT, 72))
         outer.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # --- Title ---
-        title = QLabel("No images loaded")
+        self.title_label = title = QLabel(self.TITLE)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
-            f"color: {_TEXT}; font-size: 12pt; font-weight: bold; margin-top: 12px;"
+            f"color: {tokens.TEXT}; font-size: 12pt; font-weight: bold; margin-top: 12px;"
         )
         outer.addWidget(title)
 
-        # --- Subtitle ---
-        subtitle = QLabel("Load a folder of root images to begin.")
+        self.subtitle_label = subtitle = QLabel(self.SUBTITLE)
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 9pt; margin-top: 4px;")
+        subtitle.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 9pt; margin-top: 4px;")
         outer.addWidget(subtitle)
 
-        # --- Primary action button ---
-        self.load_button = QPushButton("  Load Images")
-        self.load_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.load_button.setStyleSheet(_PRIMARY_BUTTON_QSS)
+        self.load_button = primary_button(
+            "Load Images",
+            "load",
+            tooltip=shortcuts.tooltip("Open a folder of root images", "open_folder", "Global"),
+        )
         self.load_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        try:
-            from app.gui.widgets import load_icon
-
-            self.load_button.setIcon(load_icon("load", _ACCENT_INK, 17))
-        except Exception:
-            pass
         self.load_button.clicked.connect(self._handle_load)
 
         btn_row = QHBoxLayout()
@@ -162,13 +110,29 @@ class EmptyStateWidget(QWidget):
         btn_row.addStretch(1)
         outer.addLayout(btn_row)
 
-        # --- Shortcut hint line ---
         hint = QLabel("Press F1 or ? for keyboard shortcuts")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 8pt; margin-top: 8px;")
+        hint.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 8pt; margin-top: 8px;")
         outer.addWidget(hint)
 
         outer.addStretch(1)
+
+    def set_loading(self, folder: str | None) -> None:
+        """Say that ``folder`` (its name) is loading, without the Load button; ``None``
+        goes back to the invitation to load a folder."""
+        loading = bool(folder)
+        self.title_label.setText(self.LOADING_TITLE if loading else self.TITLE)
+        if loading:
+            self.subtitle_label.ensurePolished()  # its QSS font sets the metrics
+            metrics = self.subtitle_label.fontMetrics()
+            self.subtitle_label.setText(
+                metrics.elidedText(folder, Qt.TextElideMode.ElideMiddle, self.NAME_MAX_PX)
+            )
+            self.subtitle_label.setToolTip(folder)
+        else:
+            self.subtitle_label.setText(self.SUBTITLE)
+            self.subtitle_label.setToolTip("")
+        self.load_button.setVisible(not loading)
 
     def _handle_load(self) -> None:
         """Invoke the supplied 0-arg load callback, ignoring the clicked(bool) arg."""
@@ -177,60 +141,113 @@ class EmptyStateWidget(QWidget):
 
 
 class ShortcutsDialog(QDialog):
-    """Modal dialog listing the real editor keyboard shortcuts."""
+    """The F1 sheet: every registered binding, one section per scope."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        current_scope: str | None = None,
+        on_about: Callable[[], None] | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Keyboard Shortcuts")
         self.setModal(True)
-        self.setStyleSheet(f"background-color: {_BG};")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.resize(560, 620)
+        self._section_titles: list[str] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
-        heading = QLabel("Editor Shortcuts")
-        heading.setStyleSheet(f"color: {_ACCENT}; font-size: 12pt; font-weight: bold;")
+        # Every widget is created under its final parent: under the app style sheet each
+        # reparent of a built subtree restyles all of it again (about 3x slower to open).
+        heading = QLabel("Keyboard shortcuts", self)
+        heading.setStyleSheet(f"color: {tokens.ACCENT}; font-size: 12pt; font-weight: bold;")
         layout.addWidget(heading)
 
-        intro = QLabel("These apply in the Mask Tracing and Skeleton Correction editors.")
+        intro = QLabel(
+            "Global keys work everywhere; editor keys work while that editor is open.", self
+        )
         intro.setWordWrap(True)
-        intro.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 9pt;")
+        intro.setStyleSheet(f"color: {tokens.TEXT_MUTED}; font-size: 9pt;")
         layout.addWidget(intro)
 
-        grid_frame = QFrame()
-        grid_frame.setStyleSheet(
-            f"QFrame {{ background-color: {_BG_ALT}; "
-            f"border: 1px solid {_BORDER}; border-radius: 6px; }}"
-        )
-        grid = QGridLayout(grid_frame)
-        grid.setContentsMargins(12, 12, 12, 12)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(8)
-        grid.setColumnStretch(1, 1)
+        scroll = QScrollArea(self)
+        scroll.setObjectName("shortcutScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget(scroll.viewport())  # setWidget below then needs no reparent
+        body_col = QVBoxLayout(body)
+        body_col.setContentsMargins(0, 0, 4, 0)
+        body_col.setSpacing(12)
+        for scope in self._ordered_scopes(current_scope):
+            body_col.addWidget(self._build_section(body, scope, scope == current_scope))
+        body_col.addStretch(1)
+        scroll.setWidget(body)
+        layout.addWidget(scroll, 1)
 
-        for row, (keys, desc) in enumerate(_SHORTCUTS):
-            key_label = QLabel(keys)
-            key_label.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            key_label.setStyleSheet(
-                f"QLabel {{ background-color: {_SURFACE}; color: {_ACCENT_CYAN}; "
-                f"border: 1px solid {_SURFACE_HI}; border-radius: 4px; "
-                f"padding: 2px 8px; font-family: Consolas, 'Courier New', monospace; "
-                f"font-weight: bold; font-size: 9pt; }}"
-            )
-            desc_label = QLabel(desc)
-            desc_label.setWordWrap(True)
-            desc_label.setStyleSheet(f"color: {_TEXT}; font-size: 9pt; border: none;")
-            grid.addWidget(key_label, row, 0, Qt.AlignmentFlag.AlignTop)
-            grid.addWidget(desc_label, row, 1)
-
-        layout.addWidget(grid_frame)
-
+        footer = QHBoxLayout()
+        if on_about is not None:
+            about = ghost_button("About SPROUTS…", "info", compact=True)
+            about.clicked.connect(lambda _=False: on_about())
+            footer.addWidget(about)
+        footer.addStretch(1)
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_btn = button_box.button(QDialogButtonBox.StandardButton.Close)
         if close_btn is not None:
-            close_btn.setStyleSheet(_TEXT_BUTTON_QSS)
             close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         button_box.rejected.connect(self.reject)
-        button_box.accepted.connect(self.accept)
-        layout.addWidget(button_box)
+        footer.addWidget(button_box)
+        layout.addLayout(footer)
+
+    @staticmethod
+    def _ordered_scopes(current_scope: str | None) -> list[str]:
+        scopes = list(shortcuts.SCOPES)
+        if current_scope in scopes:
+            scopes.remove(current_scope)
+            scopes.insert(0, current_scope)
+        return scopes
+
+    def section_titles(self) -> list[str]:
+        """Section headings in display order."""
+        return list(self._section_titles)
+
+    def _build_section(self, body: QWidget, scope: str, current: bool) -> QWidget:
+        self._section_titles.append(scope)
+        wrap = QWidget(body)
+        col = QVBoxLayout(wrap)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(6)
+
+        title = QLabel(f"{scope}  ·  current" if current else scope, wrap)
+        title.setAccessibleName(scope)
+        title.setStyleSheet(
+            f"color: {tokens.ACCENT if current else tokens.TEXT}; "
+            f"font-size: 10pt; font-weight: 600;"
+        )
+        col.addWidget(title)
+
+        frame = QFrame(wrap)
+        frame.setObjectName("shortcutSection")
+        frame.setStyleSheet(_SECTION_QSS + _KEYCAP_QSS)
+        grid = QGridLayout(frame)
+        grid.setContentsMargins(12, 10, 12, 10)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(7)
+        grid.setColumnStretch(1, 1)
+        for row, spec in enumerate(shortcuts.specs_for(scope)):
+            keys = QLabel(spec.label, frame)
+            keys.setObjectName("shortcutKeys")
+            keys.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            keys.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            hint = _KIND_HINT.get(spec.kind, "")
+            desc = QLabel(f"{spec.description}  ({hint})" if hint else spec.description, frame)
+            desc.setWordWrap(True)
+            desc.setStyleSheet(f"color: {tokens.TEXT}; font-size: 9pt; border: none;")
+            grid.addWidget(keys, row, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            grid.addWidget(desc, row, 1)
+        col.addWidget(frame)
+        return wrap

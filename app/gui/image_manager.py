@@ -1,257 +1,487 @@
+"""Library state: which images a project folder has, and which have masks / skeletons.
+
+:class:`ImageManager` is the single source of truth for per-image output status
+(``has_mask`` / ``has_skeleton``, and ``has_gt_*`` for the GT under ``gt/``): it is filled
+by one folder scan and kept current by the editors' save/clear signals and by
+:meth:`ImageManager.refresh_outputs` after a generation run, so nothing on the GUI thread
+stats files per image.
+
+:class:`ImageLoaderThread` scans a folder off the GUI thread and also builds the library
+hierarchy there. Opening another folder never kills a scan: the old one is asked to stop
+and its late result is dropped by a generation token. A scan's thread is let go when it
+ends and no slot holds it, so reference counting frees it at once (a slot holding it made
+a reference cycle only the cyclic garbage collector broke, never once it was frozen).
+
+Once a folder has loaded, its output folders are swept for the temp files of killed
+writes (:func:`sweep_project_temp_files`), on a daemon thread (R8).
+"""
+
 import logging
 import os
-import re
+import threading
+import weakref
+from functools import partial
 
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QFileDialog
+from PyQt6.QtCore import QTimer, pyqtSignal
+
+from app.gt.files import SOURCE_GT, SOURCE_NONE, SOURCE_PREDICTION
+from app.gui.library_index import index_names
+from app.io_utils import sweep_stale_temp_files
+from app.naming import image_stem
+from app.project_layout import (
+    SKELETON_SUFFIX,
+    GtStems,
+    ImageScan,
+    ProjectLayout,
+    few_keys,
+    find_by_stem,
+    key_to_stems,
+    project_layout_of,
+)
+from app.workers import GuardedThread, base_finished, describe_error
 
 logger = logging.getLogger(__name__)
 
+# The sweep starts this long after a folder has loaded: it lists the same 46k-file folders
+# as the scan (+15 % scan time when both ran at once) and should not compete with the
+# first image either (R8).
+TEMP_SWEEP_DELAY_MS = 2000
 
-class ImageLoaderThread(QThread):
+
+def _stems_of(found: set[str], images) -> set[str]:
+    """``found`` (output stems) under the Library's stems: an output whose name differs
+    from its image's only in case belongs to that image (O7).
+
+    A scan of many outputs comes back in the Library's own strings, so the scan's copies are
+    freed (4 MiB for the skeletons of 46k images); a few stems (GT) named as their images keep
+    theirs, by the rule of :func:`~app.project_layout.key_to_stems` (:func:`few_keys`).
+    """
+    if not few_keys(found, images):
+        # One pass over the Library's stems also tells whether every output is named as its
+        # image: a subset test first would walk the set in hash order, slower than this pass.
+        stems = set(filter(found.__contains__, images))
+        if len(stems) < len(found):  # some are not: those go by stem key (O7)
+            stems.update(key_to_stems(dict.fromkeys(found - stems), images))
+        return stems
+    if images.keys() >= found:  # every output named as its image: nothing to remap
+        return set(found)
+    return set(key_to_stems(dict.fromkeys(found), images))
+
+
+def _gt_of(found: GtStems, images) -> GtStems:
+    """``found`` (GT stems) under the Library's stems, as :func:`_stems_of` does (O7)."""
+    return GtStems(
+        mask=frozenset(_stems_of(found.mask, images)),
+        skeleton=frozenset(_stems_of(found.skeleton, images)),
+        labels=frozenset(_stems_of(found.labels, images)),
+    )
+
+
+def sweep_project_temp_files(layout: ProjectLayout) -> list[str]:
+    """Delete the stale temp files of killed writes in ``layout``'s output folders (R8).
+
+    Every folder of :attr:`ProjectLayout.output_dirs`; ``gt/`` also loses the
+    ``<name>.tmp`` the GT writers used before R8. Returns the removed paths; never
+    raises for I/O (see :func:`app.io_utils.sweep_stale_temp_files`).
+    """
+    removed: list[str] = []
+    for folder in layout.output_dirs:
+        legacy = layout.is_legacy_gt_temp if folder == layout.gt_dir else None
+        removed += sweep_stale_temp_files(folder, also=legacy)
+    return removed
+
+
+class ImageLoaderThread(GuardedThread):
+    """Scans ``folder_path`` for images, masks and skeletons, and builds the hierarchy.
+
+    Signals:
+        progress(int): percent, per scan phase.
+        finished(images, fake_images, masks, has_fake_real_pairs): the scan result
+            (``fake_images`` is always empty; skeleton paths are resolved lazily).
+        failed(str): the folder is missing or unreadable, or the scan failed otherwise
+            (any exception, ``SystemExit`` too; ``finished`` is not emitted).
+
+    An interrupted scan (``cancel()``) emits nothing. After ``finished``,
+    ``scan`` (the folder listing, with the files it does not list), ``hierarchy``,
+    ``labels`` (library row texts), ``skeleton_stems`` and ``gt`` (the images with GT mask,
+    skeleton and class labels) hold the extra results. Masks, skeletons and GT are keyed by
+    the Library's stems (O7: ``mask/a.png`` is ``A.png``'s).
+    """
+
     progress = pyqtSignal(int)
     finished = pyqtSignal(dict, dict, dict, bool)
 
     def __init__(self, folder_path):
         super().__init__()
         self.folder_path = folder_path
+        self.scan: ImageScan | None = None
+        self.hierarchy = None
+        self.labels: dict[str, str] = {}
+        self.skeleton_stems: set[str] = set()
+        self.gt = GtStems(frozenset(), frozenset(), frozenset())
 
-    def run(self):
-        images = {}
-        masks = {}
+    def work(self):
+        if not os.path.isdir(self.folder_path):
+            self.failed.emit(f"Folder not found: {self.folder_path}")
+            return
+        layout = ProjectLayout(self.folder_path)
+        self.scan = layout.scan_image_folder()
+        images = self.scan.images
+        if self._stop(50):
+            return
+        masks = key_to_stems(layout.scan_masks(), images)
+        if self._stop(70):
+            return
+        self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), images)
+        self.gt = _gt_of(layout.scan_gt_stems(), images)
+        if self._stop(85):
+            return
+        self.hierarchy, self.labels = index_names(images)
+        if self._stop(100):
+            return
+        self.finished.emit(images, {}, masks, False)
 
-        try:
-            # Load regular images using os.scandir (faster than os.listdir)
-            with os.scandir(self.folder_path) as entries:
-                for entry in entries:
-                    if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg")):
-                        base_name = os.path.splitext(entry.name)[0]
-                        images[base_name] = entry.path
+    def describe(self, exc: BaseException) -> str:
+        # GuardedThread has logged the traceback under the class name; this names the folder.
+        logger.error("Failed to scan image folder %s", self.folder_path)
+        if isinstance(exc, OSError):
+            return f"Cannot read {self.folder_path}: {exc.strerror or exc}"
+        return f"Could not scan {self.folder_path}: {describe_error(exc)}"
 
-            # Load mask images if they exist
-            mask_dir = os.path.join(self.folder_path, "mask")
-            if os.path.exists(mask_dir):
-                with os.scandir(mask_dir) as entries:
-                    for entry in entries:
-                        if entry.is_file() and entry.name.lower().endswith(
-                            (".png", ".jpg", ".jpeg")
-                        ):
-                            base_name = os.path.splitext(entry.name)[0]
-                            masks[base_name] = entry.path
-
-            self.progress.emit(100)
-            self.finished.emit(images, {}, masks, False)
-
-        except OSError:
-            logger.exception("Failed to scan image folder %s", self.folder_path)
-            self.progress.emit(100)
-            self.finished.emit({}, {}, {}, False)
+    def _stop(self, percent: int) -> bool:
+        """Report ``percent``; True when the scan was superseded and must stop."""
+        if self.is_cancelled():
+            return True
+        self.progress.emit(percent)
+        return False
 
 
 class ImageManager:
     def __init__(self, main_window=None):
         self.images = {}
         self.fake_images = {}
+        # (folder, stem) of overlay skeletons not found (case-sensitive disks list the
+        # folder for a miss): not looked for again until the outputs are re-read.
+        self._fake_misses: set[tuple[str, str]] = set()
         self.masks = {}
-        self.has_fake_real_pairs = False
+        self.skeleton_stems: set[str] = set()
+        # Images with GT under gt/ (a saved edit; a prediction is never GT).
+        self.gt_mask_stems: set[str] = set()
+        self.gt_skeleton_stems: set[str] = set()
+        self.gt_label_stems: set[str] = set()
         self.original_folder = None
-        self.loader_thread = None
+        # The newest delivered scan's listing (what it did not list too); None before one.
+        self.last_scan: ImageScan | None = None
+        self.loader_thread = None  # the newest scan until its thread ends
         self.main_window = main_window
         self.current_view_mode = None
         self.processed_base_path = None
-        # Cache for hierarchical structure
+        # The library hierarchy and row texts, built once per load (None: not built yet).
         self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
+        self._labels_cache = None
+        # Scan bookkeeping: only the newest scan may deliver. A superseded scan is never
+        # terminated: app.workers keeps its thread from start() until Qt's own finished.
+        self._generation = 0
+        self._pending_folder = None
 
+    # ------------------------------------------------------------------ loading
     def load_images(self, folder_path=None):
-        if folder_path is None:
-            folder_path = QFileDialog.getExistingDirectory(None, "Select Image Directory")
+        """Scan ``folder_path`` in the background; without a folder nothing happens (the
+        window's own load action asks for one).
 
-        if folder_path:
-            self.original_folder = folder_path
-            self._clear_images()
-            self._find_processed_base_path()
+        The current library stays until the scan delivers images; a failed or
+        image-less scan is reported to the main window and changes nothing.
+        """
+        if not folder_path:
+            return
 
-            if self.loader_thread and self.loader_thread.isRunning():
-                self.loader_thread.terminate()
-                self.loader_thread.wait()
+        self._retire_loader()
+        self._generation += 1
+        self._pending_folder = folder_path
+        thread = ImageLoaderThread(folder_path)
+        self.loader_thread = thread
+        if self.main_window:
+            thread.progress.connect(self.main_window.update_loading_progress)
+        # The slots hold a weak reference: one holding the thread would keep it alive
+        # through its own connection (thread -> slot -> thread), a cycle.
+        ref = weakref.ref(thread)
+        thread.finished.connect(partial(self._on_scan_finished, self._generation, ref))
+        thread.failed.connect(partial(self._on_scan_failed, self._generation))
+        # QThread's own finished (the class shadows it with the result signal): after the
+        # result, so the thread is let go once it has delivered.
+        base_finished(thread).connect(partial(self._on_loader_ended, ref))
+        thread.start()
 
-            self.loader_thread = ImageLoaderThread(folder_path)
+    @staticmethod
+    def _start_temp_sweep(folder_path) -> None:
+        """Sweep the project's output folders for stale temp files on a daemon thread (R8).
+
+        One scandir per folder (~70 ms for a 46k-file ``mask/``), which the GUI thread
+        must not pay; a failure is logged and never reaches the library.
+        """
+
+        def run() -> None:
+            try:
+                removed = sweep_project_temp_files(ProjectLayout(folder_path))
+            except Exception:  # housekeeping: never let it disturb opening the project
+                logger.exception("Stale temp-file sweep failed in %s", folder_path)
+                return
+            if removed:
+                logger.info("Removed %d stale temp file(s) in %s", len(removed), folder_path)
+
+        threading.Thread(target=run, name="stale-temp-sweep", daemon=True).start()
+
+    def _retire_loader(self):
+        """Ask the current scan to stop and let it go. Its thread stays held (app.workers)
+        until Qt's own finished has been handled, also when it has ended already, as its
+        result and its end may still wait in the event queue."""
+        old = self.loader_thread
+        self.loader_thread = None
+        if old is not None:
+            old.cancel()
+
+    def _on_loader_ended(self, ref) -> None:
+        """A scan's thread ended (it delivered, failed or was superseded): let it go. No slot
+        holds it, so reference counting frees it once app.workers lets it go too, rather
+        than the cyclic garbage collector."""
+        thread = ref()
+        if thread is not None and self.loader_thread is thread:
+            self.loader_thread = None
+
+    def _on_scan_finished(self, generation, ref, images, fake_images, masks, pairs):
+        if generation != self._generation:
+            return  # a newer folder was opened meanwhile
+        folder, self._pending_folder = self._pending_folder, None
+        # Alive: the manager holds the newest scan until its thread has ended, after this.
+        thread = ref()
+        self.last_scan = thread.scan if thread is not None else None
+        if not images:
             if self.main_window:
-                self.loader_thread.progress.connect(self.main_window.update_loading_progress)
-                self.loader_thread.finished.connect(self.on_loading_finished)
-            self.loader_thread.start()
+                self.main_window.on_loading_empty(folder)
+            return
+        self.original_folder = folder
+        extra = {}
+        if thread is not None:  # else they are computed here (on_loading_finished)
+            extra = {
+                "hierarchy": thread.hierarchy,
+                "labels": thread.labels,
+                "skeleton_stems": thread.skeleton_stems,
+                "gt": thread.gt,
+            }
+        try:
+            self.on_loading_finished(images, fake_images, masks, pairs, **extra)
+        except BaseException as exc:  # noqa: BLE001 - the load must end, or no job starts
+            # Unreported, the window would keep loading (W1-T1: every Generate / Measure
+            # run refused) and keep its loading card up. Half adopted, the Library could
+            # show one project while project_layout_of names another: nothing is loaded
+            # (the window clears its tree when the failed load ends with no images).
+            logger.exception("Failed to open image folder %s", folder)
+            self._clear_images()
+            self.original_folder = None
+            self.last_scan = None
+            if self.main_window:
+                self.main_window.on_loading_failed(
+                    folder, f"Could not open {folder}: {describe_error(exc)}"
+                )
+            return
+        QTimer.singleShot(TEMP_SWEEP_DELAY_MS, partial(self._start_temp_sweep, folder))
+
+    def _on_scan_failed(self, generation, message):
+        if generation != self._generation:
+            return
+        folder, self._pending_folder = self._pending_folder, None
+        if self.main_window:
+            self.main_window.on_loading_failed(folder, message)
+
+    def on_loading_finished(
+        self,
+        images,
+        fake_images,
+        masks,
+        has_fake_real_pairs,
+        *,
+        hierarchy=None,
+        labels=None,
+        skeleton_stems=None,
+        gt=None,
+    ):
+        """Adopt a scan result as the library (``original_folder`` is already set).
+
+        ``hierarchy`` / ``labels`` / ``skeleton_stems`` / ``gt`` come precomputed from the
+        loader thread; without them they are computed here (the first two lazily).
+        ``fake_images`` and ``has_fake_real_pairs`` are not read: a load starts with no
+        overlay paths, and the window is told False.
+        """
+        self._clear_images()
+        self.images = images
+        self.masks = masks
+        self._find_processed_base_path()
+        self._hierarchy_cache = hierarchy
+        self._labels_cache = labels if hierarchy is not None else None
+        if skeleton_stems is not None:
+            self.skeleton_stems = set(skeleton_stems)
+        elif self.original_folder:
+            self.skeleton_stems = _stems_of(self._layout().scan_skeleton_stems(), images)
+        if gt is None and self.original_folder:
+            gt = _gt_of(self._layout().scan_gt_stems(), images)
+        if gt is not None:
+            self._adopt_gt(gt)
+        if self.main_window:
+            self.main_window.on_loading_finished(images, self.fake_images, masks, False)
+
+    def _adopt_gt(self, gt: GtStems) -> None:
+        self.gt_mask_stems = set(gt.mask)
+        self.gt_skeleton_stems = set(gt.skeleton)
+        self.gt_label_stems = set(gt.labels)
+
+    def _clear_images(self):
+        self.images = {}
+        self.fake_images.clear()
+        self._fake_misses.clear()
+        self.masks = {}
+        self.skeleton_stems = set()
+        self._adopt_gt(GtStems(frozenset(), frozenset(), frozenset()))
+        self.processed_base_path = None
+        # Invalidate cache
+        self._hierarchy_cache = None
+        self._labels_cache = None
+
+    # ------------------------------------------------------------ project folder
+    def project_layout(self) -> ProjectLayout | None:
+        """Layout of the loaded project: ``original_folder``, else the first image's folder.
+
+        The one project-folder lookup shared by Generate, Measure, Visualize and
+        the window (see :func:`app.project_layout.project_layout_of`); None when nothing
+        is loaded.
+        """
+        return project_layout_of(self)
+
+    # ------------------------------------------------------------ output status
+    def _layout(self) -> ProjectLayout:
+        return ProjectLayout(self.original_folder)
 
     def _find_processed_base_path(self):
         if not self.original_folder:
             return
+        skeletons = self._layout().skeletons_dir
+        self.processed_base_path = skeletons if os.path.isdir(skeletons) else None
 
-        # Look for skeletons folder directly
-        potential_path = os.path.join(self.original_folder, "skeletons")
-        if os.path.exists(potential_path):
-            self.processed_base_path = potential_path
+    def refresh_outputs(self):
+        """Re-read mask/, skeletons/ and the GT under gt/ after a generation run or a GT
+        save (five scandirs), keyed by the Library's stems (O7)."""
+        if not self.original_folder:
+            return
+        layout = self._layout()
+        self.masks = key_to_stems(layout.scan_masks(), self.images)
+        self.skeleton_stems = _stems_of(layout.scan_skeleton_stems(), self.images)
+        self._adopt_gt(_gt_of(layout.scan_gt_stems(), self.images))
+        self.fake_images.clear()
+        self._fake_misses.clear()
+        self._find_processed_base_path()
 
+    def _stem_of(self, name) -> str:
+        """The Library stem ``name`` names: a stem the Library lists, as it is (``X.png``, the
+        stem of ``X.png.jpg``, is never stripped again: final review D1), else the stem of an
+        image path or file name."""
+        return name if name in self.images else image_stem(name)
+
+    def set_mask(self, name, path=None):
+        """Record that ``name`` (stem or image path) has a mask at ``path`` (None: none)."""
+        stem = self._stem_of(name)
+        if path:
+            self.masks[stem] = path
+        else:
+            self.masks.pop(stem, None)
+
+    def has_mask(self, name):
+        return name in self.masks
+
+    def has_skeleton(self, name) -> bool:
+        return name in self.skeleton_stems
+
+    def has_gt_mask(self, name) -> bool:
+        return name in self.gt_mask_stems
+
+    def has_gt_skeleton(self, name) -> bool:
+        return name in self.gt_skeleton_stems
+
+    def has_gt_labels(self, name) -> bool:
+        return name in self.gt_label_stems
+
+    def set_gt(self, name, kind: str, present: bool) -> None:
+        """Record whether ``name`` (stem or image path) has GT of ``kind``: ``"mask"``,
+        ``"skeleton"`` or ``"labels"``."""
+        stems = {
+            "mask": self.gt_mask_stems,
+            "skeleton": self.gt_skeleton_stems,
+            "labels": self.gt_label_stems,
+        }.get(kind)
+        if stems is None:
+            raise ValueError(f"Unknown GT kind {kind!r}: use 'mask', 'skeleton' or 'labels'")
+        stem = self._stem_of(name)
+        if present:
+            stems.add(stem)
+        else:
+            stems.discard(stem)
+
+    def mask_state(self, name) -> str:
+        """Where the mask of ``name`` comes from: ``"gt"`` (a saved edit), ``"prediction"``
+        or ``"none"``. GT wins over a prediction."""
+        if self.has_gt_mask(name):
+            return SOURCE_GT
+        return SOURCE_PREDICTION if self.has_mask(name) else SOURCE_NONE
+
+    def skeleton_state(self, name) -> str:
+        """Where the skeleton of ``name`` comes from: as :meth:`mask_state`."""
+        if self.has_gt_skeleton(name):
+            return SOURCE_GT
+        return SOURCE_PREDICTION if self.has_skeleton(name) else SOURCE_NONE
+
+    def gt_skeleton_path_for(self, name) -> str | None:
+        """``gt/skeletons/<stem>.png`` of ``name`` when the image has a GT skeleton (its stem
+        compared without case, O7; the save path while the file is not there yet)."""
+        stem = self._stem_of(name)
+        if stem not in self.gt_skeleton_stems or not self.original_folder:
+            return None
+        layout = self._layout()
+        return layout.find_gt_skeleton_for_stem(stem) or layout.gt_skeleton_path_for_stem(stem)
+
+    # ------------------------------------------------------------ view / lookup
     def get_fake_image_path(self, name):
         if name in self.fake_images:
             return self.fake_images[name]
 
         if self.current_view_mode in ["Overlay", "Side by Side"] and self.processed_base_path:
-            fake_path = os.path.join(self.processed_base_path, f"{name}_fake.png")
-            if os.path.exists(fake_path):
+            base = self.processed_base_path
+            fake_path = os.path.join(base, name + SKELETON_SUFFIX)
+            if not os.path.isfile(fake_path):  # the exact name: checked every time
+                if (base, name) in self._fake_misses:
+                    return None
+                fake_path = find_by_stem(base, name, SKELETON_SUFFIX)
+                if fake_path is None:
+                    self._fake_misses.add((base, name))
+            if fake_path is not None:
                 self.fake_images[name] = fake_path
-                self.has_fake_real_pairs = True
                 return fake_path
 
         return None
 
     def reload_for_view_mode(self, view_mode):
+        """Remember the display mode (state only: the library tree does not depend on it)."""
         self.current_view_mode = view_mode
         if view_mode == "Single Image":
             self.fake_images.clear()
-            self.has_fake_real_pairs = False
-
-        if self.main_window:
-            self.main_window.populate_file_list()
-            self.main_window.display_controller.update_display()
-
-    def on_loading_finished(self, images, fake_images, masks, has_fake_real_pairs):
-        self.images = images
-        self.masks = masks
-        # Invalidate cache when images change
-        self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
-        if self.main_window:
-            self.main_window.on_loading_finished(
-                images,
-                self.fake_images,
-                masks,
-                self.has_fake_real_pairs,
-            )
-
-    def _clear_images(self):
-        self.images.clear()
-        self.fake_images.clear()
-        self.has_fake_real_pairs = False
-        self.masks.clear()
-        self.processed_base_path = None
-        # Invalidate cache
-        self._hierarchy_cache = None
-        self._hierarchy_cache_valid = False
-
-    def get_image_names(self):
-        return list(self.images.keys())
 
     def get_image_path(self, name):
         return self.images.get(name)
 
-    def has_mask(self, name):
-        return name in self.masks
-
-    def parse_image_name(self, name):
-        """
-        Parse image name to extract field, tube number, length position (depth), date, and time.
-        Expected format: Field_T{XXX}_L{XXX}_YYYY.MM.DD_HHMMSS_anything
-        Returns a dictionary with the parsed information.
-        """
-        try:
-            # Initialize default values
-            info = {
-                "original_name": name,
-                "field": None,
-                "tube_number": None,
-                "length_position": None,
-                "date": None,
-                "time": None,
-            }
-
-            # Extract field name (everything before first underscore, but remove camera suffixes)
-            parts = name.split("_", 1)
-            if parts:
-                field_name = parts[0]
-                # Remove camera suffixes like cam1, CAM1, cam2, etc. from the end of field name
-                # This handles cases like xyzcam1, xyzCAM1, etc.
-                field_name = re.sub(r"cam\d+$", "", field_name, flags=re.IGNORECASE)
-                info["field"] = field_name
-
-            # Extract tube number (T followed by numbers)
-            tube_match = re.search(r"T(\d+)", name)
-            if tube_match:
-                info["tube_number"] = int(tube_match.group(1))
-
-            # Extract length position (L followed by numbers) - this is the depth
-            length_match = re.search(r"L(\d+)", name)
-            if length_match:
-                info["length_position"] = int(length_match.group(1))
-
-            # Extract date (YYYY.MM.DD format)
-            date_match = re.search(r"(\d{4})\.(\d{2})\.(\d{2})", name)
-            if date_match:
-                year, month, day = date_match.groups()
-                info["date"] = f"{year}.{month}.{day}"
-
-            # Extract time (HHMMSS format)
-            time_match = re.search(r"_(\d{6})(?:_|$)", name)
-            if time_match:
-                time_str = time_match.group(1)
-                formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:]}"
-                info["time"] = formatted_time
-
-            return info
-
-        except (AttributeError, TypeError, re.error) as e:
-            logger.debug("Failed to parse image name %r: %s", name, e)
-            return {
-                "original_name": name,
-                "field": name,  # Fallback to using full name as field
-                "tube_number": None,
-                "length_position": None,
-                "date": None,
-                "time": None,
-            }
-
     def get_hierarchical_structure(self):
-        """
-        Organize images into a hierarchical structure:
-        Field → Tube → Date → Images (with L prefix)
+        """Field -> Tube -> Date -> [(depth, name)], cached until the images change."""
+        if self._hierarchy_cache is None:
+            self._hierarchy_cache, self._labels_cache = index_names(self.images)
+        return self._hierarchy_cache
 
-        Cached for performance - only recalculated when images change.
-
-        Returns a nested dictionary structure.
-        """
-        # Return cached result if valid
-        if self._hierarchy_cache_valid and self._hierarchy_cache is not None:
-            return self._hierarchy_cache
-
-        hierarchy = {}
-
-        for image_name in self.images.keys():
-            info = self.parse_image_name(image_name)
-
-            # Use parsed values or fallbacks
-            field = info["field"] or "Unknown"
-            tube = f"T{info['tube_number']}" if info["tube_number"] is not None else "No Tube"
-            date = info["date"] or "No Date"
-
-            # Build hierarchy (no separate depth level)
-            if field not in hierarchy:
-                hierarchy[field] = {}
-            if tube not in hierarchy[field]:
-                hierarchy[field][tube] = {}
-            if date not in hierarchy[field][tube]:
-                hierarchy[field][tube][date] = []
-
-            # Store image with its depth info for sorting
-            depth = info["length_position"] if info["length_position"] is not None else float("inf")
-            hierarchy[field][tube][date].append((depth, image_name))
-
-        # Sort images by depth within each date
-        for field in hierarchy:
-            for tube in hierarchy[field]:
-                for date in hierarchy[field][tube]:
-                    hierarchy[field][tube][date].sort(key=lambda x: x[0])
-
-        # Cache the result
-        self._hierarchy_cache = hierarchy
-        self._hierarchy_cache_valid = True
-
-        return hierarchy
+    def get_leaf_labels(self) -> dict[str, str]:
+        """Library row text per image (computed with the hierarchy)."""
+        self.get_hierarchical_structure()
+        return self._labels_cache or {}

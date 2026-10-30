@@ -1,140 +1,263 @@
 """
-Image utilities for Dash hover display functionality.
-Handles image key management and base64 encoding for thumbnails.
+Image utilities for the Growth-Lines hover panel of the length dashboard.
 
-Encoded thumbnails are cached on the map built by
-:func:`build_available_images_map` and encoded lazily on first request by
-:func:`get_encoded_image`, then memoized. A hovered key is read/decoded/
-resized/encoded from disk at most once; repeat hovers are O(1). Encoding is
-NOT done eagerly at build time — that scaled O(all loaded images) and blocked
-the visualization open for minutes on large datasets (F-013).
+* :class:`ImageIndex` maps ``(tube, position, "YYYY.MM.DD")`` to an image path. It
+  snapshots the image manager's names when the dashboard opens but parses them
+  (with the shared :func:`app.naming.parse_image_name`) on first use or on a
+  background thread, so opening a dashboard never waits for 46k name parses
+  (PV-17); the dashboard parses them once its first chart has been sent.
+* :class:`ThumbnailCache` encodes each hovered image once as a small JPEG and keeps
+  a bounded LRU of the results (PV-09: base64 PNGs of ~75 KiB each were resent on
+  every hover and never evicted).
+* :class:`ThumbnailServer` serves those JPEGs by URL from the dashboard's own Flask
+  server, so a hover response carries ten short URLs instead of ~0.75 MB of base64
+  and Chromium caches and fetches the images in parallel.
+
+Qt-free: the Flask route runs on the werkzeug server thread(s); the caches are
+thread-safe.
 """
+
+from __future__ import annotations
 
 import base64
 import io
 import logging
-import os
 import re
+import secrets
+import threading
+from collections import OrderedDict
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
+from app.naming import parse_image_name
+
 logger = logging.getLogger(__name__)
 
-# Internal key under which the precomputed base64 thumbnail cache is stored on
-# the available-images map. Using a string key keeps it disjoint from the
-# (tube, position, date_str) tuple path keys.
-_THUMBNAIL_CACHE_KEY = "_encoded_thumbnails"
+#: ``(tube, position, "YYYY.MM.DD")`` -- the key of one captured image.
+ImageKey = tuple[int, int, str]
 
-# Thumbnail dimensions for hover previews. Sized so each image renders as a
-# meaningful >=100x100 representation in the Growth-Lines side panel (~300px
-# wide) without visible upscaling blur.
-_THUMBNAIL_SIZE = (256, 256)
+#: Bounding box of a hover thumbnail. Sized so each image is a meaningful
+#: >= 100x100 preview in the ~300 px wide Growth-Lines side panel.
+THUMBNAIL_SIZE = (256, 256)
+#: JPEG quality of a thumbnail: no visible artifacts at 256 px, ~10 KB each.
+THUMBNAIL_QUALITY = 82
+#: Thumbnails kept in memory per dashboard (~10 KB each, so ~5 MB at most).
+THUMBNAIL_CACHE_CAPACITY = 512
+
+_DATE_TOKEN = re.compile(r"\d{4}\.\d{2}\.\d{2}")
 
 
-def _encode_thumbnail(path: str) -> str:
-    """
-    Read, decode, resize and base64-encode a single image as a PNG data URL.
+def encode_thumbnail_jpeg(
+    path: str, size: tuple[int, int] = THUMBNAIL_SIZE, quality: int = THUMBNAIL_QUALITY
+) -> bytes:
+    """Read an image and return a JPEG thumbnail that fits in ``size``.
 
-    Returns an empty string if the file is missing, unreadable, or not a valid
-    image. Raised exceptions are limited to the specific I/O / decode errors we
-    expect from the filesystem and PIL.
+    JPEG sources are downscaled while decoding (``Image.draft``), which skips most
+    of the decode work. Returns ``b""`` if the file is missing, unreadable or not
+    an image.
     """
     try:
-        if not os.path.exists(path) or not os.access(path, os.R_OK):
-            return ""
-
         with Image.open(path) as img:
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGB")
-
-            img.thumbnail(_THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
-
-            buffered = io.BytesIO()
-            img.save(buffered, format="PNG", optimize=True)
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-            return f"data:image/png;base64,{img_str}"
+            scale = min(size[0] / img.width, size[1] / img.height, 1.0)
+            target = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+            img.draft("RGB", target)  # no-op for non-JPEG sources
+            rgb = img.convert("RGB")
+        rgb.thumbnail(size, Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        rgb.save(buffer, format="JPEG", quality=quality)
+        return buffer.getvalue()
     except (OSError, UnidentifiedImageError, ValueError) as exc:
         logger.warning("Failed to encode thumbnail for %s: %s", path, exc)
-        return ""
+        return b""
 
 
-def build_available_images_map(image_manager) -> dict:
+def jpeg_data_url(data: bytes) -> str:
+    """``data:`` URL for JPEG bytes (``""`` for no data)."""
+    return f"data:image/jpeg;base64,{base64.b64encode(data).decode()}" if data else ""
+
+
+class ThumbnailCache:
+    """Thread-safe LRU of encoded JPEG thumbnails keyed by :data:`ImageKey`.
+
+    Failures are cached too (as ``b""``) so a broken file is not re-read on every
+    hover. Encoding runs outside the lock: concurrent image requests from the
+    browser are decoded in parallel.
     """
-    Build a mapping of (tube, position, date) -> image_path from the image
-    manager. Thumbnails are NOT encoded here; the returned map carries an empty
-    cache that :func:`get_encoded_image` fills lazily on first hover.
+
+    def __init__(self, paths: Mapping[ImageKey, str], capacity: int = THUMBNAIL_CACHE_CAPACITY):
+        if capacity < 1:
+            raise ValueError("capacity must be >= 1")
+        self._paths = paths
+        self._capacity = capacity
+        self._jpegs: OrderedDict[ImageKey, bytes] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def jpeg(self, key: ImageKey) -> bytes:
+        """JPEG bytes of the image at ``key`` (``b""`` if unknown or unreadable)."""
+        with self._lock:
+            cached = self._jpegs.get(key)
+            if cached is not None:
+                self._jpegs.move_to_end(key)
+                return cached
+        path = self._paths.get(key)
+        if path is None:
+            return b""
+        data = encode_thumbnail_jpeg(path)
+        with self._lock:
+            self._jpegs[key] = data
+            self._jpegs.move_to_end(key)
+            while len(self._jpegs) > self._capacity:
+                self._jpegs.popitem(last=False)
+        return data
+
+    def data_url(self, key: ImageKey) -> str:
+        """The thumbnail as a ``data:image/jpeg`` URL (``""`` if unavailable)."""
+        return jpeg_data_url(self.jpeg(key))
+
+    def cached_keys(self) -> list[ImageKey]:
+        """Keys currently held, least recently used first."""
+        with self._lock:
+            return list(self._jpegs)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._jpegs)
+
+
+class ImageIndex(Mapping[ImageKey, str]):
+    """``(tube, position, "YYYY.MM.DD")`` -> image path, parsed on first use.
+
+    Names without a stand-alone tube, position and date token are skipped. The
+    index also owns the dashboard's :class:`ThumbnailCache` (``.thumbnails``).
+    """
+
+    def __init__(
+        self,
+        images: Mapping[str, str] | None = None,
+        *,
+        thumbnail_capacity: int = THUMBNAIL_CACHE_CAPACITY,
+    ):
+        self._names: dict[str, str] = dict(images or {})  # snapshot: name -> path
+        self._paths: dict[ImageKey, str] | None = None
+        self._lock = threading.Lock()
+        self.thumbnails = ThumbnailCache(self, thumbnail_capacity)
+
+    def _index(self) -> dict[ImageKey, str]:
+        paths = self._paths
+        if paths is None:
+            with self._lock:
+                if self._paths is None:
+                    self._paths = self._parse(self._names)
+                    self._names = {}  # the snapshot is read only here (2.5 MB for 46k names)
+                paths = self._paths
+        return paths
+
+    def parse_in_background(self) -> threading.Thread:
+        """Parse the names on a daemon thread now instead of on first use.
+
+        The length dashboard calls this once its first chart has been sent: the
+        names are parsed while the browser draws it, and the first Depth Profile
+        view no longer waits for them (~140 ms for 46k names). A lookup meanwhile
+        waits for the same parse (one lock), never runs a second one.
+        """
+        thread = threading.Thread(target=self._index, name="image-index", daemon=True)
+        thread.start()
+        return thread
+
+    @staticmethod
+    def _parse(names: Mapping[str, str]) -> dict[ImageKey, str]:
+        paths: dict[ImageKey, str] = {}
+        for name, path in names.items():
+            parsed = parse_image_name(name)
+            if parsed.is_complete:
+                paths[(parsed.tube, parsed.position, parsed.date)] = path
+        return paths
+
+    def __getitem__(self, key: ImageKey) -> str:
+        return self._index()[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._index()
+
+    def __iter__(self) -> Iterator[ImageKey]:
+        return iter(self._index())
+
+    def __len__(self) -> int:
+        return len(self._index())
+
+
+class ThumbnailServer:
+    """Serves a :class:`ThumbnailCache` over HTTP from a dashboard's Flask app.
+
+    URLs look like ``/sprouts-thumb/<token>/<tube>/<position>/<YYYY.MM.DD>.jpg``.
+    The random per-instance token keeps browser-cached thumbnails from leaking
+    into a later dashboard session on the same port (another project).
+    """
+
+    def __init__(self, cache: ThumbnailCache, *, url_prefix: str = "/sprouts-thumb"):
+        self._cache = cache
+        self._base = f"{url_prefix.rstrip('/')}/{secrets.token_hex(6)}"
+
+    def url(self, tube: int, position: int, date_str: str) -> str:
+        """URL of one thumbnail (``date_str`` is ``"YYYY.MM.DD"``)."""
+        return f"{self._base}/{int(tube)}/{int(position)}/{date_str}.jpg"
+
+    def register(self, server: Any) -> None:
+        """Add the thumbnail route to a Flask app (before it serves requests)."""
+        from flask import Response, abort
+
+        def serve(tube: int, position: int, date_str: str):
+            if not _DATE_TOKEN.fullmatch(date_str):
+                abort(404)
+            data = self._cache.jpeg((tube, position, date_str))
+            if not data:
+                abort(404)
+            response = Response(data, mimetype="image/jpeg")
+            response.headers["Cache-Control"] = "private, max-age=86400, immutable"
+            return response
+
+        server.add_url_rule(
+            f"{self._base}/<int:tube>/<int:position>/<date_str>.jpg",
+            endpoint=f"sprouts_thumbnail_{self._base.rsplit('/', 1)[-1]}",
+            view_func=serve,
+        )
+
+
+def build_available_images_map(image_manager) -> ImageIndex:
+    """Index the image manager's images for hover display (parsed lazily).
 
     Args:
-        image_manager: ImageManager instance with loaded images
+        image_manager: an ImageManager-like object whose ``images`` maps image
+            name -> path, or None.
 
     Returns:
-        dict: Mapping with (tube, position, date_str) tuple keys -> path values.
-            A private "_encoded_thumbnails" entry holds the
-            {(tube, position, date_str): data_url} cache, populated lazily by
-            :func:`get_encoded_image`.
+        An :class:`ImageIndex` (a read-only mapping ``(tube, position,
+        "YYYY.MM.DD") -> path``) whose ``thumbnails`` cache serves the images.
     """
-    available_images: dict = {}
-    thumbnails: dict = {}
-
-    if image_manager and image_manager.images:
-        for name, path in image_manager.images.items():
-            tube_match = re.search(r"T(\d+)", name)
-            pos_match = re.search(r"L(\d+)", name)
-            date_match = re.search(r"(\d{4})\.(\d{2})\.(\d{2})", name)
-
-            if all([tube_match, pos_match, date_match]):
-                tube = int(tube_match.group(1))
-                position = int(pos_match.group(1))
-                date_str = f"{date_match.group(1)}.{date_match.group(2)}.{date_match.group(3)}"
-
-                key = (tube, position, date_str)
-                available_images[key] = path
-                # F-013: thumbnails are encoded lazily on first hover and
-                # memoized by get_encoded_image(), NOT eagerly here. Eager
-                # precompute scaled O(all loaded images): 46k images blocked
-                # the open for ~6 min. Lazy keeps open fast; hover pays the
-                # ~8ms encode once per (tube, position, date) key.
-
-    available_images[_THUMBNAIL_CACHE_KEY] = thumbnails
-    return available_images
+    return ImageIndex(getattr(image_manager, "images", None))
 
 
-def get_encoded_image(available_images, tube: int, position: int, date) -> str:
-    """
-    Get base64 encoded image for hover display from the precomputed cache.
+def get_encoded_image(available_images: Mapping, tube: int, position: int, date) -> str:
+    """Hover thumbnail of one image as a ``data:image/jpeg`` URL.
 
     Args:
-        available_images: Map returned by :func:`build_available_images_map`.
-        tube: Tube number
-        position: Position/depth number
-        date: pandas Timestamp or date object
+        available_images: the map returned by :func:`build_available_images_map`.
+        tube: tube number.
+        position: position (depth) number.
+        date: pandas Timestamp or date object.
 
     Returns:
-        str: Base64 encoded image data URL or empty string if not found.
+        The data URL, or ``""`` if the image is unknown or unreadable.
     """
     try:
-        date_str = date.strftime("%Y.%m.%d")
+        key = (tube, position, date.strftime("%Y.%m.%d"))
     except (AttributeError, ValueError) as exc:
         logger.debug("Invalid date passed to get_encoded_image: %s (%s)", date, exc)
         return ""
-
-    key = (tube, position, date_str)
-
-    thumbnails = available_images.get(_THUMBNAIL_CACHE_KEY)
-    if isinstance(thumbnails, dict):
-        # Fast path: precomputed thumbnail (F-013).
-        if key in thumbnails:
-            return thumbnails[key]
-        # No image known for this key.
-        if key not in available_images:
-            return ""
-        # Known path but missing from cache (e.g. map built externally):
-        # encode lazily and memoize.
-        encoded = _encode_thumbnail(available_images[key])
-        thumbnails[key] = encoded
-        return encoded
-
-    # Fallback for maps without a precomputed cache.
-    if key in available_images:
-        return _encode_thumbnail(available_images[key])
-    return ""
+    cache = getattr(available_images, "thumbnails", None)
+    if cache is not None:
+        return cache.data_url(key)
+    path = available_images.get(key)
+    return jpeg_data_url(encode_thumbnail_jpeg(path)) if path else ""

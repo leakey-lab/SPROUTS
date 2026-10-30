@@ -1,0 +1,431 @@
+"""Document lifecycle of the Correct workspace (Qt-free).
+
+``CorrectSession`` owns what the mask and skeleton layers share: which image is open,
+the one undo timeline (``EditJournal``) over the layers' own stacks, the aggregate dirty
+state, saving (one summary toast, one report per layer save attempt) and the one
+unsaved-changes prompt. Before each layer save it asks its ``SaveGate``
+(``app.gui.correct.save_gate``), which may ask the user first, decline the save, or read
+the layer again when its file changed on disk; Discard, too, reads such a layer again
+instead of reverting it to a stale copy. What the open documents were read from (the
+image's and the layers' file stamps) is its ``ImageStamps`` (``app.gui.correct.stamps``).
+It drives the layers only through ``EditLayer`` and reaches the UI only through the
+callbacks it is given, so it runs without Qt.
+
+Gestures first: every call that saves, prompts, opens, closes or reloads first ends a
+drag in progress (``finish_gestures``), so a stroke it commits is saved or prompted for
+like any other edit, and nothing painted is dropped silently.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Iterable, Mapping, Sequence
+
+from app.editing.history import UNDO_STEPS
+from app.editing.journal import EditJournal
+from app.gui.correct import save_gate
+from app.gui.correct.layer import LAYER_IDS, EditLayer, Notice, SaveOutcome, join_nouns
+from app.gui.correct.save_gate import CANCEL, DISCARD, KEEP, SAVE, Prompts, SaveGate, SaveReport
+from app.gui.correct.stamps import ImageStamps
+
+# The answers, Prompts and SaveReport live in save_gate; the session's callers import them here.
+__all__ = ["CANCEL", "DISCARD", "KEEP", "SAVE", "CorrectSession", "Prompts", "SaveReport"]
+
+
+def _by_id(layers: Sequence[EditLayer]) -> dict[str, EditLayer]:
+    """The layers by id, in ``LAYER_IDS`` order (unknown ids last, as given)."""
+    rank = {layer_id: index for index, layer_id in enumerate(LAYER_IDS)}
+    by_id: dict[str, EditLayer] = {}
+    for layer in sorted(layers, key=lambda layer: rank.get(layer.layer_id, len(rank))):
+        if layer.layer_id in by_id:
+            raise ValueError(f"two layers share the id {layer.layer_id!r}")
+        by_id[layer.layer_id] = layer
+    return by_id
+
+
+class _Batch:
+    """Re-entrant scope that defers the session's UI sync to its outermost end.
+
+    A ``quiet`` batch syncs only when something inside it asked for a sync (a layer
+    change, a save, a revert): paging and leaving a clean image refresh nothing.
+    """
+
+    __slots__ = ("_quiet", "_session")
+
+    def __init__(self, session: CorrectSession, *, quiet: bool = False) -> None:
+        self._session = session
+        self._quiet = quiet
+
+    def __enter__(self) -> None:
+        self._session._batch_depth += 1
+        if not self._quiet:
+            self._session._stale = True
+
+    def __exit__(self, *_exc) -> None:
+        session = self._session
+        session._batch_depth -= 1
+        if not session._batch_depth and session._stale:
+            session._sync()
+
+
+class CorrectSession:
+    """Document lifecycle of the Correct workspace: open/close, the one undo timeline,
+    dirty aggregation, save and the one unsaved-changes prompt."""
+
+    def __init__(
+        self,
+        layers: Sequence[EditLayer],
+        *,
+        prompts: Prompts,
+        parent: Callable[[], object],
+        on_dirty_changed: Callable[[bool], None],
+        on_notice: Callable[[str, str], None],
+        on_history_changed: Callable[[], None],
+        on_undone: Callable[[str, str], None],
+        on_saved: Callable[[SaveOutcome], None],
+    ) -> None:
+        self.layers: dict[str, EditLayer] = _by_id(layers)
+        # Room for each layer's newest UNDO_STEPS actions, its own stack's depth (C4-01).
+        depth = max(len(LAYER_IDS), len(self.layers)) * UNDO_STEPS
+        self.journal = EditJournal(depth, per_layer=UNDO_STEPS)
+        self.image_path = ""
+        self._prompts = prompts
+        self._parent = parent
+        self._gate = SaveGate(prompts, parent, reopen=self._reopen, root=self._root)
+        self._on_dirty_changed = on_dirty_changed
+        self._on_notice = on_notice
+        self._on_history_changed = on_history_changed
+        self._on_undone = on_undone
+        self._on_saved = on_saved
+        self._size: tuple[int, int] = (0, 0)
+        self._images_base_folder: str | None = None
+        self._stamps = ImageStamps()  # what the open documents were read from
+        self._dirty = False
+        self._batch_depth = 0
+        self._stale = False  # a sync is owed at the end of the outermost batch
+        self._batch = _Batch(self)
+        self._quiet = _Batch(self, quiet=True)
+
+    # ------------------------------------------------------------------ lifecycle
+    def open(
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        images_base_folder: str | None,
+        ahead: Mapping[str, object] | None = None,
+    ) -> None:
+        """Open ``image_path`` (``size`` = (w, h)) in every layer, with a new timeline.
+
+        The caller asks about unsaved edits first (``release``). ``ahead`` maps a layer id
+        to what that layer's ``read_ahead`` reader read (``open(..., ahead=payload)``); the
+        other layers open as usual. The layers' notices are forwarded; the image's and the
+        layers' file stamps are recorded.
+        """
+        with self._batch:
+            self.finish_gestures()
+            self.image_path = image_path
+            self._size = size
+            self._images_base_folder = images_base_folder
+            self._stamps.image_opened(image_path)
+            self._open_layers(ahead or {})
+
+    def reload_documents(self) -> None:
+        """Same image, files changed on disk: reopen every layer, with a new timeline.
+
+        The image's stamp is kept: the photo is not reloaded here.
+        """
+        if not self.image_path:
+            return
+        with self._batch:
+            self.finish_gestures()
+            self._open_layers()
+
+    def close(self) -> None:
+        """Close every layer and forget the image and the timeline (edits are dropped)."""
+        with self._batch:
+            self.finish_gestures()
+            for layer in self.layers.values():
+                layer.close()
+            self.journal.clear()
+            self.image_path = ""
+            self._stamps.clear()
+            self._gate.forget()
+
+    def files_changed(self) -> bool:
+        """True when any layer's ``file_stamps()`` differ from those at open (or reload)."""
+        return bool(self.image_path) and self._stamps.files_changed(self.layers)
+
+    def image_changed(self) -> bool:
+        """True when the image file's stamp differs from the one at open."""
+        return bool(self.image_path) and self._stamps.image_changed(self.image_path)
+
+    def saved_stamps(self) -> dict[str, tuple] | None:
+        """Each layer's file stamps at open or at its last save, while every layer is clean
+        and its files are still those: the documents hold what is on disk (the page hands
+        the image back to its read-ahead when it leaves it). None otherwise."""
+        if not self.image_path or self.is_dirty():
+            return None
+        return self._stamps.held(self.layers)
+
+    def take_stamps(self, layer_id: str) -> None:
+        """``layer_id`` wrote a file of its own outside a save (Classes…: gt/classes.json):
+        its file stamps are taken again, so that is no change on disk (the save guard stays)."""
+        self._stamps.retake(layer_id, self.layers[layer_id])
+
+    def _open_layers(self, ahead: Mapping[str, object] | None = None) -> None:
+        args = (self.image_path, self._size, self._images_base_folder)
+        for layer_id, layer in self.layers.items():
+            payload = None if ahead is None else ahead.get(layer_id)
+            self._forward(
+                layer.open(*args) if payload is None else layer.open(*args, ahead=payload)
+            )
+        self.journal.clear()
+        for layer_id in self.layers:
+            self._take(layer_id)
+
+    def _take(self, layer_id: str) -> None:
+        """``layer_id``'s files hold its saved state: take its file and write stamps."""
+        layer = self.layers[layer_id]
+        self._stamps.take(layer_id, layer)
+        self._gate.take(layer_id, layer)
+
+    def _reopen(self, layer_id: str) -> None:
+        """Read ``layer_id`` again from disk (its file changed): its notices are shown, its
+        timeline entries forgotten and its stamps taken again."""
+        self._stale = True  # inside a batch: its end refreshes the page
+        layer = self.layers[layer_id]
+        self._forward(layer.open(self.image_path, self._size, self._images_base_folder))
+        self.journal.forget(layer_id)
+        self._take(layer_id)
+
+    def _root(self) -> str:
+        """The project folder the gate's file labels are relative to."""
+        return self._images_base_folder or os.path.dirname(self.image_path)
+
+    # ------------------------------------------------------------------- gestures
+    def finish_gestures(self) -> None:
+        """End every drag in progress as a release there would; other layers are left alone."""
+        for layer in self.layers.values():
+            if layer.gesture_active():
+                layer.finish_gesture()
+
+    def _gesture_in_progress(self) -> bool:
+        return any(layer.gesture_active() for layer in self.layers.values())
+
+    # --------------------------------------------------------------- layer events
+    def layer_edited(self, layer_id: str) -> None:
+        """A layer recorded a new undoable action: journal it; every other redo branch ends."""
+        with self._batch:
+            self.journal.record(layer_id)
+            for other_id, layer in self.layers.items():
+                if other_id != layer_id:
+                    layer.drop_redo()
+
+    def layer_changed(self, layer_id: str) -> None:
+        """Something ``layer_id`` shows changed: refresh the dirty state and the history."""
+        self._sync()
+
+    def forget(self, layer_id: str) -> None:
+        """Drop ``layer_id``'s timeline entries (its own history was cleared)."""
+        with self._batch:
+            self.journal.forget(layer_id)
+
+    # ---------------------------------------------------------------------- dirty
+    def is_dirty(self) -> bool:
+        """True when any layer differs from its saved state."""
+        return any(layer.is_dirty() for layer in self.layers.values())
+
+    def dirty_layers(self) -> list[str]:
+        """Ids of the dirty layers, mask first."""
+        return [layer_id for layer_id, layer in self.layers.items() if layer.is_dirty()]
+
+    def _sync(self) -> None:
+        if self._batch_depth:
+            self._stale = True  # the outermost batch syncs once when it ends
+            return
+        self._stale = False
+        dirty = self.is_dirty()
+        if dirty != self._dirty:
+            self._dirty = dirty
+            self._on_dirty_changed(dirty)
+        self._on_history_changed()
+
+    # ----------------------------------------------------------------------- save
+    def save(self, active_id: str) -> SaveReport:
+        """Ctrl+S: save the dirty layers, mask first (O2: a clean layer is never written).
+
+        With none dirty nothing is written: an empty report and the notice "Nothing
+        unsaved". ``active_id`` (the edited layer) selects nothing. A gesture in progress
+        is committed first, so its stroke is saved too.
+        """
+        if active_id not in self.layers:
+            raise KeyError(active_id)
+        if not self.image_path:
+            return SaveReport()
+        with self._batch:
+            self.finish_gestures()
+            dirty = self.dirty_layers()
+            if not dirty:
+                self._on_notice("Nothing unsaved", "info")
+                return SaveReport()
+            return self._save(dirty, ask=True)
+
+    def save_dirty(self) -> SaveReport:
+        """PgDn / PgUp: save the dirty layers only; an empty report (and no refresh of the
+        page) when none is. Never asks: a save the gate would ask about is declined."""
+        with self._quiet:
+            self.finish_gestures()
+            dirty = self.dirty_layers()
+            return self._save(dirty, ask=False) if dirty else SaveReport()
+
+    def _save(self, layer_ids: Iterable[str], *, ask: bool) -> SaveReport:
+        """Save ``layer_ids`` mask first; report each attempt; a failure stops nothing.
+
+        The gate comes first (``ask``: it may ask the user); a declined save is reported
+        like any attempt, and the layer is not saved. A layer's own write is no change on
+        disk: its file stamps are taken again, so coming back to the image keeps the
+        documents and their history.
+        """
+        self._stale = True  # inside a batch: its end refreshes the page
+        targets = set(layer_ids)
+        outcomes = []
+        for layer_id, layer in self.layers.items():
+            if layer_id in targets:
+                layer.finish_gesture()
+                outcome = self._gate.before_save(layer_id, layer, ask=ask)
+                if outcome is None:
+                    outcome = layer.save()
+                if outcome.ok and self._stamps.has(layer_id):
+                    self._take(layer_id)
+                outcomes.append(outcome)
+                self._on_saved(outcome)
+        self._announce(outcomes)
+        return SaveReport(tuple(outcomes))
+
+    def _announce(self, outcomes: Sequence[SaveOutcome]) -> None:
+        """One summary toast for the written layers, then every other message."""
+        name = os.path.basename(self.image_path)
+        written = [self.layers[o.layer_id].noun for o in outcomes if o.ok and o.path]
+        if written:
+            self._on_notice(f"Saved {join_nouns(written)} · {name}", "success")
+        for outcome in outcomes:
+            if outcome.ok and outcome.message:
+                self._on_notice(outcome.message, outcome.kind)
+        for outcome in outcomes:
+            if not outcome.ok:
+                noun = self.layers[outcome.layer_id].noun
+                message = outcome.message or f"Could not save the {noun} for {name}"
+                self._on_notice(message, "danger" if outcome.kind == "success" else outcome.kind)
+
+    # --------------------------------------------------------------------- prompt
+    def release(self, layer_ids: Sequence[str] | None = None) -> bool:
+        """The one unsaved-changes prompt; True when it is safe to move on.
+
+        Asks about the dirty layers among ``layer_ids`` (all when None), naming them and
+        the image. Discard reverts them and forgets the timeline entries of each layer
+        whose history the revert cleared; Cancel stays; Save saves them (each attempt
+        reported) and, if one fails, asks about the failed layers only: Discard reverts
+        them, Keep editing stays. A save the user declined (the gate's Keep it) stays too,
+        without that question. Nothing to ask, or Cancel, changes nothing and refreshes
+        nothing.
+        """
+        with self._quiet:
+            self.finish_gestures()
+            dirty = [i for i in self.dirty_layers() if layer_ids is None or i in layer_ids]
+            if not dirty:
+                return True
+            name = os.path.basename(self.image_path)
+            answer = self._prompts.ask_unsaved(self._parent(), self._nouns(dirty), name)
+            if answer == DISCARD:
+                self._revert(dirty)
+                return True
+            if answer != SAVE:
+                return False
+            report = self._save(dirty, ask=True)
+            failed, moves_on = report.failed, True
+            if failed:
+                nouns = self._nouns(failed)
+                moves_on = (
+                    self._prompts.ask_after_failed_save(self._parent(), nouns, name) == DISCARD
+                )
+                if moves_on:
+                    self._revert(failed)
+            return moves_on and not report.declined
+
+    def reset(self) -> bool:
+        """A new folder: the prompt, then close. False (nothing changed) when the user stays."""
+        if not self.release():
+            return False
+        self.close()
+        return True
+
+    def _nouns(self, layer_ids: Sequence[str]) -> str:
+        return join_nouns([self.layers[layer_id].noun for layer_id in layer_ids])
+
+    def _revert(self, layer_ids: Sequence[str]) -> None:
+        """Discard: each layer back to its saved state; one whose files changed on disk
+        since (and would not open that state) is read again from disk, with a notice."""
+        self._stale = True  # inside a batch: its end refreshes the page
+        for layer_id in layer_ids:
+            layer = self.layers[layer_id]
+            changed = self._stamps.layer_changed(layer_id, layer)
+            if changed and not save_gate.matches_disk_of(layer):
+                self._reopen(layer_id)
+                self._on_notice(save_gate.reloaded_message(layer.noun), "info")
+                continue
+            self._forward(layer.revert())
+            if not (layer.can_undo() or layer.can_redo()):  # its history was cleared
+                self.journal.forget(layer_id)  # (a skeleton that only lost a draft keeps it)
+            self._take(layer_id)
+
+    def _forward(self, notices: Iterable[Notice]) -> None:
+        for notice in notices:
+            self._on_notice(notice.message, notice.kind)
+
+    # --------------------------------------------------------------- undo / redo
+    def undo(self, active_id: str) -> str | None:
+        """Ctrl+Z: the id of the layer that stepped back, or None.
+
+        Refused while a drag is in progress. A polyline draft of the active layer loses
+        its last point first (not a timeline step). Otherwise the newest action of
+        either layer is undone; actions a layer already evicted are skipped.
+        """
+        if self._gesture_in_progress():
+            return None
+        with self._batch:
+            if self.layers[active_id].undo_in_gesture():
+                return active_id
+            layer_id = self.journal.undo(self._undo_step)
+            if layer_id is not None:
+                self._on_undone(layer_id, "undo")
+            return layer_id
+
+    def redo(self) -> str | None:
+        """Ctrl+Y: the id of the layer that stepped forward, or None (refused mid-drag)."""
+        if self._gesture_in_progress():
+            return None
+        with self._batch:
+            layer_id = self.journal.redo(self._redo_step)
+            if layer_id is not None:
+                self._on_undone(layer_id, "redo")
+            return layer_id
+
+    def can_undo(self) -> bool:
+        """True when the timeline holds an action its layer can still undo."""
+        return self.journal.can_undo(self._can_undo)
+
+    def can_redo(self) -> bool:
+        """True when the timeline holds an undone action its layer can redo."""
+        return self.journal.can_redo(self._can_redo)
+
+    def _undo_step(self, layer_id: str) -> bool:
+        return self.layers[layer_id].undo()
+
+    def _redo_step(self, layer_id: str) -> bool:
+        return self.layers[layer_id].redo()
+
+    def _can_undo(self, layer_id: str) -> bool:
+        return self.layers[layer_id].can_undo()
+
+    def _can_redo(self, layer_id: str) -> bool:
+        return self.layers[layer_id].can_redo()

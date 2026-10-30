@@ -1,0 +1,868 @@
+"""MainWindow with the Correct stage (plan P8b, contracts C17 and C19).
+
+One Correct stage (``MainWindow.correct_editor``, right-panel page ``Panel.CORRECT``)
+replaced the two editors of the mask and the skeleton, then the Trace GT editor (WG-T11):
+five stages with Alt+1 … Alt+5; one prompt when leaving it (a refused leave keeps the stage
+and its page); tree clicks, the arrow-key debounce and PgDn / PgUp open images in it; the
+editor's save reports reach the Library badge and the metrics bar once, on every save path,
+a GT skeleton's too (measured first, O1); the generated-skeleton resolver, the OpenGL
+switch, the toast offset and the F1 sheet know the page; scikit-image is imported in
+the thread pool once the event loop runs, never on the GUI thread.
+
+Offscreen. Every project is a tmp_path folder of four 200x150 photos, the first with a
+model mask and a generated skeleton; every window has its own INI settings, so the user's
+settings are never read or written.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+from PyQt6.QtCore import QPoint, QRect, Qt, QThreadPool
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QPushButton
+
+from app.gui import (
+    shell_chrome,
+    shortcuts,
+    skeleton_graph_model,
+)
+from app.gui.correct.layer import MASK, SKELETON
+from app.gui.key_text import platform_keys
+from app.gui.panels import Panel
+from app.gui.skeleton_graph_model import SkeletonCorrectionModel
+from tests.correct_support import (
+    CANCEL,
+    DISCARD,
+    SAVE,
+    H,
+    Mouse,
+    W,
+    answer_prompts,
+    box_plane,
+    bump,
+    click,
+    draw_line,
+    paint,
+    plane,
+    qapp,
+    raster,
+    record,
+    same_path,
+    write_image,
+    write_mask,
+    write_skeleton,
+)
+from tests.qt_teardown import delete_widgets
+from tests.qt_wait import settle
+from tests.qt_wait import wait_until as wait
+from tests.test_correct_editor_paging import read_ahead_done
+from tests.window_support import build_window, open_folder, quiet_window
+
+STEMS = tuple(f"24EFCAM1_T001_L0{d}_2024.07.18_1115{d}_001_SMM" for d in (21, 22, 23, 24))
+STAGE_NAMES = ["Library", "Generate", "Correct", "Measure", "Visualize"]
+#: The code under test: an exception it raises inside a Qt slot fails the test.
+SLOT_ERRORS_FROM = tuple(
+    os.path.normcase(os.path.join("app", "gui", *part))
+    for part in (
+        ("main_window.py",),
+        ("shell_chrome.py",),
+        ("correct", "editor.py"),
+        *(
+            ("window", f"{name}.py")
+            for name in (
+                "_common",
+                "body",
+                "editors",
+                "job_buttons",
+                "lifecycle",
+                "metrics",
+                "navigator",
+                "project_loader",
+                "stages",
+            )
+        ),
+    )
+)
+
+
+# ============================================================================== helpers
+@dataclass(frozen=True)
+class Project:
+    """A project folder: four photos; the first has a model mask and a generated skeleton."""
+
+    folder: str
+
+    def image(self, i: int) -> str:
+        """The photo of image ``i``."""
+        return os.path.join(self.folder, f"{STEMS[i]}.jpg")
+
+    def mask(self, i: int) -> str:
+        """The model's mask (the prediction) of image ``i``."""
+        return os.path.join(self.folder, "mask", f"{STEMS[i]}.png")
+
+    def gt_mask(self, i: int) -> str:
+        """The saved (GT) mask of image ``i``: what a mask save writes."""
+        return os.path.join(self.folder, "gt", "mask", f"{STEMS[i]}.png")
+
+    def correction(self, i: int) -> str:
+        """The saved (GT) skeleton of image ``i``: what a skeleton save writes."""
+        return os.path.join(self.folder, "gt", "skeletons", f"{STEMS[i]}.png")
+
+    def generated(self, i: int) -> str:
+        """The generated skeleton of image ``i``."""
+        return os.path.join(self.folder, "skeletons", f"{STEMS[i]}_fake.png")
+
+
+def new_project(root) -> Project:
+    """Four photos in ``root/project``; image 0 with a model mask and a generated skeleton."""
+    project = Project(str(root / "project"))
+    for i in range(len(STEMS)):
+        write_image(project.image(i), value=60 + 20 * i)
+    write_mask(project.mask(0), box_plane())
+    write_skeleton(project.generated(0))
+    return project
+
+
+def open_project(window, project: Project) -> None:
+    """Open ``project`` in ``window`` (the folder scan runs in a thread), wait until that
+    load has ended, and expand the tree."""
+    open_folder(window, project.folder, len(STEMS))
+    window.file_list.expandAll()
+    settle()
+
+
+def leaf(window, i: int):
+    """The library row of image ``i``."""
+    return window.library_index.item_for(STEMS[i])
+
+
+def select(window, i: int) -> None:
+    """A click on the library row of image ``i``."""
+    item = leaf(window, i)
+    window.file_list.setCurrentItem(item)
+    window.on_tree_item_clicked(item, 0)
+    settle()
+
+
+def enter(window, stage: str) -> None:
+    """A click on the topbar's ``stage`` button."""
+    window.ribbon_buttons[stage].click()
+    settle()
+
+
+def activate(window) -> None:
+    """Make ``window`` the active window (keyboard shortcuts need it)."""
+    window.show()
+    window.activateWindow()
+    assert QTest.qWaitForWindowActive(window, 3000)
+    settle()
+
+
+def record_toasts(window) -> list[tuple[str, str]]:
+    """Every toast the window shows from now on, as ``(kind, message)``."""
+    seen: list[tuple[str, str]] = []
+    window.toasts.show = lambda message, kind="success", *_a, **_k: seen.append((kind, message))
+    return seen
+
+
+# ============================================================================= fixtures
+@pytest.fixture(scope="module")
+def app():
+    return qapp()
+
+
+# No unexpected prompt or file dialog, no GL, no delayed stale-temp sweep (R8: a window of
+# this test never sweeps inside a later test), and no exception of the code under test
+# hidden in a Qt slot (PyQt hands those to ``sys.excepthook``).
+pytestmark = pytest.mark.usefixtures("window_guards", "slot_errors")
+
+
+@pytest.fixture
+def make_window(app, tmp_path):
+    """``make(*, show=True)`` builds a MainWindow (1280x800) with its own INI settings;
+    every window made is closed without prompts and deleted afterwards."""
+    made = []
+
+    def make(*, show: bool = True):
+        window = build_window(tmp_path / f"settings_{len(made)}.ini", show=False)
+        made.append(window)
+        if show:
+            window.show()
+            settle()
+        return window
+
+    yield make
+    delete_widgets(made, prepare=quiet_window)
+    QApplication.processEvents()
+
+
+def in_correct(make_window, tmp_path, image: int = 0, project: Project | None = None):
+    """A shown window on a new project with image ``image`` open in the Correct stage."""
+    project = project or new_project(tmp_path)
+    window = make_window()
+    open_project(window, project)
+    select(window, image)
+    enter(window, "Correct")
+    assert window.right_panel.currentIndex() == Panel.CORRECT
+    return window, project
+
+
+# ======================================================================= stages and pages
+def test_the_topbar_has_five_stages_with_alt_1_to_alt_5(make_window):
+    window = make_window(show=False)
+
+    assert list(window.ribbon_buttons) == STAGE_NAMES == [s[0] for s in shell_chrome.STAGES]
+    assert shortcuts.STAGE_KEYS == ("Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5")
+    assert len(shortcuts.STAGE_KEYS) == len(shell_chrome.STAGES)
+    bound = [s.key().toString() for s in window._global_shortcuts["go_to_stage"]]
+    assert bound[: len(shortcuts.STAGE_KEYS)] == list(shortcuts.STAGE_KEYS)  # stage i: key i
+    assert len(bound) == sum(map(len, shortcuts.stage_keys()))
+    assert window.ribbon_buttons["Correct"].toolTip() == (
+        "Correct — Fix the model's mask (area) and skeleton (length), and paint class labels "
+        f"(GT for training), on one canvas. ({platform_keys(' / '.join(shortcuts.stage_keys()[2]))})"
+    )
+    assert window.welcome.stage_labels() == STAGE_NAMES  # five welcome chips
+
+
+def test_there_is_no_trace_gt_stage_scope_or_panel(make_window):
+    window = make_window(show=False)
+
+    assert "Trace GT" not in shortcuts.SCOPES and shortcuts.scope_for_stage("Trace GT") is None
+    assert not hasattr(Panel, "GT_TRACING") and [int(p) for p in Panel] == [0, 1, 2]
+    assert not hasattr(window, "gt_tracing_interface")
+    assert not hasattr(window, "toggle_gt_tracing")
+    assert window._editors() == {Panel.CORRECT: window.correct_editor}
+    assert window.right_panel.count() == len(Panel)  # no dashboard built yet
+
+
+def test_the_deleted_editor_modules_are_gone():
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    assert not (app_dir / "gui" / "raster_editor_base.py").exists()
+    assert not (app_dir / "gui" / "gt_tracing_interface.py").exists()
+    sources = [p.read_text(encoding="utf-8") for p in app_dir.rglob("*.py")]
+    assert not any("gt_tracing_interface" in text for text in sources)
+    assert not any("RasterEditorBase" in text for text in sources)
+
+
+def test_the_correct_editor_is_page_one_of_the_three_right_panel_pages(make_window):
+    window = make_window(show=False)
+
+    assert window.right_panel.count() == 3
+    assert window.right_panel.widget(Panel.DISPLAY) is not None
+    assert window.right_panel.widget(Panel.CORRECT) is window.correct_editor
+    assert window.right_panel.widget(Panel.VISUALIZATION) is window.visualization_widget
+
+
+def test_alt_3_enters_correct_once_a_folder_is_open(make_window, tmp_path):
+    window = make_window()
+    alt_3 = window._global_shortcuts["go_to_stage"][2]
+    alt_3.activated.emit()
+    assert window.right_panel.currentIndex() == Panel.DISPLAY  # the Welcome screen: nothing
+
+    open_project(window, new_project(tmp_path))
+    select(window, 0)
+    alt_3.activated.emit()
+    settle()
+
+    assert window.right_panel.currentIndex() == Panel.CORRECT
+    assert window.ribbon_buttons["Correct"].isChecked()
+
+
+def test_entering_correct_opens_the_selected_image_with_both_layers(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+
+    assert window.right_panel.currentWidget() is editor
+    assert same_path(editor.current_image_path, project.image(0))
+    assert np.array_equal(plane(editor), box_plane())  # the model mask
+    assert raster(editor)[110, 20 : W - 20].all()  # the generated skeleton
+    assert editor.layers[SKELETON].document.source == "prediction"
+    page = window.action_bar_stack.currentWidget()
+    assert not hasattr(editor, "clear_button")
+    assert not [b for b in page.findChildren(QPushButton) if "Clear" in b.text()]
+
+    enter(window, "Correct")  # clicking the open stage again never leaves it
+    assert window.right_panel.currentWidget() is editor
+    assert same_path(editor.current_image_path, project.image(0))
+
+
+# ============================================================================ leaving
+def test_leaving_correct_with_unsaved_edits_asks_once(make_window, tmp_path, monkeypatch):
+    window, _project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+    assert window.isWindowModified()
+    answers = answer_prompts(monkeypatch).will(DISCARD)
+
+    enter(window, "Library")
+
+    assert answers.seen == [("Unsaved mask", f"Save changes to the mask for {STEMS[0]}.jpg?")]
+    assert window.right_panel.currentIndex() == Panel.DISPLAY
+    assert window.ribbon_buttons["Library"].isChecked()
+    assert not editor.has_unsaved_changes() and np.array_equal(plane(editor), box_plane())
+    assert not window.isWindowModified()
+
+
+def test_a_refused_leave_keeps_the_correct_stage_its_page_and_the_edits(
+    make_window, tmp_path, monkeypatch
+):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+    answers = answer_prompts(monkeypatch).will(CANCEL)
+
+    enter(window, "Measure")
+
+    assert len(answers.seen) == 1
+    assert window.right_panel.currentIndex() == Panel.CORRECT
+    assert window.ribbon_buttons["Correct"].isChecked()
+    assert window.action_bar_stack.currentIndex() == window._action_bar_pages["Correct"]
+    assert editor.has_unsaved_changes() and window.isWindowModified()
+    assert same_path(editor.current_image_path, project.image(0))
+
+
+def test_open_folder_asks_once_then_closes_both_layers(make_window, tmp_path, monkeypatch):
+    window, _project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+    draw_line(editor)
+    loads = []
+    monkeypatch.setattr(window.image_manager, "load_images", loads.append)
+    answers = answer_prompts(monkeypatch).will(DISCARD)
+    other = tmp_path / "other"
+    other.mkdir()
+
+    window.open_path(str(other))
+
+    name = f"{STEMS[0]}.jpg"
+    expected = ("Unsaved mask and skeleton", f"Save changes to the mask and skeleton for {name}?")
+    assert answers.seen == [expected]
+    assert loads == [str(other)]
+    assert editor.current_image_path == ""
+    assert not editor.layers[MASK].is_open() and not editor.layers[SKELETON].is_open()
+    assert not window.isWindowModified()
+
+
+def test_closing_the_window_asks_once_and_cancel_keeps_it_open(make_window, tmp_path, monkeypatch):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+    draw_line(editor)
+    answers = answer_prompts(monkeypatch).will(CANCEL, DISCARD)
+
+    window.close()
+    settle()
+    assert window.isVisible() and editor.has_unsaved_changes()
+
+    window.close()
+    settle()
+    assert not window.isVisible()
+    assert [title for title, _ in answers.seen] == ["Unsaved mask and skeleton"] * 2
+    assert not editor.has_unsaved_changes()  # Discard reverted both layers
+    assert np.array_equal(plane(editor), box_plane())
+    assert not os.path.exists(project.correction(0))
+
+
+# ======================================================================= opening images
+def test_a_tree_click_opens_the_image_in_correct_and_the_metrics_follow(
+    make_window, tmp_path, monkeypatch
+):
+    window, project = in_correct(make_window, tmp_path, 0)
+    names = []
+    real = window.metrics_bar.set_metrics
+    monkeypatch.setattr(
+        window.metrics_bar, "set_metrics", lambda *a, **k: names.append(k["name"]) or real(*a, **k)
+    )
+
+    select(window, 2)
+
+    assert same_path(window.correct_editor.current_image_path, project.image(2))
+    assert window.right_panel.currentIndex() == Panel.CORRECT
+    assert names and names[-1] == STEMS[2]
+
+
+def test_arrow_keys_open_the_image_they_come_to_rest_on(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    activate(window)
+    window.file_list.setFocus()
+
+    QTest.keyClick(window.file_list, Qt.Key.Key_Down)
+
+    assert window._tree_load_timer.isActive()  # the 40 ms debounce: nothing loaded yet
+    assert same_path(editor.current_image_path, project.image(0))
+    assert wait(lambda: same_path(editor.current_image_path, project.image(1)), 2.0)
+
+
+def test_arrow_keys_keep_browsing_the_tree_in_the_editor(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    activate(window)
+    window.file_list.setFocus()
+
+    for i in (1, 2):
+        QTest.keyClick(QApplication.focusWidget(), Qt.Key.Key_Down)
+        assert wait(lambda i=i: same_path(editor.current_image_path, project.image(i)), 2.0)
+        assert window.file_list.hasFocus()  # the canvas did not take the arrow keys
+
+
+def test_pgdn_and_pgup_on_the_canvas_save_then_open_the_next_and_previous_image(
+    make_window, tmp_path
+):
+    window, project = in_correct(make_window, tmp_path, 1)
+    editor = window.correct_editor
+    activate(window)
+    paint(editor, (20, 100), (60, 100))
+    saved = record(window.mask_saved)
+    view = editor.graphics_view
+    view.setFocus()
+
+    QTest.keyClick(view, Qt.Key.Key_PageDown)  # the guard fails on any prompt
+    settle()
+
+    assert len(saved) == 1 and same_path(saved[0], project.image(1))
+    assert os.path.isfile(project.gt_mask(1))
+    assert same_path(editor.current_image_path, project.image(2))
+    assert window.file_list.currentItem() is leaf(window, 2)
+
+    QTest.keyClick(view, Qt.Key.Key_PageUp)
+    settle()
+    assert same_path(editor.current_image_path, project.image(1))
+    assert window.file_list.currentItem() is leaf(window, 1)
+
+
+def test_pgdn_in_the_library_while_correcting_saves_then_opens_the_next_image(
+    make_window, tmp_path
+):
+    window, project = in_correct(make_window, tmp_path, 1)
+    editor = window.correct_editor
+    activate(window)
+    paint(editor, (20, 100), (60, 100))
+    window.file_list.setFocus()
+
+    QTest.keyClick(window.file_list, Qt.Key.Key_PageDown)
+    settle()
+
+    assert os.path.isfile(project.gt_mask(1)) and not editor.has_unsaved_changes()
+    assert same_path(editor.current_image_path, project.image(2))
+    assert window.file_list.currentItem() is leaf(window, 2)
+
+
+def test_paging_steps_from_the_image_open_in_correct_not_the_tree_selection(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    window.file_list.setCurrentItem(leaf(window, 2))  # arrow keys moved on: nothing loaded
+    window._tree_load_timer.stop()
+
+    window.navigate_image(1)
+    settle()
+
+    assert same_path(window.correct_editor.current_image_path, project.image(1))
+    assert window.file_list.currentItem() is leaf(window, 1)
+
+
+def test_cancel_on_a_tree_click_keeps_the_open_image_selected(make_window, tmp_path, monkeypatch):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+    answers = answer_prompts(monkeypatch).will(CANCEL)
+
+    select(window, 2)
+
+    assert len(answers.seen) == 1
+    assert same_path(editor.current_image_path, project.image(0))
+    assert editor.has_unsaved_changes()
+    assert window.file_list.currentItem() is leaf(window, 0)
+
+
+# ====================================================================== save reports
+def test_the_editor_signals_are_connected_once_whatever_the_stage_visits(make_window, tmp_path):
+    window = make_window()
+    project = new_project(tmp_path)
+    open_project(window, project)
+    select(window, 0)
+    editor = window.correct_editor
+    for _ in range(3):
+        enter(window, "Correct")
+        enter(window, "Library")
+
+    for signal in (
+        editor.mask_saved,
+        editor.mask_cleared,
+        editor.b_key_status_changed,
+        editor.navigate_requested,
+        editor.notice,
+        editor.dirty_changed,
+        editor.gt_saved,  # WG-T5: the class labels, Remove GT… and a cleared GT skeleton
+        editor.gt_removed,
+        editor.skeleton_cleared,
+        editor.skeleton_saved,  # WG-T11: a GT skeleton reaches the Library and the metrics
+    ):
+        assert editor.receivers(signal) == 1
+    saved = record(window.mask_saved)
+    editor.mask_saved.emit(project.image(1))
+    assert saved == [project.image(1)]
+
+
+def test_a_mask_save_badges_the_image_and_refreshes_the_metrics_without_stat_per_image(
+    make_window, tmp_path, monkeypatch
+):
+    window, project = in_correct(make_window, tmp_path, 1)  # image 1 has no mask
+    editor = window.correct_editor
+    read_ahead_done(editor)  # the neighbours' read-ahead (60 ms after the open) ends first
+    assert window.metrics_bar._status_value.text() == "No mask · No skeleton · No classes"
+    paint(editor, (20, 100), (60, 100))
+    toasts = record_toasts(window)
+    stats: list[str] = []
+    real_stat, real_exists = os.stat, os.path.exists
+
+    def stat(path, *args, **kwargs):
+        stats.append(os.fspath(path) if isinstance(path, (str, os.PathLike)) else "")
+        return real_stat(path, *args, **kwargs)
+
+    def exists(path):
+        stats.append(os.fspath(path) if isinstance(path, (str, os.PathLike)) else "")
+        return real_exists(path)
+
+    monkeypatch.setattr(os, "stat", stat)
+    monkeypatch.setattr(os.path, "exists", exists)
+    assert editor.save()
+    settle()
+    monkeypatch.setattr(os, "stat", real_stat)
+    monkeypatch.setattr(os.path, "exists", real_exists)
+
+    other_images = [p for p in stats if any(stem in p for stem in STEMS if stem != STEMS[1])]
+    assert stats and other_images == []  # the spy saw the save; no other image was looked up
+    # The save is GT (WG-T2): recorded as a GT mask, never as a prediction; the Library
+    # badge shows it (WG-T6).
+    assert window.image_manager.has_gt_mask(STEMS[1])
+    assert not window.image_manager.has_mask(STEMS[1])
+    assert window.image_manager.mask_state(STEMS[1]) == "gt"
+    assert toasts == [("success", f"Saved mask · {STEMS[1]}.jpg")]  # the editor's toast only
+    assert not window.isWindowModified()
+
+
+def test_a_tree_click_answered_save_reports_the_mask_once_and_badges_it(
+    make_window, tmp_path, monkeypatch
+):
+    window, project = in_correct(make_window, tmp_path, 1)
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+    saved = record(window.mask_saved)
+    answers = answer_prompts(monkeypatch).will(SAVE)
+
+    select(window, 2)
+
+    assert len(answers.seen) == 1
+    assert len(saved) == 1 and same_path(saved[0], project.image(1))
+    assert os.path.isfile(project.gt_mask(1)) and not os.path.exists(project.mask(1))
+    assert window.image_manager.has_gt_mask(STEMS[1])
+    assert same_path(editor.current_image_path, project.image(2))
+
+
+def test_an_emptied_mask_saved_on_a_tree_click_records_an_empty_gt_mask_once(
+    make_window, tmp_path, monkeypatch
+):  # O9
+    window, project = in_correct(make_window, tmp_path, 0)  # image 0 has the model mask
+    editor = window.correct_editor
+    assert window.image_manager.mask_state(STEMS[0]) == "prediction"
+    editor.clear_active_layer()
+    saved, cleared = record(window.mask_saved), record(window.mask_cleared)
+    answers = answer_prompts(monkeypatch).will(SAVE)
+
+    select(window, 1)
+
+    assert len(answers.seen) == 1
+    assert len(saved) == 1 and same_path(saved[0], project.image(0)) and cleared == []
+    assert os.path.exists(project.mask(0)) and os.path.isfile(project.gt_mask(0))
+    assert window.image_manager.has_mask(STEMS[0])  # the prediction stays
+    assert window.image_manager.mask_state(STEMS[0]) == "gt"
+
+
+def test_a_mask_back_to_the_prediction_forgets_the_gt_mask(make_window, tmp_path, monkeypatch):
+    project = new_project(tmp_path)
+    write_mask(project.gt_mask(0), np.zeros((H, W), np.uint8))
+    window, _project = in_correct(make_window, tmp_path, 0, project)
+    editor = window.correct_editor
+    window.image_manager.set_gt(project.image(0), "mask", True)  # as the scan (WG-T1) finds it
+    editor.load_prediction()
+    cleared = record(window.mask_cleared)
+
+    assert editor.save()
+
+    assert len(cleared) == 1 and not os.path.exists(project.gt_mask(0))
+    assert window.image_manager.mask_state(STEMS[0]) == "prediction"
+
+
+def test_the_library_marks_a_gt_mask_after_a_save(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 1)  # image 1 has no mask
+    editor = window.correct_editor
+    paint(editor, (20, 100), (60, 100))
+
+    assert editor.save()
+
+    assert window.image_manager.has_gt_mask(STEMS[1])
+    assert STEMS[1] not in window.image_manager.masks  # a save never adds a prediction
+
+
+def test_re_entering_correct_after_a_skeleton_save_shows_the_saved_correction(
+    make_window, tmp_path
+):
+    project = new_project(tmp_path)
+    # A generated skeleton at half size: the correction is saved at image resolution, so
+    # re-entry shows exactly the raster that was in memory (Q1 fixed).
+    write_skeleton(project.generated(0), row=55, w=W // 2, h=H // 2)
+    window, _project = in_correct(make_window, tmp_path, 0, project)
+    editor = window.correct_editor
+    draw_line(editor)
+    assert editor.save()
+    in_memory = raster(editor).copy()
+
+    enter(window, "Measure")
+    enter(window, "Correct")
+
+    saved = cv2.imread(project.correction(0), cv2.IMREAD_GRAYSCALE)
+    fresh = SkeletonCorrectionModel()
+    fresh.load_from_raster(saved, target_size=(W, H))
+    assert np.array_equal(raster(editor), fresh.mask)
+    assert np.array_equal(raster(editor), in_memory)
+    assert editor.layers[SKELETON].document.source == "gt"
+
+
+def test_a_skeleton_save_reaches_the_library_and_the_metrics_bar_at_once(
+    make_window, tmp_path, monkeypatch
+):
+    window, project = in_correct(make_window, tmp_path, 1)  # no generated skeleton
+    editor = window.correct_editor
+    assert editor.receivers(editor.skeleton_saved) == 1
+    refreshed = []
+    real = window.metrics.refresh_if_current
+    monkeypatch.setattr(
+        window.metrics, "refresh_if_current", lambda stem: refreshed.append(stem) or real(stem)
+    )
+    # Only the save's own report may tell the Library: the dirty_changed sync is off.
+    monkeypatch.setattr(window, "_sync_open_correction", lambda: None)
+
+    draw_line(editor)
+    assert editor.save()
+
+    assert os.path.isfile(project.correction(1))
+    assert window.image_manager.has_gt_skeleton(STEMS[1])
+    assert not window.image_manager.has_skeleton(STEMS[1])  # a GT, never a prediction
+    assert window.library_index.status_of(STEMS[1]) == ("none", "gt", False)
+    assert refreshed == [STEMS[1]]
+
+
+# ============================================================================ the page
+def test_the_generated_skeleton_resolver_reaches_the_skeleton_layer(make_window, tmp_path):
+    project = new_project(tmp_path)
+    run_output = tmp_path / "run_output"
+    write_skeleton(str(run_output / f"{STEMS[1]}_fake.png"), row=40)
+    window = make_window()
+    open_project(window, project)
+    window.image_manager.processed_base_path = str(run_output)  # the last generation run
+
+    select(window, 1)
+    enter(window, "Correct")
+
+    editor = window.correct_editor
+    assert raster(editor)[40, 20 : W - 20].all()
+    assert editor.layers[SKELETON].document.source == "prediction"
+
+
+def test_the_opengl_switch_reaches_the_display_and_correct_canvases(make_window, monkeypatch):
+    window = make_window(show=False)
+    views = [
+        window.display_controller.magnifying_view,
+        window.correct_editor.graphics_view,
+    ]
+    seen = []
+    for view in views:
+        monkeypatch.setattr(
+            view, "set_opengl_viewport_enabled", lambda on, v=view: seen.append((v, on))
+        )
+
+    window.set_opengl_viewports_enabled(False)
+
+    assert [view for view, _ in seen] == views and not any(on for _, on in seen)
+
+
+def test_toasts_stay_clear_of_the_correct_dock(make_window, tmp_path):
+    window, _project = in_correct(make_window, tmp_path, 0)
+    window.resize(1000, 700)
+    settle()
+    dock = window.correct_editor.dock
+    assert dock.isVisible()
+
+    toast = window.toasts.show("Saved mask and skeleton · " + STEMS[0] + ".jpg", timeout=20_000)
+    settle()
+
+    dock_rect = QRect(dock.mapTo(window, QPoint(0, 0)), dock.size())
+    toast_rect = toast.geometry()
+    assert toast_rect.left() <= dock_rect.right() and toast_rect.right() >= dock_rect.left()
+    assert toast_rect.bottom() < dock_rect.top()
+
+
+def test_f1_opens_the_sheet_on_the_correct_keys_in_the_correct_stage(make_window, monkeypatch):
+    from app.gui import main_window
+
+    window = make_window()
+    enter(window, "Correct")
+    sections = []
+    monkeypatch.setattr(
+        main_window.ShortcutsDialog, "exec", lambda dialog: sections.append(dialog.section_titles())
+    )
+
+    window.show_shortcuts()
+
+    assert sections == [["Correct", "Global", "Library"]]
+
+
+def test_holding_b_on_the_canvas_says_how_to_resize_the_brush(make_window, tmp_path):
+    window, _project = in_correct(make_window, tmp_path, 0)
+    view = window.correct_editor.graphics_view
+
+    QTest.keyPress(view, Qt.Key.Key_B)
+    held = window.status_bar.currentMessage()
+    QTest.keyRelease(view, Qt.Key.Key_B)
+
+    assert held.startswith("Scroll to resize the brush")
+    assert window.status_bar.currentMessage() == ""
+
+
+# ============================================================================ prewarm
+def _flush_pending_prewarms() -> None:
+    """Windows of earlier tests may still have a zero timer or a pool job pending."""
+    settle()
+    assert QThreadPool.globalInstance().waitForDone(10_000)
+
+
+def test_scikit_image_is_prewarmed_once_in_the_thread_pool(make_window, monkeypatch):
+    _flush_pending_prewarms()
+    threads = []
+    started = threading.Event()
+
+    def spy() -> None:
+        threads.append(threading.get_ident())
+        started.set()
+
+    monkeypatch.setattr(skeleton_graph_model, "prewarm_skeletonize", spy)
+
+    window = make_window(show=False)
+    # Nothing starts while the window is built: the import waits for the event loop
+    # (main.py shows the window first), so it never competes with the start-up.
+    assert not started.wait(0.3)
+
+    assert wait(lambda: threads, 5.0)
+    assert QThreadPool.globalInstance().waitForDone(5000)
+    settle()
+    assert len(threads) == 1
+    assert threads[0] != threading.main_thread().ident
+    assert window.isHidden()  # the prewarm does not need the window shown
+
+
+def test_a_failing_prewarm_is_logged_not_raised(make_window, monkeypatch, caplog):
+    _flush_pending_prewarms()
+    hooked = []
+    monkeypatch.setattr(sys, "excepthook", lambda *exc: hooked.append(exc))
+
+    def fail() -> None:
+        raise RuntimeError("scikit-image is broken")
+
+    monkeypatch.setattr(skeleton_graph_model, "prewarm_skeletonize", fail)
+    with caplog.at_level(logging.WARNING):
+        make_window(show=False)
+        assert wait(
+            lambda: any("scikit-image is broken" in str(r.exc_info) for r in caplog.records), 5.0
+        )
+        assert QThreadPool.globalInstance().waitForDone(5000)
+    assert hooked == []
+
+
+# ============================================================ the open image and Generate
+def skeleton_rows(editor) -> set[int]:
+    """The rows of the open skeleton that hold a line."""
+    return set(np.flatnonzero(raster(editor).any(axis=1)).tolist())
+
+
+def test_the_open_image_follows_a_finished_generate_run(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    assert skeleton_rows(window.correct_editor) == {110}
+    write_skeleton(project.generated(0), row=60)  # the run rewrote the skeleton
+    bump(project.generated(0))
+
+    window.on_outputs_changed()
+    settle()
+
+    assert skeleton_rows(window.correct_editor) == {60}
+
+
+def test_an_image_with_unsaved_edits_does_not_follow_generate(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    draw_line(editor)
+    edited = raster(editor).copy()
+    write_skeleton(project.generated(0), row=60)
+    bump(project.generated(0))
+
+    window.on_outputs_changed()
+    settle()
+
+    assert np.array_equal(raster(editor), edited) and editor.has_unsaved_changes()
+
+
+def rewrite_generated(project: Project) -> None:
+    """A Generate run rewrote the skeleton of image 0 (one line on row 60)."""
+    write_skeleton(project.generated(0), row=60)
+    bump(project.generated(0))
+
+
+def test_a_drag_in_progress_is_not_cut_off_by_a_finished_generate_run(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    skeleton = editor.layers[SKELETON]
+    editor.request_tool(SKELETON, "connect")
+    editor.router.canvas_press(QPoint(20, 110), Mouse())  # on the line's left endpoint
+    assert skeleton.gesture_active() and not editor.has_unsaved_changes()
+    rewrite_generated(project)
+
+    window.on_outputs_changed()  # the mouse is still held
+    settle()
+
+    assert skeleton.gesture_active() and skeleton_rows(editor) == {110}
+
+
+def test_a_pending_polyline_keeps_its_image_from_following_generate(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    editor = window.correct_editor
+    editor.controls.tool_buttons[(SKELETON, "polyline")].click()
+    click(editor, (40, 125))
+    click(editor, (160, 135))
+    assert editor.layers[SKELETON].draft.pending()
+    rewrite_generated(project)
+
+    window.on_outputs_changed()
+    settle()
+
+    assert editor.layers[SKELETON].draft.pending() and skeleton_rows(editor) == {110}
+
+
+def test_the_image_left_in_correct_does_not_follow_while_another_page_shows(make_window, tmp_path):
+    window, project = in_correct(make_window, tmp_path, 0)
+    enter(window, "Library")
+    assert window.right_panel.currentIndex() != Panel.CORRECT
+    assert window.correct_editor.current_image_path  # still open in the page
+    rewrite_generated(project)
+
+    window.on_outputs_changed()
+    settle()
+
+    assert skeleton_rows(window.correct_editor) == {110}

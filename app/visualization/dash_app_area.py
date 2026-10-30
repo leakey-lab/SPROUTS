@@ -1,187 +1,216 @@
-"""Dash application for root area visualization (F-014 hardened)."""
+"""
+Root-area dashboard (Dash): layout, callbacks and figures (F-014 hardened).
+
+Shares its chrome with the length dashboard (:mod:`.dash_shell`) and its
+aggregates with it (:class:`.dash_data_cache.DataCache` over the area column), so
+every figure is built from cached per-tube / per-position tables and memoized
+(PV-17: the area app used to re-filter the whole frame on every callback).
+
+The Growth Over Time view draws one line per tube and shows its legend as the length
+view does: automatically up to :data:`~.dash_visualizations.AUTO_LEGEND_MAX_TUBES` tubes
+(a 160-entry legend was about 200 ms of each ~660 ms draw, and the hover names each
+tube), and "Toggle Legend" shows or hides it; the choice is kept across views. The button
+floats in the chart's top-left margin on that view only: the view keeps no control strip,
+because a strip opening or closing resizes the chart on screen, a full redraw (measured:
+it took back most of what the hidden legend saves).
+"""
 
 import logging
-import os
 
 import dash
-import dash_bootstrap_components as dbc
-import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, dcc, html
+from dash import Input, Output, State, dcc, html
+from dash.exceptions import PreventUpdate
 
-from app.config import DASH_AREA_PORT
-
-from . import theme
+from . import dash_export, theme
+from .dash_data_cache import DataCache
+from .dash_shell import (
+    LEGEND_STORE_ID,
+    LEGEND_TOGGLE_ID,
+    NO_OPTIONS_SUMMARY,
+    DashboardShell,
+    ShellSpec,
+    ViewOption,
+    browser_figure,
+    clientside_js,
+    create_dash_app,
+    error_outputs,
+    exclusions_note,
+    legend_patch,
+    legend_shown,
+    legend_store,
+    plotted_tube,
+    tube_options,
+    with_uirevision,
+)
+from .dash_visualizations import AUTO_LEGEND_MAX_TUBES, auto_legend, stacked_bar_figure
+from .figure_memo import FigureMemo
 
 theme.use("sprouts")
 
 logger = logging.getLogger(__name__)
 
-# Shared graph-container style to avoid duplication (F-087).
+AREA_SHELL = ShellSpec(
+    title="Root Area — trial overview",
+    controls_label="Tube selection",
+    views=(
+        ViewOption("Totals by Tube", "stacked"),
+        ViewOption("Growth Over Time", "time"),
+        ViewOption("Depth Profile", "profile", has_controls=True),
+    ),
+    plot_filename="root_area_plot",
+    tube_view="profile",
+)
+
 # Fill the chart card completely (card is flex:1 of the 100vh page).
-_GRAPH_STYLE = {
-    "height": "100%",
-    "width": "100%",
-    "overflow": "hidden",
+_GRAPH_STYLE = {"height": "100%", "width": "100%", "overflow": "hidden"}
+_SHOWN = {"display": "block"}
+_HIDDEN = {"display": "none"}
+_FIGURE_MEMO_SIZE = 16
+
+# The chart's box: fills the chart card as the card's own flex child does (.viz-loading),
+# and places "Toggle Legend" over the chart's top-left margin (above the plot, left of the
+# centred title), so showing or hiding the button never resizes the chart.
+_CHART_BOX = {
+    "flex": "1 1 0%",
+    "minHeight": 0,
+    "display": "flex",
+    "flexDirection": "column",
+    "position": "relative",
 }
+_LEGEND_BUTTON = {"position": "absolute", "top": "14px", "left": "16px", "zIndex": 5}
+_LEGEND_BUTTON_SHOWN = {**_LEGEND_BUTTON, "display": "inline-block"}
+_LEGEND_BUTTON_HIDDEN = {**_LEGEND_BUTTON, "display": "none"}
+_LEGEND_TIP = (
+    f"Show or hide the legend (hidden at first for more than {AUTO_LEGEND_MAX_TUBES} "
+    "tubes; the hover names a line's tube)"
+)
+# The button shows with its view, in the browser, in the click's own frame.
+_LEGEND_BUTTON_JS = """
+function(view) {
+    return view === 'time' ? __SHOWN__ : __HIDDEN__;
+}
+"""
+
+
+def _triggered_ids() -> set[str]:
+    """The component ids whose change fired the running callback."""
+    triggered = dash.callback_context.triggered
+    return {t["prop_id"].split(".")[0] for t in triggered} if triggered else set()
 
 
 class DashAppArea:
-    """Manages the Dash application for root area visualization."""
+    """The root-area dashboard: one Dash app over one root_areas.csv."""
 
     def __init__(self, data_processor, save_directory):
         self.data_processor = data_processor
         self.save_directory = save_directory
+        self.data_cache = DataCache(data_processor)
+        self._figures = FigureMemo(_FIGURE_MEMO_SIZE)
 
-        self.app = Dash(
-            __name__,
-            external_stylesheets=[dbc.themes.DARKLY],
-            assets_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets"),
-            suppress_callback_exceptions=True,
-            update_title=None,
-            compress=True,
-        )
-        self.app.index_string = """<!DOCTYPE html><html><head>{%metas%}<title>{%title%}</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-{%favicon%}{%css%}</head><body>{%app_entry%}<footer>{%config%}{%scripts%}{%renderer%}</footer></body></html>"""
-
+        self.shell = DashboardShell(AREA_SHELL)
+        self.app = create_dash_app(__name__, title="SPROUTS — Root Area")
         self._setup_layout()
         self._setup_callbacks()
 
     def _setup_layout(self):
         """Define the Dash app layout."""
-        self.app.layout = html.Div(
-            className="sprouts-app viz-page",
-            children=[
-                # ---- header band ----
-                html.Div(
-                    className="viz-header",
-                    children=[
-                        html.Div(
-                            className="viz-header-left",
-                            children=[
-                                html.Div("INTERACTIVE DASHBOARD", className="viz-eyebrow"),
-                                html.H1("Root Area — trial overview", className="viz-title"),
-                            ],
-                        ),
-                        html.Div(
-                            className="viz-header-right",
-                            children=[
-                                dbc.RadioItems(
-                                    id="view-selector",
-                                    options=[
-                                        {"label": "Stacked Bar View", "value": "stacked"},
-                                        {"label": "Growth Over Time", "value": "time"},
-                                        {"label": "Area Profile by Position", "value": "profile"},
-                                    ],
-                                    value="stacked",
-                                    class_name="btn-group",
-                                    input_class_name="btn-check",
-                                    label_class_name="btn btn-outline-secondary",
-                                ),
-                            ],
-                        ),
-                    ],
+        self.app.layout = self.shell.page(
+            controls=[
+                # Options are static: blanking them made Dash 4's Dropdown drop the
+                # selected tube whenever another view was shown.
+                dcc.Dropdown(
+                    id="tube-selector",
+                    options=tube_options(self.data_cache.tubes),
+                    placeholder="Select Tube",
+                    clearable=False,
+                    className="viz-tube-dropdown",
+                    style=_HIDDEN,
                 ),
-                # ---- collapsible control strip ----
-                html.Div(
-                    className="viz-controls",
-                    children=[
-                        dbc.Button(
-                            [
-                                html.Span("▸", className="viz-controls-caret"),
-                                html.Span("Tube selection"),
-                                html.Span("controls", className="viz-controls-summary"),
-                            ],
-                            id="viz-controls-toggle",
-                            n_clicks=0,
-                            className="viz-controls-toggle",
-                            color="link",
-                        ),
-                        dbc.Collapse(
-                            id="viz-controls-collapse",
-                            is_open=False,
-                            children=html.Div(
-                                className="viz-controls-body",
-                                children=[
-                                    dcc.Dropdown(
-                                        id="tube-selector",
-                                        placeholder="Select Tube",
-                                        className="mb-3",
-                                        style={"display": "none", "fontSize": "16px"},
-                                    ),
-                                ],
-                            ),
-                        ),
-                    ],
-                ),
-                # click-data kept as a hidden callback target; the visible
-                # metric band was an always-empty row and is removed.
-                html.Div(id="click-data", style={"display": "none"}),
-                # ---- chart card: full-bleed, fills remaining space ----
-                html.Div(
-                    className="viz-chart-card",
-                    children=dcc.Loading(
-                        type="default",
-                        color="#5fd6a0",
-                        children=dcc.Graph(
-                            id="main-graph",
-                            className="sprouts-graph-card",
-                            style={"width": "100%"},
-                            config={
-                                "scrollZoom": True,
-                                "doubleClick": "reset",
-                                "showTips": False,
-                                "displayModeBar": True,
-                                "watermark": False,
-                                "responsive": True,
-                                "autosizable": True,
-                                "toImageButtonOptions": {
-                                    "format": "svg",
-                                    "filename": "root_area_plot",
-                                    "scale": 2,
-                                },
-                            },
+            ],
+            chart=html.Div(
+                style=_CHART_BOX,
+                children=[
+                    # Growth Over Time only: shows or hides its legend (as the length view's).
+                    html.Button(
+                        "Toggle Legend",
+                        id=LEGEND_TOGGLE_ID,
+                        n_clicks=0,
+                        className="btn btn-secondary btn-sm",
+                        title=_LEGEND_TIP,
+                        style=(
+                            _LEGEND_BUTTON_SHOWN
+                            if AREA_SHELL.default_view == "time"
+                            else _LEGEND_BUTTON_HIDDEN
                         ),
                     ),
-                ),
-                # no-op Output target for the clientside resize callback
-                dcc.Store(id="viz-resize-dummy"),
-                # Hidden store for caching
-                dcc.Store(id="cached-data"),
-            ],
+                    self.shell.chart_graph(),
+                ],
+            ),
+            stores=[legend_store()],
+            notice=exclusions_note(self.data_processor),
         )
+
+    def _legend_shown(self, choice) -> bool:
+        """Whether the time view shows its legend: the user's choice, else automatic (up to
+        ``AUTO_LEGEND_MAX_TUBES`` tubes, all of which the view draws)."""
+        return legend_shown(choice, auto_legend(self.data_cache.tubes))
+
+    def _profile_tube(self, selected_tube):
+        """The tube the profile view plots: the dropdown's, else the first."""
+        return plotted_tube(self.data_cache.tubes, selected_tube)
+
+    def _controls_summary(self, view, tube) -> str:
+        """One line for the collapsed control strip (PV-15)."""
+        if view == "profile":
+            plotted = self._profile_tube(tube)
+            return f"Tube {plotted}" if plotted is not None else "No tubes"
+        return NO_OPTIONS_SUMMARY
+
+    def _export_table(self, view, tube) -> dash_export.ExportTable | None:
+        """The rows behind ``view`` (PV-16), from the same cached aggregates."""
+        if view in ("stacked", "time"):
+            return dash_export.ExportTable(
+                dash_export.tube_date_totals(self.data_cache),
+                "Total root area per tube and measurement date (sum over positions)",
+                {"tubes": "all", "dates": "all"},
+            )
+        if view == "profile":
+            plotted = self._profile_tube(tube)
+            if plotted is None:
+                return None
+            return dash_export.ExportTable(
+                dash_export.position_means(self.data_cache, plotted),
+                "Mean root area per position and measurement date for one tube",
+                {"tube": str(plotted), "dates": "all"},
+            )
+        return None
 
     def _setup_callbacks(self):
         """Define Dash callbacks."""
-
-        # Collapsible control strip toggle (new; touches only new ids).
-        @self.app.callback(
-            Output("viz-controls-collapse", "is_open"),
-            Input("viz-controls-toggle", "n_clicks"),
-            State("viz-controls-collapse", "is_open"),
+        self.shell.register_callbacks(
+            self.app,
+            summary_inputs=[Input("tube-selector", "value")],
+            summarize=self._controls_summary,
+        )
+        self.shell.register_legend_toggle(
+            self.app, automatic=lambda: auto_legend(self.data_cache.tubes)
+        )
+        self.app.clientside_callback(
+            clientside_js(
+                _LEGEND_BUTTON_JS, shown=_LEGEND_BUTTON_SHOWN, hidden=_LEGEND_BUTTON_HIDDEN
+            ),
+            Output(LEGEND_TOGGLE_ID, "style"),
+            Input("view-selector", "value"),
             prevent_initial_call=True,
         )
-        def toggle_controls(n_clicks, is_open):
-            return not is_open
-
-        # Clientside refit on control-strip toggle / view change. Writes a
-        # no-op Store output; touches NO figure Output.
-        self.app.clientside_callback(
-            """
-            function(_n, _v) {
-                if (window.Plotly) {
-                    var g = document.getElementById('main-graph');
-                    if (g) { try { window.Plotly.Plots.resize(g); } catch (e) {} }
-                }
-                window.dispatchEvent(new Event('resize'));
-                return '';
-            }
-            """,
-            Output("viz-resize-dummy", "data"),
-            Input("viz-controls-collapse", "is_open"),
-            Input("view-selector", "value"),
+        self.shell.register_export(
+            self.app,
+            states=[State("tube-selector", "value")],
+            build_table=self._export_table,
+            source_csv=self.data_processor.csv_path,
+            metric_column=self.data_cache.value_column,
+            metric_slug="root_area",
         )
 
         @self.app.callback(
@@ -195,230 +224,130 @@ class DashAppArea:
             [
                 Input("view-selector", "value"),
                 Input("tube-selector", "value"),
+                Input(LEGEND_STORE_ID, "data"),
             ],
         )
-        def update_visualization(view_type, selected_tube):
-            ctx = dash.callback_context
-            if not ctx.triggered:
-                # Initial load - show stacked view by default
-                return (
-                    self.create_stacked_bar_chart(),
-                    "",
-                    {"display": "none"},
-                    [],
-                    dict(_GRAPH_STYLE, overflow="hidden"),
-                )
-
-            trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-
+        def update_visualization(view_type, selected_tube, legend=None):
+            keep = dash.no_update  # tube-selector options are static (see layout)
+            # A press always stores True or False. None is the page load: the store
+            # re-sends its data as it mounts, and Dash then names only that trigger.
+            if _triggered_ids() == {LEGEND_STORE_ID} and legend is not None:
+                # "Toggle Legend": flip the legend of the time view in place.
+                if view_type != "time":
+                    raise PreventUpdate
+                return legend_patch(self._legend_shown(legend)), keep, keep, keep, keep
             try:
-                if view_type == "stacked":
-                    return (
-                        self.create_stacked_bar_chart(),
-                        "",
-                        {"display": "none"},
-                        [],
-                        _GRAPH_STYLE,
-                    )
-
-                elif view_type == "profile":
-                    tubes = self.data_processor.get_unique_tubes()
-                    tube_options = [{"label": f"Tube {tube}", "value": tube} for tube in tubes]
-
-                    if trigger_id == "view-selector":
-                        if not tubes:
-                            logger.warning("profile view: no tubes available")
-                            return dash.no_update
-                        first_tube = tubes[0]
-                        return (
-                            self.show_area_profile(first_tube),
-                            "",
-                            {"display": "block"},
-                            tube_options,
-                            _GRAPH_STYLE,
-                        )
-
-                    if trigger_id == "tube-selector" and selected_tube:
-                        return (
-                            self.show_area_profile(selected_tube),
-                            "",
-                            {"display": "block"},
-                            tube_options,
-                            _GRAPH_STYLE,
-                        )
-
+                if view_type == "profile":
+                    tube = self._profile_tube(selected_tube)
+                    if tube is None:
+                        logger.warning("profile view: no tubes available")
+                        raise PreventUpdate
+                    figure = with_uirevision(self.show_area_profile(tube), "profile", tube)
+                    tube_style = _SHOWN
                 elif view_type == "time":
-                    return (
-                        self.show_growth_over_time(),
-                        "",
-                        {"display": "none"},
-                        [],
-                        _GRAPH_STYLE,
-                    )
-
-            except (KeyError, IndexError, ValueError) as exc:
-                logger.error("update_visualization(%s): %s", view_type, exc, exc_info=True)
-                return dash.no_update
-            except Exception:  # noqa: BLE001 — last-resort guard
+                    figure = with_uirevision(self.show_growth_over_time(legend), "time")
+                    tube_style = _HIDDEN
+                else:
+                    figure = with_uirevision(self.create_stacked_bar_chart(), "stacked")
+                    tube_style = _HIDDEN
+            except PreventUpdate:
+                raise
+            except Exception as exc:  # noqa: BLE001 -- show the failure instead of a stale chart
                 logger.exception("update_visualization(%s): unexpected error", view_type)
-                return dash.no_update
+                return (*error_outputs(exc), _HIDDEN, keep, _GRAPH_STYLE)
+            # Outside the try, as Dash converted the figure after the callback returned.
+            return browser_figure(figure), "", tube_style, keep, _GRAPH_STYLE
 
-            return dash.no_update
+    # ---- figures (memoized; treat returned figures as read-only) ---------------
 
-    def create_stacked_bar_chart(self):
-        """Create a stacked bar chart showing root area by tube and date."""
-        df = self.data_processor.df
+    def _memoized(self, key: tuple, build):
+        return self._figures.get_or_build((self.data_cache.generation, *key), build)
 
-        try:
-            # Group data by tube and date
-            grouped = df.groupby(["Tube", "Date"])["Area (mm²)"].sum().reset_index()
+    def create_stacked_bar_chart(self) -> go.Figure:
+        """Stacked bars: total root area per tube, one bar segment per date."""
+        return self._memoized(("stacked",), self._stacked_bar_figure)
 
-            # Sort dates chronologically
-            grouped["Date"] = pd.to_datetime(grouped["Date"])
-            dates = sorted(grouped["Date"].unique())
+    def _stacked_bar_figure(self) -> go.Figure:
+        processor = self.data_processor
+        return stacked_bar_figure(self.data_cache, processor.metric_label, processor.unit)
 
-            # Prepare data for plotting
-            tubes = sorted(grouped["Tube"].unique())
-            traces = []
+    def show_area_profile(self, selected_tube) -> go.Figure:
+        """Mean root area per position for one tube, one bar group per date."""
+        return self._memoized(
+            ("profile", selected_tube), lambda: self._area_profile_figure(selected_tube)
+        )
 
-            # Pivot once (tube x date) to avoid O(dates*tubes) per-cell filtering.
-            pivot = (
-                grouped.pivot(index="Tube", columns="Date", values="Area (mm²)")
-                .reindex(index=tubes)
-                .fillna(0)
-            )
-
-            # Create a bar trace for each date
-            for date in dates:
-                trace_data = pivot[date].to_numpy()
-
-                traces.append(
-                    go.Bar(
-                        name=date.strftime("%Y-%m-%d"),
-                        x=[f"Tube {int(tube)}" for tube in tubes],
-                        y=trace_data,
-                        text=[f"{v:.2f}" for v in trace_data],
-                        textposition="auto",
-                        hovertemplate=theme.hover(
-                            "%{x}",
-                            [
-                                ("Date", date.strftime("%Y-%m-%d")),
-                                ("Area", "%{y:.2f} mm²"),
-                            ],
-                        ),
-                    )
-                )
-
-            fig = go.Figure(data=traces)
-
-            fig.update_layout(
-                barmode="stack",
-                title_text="Root Area Growth by Tube and Date",
-                xaxis_title_text="Tube",
-                yaxis_title_text="Total Area (mm²)",
-                legend_title_text="Measurement Date",
-                hovermode="x unified",
-            )
-
-            return fig
-
-        except (KeyError, ValueError) as exc:
-            logger.error("create_stacked_bar_chart: %s", exc, exc_info=True)
-            return go.Figure()
-        except Exception:  # noqa: BLE001
-            logger.exception("create_stacked_bar_chart: unexpected error")
-            return go.Figure()
-
-    def show_area_profile(self, selected_tube):
-        """Generate area profile by position for a selected tube."""
-        df = self.data_processor.df
+    def _area_profile_figure(self, tube) -> go.Figure:
+        means = dash_export.position_means(self.data_cache, tube)
+        value = f"Mean {self.data_cache.value_column}"
+        positions = sorted(means["Position"].unique())
+        # grouped: every date's bar of a position stands side by side
+        bars = len(positions) * means["Date"].nunique()
+        # a date's colour is its place among ALL dates of the trial, not among this tube's
+        days = [date.strftime("%Y-%m-%d") for date in self.data_cache.dates]
+        ramp = theme.date_colors(len(days))
         fig = go.Figure()
-
-        try:
-            tube_data = df[df["Tube"] == selected_tube].copy()
-            dates = sorted(tube_data["Date"].unique())
-
-            colors = px.colors.qualitative.Plotly
-
-            for i, date in enumerate(dates):
-                date_data = tube_data[tube_data["Date"] == date]
-                position_data = date_data.groupby("Position")["Area (mm²)"].mean().reset_index()
-
-                if not position_data.empty:
-                    fig.add_trace(
-                        go.Bar(
-                            x=[f"L{int(pos)}" for pos in position_data["Position"]],
-                            y=position_data["Area (mm²)"],
-                            name=date.strftime("%Y-%m-%d"),
-                            marker_color=colors[i % len(colors)],
-                            text=position_data["Area (mm²)"].round(2),
-                            textposition="auto",
-                            hovertemplate=theme.hover(
-                                "Position: %{x}",
-                                [
-                                    ("Area", "%{y:.2f} mm²"),
-                                    ("Date", date.strftime("%Y-%m-%d")),
-                                ],
-                            ),
-                        )
-                    )
-
-            fig.update_layout(
-                title_text=f"Root Area Profile - Tube {int(selected_tube)}",
-                xaxis_title_text="Position",
-                yaxis_title_text="Root Area (mm²)",
-                legend_title_text="Measurement Dates",
-                barmode="group",
+        for day, rows in means.groupby("Date", sort=True):
+            colour = ramp[days.index(day)]
+            fig.add_trace(
+                go.Bar(
+                    x=[f"L{int(pos)}" for pos in rows["Position"]],
+                    y=rows[value],
+                    name=day,
+                    marker_color=colour,
+                    **theme.bar_labels(rows[value].round(2), bars, colour),
+                    hovertemplate=theme.hover(
+                        "Position: %{x}", [("Area", "%{y:.2f} mm²"), ("Date", day)]
+                    ),
+                )
             )
-        except (KeyError, ValueError) as exc:
-            logger.error("show_area_profile(tube=%s): %s", selected_tube, exc, exc_info=True)
-        except Exception:  # noqa: BLE001
-            logger.exception("show_area_profile(tube=%s): unexpected error", selected_tube)
-
+        fig.update_layout(
+            title_text=f"Root Area Depth Profile - Tube {int(tube)}",
+            xaxis_title_text="Position (L)",
+            yaxis_title_text="Root Area (mm²)",
+            legend_title_text="Measurement date",
+            barmode="group",
+        )
+        # Shallow to deep. Plotly's default category order is first appearance, so
+        # a later date that starts higher (L5 after L10...) put L5 at the deep end.
+        fig.update_xaxes(categoryorder="array", categoryarray=[f"L{int(p)}" for p in positions])
         return fig
 
-    def show_growth_over_time(self):
-        """Generate growth over time figure."""
-        df = self.data_processor.df
-        fig = go.Figure()
-        try:
-            for tube in self.data_processor.get_unique_tubes():
-                tube_data = df[df["Tube"] == tube].sort_values("Date")
-                grouped = tube_data.groupby("Date")["Area (mm²)"].sum().reset_index()
-                fig.add_trace(
-                    go.Scatter(
-                        x=grouped["Date"],
-                        y=grouped["Area (mm²)"],
-                        mode="lines+markers",
-                        name=f"Tube {int(tube)}",
-                        hovertemplate=theme.hover(
-                            "Tube %{fullData.name}",
-                            [
-                                ("Date", "%{x|%Y-%m-%d}"),
-                                ("Total Area", "%{y:.2f} mm²"),
-                            ],
-                        ),
-                    )
-                )
+    def show_growth_over_time(self, show_legend: bool | None = None) -> go.Figure:
+        """Total root area per tube over time, one line per tube. ``show_legend``: the
+        user's choice; None: automatic (shown up to ``AUTO_LEGEND_MAX_TUBES`` tubes)."""
+        legend = self._legend_shown(show_legend)
+        return self._memoized(("time", legend), lambda: self._growth_over_time_figure(legend))
 
-            fig.update_layout(
-                title_text="Root Area Growth Over Time",
-                xaxis_title_text="Date",
-                yaxis_title_text="Total Area (mm²)",
+    def _growth_over_time_figure(self, show_legend: bool = True) -> go.Figure:
+        """The time view's figure; shown, the legend is the theme's (the figure as before
+        the toggle), hidden it leaves no empty band beside the plot."""
+        # Plain dicts, not validated (_validate=False): add_trace validated every trace and
+        # then the figure again (57 ms for 160 tubes), the dicts validated once 18 ms, now
+        # 6 ms. The same JSON (tests/test_viz_data_time_view.py compares it).
+        hovertemplate = theme.hover(
+            "Tube %{fullData.name}",
+            [("Date", "%{x|%Y-%m-%d}"), ("Total Area", "%{y:.2f} mm²")],
+        )
+        traces = []
+        for tube in self.data_cache.tubes:
+            totals = self.data_cache.get_tube_totals(tube)
+            traces.append(
+                {
+                    "type": "scatter",
+                    "x": totals.index.to_numpy(),
+                    "y": totals.to_numpy(),
+                    "mode": "lines+markers",
+                    "name": f"Tube {int(tube)}",
+                    "hovertemplate": hovertemplate,
+                }
             )
-            return fig
-        except (KeyError, ValueError) as exc:
-            logger.error("show_growth_over_time: %s", exc, exc_info=True)
-            return go.Figure()
-        except Exception:  # noqa: BLE001
-            logger.exception("show_growth_over_time: unexpected error")
-            return go.Figure()
-
-    def run_server(self):
-        """Run the Dash server (legacy entry point — use DashServerThreadArea in production)."""
-        try:
-            self.app.run(debug=False, port=DASH_AREA_PORT, host="127.0.0.1", threaded=True)
-        except OSError as exc:
-            logger.error("run_server: port %d unavailable: %s", DASH_AREA_PORT, exc)
-        except Exception:  # noqa: BLE001
-            logger.exception("run_server: unexpected error")
+        layout = {
+            "title": {"text": "Root Area Growth Over Time"},
+            "xaxis": {"title": {"text": "Date"}},
+            "yaxis": {"title": {"text": "Total Area (mm²)"}},
+        }
+        if not show_legend:
+            layout["showlegend"] = False
+            layout["margin"] = {"r": theme.margin_right(False)}
+        return go.Figure(data=traces, layout=layout, _validate=False)

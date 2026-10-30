@@ -7,12 +7,19 @@
 # Dev/test tooling lives in requirements-dev.txt.
 #
 # ---------------------------------------------------------------------------
-# PyTorch (GPU): NOT pinned here on purpose. The working environment uses a
-# CUDA 12.8 build:
-#     torch==2.8.0.dev20250325+cu128
-#     torchvision==0.22.0.dev20250326+cu128
-# Install it from the matching CUDA index BEFORE the packages below, e.g.:
-#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# PyTorch: NOT pinned here on purpose. Install the build that matches your GPU
+# driver (or the CPU build) BEFORE the packages below -- see README
+# "Installation". Recommended (Python 3.14, verified on the index 2026-10-28):
+#     pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu132
+#     (CUDA 13.2 build, NVIDIA driver of the 580 series or newer; CPU only: same versions,
+#     --index-url https://download.pytorch.org/whl/cpu; macOS: the same versions from PyPI)
+#     Supported GPUs: Turing (RTX 20 series, GTX 16xx) and newer. The CUDA 13 builds have no
+#     kernels for older ones (Maxwell, Pascal, Volta): use the CPU build there.
+# The results published so far were produced with the nightly torch 2.8.0.dev20250325+cu128 /
+# torchvision 0.22.0.dev20250326+cu128 (cuDNN 9.7.1), which is no longer downloadable.
+# torch 2.14.1 reproduces its CPU outputs bit for bit; on the GPU, its cuDNN 9.24 moves 1-4
+# pixels in some masks and some raw skeleton prediction values by one level, the measured
+# skeletons unchanged (CHANGELOG "Scientific output changes", docs/MODELS.md).
 # Pinning torch in this file would let pip pull a CPU wheel and silently disable
 # GPU inference. Keep it managed separately.
 # ---------------------------------------------------------------------------
@@ -22,22 +29,23 @@ PyQt6==6.11.0
 PyQt6-WebEngine==6.11.0
 
 # --- Imaging / scientific ---
-numpy==2.2.6
-scipy==1.15.3
-scikit-image==0.25.2
-opencv-python==4.13.0.92
-pillow==12.2.0
+numpy==2.5.4
+scipy==1.18.1
+scikit-image==0.26.0
+opencv-python-headless==5.0.0.93
+pillow==13.0.0
 
 # --- Data ---
-pandas==2.3.3
+pandas==3.1.0
 
 # --- Visualization (Dash pulls Flask/Werkzeug/plotly transitively) ---
-dash==4.1.0
+# dash 4.4.1 loses the zoom when a callback returns a new figure with the same uirevision
+# (plotly/dash#4093); app/assets/sprouts-uirevision.js keeps it (tests/test_viz_dash_uirevision.py).
+dash==4.4.1
 dash-bootstrap-components==2.0.4
-plotly==6.7.0
+# plotly.py builds figures for one plotly.js version: upgrade it together with the vendored
+# app/assets/plotly-basic.min.js (app/assets/THIRD_PARTY.md, tests/test_viz_dash_plotly_bundle.py).
+plotly==7.1.0
 
 # --- Networking ---
 requests==2.34.2
-
-# --- Windows integration (PyInstaller builds, win shell) ---
-pywin32==308; sys_platform == "win32"

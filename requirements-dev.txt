@@ -1,6 +1,8 @@
 # Development & CI dependencies (not required to run the app)
-pytest>=8.0
-ruff>=0.15
-black>=24.0
-isort>=5.13
-pre-commit>=3.7
+pytest>=9.2
+ruff>=0.17.3  # lint, import sort and format (black/isort are not used)
+pre-commit>=4.7
+# Read by the FAIR metadata tests (tests/test_fair_*.py)
+packaging>=26.3
+pyyaml>=6.0.3
+setuptools>=84.2  # reads the PEP 639 licence fields (tests/test_fair_packaging.py)

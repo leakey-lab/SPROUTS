@@ -1,0 +1,230 @@
+"""
+Palette-PNG store for ground-truth (GT) tracings (``gt/<stem>.png``).
+
+Each tracing is an 8-bit palette PNG whose pixel value is the class id
+(0 = background, 1-254 = registry classes, 255 = Ignore). The palette gives
+every image viewer the tracing in class colours for free; a PNG text chunk
+(``app.config.GT_META_CHUNK``) records the file's own id-to-key map and which
+classes the annotator has reviewed, so a file is self-describing even before
+it is matched against the current registry (see
+``docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`` §1).
+
+No Qt dependency: this module is pure I/O over Pillow + numpy (OpenCV only to count
+ids), read/written
+through Python file handles (so non-ASCII Windows paths work), and writes go
+through :func:`app.io_utils.atomic_write_bytes` (temp file, fsync, then
+``os.replace`` with a lock retry).
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+
+import cv2
+import numpy as np
+from PIL import Image, PngImagePlugin
+
+from app.config import GT_BACKGROUND_ID, GT_DIRNAME, GT_IGNORE_ID, GT_META_CHUNK, GT_UNKNOWN_COLOR
+from app.gt.registry import Registry
+from app.io_utils import atomic_write_bytes
+
+logger = logging.getLogger(__name__)
+
+_VALID_MODES = ("P", "L")
+# cv2.calcHist counts in float32, exact up to 2**24 per value: arrays up to this many
+# pixels are counted by it (about 10x faster than np.bincount), larger ones by np.bincount.
+_EXACT_HIST_MAX = 1 << 24
+
+
+class GtFileError(ValueError):
+    """Raised for a GT PNG that cannot be read: wrong mode or bad metadata chunk."""
+
+
+@dataclass
+class Tracing:
+    """One image's GT: per-pixel class ids plus the annotator's review state.
+
+    ``ids`` is an ``(h, w)`` uint8 array (0 background, 1-254 class ids, 255
+    Ignore) at the source image's resolution. ``reviewed`` holds the keys of
+    classes checked on this image ("looked for it"), and ``file_classes`` the
+    id -> key map the file was written with.
+    """
+
+    ids: np.ndarray  # (h, w) uint8
+    reviewed: frozenset[str] = frozenset()
+    file_classes: dict[int, str] = field(default_factory=dict)  # id -> key from the file
+
+
+def _present_ids(ids: np.ndarray) -> list[int]:
+    """The distinct values of uint8 ``ids``, ascending: a histogram instead of a sort.
+
+    ``cv2.calcHist`` counts in float32, but only "more than zero" is read here, which
+    float32 keeps at any count (about 25x faster than ``np.unique`` at 2048 x 1536).
+    """
+    if ids.size == 0:
+        return []
+    hist = cv2.calcHist([np.ascontiguousarray(ids, dtype=np.uint8)], [0], None, [256], [0, 256])
+    return np.flatnonzero(hist.ravel()).tolist()
+
+
+def histogram(ids: np.ndarray) -> np.ndarray:
+    """Pixels per value (256 int64 counts) of a uint8 array of any shape; exact."""
+    if ids.size == 0:
+        return np.zeros(256, np.int64)
+    if ids.size > _EXACT_HIST_MAX:
+        return np.bincount(ids.ravel(), minlength=256).astype(np.int64)
+    if ids.ndim != 2:
+        ids = np.ascontiguousarray(ids).reshape(1, -1)
+    return cv2.calcHist([ids], [0], None, [256], [0, 256]).ravel().astype(np.int64)
+
+
+def _hex_to_rgb(color: str) -> list[int]:
+    return [int(color[i : i + 2], 16) for i in (1, 3, 5)]
+
+
+def gt_dir(project_dir: str) -> str:
+    """``<project_dir>/gt``: the folder holding the tracings and ``classes.json``."""
+    return os.path.join(project_dir, GT_DIRNAME)
+
+
+def gt_path(image_path: str) -> str:
+    """``<project_dir>/gt/<stem>.png`` for an image at ``image_path``."""
+    project_dir = os.path.dirname(image_path)
+    stem = os.path.splitext(os.path.basename(image_path))[0]
+    return os.path.join(gt_dir(project_dir), f"{stem}.png")
+
+
+def empty_tracing(height: int, width: int) -> Tracing:
+    """An all-background (id 0) tracing of ``height`` x ``width`` pixels, nothing reviewed."""
+    return Tracing(ids=np.zeros((height, width), dtype=np.uint8))
+
+
+def write_tracing(path: str, tracing: Tracing, registry: Registry) -> None:
+    """Atomically write ``tracing`` as an 8-bit palette PNG at ``path``.
+
+    Pixel value = class id; the palette holds each registry class colour (ids
+    painted but unknown to ``registry`` get ``GT_UNKNOWN_COLOR``); background
+    (0) is the transparent entry. The ``GT_META_CHUNK`` text chunk records the
+    id -> key map and the reviewed keys. Raises ``GtFileError`` for non 2-D ids
+    and ``OSError`` if the file cannot be written (any old file is kept), e.g.
+    :class:`app.io_utils.FileLockedError` while another program holds it open.
+    """
+    ids = np.ascontiguousarray(tracing.ids, dtype=np.uint8)
+    if ids.ndim != 2:
+        raise GtFileError(f"GT ids must be 2-D, got shape {ids.shape}")
+    palette = [0, 0, 0] * 256
+    unknown = _hex_to_rgb(GT_UNKNOWN_COLOR)
+    for i in _present_ids(ids):
+        if i != GT_BACKGROUND_ID:
+            palette[3 * i : 3 * i + 3] = unknown
+    for c in registry.classes:
+        palette[3 * c.id : 3 * c.id + 3] = _hex_to_rgb(c.color)
+    image = Image.fromarray(ids, mode="P")
+    image.putpalette(palette)
+    meta = {
+        "v": 1,
+        "classes": {str(c.id): c.key for c in registry.classes},
+        "reviewed": sorted(tracing.reviewed),
+    }
+    info = PngImagePlugin.PngInfo()
+    info.add_text(GT_META_CHUNK, json.dumps(meta))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG", pnginfo=info, transparency=GT_BACKGROUND_ID)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Hand-made data: the shared durable writer, with its lock retry (R8).
+    atomic_write_bytes(path, buf.getvalue(), durable=True)
+
+
+def read_tracing(path: str) -> Tracing | None:
+    """Read a GT PNG. Returns ``None`` if missing; raises ``GtFileError`` if unreadable (a file
+    Pillow refuses as too large or broken included)."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            image = Image.open(fh)
+            image.load()
+            if image.mode not in _VALID_MODES:
+                raise GtFileError(f"Unsupported GT PNG mode in {path}: {image.mode}")
+            ids = np.array(image, dtype=np.uint8)
+            text = getattr(image, "text", {}) or {}
+    except GtFileError:
+        raise
+    except Image.DecompressionBombError as exc:  # over twice Image.MAX_IMAGE_PIXELS
+        raise GtFileError(str(exc)) from exc  # Pillow's text, as the export has always listed it
+    except (OSError, ValueError, SyntaxError) as exc:  # SyntaxError: Pillow's "broken PNG file"
+        raise GtFileError(f"Could not read GT file {path}: {exc}") from exc
+
+    raw_meta = text.get(GT_META_CHUNK)
+    if raw_meta is None:
+        return Tracing(ids=ids, reviewed=frozenset(), file_classes={})
+
+    try:
+        meta = json.loads(raw_meta)
+        raw_classes = meta.get("classes", {})
+        file_classes = {int(k): str(v) for k, v in raw_classes.items()}
+        reviewed = frozenset(str(k) for k in meta.get("reviewed", []))
+    except (json.JSONDecodeError, ValueError, AttributeError, TypeError, RecursionError) as exc:
+        # RecursionError: JSON nested deeper than the recursion limit (R4).
+        raise GtFileError(f"Bad GT metadata chunk in {path}: {exc}") from exc
+
+    return Tracing(ids=ids, reviewed=reviewed, file_classes=file_classes)
+
+
+def align_to_registry(tracing: Tracing, registry: Registry) -> tuple[Tracing, list[str], bool]:
+    """Remap ``tracing.ids`` from the file's id->key map onto ``registry`` ids.
+
+    Per spec §1.4: a file id with a key the registry knows becomes that
+    class's registry id; a file id whose key the registry does not know, or
+    an id missing from both the file's map and the registry, becomes Ignore
+    (255) with a warning naming the key/id; 0 always stays 0.
+    """
+    warnings: list[str] = []
+    lut = np.arange(256, dtype=np.uint8)
+
+    present = _present_ids(tracing.ids)
+    for old_id in present:
+        if old_id == GT_BACKGROUND_ID:
+            continue
+        key = tracing.file_classes.get(old_id)
+        if key is not None:
+            try:
+                lut[old_id] = registry.by_key(key).id
+            except KeyError:
+                lut[old_id] = GT_IGNORE_ID
+                warnings.append(f"File id {old_id} has unknown key {key!r}; mapped to Ignore")
+        elif registry.by_id(old_id) is not None:
+            lut[old_id] = old_id
+        else:
+            lut[old_id] = GT_IGNORE_ID
+            warnings.append(
+                f"File id {old_id} has no key mapping and is unknown to the registry; "
+                "mapped to Ignore"
+            )
+
+    # The ids change exactly where a present id maps elsewhere (a new array either way).
+    changed = any(int(lut[i]) != i for i in present)
+    ids = np.ascontiguousarray(tracing.ids, dtype=np.uint8)
+    new_ids = cv2.LUT(ids, lut) if changed else ids.copy()
+    new_tracing = Tracing(
+        ids=new_ids,
+        reviewed=tracing.reviewed,
+        file_classes=tracing.file_classes,
+    )
+    return new_tracing, warnings, changed
+
+
+def present_keys(tracing: Tracing, registry: Registry) -> set[str]:
+    """Keys of classes that have at least one pixel, Ignore excluded."""
+    present_ids = set(_present_ids(tracing.ids))
+    return {c.key for c in registry.classes if not c.is_ignore and c.id in present_ids}
+
+
+def is_complete(tracing: Tracing, registry: Registry) -> bool:
+    """True once every active, non-Ignore class has been reviewed."""
+    required = {c.key for c in registry.labelled()}
+    return required.issubset(tracing.reviewed)

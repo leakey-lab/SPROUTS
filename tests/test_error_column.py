@@ -27,7 +27,7 @@ def test_error_column_persisted_and_dataprocessor_tolerates_it(tmp_path):
             "Length (mm)": round(float(info_pos), 2),
         }
 
-    # Failure handler mirrors process_single_image's failure dict (sets 'Error').
+    # Failure handler mirrors length_row's failure dict (sets 'Error').
     def safe_worker(name, path):
         try:
             return worker(name, path)
@@ -66,3 +66,33 @@ def test_error_column_persisted_and_dataprocessor_tolerates_it(tmp_path):
     dp = DataProcessor(str(csv_path))
     assert list(dp.get_unique_tubes()) == [1]
     assert dp.get_unique_positions() == [10, 20]
+
+
+def _fake_png(tmp_path):
+    p = tmp_path / "deep" / "dir" / "x_T1_L1_fake.png"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"not a png")
+    return p
+
+
+def test_an_unreadable_file_names_only_the_file(tmp_path):
+    from app.inference import metrics
+
+    p = _fake_png(tmp_path)
+    assert metrics.length_row("x", str(p))["Error"] == "Could not read image: x_T1_L1_fake.png"
+    assert metrics.area_row("x", str(p))["Error"] == "Could not read mask: x_T1_L1_fake.png"
+
+
+def test_an_os_error_loses_its_folder(tmp_path, monkeypatch):
+    from app.inference import metrics
+
+    p = _fake_png(tmp_path)
+
+    def boom(path, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", str(p))
+
+    monkeypatch.setattr(metrics, "preprocess_image", boom)
+    error = metrics.length_row("x", str(p))["Error"]
+    assert "x_T1_L1_fake.png" in error
+    assert str(tmp_path) not in error
+    assert repr(str(tmp_path))[1:-1] not in error

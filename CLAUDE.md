@@ -1,12 +1,20 @@
 # CLAUDE.md — Root-Mask-and-Skeletons
 
-Desktop app (**PyQt6 + PyTorch**, Python 3.10) for **plant-root phenotyping**
-from minirhizotron images. Pipeline:
+Desktop app (**PyQt6 + PyTorch**, Python 3.14) for **plant-root phenotyping**
+from minirhizotron images. Two model branches, both from the ORIGINAL image
+(the skeletonizer never reads masks, so mask corrections change area only):
 
 ```
-image → ResNet mask → manual mask trace → Pix2Pix skeleton →
-skeleton-correction GUI → root length (mm) & area (mm²) → CSV → Dash/Plotly viz
+image → ResNet mask      → Correct (mask layer)     → root area (mm²)   ┐
+image → Pix2Pix skeleton → Correct (skeleton layer) → root length (mm) ┴→ CSV (+ provenance) → Dash/Plotly viz
 ```
+(Vocabulary: model output is a **prediction**, a human-saved result is **GT**; Correct is ONE
+editor with three layers, Mask `M` / Skeleton `L` / Classes `G`; every save goes to `gt/`,
+predictions are never overwritten. The Classes layer is independent of the other two and
+is never measured. Correct edits the mask and skeleton of an image on one canvas and saves edits as GT:
+`gt/mask/<stem>.png`, `gt/skeletons/<stem>.png`. Measure reads GT first for both metrics —
+the GT file where valid, else the prediction; the CSVs' last column `Source` says `gt` /
+`prediction` — owner decision O1, built by WG-T8 (`app/inference/measure_sources.py`).)
 
 See `README.md` for the user-facing overview and calibration math. This file is
 the agent contract: how to run things, where things live, and the conventions to
@@ -24,6 +32,17 @@ follow.
 - PyTorch is installed **separately** from `requirements.txt` so the build
   matches the local CUDA toolkit (pip won't silently swap in a CPU wheel). See
   README "Installation".
+- The venv is Python 3.14 with torch 2.14.1+cu132 (cuDNN 9.24). Its GPU predictions differ
+  from the published results' (nightly 2.8.0.dev20250325+cu128, cuDNN 9.7.1): on the 40
+  test photos, 11 masks in 1-4 pixels and 6 raw skeleton predictions in up to 25 pixels by
+  one intensity level, the measured skeletons unchanged, 3 areas by 0.01 mm² (CHANGELOG
+  "Scientific output changes" lists the files). On the CPU it reproduces the nightly's CPU
+  outputs bit for bit; Measure and the dashboards are identical. Supported GPUs: Turing
+  (RTX 20 series) and newer only (owner decision 2026-10-28; the CUDA 13 builds have no
+  older kernels). The previous venv lives outside the repo, in `D:/sprouts-venvs/venv-py310`
+  (a renamed venv inside the repo would not be git-ignored): Python 3.10.11 with the
+  nightly torch 2.8.0.dev20250325+cu128 that produced the published results (no longer
+  downloadable). Never delete it; the RQv2 benchmark's re-runs need it too.
 
 ---
 
@@ -36,70 +55,94 @@ follow.
 # Tests (Qt needs an offscreen platform in headless/CI)
 $env:QT_QPA_PLATFORM = 'offscreen'; ./venv/Scripts/python.exe -m pytest
 
-# Lint / format (configured in pyproject.toml — line-length 100, py310)
-./venv/Scripts/python.exe -m ruff check .
-./venv/Scripts/python.exe -m black .
-./venv/Scripts/python.exe -m isort .
+# Lint + import sort + format: ruff only (pyproject.toml — line-length 100, py314).
+# Same tools pre-commit runs; black/isort are not used (they fight ruff format).
+./venv/Scripts/python.exe -m ruff check --fix .
+./venv/Scripts/python.exe -m ruff format .
 ```
+
+- Scripts that build a window or an editor page must delete it before the `QApplication`
+  goes, or the process can end in an access violation (about 1 run in 30):
+  `from tests.qt_teardown import delete_widgets`, then `delete_widgets([page])` as the last
+  step. `main.main` and the test suite already do this.
 
 - Test suite pins the scientific calibration (length/area), skeleton
   vectorization, the CSV schema, and an import-smoke of every app module.
-- CI: `.github/workflows/ci.yml` runs that suite on push. Two CI gotchas already
+- CI: `.github/workflows/ci.yml` runs that suite on pushes to `main`, `v3`, `refactor/**`,
+  `feat/**` and `fix/**` and on pull requests, on Ubuntu, Windows and macOS. Two CI gotchas already
   fixed (memory `ci-deps-install-gotchas`): `requirements.txt` must stay UTF-8
-  (was UTF-16), and `pywin32` is gated to `platform_system == "Windows"` (no
-  Linux wheel). `.pre-commit-config.yaml` mirrors the lint/format hooks.
-- Model checkpoints are **not** committed — place under `checkpoints/`
+  (was UTF-16), and `pywin32` was removed (O21: no Windows-only package; OpenCV is
+  `opencv-python-headless`). `.pre-commit-config.yaml` mirrors the lint/format hooks.
+- Model checkpoints are **not** committed (they are published as a Zenodo record, `docs/MODELS.md`;
+  `scripts/fetch_models.py` downloads and verifies them): place them under `checkpoints/`
   (`mask_weights/best_mask_model_V5.pth`, `skeletonizer/latest_net_G.pth`).
 
 ---
 
 ## Architecture map
 
-Entry: `main.py` — sets Qt6 D3D11 RHI + ANGLE flags (WebEngine stability, see
-`gles3-error-from-disable-gpu`), loads `resources/themes/dark_theme.qss`, applies
-the SPROUTS dark palette, opens `MainWindow`.
+Entry: `main.py` — sets the Qt / Chromium start-up flags per OS through the Qt-free
+`app/qt_environment.py` (Windows: D3D11 RHI + ANGLE, see `gles3-error-from-disable-gpu`;
+Linux / macOS: Qt defaults, Chromium sandbox off only as root, macOS `QT_FONT_DPI=96`),
+sets `KMP_BLOCKTIME=0` before torch loads unless the user set it (idle OpenMP workers
+sleep; scripts that skip `main.py` keep the old wait), sets Fusion off Windows and the
+desktop file name `sprouts`, loads
+`resources/themes/dark_theme.qss`, applies the SPROUTS dark palette, opens `MainWindow`.
 
 | Area | Path | Notes |
 |---|---|---|
-| Config | `app/config.py` | **Single source of truth**: `Calibration` (FOV 18×13 mm), ports, paths, batch sizes. Change FOV here only. |
-| Inference | `app/inference/` | `metrics.py` = shared length+area primitives (de-duplicated); `skeleton_inference.py` = Pix2Pix; ResNet mask inference; `runtime.py` = shared GPU auto-tuner (device/autocast/channels_last) + singleton skeleton-model cache. |
-| Handlers | `app/handlers/` | Batch orchestration on `QThread` (skeleton, mask-gen, root-length/area). Keep heavy work off the GUI thread. |
-| GUI | `app/gui/` | PyQt6 widgets. `MainWindow` orchestrates and **delegates** to `ui_panels`, `file_tree_manager`, `visualization_manager`. SPROUTS guided shell: titlebar / 7-stage ribbon / action bar / `MetricsBar`. |
-| Editors | `app/gui/` | `MaskTracingInterface` (interface + graphics view + drawing mixin + cursor) and `SkeletonCorrectionInterface` (interface + view + `SkeletonCorrectionModel`) are **isolated** editor streams. |
-| Visualization | `app/visualization/` | Dash/Plotly length + area dashboards, `DataProcessor` / `DataCache`, embedded via `QWebEngineView`. |
-| Mask model | `app/mask_model/` | ResNet segmentation (`EnhancedResnetGenerator`, SE/`DualAttention` blocks). |
+| Config | `app/config.py`, `app/settings.py` | **Single source of truth**: `Calibration` (default FOV 18×13.5 mm; a project can set its own in `sprouts_project.json`, read by `app/calibration.py`), ports, paths, folder names, batch sizes. Change the default FOV here only. Must not import torch (lazy `SKELETON_BATCH_SIZE`). User settings: `app/settings.py` `app_settings()` is the only `QSettings` constructor (the user's store; a fresh `MemorySettings` on the offscreen platform, so headless tests and scripts never touch the user's settings; `tests/test_settings_factory.py`). |
+| Qt-free core | `app/project_layout.py`, `naming.py`, `io_utils.py`, `provenance.py`, `models.py`, `user_paths.py`, `design/tokens.py`, `editing/`, `imaging/`, `masks/`, `enhancement.py`, `read_ahead_cache.py` | Project folder conventions (`project_layout_of`: the one way the handlers and the window find the open project), the one file-name parser, atomic + unicode-safe I/O, provenance sidecars, model SHA-256 registry, per-user dirs, design tokens, undo history + the cross-layer `EditJournal` (stdlib only), the plane documents of the Correct raster layers (`editing/planes.py`: `PlaneDocument`, `SavedPlane`, `planes_equal`), the image pyramid of smooth zoom and the skeleton's vector links (`imaging/skeleton_vectors.py`), mask store, the bounded cache both read-aheads share (Library + Correct). Unit-testable; no PyQt6/torch at import. |
+| Inference | `app/inference/` | `metrics.py` = shared length+area primitives (de-duplicated); `measure_sources.py` = GT-first resolver (which file each image is measured from; decided on the Measure job's worker); `skeleton_inference.py` = Pix2Pix; ResNet mask inference; `runtime.py` = shared GPU auto-tuner (device / TF32 precision / channels_last; no autocast, cuDNN deterministic by default) + singleton skeleton-model cache. |
+| Handlers | `app/handlers/` | Batch orchestration: threads subclass `GuardedThread` (`app/workers.py`: error boundary + cancel), the only `QThread` base of the app (no subclass with its own `run()`, no `QThread` with a parent: `tests/test_workers_thread_keeper.py`). `app/workers.py` also keeps every `QThread` from `start()` until Qt's own `finished` (`keep`, `release_qthread`, `stop_all` on `aboutToQuit`) and starts every pool job (`start_pool_job`; torch refuses a pool thread: `tests/test_workers_pool_jobs.py`). `JobRegistry` (`main_window.jobs`) runs one batch job at a time; progress goes through `main_window.feedback` (`UiFeedback`, `app/feedback.py`). Every `.exec()` of a dialog and every self-freeing box goes through `app/dialogs.py` (`run_modal`, `show_transient`; `tests/test_dialogs.py`). Imports nothing from `app.gui` (the window imports the handlers; `tests/test_layering_contract.py`, which keeps `app/workers.py`, `app/feedback.py`, `app/settings.py` and `app/dialogs.py` layer-neutral). Generate writes predictions only (`mask/`, `skeletons/`) and never reads or touches `gt/`. |
+| GUI | `app/gui/` | PyQt6 widgets. `MainWindow` (`main_window.py`) is composed from the parts in `app/gui/window/`: `navigator` (library browsing, arrow debounce, PgDn), `project_loader` (open folder, scan outcomes, recents), `metrics` (`MetricsController`, the one stateful part, held as `window.metrics`), `editors` (page switching, editor reports), `stages` (stage changes, status summary, Visualize entry), `job_buttons`, `lifecycle` (closing), `body` (widgets, toast chrome), `_common`. Stateless parts are functions attached in the class body under their old names (no call hop; slots stay window methods): new window logic goes into a part, and `tests/test_shell_window_split_surface.py` pins the API surface. `MainWindow` orchestrates and **delegates** to `library_index` (O(1) tree index, search, navigation; `neighbours` / `position_of` feed the read-aheads and the position chip), `ui_panels`, `visualization_manager`, `shell_chrome` (`ShellTopbar`, `StatusLine`; five stages Library · Generate · Correct · Measure · Visualize, `Alt+1`…`Alt+5`), `shortcuts` (single key registry → F1 sheet; `stage_keys()` / `build_registry(platform)`, key texts through the Qt-free `key_text.platform_keys` (Cmd / Option on macOS); scopes Global, Library, Correct), `window_state`, `about_dialog`, `recent_projects`, `device_check` (status-line device chip resolved off the GUI thread; `SPROUTS_DEVICE_CHECK=0` opts out; named through the NVIDIA driver by the Qt-free `app/inference/device_probe.py`, no torch), `warmup` (intent-based warm-ups: `STAGE_WARMUPS` / `BUTTON_WARMUPS` tables, one at a time on fresh threads, never during a load, CSV parse or job; torch refuses a `QThreadPool` thread, where it deadlocked) with `app/gc_policy.py` (full collections held during a warm-up import, `gc.freeze()` after start-up and each warm-up), `toast_clearance` (toasts keep clear of the bottom chrome and the editors' side panels), `display_read_ahead` (Qt-free: the Library decodes the next / previous photo on a worker, ≤ 3 photos / 192 MiB, used only while the file stamp matches; on `app/read_ahead_cache.py`), `canvas_key_relay` (the library tree hands the hold and gesture keys B, Space, S, Enter, Esc, Delete to the editor canvas), `stage_summary` (Qt-free texts) + `stage_status` (pool scandir) for the Generate / Measure status line, `visualize_empty_state` (Visualize with nothing to chart: why, and the next step). **Page shortcuts** are `WindowShortcut`s: live wherever the keyboard is while their page is on screen (Qt ignores hidden pages; text fields keep their typing, modal dialogs block them); the `PgDn` / `PgUp` owners use `WidgetWithChildrenShortcut`, so exactly one is live. Panel indices: `app/gui/panels.Panel` — `DISPLAY 0`, `CORRECT 1`, `VISUALIZATION 2` (dashboards appended after); use the members, never int literals or the removed keys `"mask_tracing"` / `"skeleton_correction"` / `"gt_tracing"` (`tests/test_right_panel_contract.py`). |
+| Editors | `app/gui/` | Views share `canvas_view.CanvasViewMixin` (zoom/pan/fit/OpenGL, `ZOOM_STOPS` ladder, 120 ms anchored step-zoom glide, `zoom_out_limit` = min(100 %, half the fit), pixel grid from 800 % toggled by `Ctrl+'` — display only; a held `Space`, and `B` on the editor canvas, ends when the view loses the keyboard or on `end_holds()`, which the tree's key relay calls). The editor is built from shared parts: `editor_canvas.EditorCanvasView` (tool input to an `InputSink`), `editor_chrome.EditorChrome` (rail, dock, Enhance popover, status chip, zoom cluster on one `widgets/overlay_layout.OverlayLayout`), `paint_canvas.PaintCanvas` (QImage canvas over `PatchHistory`; 0/1 patches bit-packed) and `editor_prompts` (Save / Discard / Cancel). **Correct** = `app/gui/correct/`: `CorrectEditor` (`editor.py`) only composes — `CorrectSession` (Qt-free: open / close, dirty, save reports, the one prompt, one undo timeline over `app/editing/journal.EditJournal`), `ToolRouter` (input), three `EditLayer`s, keys M / L / G (`MaskLayer` + `mask_tools.py` over the Qt-free `MaskDocument`; `ClassesLayer` + `classes_paint.py` over the Qt-free `ClassesDocument` (the class labels, GT for training; `ClassPanel` in the side card); both are `RasterLayer`s, their documents `PlaneDocument`s; `SkeletonLayer` over the Qt-free `SkeletonDocument` / `SkeletonCorrectionModel` — patch history with one base copy, 100 steps, 64 MiB; windowed endpoints — tools in `skeleton_tools.py`), `CorrectControls`, `LayerPanel` (rows and eyes Tab-reachable), `keys.py` (the page's shortcut table), `chip.py` (status-chip name forms, "Image 12 / 40"), `layer_prefs.LayerPrefs` (layer opacity / visibility in QSettings), `paging.Neighbours` + the Qt-free `read_ahead.ReadAhead` (next / previous image — photo, mask plane, thinned skeleton — read on one worker, ≤ 3 images / 256 MiB, used only while the files' stamps match; layers opt in through `ReadAheadLayer`; on `app/read_ahead_cache.py`, like the Library's); contract in `correct/layer.py`, every `correct/*.py` ≤ 450 lines (ratchet test). Render items `canvas_layers/` (thresholds use the device scale = zoom × devicePixelRatio): `PhotoLayerItem` (area pyramid `app/imaging/pyramid.py`, bilinear, level 1 blended in below about 76 %; warms the next zoom step when idle), `RasterLayerItem` (exact pixels at scale ≥ 1, area coverage below, 256 px tiles; warms the next zoom step's tiles when idle, only while shown), `SkeletonLayerItem` (a line at every zoom; vector tiles warmed when idle; vector links from the Qt-free `app/imaging/skeleton_vectors.py`; halo composited once; `vectors=False` in the Library). Every editor has `maybe_save_changes()` (False = stay). |
+| Visualization | `app/visualization/` | Dash/Plotly length + area dashboards (`dash_shell.py` shared layout, offline assets in `app/assets/`), `DataProcessor` / `DataCache` / `FigureMemo`, embedded via `QWebEngineView` through one `viz_window.DashVizWindow` base. plotly.js basic is vendored as `app/assets/plotly-basic.min.js` (dcc.Graph uses it through `window.Plotly`; `tests/test_viz_dash_plotly_bundle.py` pins it to plotly.py's plotly.js version and to basic trace types — update it with plotly.py, see `app/assets/THIRD_PARTY.md`). `app/assets/sprouts-autosize.js` skips plotly.js's same-size autosize relayout (what it relies on is pinned in `tests/test_viz_dash_plotly_bundle.py`); `app/assets/sprouts-uirevision.js` keeps the Growth Over Time zoom that Dash 4.4.1 drops (plotly/dash#4093; `tests/test_viz_dash_uirevision.py`, `docs/KNOWN_ISSUES.md` U1). Strip, caret, view-card and per-tube selection callbacks are clientside (tests run the JS in QJSEngine via `tests/viz_dash_helpers.call_clientside`). On Windows each dashboard is a native child window with its own Direct3D 11 surface (`viz_window.native_child_surface`): the main window is never recreated and the OpenGL canvases stay on (KNOWN_ISSUES D8; `tests/test_visualization_manager_release_native.py` runs the real window off screen). Elsewhere a dashboard is a plain child and the canvases use raster viewports while one lives. Dashboards are released 5 min after Visualize is left (a released dashboard leaves the window first). `dash_app.py` composes `dash_length_layout.py` (pure layout builders), `dash_length_views.py` (view rendering, export table) and `dash_length_callbacks.py` (`register_callbacks`); `tests/test_viz_dash_split_golden.py` pins the layout hash, the callback wiring and the clientside JS hash. |
+| Mask model | `app/mask_model/` | ResNet-18 segmentation network `ResNetSkeleton` (the name is historical: it is the mask network) with `DualAttention` blocks; `EnhancedResnetGenerator` and the SE layer are the skeleton generator in `app/inference/skeleton_inference.py`. |
+| Class labels | `app/gt/` + the Classes layer of Correct (`app/gui/correct/classes_*.py`) | Class labels: the Classes layer of Correct, `app/gt/` core. Multi-class **ground truth** for segmentation datasets (key `G` on the Correct page; Classes…, Export dataset… and Remove GT… on its action bar). Qt-free core: `registry.py` (`gt/classes.json`), `store.py` (`gt/<stem>.png` 8-bit palette, id 255 = Ignore), `export.py` (dataset export). **Independent of every ML model**: never reads/writes `mask/` or `skeletons/`, never measures. Spec: `docs/superpowers/specs/2026-09-22-multiclass-labels-design.md`. |
 
-**God nodes** (most-connected core abstractions, from the graph — touch with
-care): `SkeletonCorrectionInterface` (85 edges), `MainWindow` (72),
-`MaskTracingInterface` (47), `NormalizationControls` (34),
-`SkeletonCorrectionModel` (34).
+**God nodes** (most-connected core abstractions — touch with care): the list is
+refreshed by `graphify update .`; the one recorded before the Correct swap named
+the two editors it deleted, so read the current list from
+`graphify-out/GRAPH_REPORT.md`.
 
 **Other single-source files:** `app/inference/runtime.py` (how inference runs),
-`resources/themes/dark_theme.qss` + `app/gui/widgets/tokens.py` (SPROUTS design
-tokens). SPROUTS accents: mask green `#5fd6a0`, skeleton orange `#f0a868`,
-purple primary `#c39af6`, selection `#b794f6`.
+`app/design/tokens.py` (SPROUTS design tokens, Qt-free; Qt code imports them as
+`app.gui.widgets.tokens`, a re-export) + `resources/themes/dark_theme.qss` (every colour
+in it is one of those values, `tests/test_design_system_qss.py`; QSS images such as the check mark resolve through the `sprouts-theme:` search
+path registered in `app/gui/widgets/icons.py`). SPROUTS accents: mask green `#5fd6a0`,
+skeleton orange `#f0a868`, purple primary `#c39af6`, selection `#b794f6`.
 
 ---
 
 ## Docs
 
 - `docs/KNOWN_ISSUES.md` — **read first** for current open items.
-- `docs/Architecture_2.md` — deeper architecture / data-flow write-up.
-- `docs/BUILD_EXECUTABLE.md` — PyInstaller packaging (CUDA build notes).
+- `docs/Architecture_2.md` — the Correct editor's composition, the file structure and a short data-flow section.
+- `docs/MODELS.md` — model card: checkpoints, SHA-256, inputs and outputs.
+- `docs/DATA_DICTIONARY.md` — project folder, file formats, CSV columns, provenance.
 - `docs/SPROUTS_DASH_THEME.md` — Dash theme + design-token reference.
 - `docs/superpowers/{plans,specs}/` — implementation plans + specs (viz redesign,
-  ribbon/metrics, SPROUTS shell).
+  ribbon/metrics, SPROUTS shell, multi-class GT, unified Correct editor, and the
+  MainWindow / length-dashboard split, executed 2026-09-30).
 
-**Current open item** (KNOWN_ISSUES #3): the display `MetricsBar` shows Root
-length / Root area as `—`. Measured values are produced only by batch threads and
-written to CSV; they're never loaded back into per-image state. **Do not
-fabricate values** — populating them read-only means parsing those CSVs.
+**Open items**: `docs/KNOWN_ISSUES.md` (the owner decisions O1-O38 with the task that builds
+each, and the open engineering table; the build plan is
+`docs/superpowers/plans/2026-10-25-owner-decisions/00-master.md`).
+The metrics bar shows measured values read-only from the Measure CSVs
+(`MeasurementIndex`) — **never fabricate values**. `CHANGELOG.md` has a
+"Scientific output changes" section: record anything that can change a CSV value
+or an output pixel there. Saved mask and skeleton pixels are pinned by golden tests
+(`tests/data/correct_goldens.json`): editor changes must keep them identical. Real-image
+cases: `tests/test_correct_goldens_real.py` over `docs/examples/` (three real photos with
+their outputs; regenerate with `scripts/make_examples.py`; goldens in
+`tests/data/correct_goldens_real.json`, record with `SPROUTS_RECORD_REAL_GOLDENS=1`).
+Real-data tests find the owner's project through `tests/real_data.real_data_dir()`
+(`$SPROUTS_REAL_DATA`, else `D:/2024 EF image data`) and skip without it.
 
 ---
 
-## Memory — two layers (use both)
-
-### 1. Local auto-memory (file-based, per-project)
+## Memory — local auto-memory (file-based, per-project)
 
 Path: `~/.claude/projects/D--Root-Mask-and-Skeletons/memory/`
 
@@ -113,19 +156,6 @@ Path: `~/.claude/projects/D--Root-Mask-and-Skeletons/memory/`
   gotchas. Update the matching file instead of duplicating; delete memories
   proven wrong.
 
-### 2. mem0 (semantic memory, MCP server)
-
-Self-hosted mem0 MCP (`~/mem0-mcp/`, local Ollama + Qdrant, no cloud). Requires
-the Qdrant container + Ollama running.
-
-- **At start of coding work:** `mcp__mem0__search_coding_memory` to recall prior
-  context, conventions, decisions.
-- **When you learn** architecture, conventions, key decisions, debugging
-  insights, or user preferences: `mcp__mem0__add_coding_memory`.
-
-Rule of thumb: **file-memory = pinned, human-curated facts**; **mem0 = semantic
-recall across everything learned**. Significant decisions go in both.
-
 ---
 
 ## Knowledge graph — graphify
@@ -138,13 +168,13 @@ Graph at `graphify-out/` (built AST-only, no API cost).
   the area.
 - After editing code this session, run `graphify update .` to refresh the graph
   (check staleness: graph header lists its build commit vs `git rev-parse HEAD`).
+- graphify, like every tool that parses the sources, must run on Python 3.14: an older
+  Python cannot parse the PEP 758 `except A, B:` lines, and graphify's import-alias pass
+  then silently skips those files (`docs/KNOWN_ISSUES.md` U5). The uv tool is the owner's
+  (shared by every project): ask before reinstalling it on 3.14 with
+  `uvx uv@0.13.6 tool install --python 3.14.10 --reinstall graphifyy`.
 - `/graphify` for a fresh build of any input.
 
----
-
-## MCP servers
-
-- **mem0** — persistent coding memory (above).
 ---
 
 ## Skills & tooling conventions
@@ -166,10 +196,8 @@ Graph at `graphify-out/` (built AST-only, no API cost).
 
 ## Workflow defaults
 
-1. Recall memory (file `MEMORY.md` + mem0 search) at start.
+1. Recall memory (file `MEMORY.md`) at start.
 2. Consult graphify before architecture questions.
 3. Use `./venv/Scripts/python.exe` for any run.
-4. Persist new decisions/insights to **both** memory layers.
+4. Persist new decisions/insights to file memory.
 5. Run `graphify update .` after code edits.
-</content>
-</invoke>

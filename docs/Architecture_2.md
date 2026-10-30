@@ -1,724 +1,204 @@
-# 🌱 Root-Mask-and-Skeletons — System Architecture
+# Root-Mask-and-Skeletons (SPROUTS): Architecture
 
-## 📋 Executive Summary
-
-The Root-Mask-and-Skeletons application is a comprehensive PyQt6-based system for automated root analysis in plant science. It combines computer vision, deep learning, and interactive visualization to process root images, generate segmentation masks, extract skeletal structures, and compute morphological metrics.
+SPROUTS is a PyQt6 desktop application for plant-root phenotyping from minirhizotron
+images. A ResNet model predicts a root mask (area) and a Pix2Pix model predicts a root
+skeleton (length), both from the original image. The user corrects the predictions on one
+canvas, Measure writes the CSVs, and Plotly Dash dashboards chart them.
 
 ### Key Capabilities
-- **🎨 Interactive Mask Editing**: Manual tracing and editing tools for precise segmentation
-- **🤖 ML-Powered Processing**: Dual-model architecture using ResNet for masks and Pix2Pix for skeletons
-- **📊 Advanced Analytics**: Automatic root length calculation and morphometric analysis
-- **📈 Rich Visualizations**: Interactive dashboards with Plotly Dash integration
-- **⚡ Hardware Optimization**: Intelligent GPU/CPU resource management
+- **One Correct editor with three layers**: mask, skeleton and class labels of an image on
+  one canvas, one layer edited at a time, one undo timeline. Every human save goes to the
+  project's `gt/` folder (`gt/mask/<stem>.png`, `gt/skeletons/<stem>.png`, `gt/<stem>.png`).
+- **Two model branches**: ResNet for masks and Pix2Pix for skeletons. The skeletonizer never
+  reads masks, so a mask correction changes area only.
+- **Measure reads GT first** (`app/inference/measure_sources.py`): the GT file where it is
+  valid, else the prediction. The last CSV column, `Source`, says which.
+- **Calibrated output**: the field of view is 18 x 13.5 mm by default and can be set per
+  project in `sprouts_project.json` (`app/calibration.py`); length uses the corner-count
+  estimator (Vossepoel and Smeulders, 1982) in `app/inference/metrics.py`.
+- **Reproducible batches**: fixed batch shapes by default (`SPROUTS_BATCH_POLICY=fixed`),
+  and a provenance sidecar next to every CSV.
+- **Dashboards**: Dash/Plotly length and area dashboards embedded in the window.
+
+The five stages are Library, Generate, Correct, Measure and Visualize (`Alt+1` to `Alt+5`).
 
 ---
 
-## 🏗️ System Architecture Overview
+## The Correct editor (composition)
 
-### Unified Functional Architecture
+One stage edits the documents of an image on one canvas. `CorrectEditor`
+(`app/gui/correct/editor.py`) owns no document, tool or history logic: it builds the parts
+below, forwards the `MainWindow` API (`load_image`, `maybe_save_changes`, `reset`,
+`navigate`, ...) and turns the session's save reports into signals (`mask_saved`,
+`mask_cleared`, `skeleton_saved`, `skeleton_cleared`, `gt_saved`).
 
 ```mermaid
 flowchart TB
-    %% Styling
-    classDef actor fill:#fef3c7,stroke:#f59e0b,stroke-width:3px,color:#000
-    classDef storage fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#000
-    classDef ui fill:#e9d5ff,stroke:#a855f7,stroke-width:2px,color:#000
-    classDef process fill:#d1fae5,stroke:#10b981,stroke-width:2px,color:#000
-    classDef ml fill:#fecaca,stroke:#ef4444,stroke-width:2px,color:#000
-    classDef gpu fill:#fee2e2,stroke:#dc2626,stroke-width:3px,stroke-dasharray: 5 5,color:#000
-    
-    %% Actors & Storage
-    U([👤 User]):::actor
-    UI["🎛️ User Interface<br/>Orchestrator<br/>(PyQt6 GUI)<br/>[CPU]"]:::ui
-    STORE[("📁 Local/Shared Storage<br/>Images & Folders")]:::storage
-    ART[("💾 Processed Artifacts<br/>Masks, Skeletons<br/>CSV, HTML")]:::storage
-
-    U ==> UI
-    UI <==> STORE
-    UI <==> ART
-
-    %% Action Selection Hub
-    subgraph SELECT["🎯 Action Selection Hub"]
-        direction LR
-        SEL{Select Operation}
-    end
-    
-    UI --> SEL
-
-    %% Core Functional Units
-    subgraph CORE["🔧 Core Processing Units"]
-        direction TB
-        VIEW["👁️ View/Overlay/Compare<br/>(Display Controller)<br/>[CPU]"]:::process
-        MT["✏️ Manual Mask Tracing<br/>(Drawing & Editing)<br/>[CPU]"]:::process
-        MG["🎭 Generate Masks<br/>(ML Inference)<br/>[GPU→CPU]"]:::ml
-        SG["🦴 Generate Skeletons<br/>(ML via Subprocess)<br/>[GPU→CPU]"]:::ml
-        RL["📏 Compute Root Length<br/>(Skeletonization)<br/>[CPU]"]:::process
-        VIZ["📊 Visualize Metrics<br/>(Dash Server)<br/>[CPU]"]:::process
-    end
-
-    SEL ==> VIEW
-    SEL ==> MT
-    SEL ==> MG
-    SEL ==> SG
-    SEL ==> RL
-    SEL ==> VIZ
-
-    %% Data Flow Paths
-    VIEW -.->|overlay masks| ART
-    MT -->|save/edit| ART
-    MG -->|binary masks| ART
-    SG -->|skeleton images| ART
-    RL -->|metrics CSV| ART
-    VIZ -->|read/export| ART
-
-    %% Device & Model Lifecycle
-    subgraph ML["🧠 Machine Learning Models"]
-        direction TB
-        RESL["🔴 ResNet Skeleton Model<br/>• Loaded at startup<br/>• GPU/CPU adaptive<br/>• Persistent in memory<br/>• Released on exit"]:::gpu
-        P2PL["🔵 Pix2Pix Model<br/>• Spawned in subprocess<br/>• GPU prioritized<br/>• Auto memory cleanup<br/>• Process isolation"]:::gpu
-    end
-
-    MG -.->|uses| RESL
-    SG -.->|spawns| P2PL
-
-    %% Storage Connections
-    STORE ==> MG
-    STORE ==> SG
-    STORE ==> VIEW
-    STORE ==> MT
-```
-
----
-
-## 🌐 System Context & External Interfaces
-
-```mermaid
-flowchart LR
-    %% Styling
-    classDef external fill:#f0f9ff,stroke:#0284c7,stroke-width:2px
-    classDef internal fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
-    classDef hardware fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-    classDef model fill:#fce7f3,stroke:#ec4899,stroke-width:2px
-
-    %% External Actors
-    subgraph EXT["External Interfaces"]
-        user([👤 User]):::external
-        fs[("💾 File System<br/>Local Storage")]:::external
-        gpu["⚡ GPU/CPU<br/>Hardware")]:::hardware
-    end
-
-    %% Core Application
-    subgraph APP["Root Analysis Application"]
-        gui["🖥️ PyQt6 GUI<br/>`main.py`<br/>`main_window.py`"]:::internal
-        
-        subgraph MODELS["ML Models"]
-            pix2pix["🎨 Pix2Pix GAN<br/>`pix2pix_inference_script.py`<br/>Enhanced ResNet"]:::model
-            resnet["🔍 Mask Model<br/>`mask_model/model.py`<br/>ResNetSkeleton"]:::model
-        end
-        
-        dash["📊 Dash Server<br/>`root_length_visulization.py`<br/>`dash_app.py`"]:::internal
-    end
-
-    %% Connections
-    user ==> gui
-    gui <==> fs
-    gui <==> dash
-    gui --> pix2pix
-    gui --> resnet
-    pix2pix <==> fs
-    resnet <==> fs
-    dash <==> fs
-    pix2pix -.-> gpu
-    resnet -.-> gpu
-```
-
----
-
-## 🔌 Component Architecture & Module Dependencies
-
-```mermaid
-flowchart TB
-    %% Styling
     classDef gui fill:#e0e7ff,stroke:#6366f1,stroke-width:2px
-    classDef handler fill:#dcfce7,stroke:#22c55e,stroke-width:2px
-    classDef inference fill:#fee2e2,stroke:#ef4444,stroke-width:2px
-    classDef viz fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    classDef core fill:#dcfce7,stroke:#22c55e,stroke-width:2px
+    classDef item fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
 
-    %% GUI Layer
-    subgraph GUI["🎨 GUI Layer (PyQt6)"]
-        MW["📱 MainWindow<br/>`main_window.py`<br/>Application Controller"]:::gui
-        DC["🖼️ DisplayController<br/>`display_controller.py`<br/>Image Rendering"]:::gui
-        MTI["✏️ MaskTracingInterface<br/>`mask_tracing_interface.py`<br/>Manual Annotation"]:::gui
-        IM["📂 ImageManager<br/>`image_manager.py`<br/>File Management"]:::gui
-    end
+    CE["CorrectEditor<br/>correct/editor.py"]:::gui
+    VIEW["EditorCanvasView<br/>editor_canvas.py"]:::gui
+    ROUTER["ToolRouter<br/>correct/tool_router.py"]:::gui
+    CHROME["EditorChrome, CorrectControls,<br/>SidePanels (Layers + class panel)"]:::gui
+    ACT["PageActions<br/>correct/actions.py"]:::gui
+    SESSION["CorrectSession (Qt-free)<br/>correct/session.py"]:::core
+    JOURNAL["EditJournal (stdlib only)<br/>app/editing/journal.py"]:::core
+    ML["MaskLayer<br/>correct/mask_layer.py"]:::gui
+    CL["ClassesLayer<br/>correct/classes_layer.py"]:::gui
+    SL["SkeletonLayer<br/>correct/skeleton_layer.py"]:::gui
+    MD["MaskDocument (Qt-free)"]:::core
+    CD["ClassesDocument (Qt-free)"]:::core
+    SD["SkeletonDocument"]:::core
+    PHOTO["PhotoLayerItem<br/>area pyramid, bilinear"]:::item
+    RASTER["RasterLayerItem<br/>exact pixels, 256 px tiles"]:::item
+    SKEL["SkeletonLayerItem<br/>a line at every zoom"]:::item
 
-    %% Handler Layer
-    subgraph HANDLERS["⚙️ Handler Layer"]
-        SKH["🦴 SkeletonHandler<br/>`skeleton_handler.py`<br/>Skeleton Ops"]:::handler
-        MGH["🎭 MaskGenerationHandler<br/>`mask_generation_handler.py`<br/>Mask Ops"]:::handler
-        GSH["🔄 GenerateSkeletonHandler<br/>`generate_skeleton_handler.py`<br/>Subprocess Manager"]:::handler
-    end
-
-    %% Inference Layer
-    subgraph INFERENCE["🤖 Inference Layer"]
-        P2P["🎨 Pix2Pix Engine<br/>`pix2pix_inference_script.py`"]:::inference
-        
-        subgraph P2P_DEPS["Pix2Pix Dependencies"]
-            MODELS["📦 models/*<br/>Network Definitions"]:::inference
-            DATA["📊 data/*<br/>Dataset Loaders"]:::inference
-            UTIL["🛠️ util/*<br/>Helper Functions"]:::inference
-        end
-        
-        RLC["📏 RootLengthCalculator<br/>`root_length_inference_handler.py`<br/>Morphometry"]:::inference
-        RESNET["🧠 ResNetSkeleton<br/>`mask_model/model.py`<br/>Segmentation"]:::inference
-    end
-
-    %% Visualization Layer
-    subgraph VIZ["📊 Visualization Layer"]
-        RLV["📈 RootLengthVisualization<br/>`root_length_visulization.py`<br/>Qt Integration"]:::viz
-        DASH["🎯 DashApp<br/>`dash_app.py`<br/>Web Dashboard"]:::viz
-        DP["🔄 DataProcessor<br/>`data_processor.py`<br/>Data Pipeline"]:::viz
-    end
-
-    %% Connections
-    MW ==> IM
-    MW ==> DC
-    MW ==> MTI
-    MW ==> SKH
-    MW ==> MGH
-    SKH ==> GSH
-    SKH ==> RLC
-    MGH ==> RESNET
-    GSH ==> P2P
-    P2P --> MODELS
-    P2P --> DATA
-    P2P --> UTIL
-    RLV ==> DASH
-    RLV ==> DP
-    MW <==> RLV
+    CE --> VIEW
+    CE --> CHROME
+    CE --> SESSION
+    CE --> ROUTER
+    CE --> ACT
+    CE --> PHOTO
+    VIEW -->|input| ROUTER
+    ROUTER -->|active layer| ML
+    ROUTER -->|active layer| CL
+    ROUTER -->|active layer| SL
+    SESSION --> ML
+    SESSION --> CL
+    SESSION --> SL
+    SESSION --> JOURNAL
+    ML --> MD
+    ML --> RASTER
+    CL --> CD
+    CL --> RASTER
+    SL --> SD
+    SL --> SKEL
 ```
+
+- **Layers** implement one contract, `EditLayer` (`app/gui/correct/layer.py`): open, save
+  and revert, their own undo stack, gestures, tools, visibility and opacity. The layer ids
+  are `MASK`, `SKELETON` and `CLASSES`. `MaskLayer` and `ClassesLayer` are both
+  `RasterLayer`s (`raster_layer.py`: canvas, Brush / Eraser / Fill, history replay, the
+  document members) over their own Qt-free document (their shared half: `PlaneDocument` in
+  `app/editing/planes.py`, whose `SavedPlane` and `planes_equal` the skeleton model uses
+  too); `SkeletonLayer` has its own tools (`app/gui/skeleton_tools.py`).
+- **The session** (`CorrectSession`) opens the layers, aggregates the unsaved state, saves
+  (the unsaved layers; with nothing unsaved, nothing is written), asks the one Save /
+  Discard / Cancel question (`app/gui/editor_prompts.py`) and keeps one undo timeline:
+  `EditJournal` records which layer acted (each layer's newest 100 actions), each layer
+  keeps its own stack. `save_gate.py`
+  asks before a save would replace a file the layer could not load, and `stamps.py` notices
+  files that changed on disk.
+- **What each layer reads and writes**: the mask opens `gt/mask/<stem>.png`, else the
+  prediction `mask/<stem>.png`; the skeleton opens `gt/skeletons/<stem>.png`, else the
+  prediction; the class labels open `gt/<stem>.png` with the registry `gt/classes.json`
+  (`app/gt/`). A save never writes `mask/` or `skeletons/`. A mask or skeleton equal to its
+  prediction removes its GT file.
+- **Paging**: after each open, `paging.Neighbours` asks the library for the next and
+  previous images and the Qt-free `read_ahead.ReadAhead` reads them on one worker thread
+  (photo, mask plane, thinned skeleton; at most 3 images and 256 MiB; used only while the
+  files' stamps still match). Its bounded cache, `app/read_ahead_cache.ReadAheadCache`, is
+  shared with the Library's `display_read_ahead.DisplayReadAhead`. `read_back.py` hands the
+  image just left back to the read-ahead.
+- **Small parts**: `keys.py` (the page's shortcut table), `chip.py` (the status chip),
+  `layer_prefs.py` (layer opacity and visibility in QSettings), `actions.py` (Load skeleton
+  file, Load prediction, Classes, Remove GT).
+- The shared canvas parts are `EditorCanvasView`, `EditorChrome`, `PaintCanvas`
+  (`app/gui/paint_canvas.py`) and the render items in `app/gui/canvas_layers/`.
+- Every `app/gui/correct/*.py` stays at or under 450 lines (a ratchet test).
 
 ---
 
-## 🔄 Operational Workflows
+## Data flow
 
-### 🦴 Skeleton Generation Workflow (Pix2Pix GAN)
+1. The GUI process starts a job: `app/handlers/*` build a `GuardedThread` (error boundary
+   and cancel, `app/workers.py`) and `JobRegistry` runs one batch job at a time. The window
+   imports the handlers, and `app.handlers` imports nothing from `app.gui`: a handler gets
+   the project's layout from `project_layout_of` in `app/project_layout.py`.
+   `app/workers.py` holds every `QThread` from `start()` until Qt's own `finished` (none
+   has a parent; `stop_all` stops the running ones at quit) and starts every `QThreadPool`
+   job through `start_pool_job`, where torch refuses to run. Every `exec()` of a dialog
+   and every box that frees itself once answered goes through `app/dialogs.py`
+   (`run_modal`, `show_transient`).
+2. `app/inference/batch_engine.py` runs the batches for both models: decode on a thread
+   pool, the GPU forward on the job's thread, PNG writes on an async writer. Fixed batch
+   shapes keep outputs identical from run to run; `runtime.py` picks device and precision.
+3. `mask_inference.py` writes `mask/<stem>.png`; `skeleton_inference.py` writes
+   `skeletons/<stem>_fake.png`. The user corrects in Correct; saves go to `gt/`.
+4. `measure_sources.py` picks GT or prediction per image; `metrics.py` computes length (mm)
+   and area (mm2) with the project's field of view; `measure_run.py` writes
+   `skeletons/root_lengths.csv` and `mask/root_areas.csv` with a provenance sidecar.
+5. `app/visualization/` reads the CSVs through `app/data_processing/` and serves the
+   dashboards on `127.0.0.1:8050` (length) and `127.0.0.1:8051` (area), embedded by
+   `QWebEngineView`.
 
-```mermaid
-sequenceDiagram
-    %% Styling
-    autonumber
-    
-    participant U as 👤 User
-    participant MW as 🖥️ MainWindow
-    participant GSH as ⚙️ GenerateSkeletonHandler<br/>(QThread)
-    participant P2P as 🎨 pix2pix_inference_script<br/>(Subprocess)
-    participant M as 🧠 Models & Data<br/>(PyTorch)
-    participant FS as 💾 File System
-    participant GPU as ⚡ GPU/CUDA
-
-    rect rgb(230, 245, 255)
-        Note over U,GPU: Initialization Phase
-        U->>+MW: Click "Generate Skeleton"
-        MW->>+GSH: generate_skeleton(input_dir)
-        GSH->>GSH: Validate input directory
-    end
-
-    rect rgb(245, 230, 255)
-        Note over GSH,GPU: Processing Phase
-        GSH->>+P2P: spawn_subprocess(args)<br/>[dataroot, results_dir, gpu_ids]
-        P2P->>+GPU: Check CUDA availability
-        GPU-->>-P2P: Device status
-        P2P->>+M: create_dataset()<br/>create_model()<br/>model.setup(opt)
-        M->>GPU: Load model weights<br/>Initialize tensors
-        
-        loop For each image
-            P2P->>M: model.set_input(data)
-            M->>GPU: Forward pass
-            GPU-->>M: Generated skeleton
-            M-->>P2P: Post-processed image
-            P2P->>FS: Save *_fake.png
-            P2P-->>GSH: Progress update (stdout)
-        end
-    end
-
-    rect rgb(230, 255, 230)
-        Note over P2P,MW: Completion Phase
-        P2P->>FS: Generate index.html
-        P2P-->>-GSH: Process complete (exit 0)
-        GSH-->>-MW: finished(results_dir)
-        MW->>MW: Update UI status
-        MW->>IM: load_results(results_dir)
-        deactivate MW
-    end
-```
-
-### 🎭 Mask Generation Workflow (ResNet CNN)
-
-```mermaid
-sequenceDiagram
-    %% Styling
-    autonumber
-    
-    participant U as 👤 User
-    participant MW as 🖥️ MainWindow
-    participant MGH as ⚙️ MaskGenerationHandler
-    participant TH as 🔄 MaskGenerationThread<br/>(QThread)
-    participant RES as 🧠 ResNetSkeleton<br/>(PyTorch)
-    participant FS as 💾 File System
-    participant GPU as ⚡ GPU/CUDA
-
-    rect rgb(230, 245, 255)
-        Note over U,GPU: Initialization
-        U->>+MW: Click "Generate ML Masks"
-        MW->>+MGH: generate_masks(input_dir)
-        MGH->>MGH: Create output mask/ directory
-        MGH->>+TH: start(input_dir, mask_dir)
-    end
-
-    rect rgb(245, 230, 255)
-        Note over TH,GPU: Model Loading
-        TH->>+RES: Load model weights
-        RES->>GPU: model.to(device)
-        GPU-->>RES: Model ready
-        RES-->>-TH: Model loaded
-    end
-
-    rect rgb(255, 245, 230)
-        Note over TH,FS: Batch Processing
-        TH->>FS: Enumerate images
-        FS-->>TH: Image list
-        
-        loop For each image
-            TH->>FS: Load image
-            TH->>TH: Preprocess<br/>(resize, normalize)
-            TH->>RES: model(image_tensor)
-            RES->>GPU: Forward pass
-            GPU-->>RES: Predicted mask
-            RES-->>TH: Binary mask
-            TH->>TH: Post-process<br/>(threshold, clean)
-            TH->>FS: Save mask/*.png
-            TH-->>MGH: progress_update(%)
-        end
-    end
-
-    rect rgb(230, 255, 230)
-        Note over TH,MW: Completion
-        TH-->>-MGH: finished(mask_dir)
-        MGH-->>-MW: masks_generated signal
-        MW->>MW: Enable overlay options
-        deactivate MW
-    end
-```
-
-### 📏 Root Length Calculation & Visualization
-
-```mermaid
-sequenceDiagram
-    %% Styling
-    autonumber
-    
-    participant U as 👤 User
-    participant MW as 🖥️ MainWindow
-    participant SKH as 🦴 SkeletonHandler
-    participant RLC as 📏 RootLengthCalculator<br/>(Thread)
-    participant FS as 💾 File System
-    participant RLV as 📊 RootLengthVisualization
-    participant DP as 🔄 DataProcessor
-    participant DASH as 🎯 DashApp<br/>(Web Server)
-    participant WEB as 🌐 QWebEngineView
-
-    rect rgb(230, 245, 255)
-        Note over U,FS: Length Calculation
-        U->>+MW: Click "Calculate Root Length"
-        MW->>+SKH: calculate_root_length()
-        SKH->>FS: Find skeleton images<br/>(*_fake.png)
-        FS-->>SKH: Image paths
-        SKH->>+RLC: start(image_map, params)
-        
-        loop For each skeleton
-            RLC->>RLC: Skeletonize image
-            RLC->>RLC: Extract centerline
-            RLC->>RLC: Calculate physical length<br/>(pixels → mm)
-            RLC->>RLC: Compute metrics<br/>(total, primary, lateral)
-        end
-        
-        RLC->>FS: Write root_lengths.csv
-        RLC-->>-SKH: finished(csv_path)
-        SKH-->>-MW: calculation_complete
-    end
-
-    rect rgb(245, 230, 255)
-        Note over U,WEB: Visualization
-        U->>MW: Click "Visualize Root Length"
-        MW->>+RLV: show_visualization(csv_path)
-        RLV->>+DP: load_data(csv_path)
-        DP->>FS: Read CSV
-        DP->>DP: Clean & validate data
-        DP-->>-RLV: Processed DataFrame
-        
-        RLV->>+DASH: start_server(data, port)
-        DASH->>DASH: Create layout
-        DASH->>DASH: Register callbacks
-        DASH->>DASH: Generate figures<br/>(scatter, box, histogram)
-        DASH-->>-RLV: Server running
-        
-        RLV->>+WEB: load(http://localhost:port)
-        WEB-->>-RLV: Page loaded
-        RLV-->>MW: Widget ready
-        deactivate RLV
-        deactivate MW
-    end
-```
+The README "Pipeline" diagram is the picture.
 
 ---
 
-## 🔀 Data Flow Architecture
-
-```mermaid
-flowchart LR
-    %% Styling
-    classDef input fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
-    classDef process fill:#d1fae5,stroke:#10b981,stroke-width:2px
-    classDef output fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-    classDef optional fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,stroke-dasharray: 5 5
-
-    %% Input Stage
-    subgraph INPUT["📥 Input Stage"]
-        raw["📷 Raw Images<br/>(PNG/JPG)"]:::input
-        meta["📋 Metadata<br/>(optional)"]:::optional
-    end
-
-    %% Processing Pipeline
-    subgraph PIPELINE["⚙️ Processing Pipeline"]
-        direction TB
-        
-        subgraph MASK_PROC["Mask Processing"]
-            man_mask["✏️ Manual Masks<br/>(User Drawn)"]:::process
-            ml_mask["🤖 ML Masks<br/>(ResNet)"]:::process
-            mask_merge["🔄 Mask Merge<br/>&amp; Cleanup"]:::process
-        end
-        
-        subgraph SKEL_PROC["Skeleton Processing"]
-            p2p["🎨 Pix2Pix<br/>GAN"]:::process
-            skel_post["🦴 Skeleton<br/>Post-Process"]:::process
-        end
-        
-        subgraph ANALYSIS["Analysis"]
-            morph["📐 Morphometry<br/>Analysis"]:::process
-            stats["📊 Statistical<br/>Processing"]:::process
-        end
-    end
-
-    %% Output Stage
-    subgraph OUTPUT["📤 Output Stage"]
-        masks["🎭 Binary Masks<br/>mask/*.png"]:::output
-        skels["🦴 Skeletons<br/>*_fake.png"]:::output
-        csv["📊 Metrics<br/>root_lengths.csv"]:::output
-        viz["📈 Visualizations<br/>Interactive Dash"]:::output
-        reports["📄 Reports<br/>(HTML/PDF)"]:::output
-    end
-
-    %% Connections
-    raw --> man_mask
-    raw --> ml_mask
-    meta -.-> ANALYSIS
-    
-    man_mask --> mask_merge
-    ml_mask --> mask_merge
-    
-    raw --> p2p
-    mask_merge -.->|optional overlay| p2p
-    p2p --> skel_post
-    
-    skel_post --> morph
-    morph --> stats
-    
-    mask_merge --> masks
-    skel_post --> skels
-    stats --> csv
-    csv --> viz
-    stats --> reports
-```
-
----
-
-## 💻 Hardware Resource Management
-
-```mermaid
-flowchart TB
-    %% Styling
-    classDef cpu fill:#e0e7ff,stroke:#6366f1,stroke-width:2px
-    classDef gpu fill:#fee2e2,stroke:#ef4444,stroke-width:2px
-    classDef memory fill:#dcfce7,stroke:#22c55e,stroke-width:2px
-    classDef task fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-
-    %% Resource Pool
-    subgraph RESOURCES["🖥️ System Resources"]
-        direction LR
-        
-        subgraph CPU_POOL["CPU Resources"]
-            CPU1["Core 1-4<br/>UI & Control"]:::cpu
-            CPU2["Core 5-8<br/>Processing"]:::cpu
-        end
-        
-        subgraph GPU_POOL["GPU Resources"]
-            GPU1["CUDA Cores<br/>ML Inference"]:::gpu
-            VRAM["VRAM<br/>Model Storage"]:::gpu
-        end
-        
-        subgraph MEM_POOL["Memory"]
-            RAM["System RAM<br/>Data Buffers"]:::memory
-            CACHE["Cache<br/>Image Cache"]:::memory
-        end
-    end
-
-    %% Task Allocation
-    subgraph TASKS["📋 Task Allocation"]
-        UI_TASK["🎨 UI Rendering<br/>Event Handling"]:::task
-        MASK_TASK["🎭 Mask Generation<br/>ResNet Inference"]:::task
-        SKEL_TASK["🦴 Skeleton Generation<br/>Pix2Pix Inference"]:::task
-        CALC_TASK["📏 Length Calculation<br/>Morphometry"]:::task
-        VIZ_TASK["📊 Visualization<br/>Dash Server"]:::task
-    end
-
-    %% Allocations
-    UI_TASK --> CPU1
-    CALC_TASK --> CPU2
-    VIZ_TASK --> CPU2
-    
-    MASK_TASK --> GPU1
-    MASK_TASK --> VRAM
-    SKEL_TASK --> GPU1
-    SKEL_TASK --> VRAM
-    
-    UI_TASK --> RAM
-    MASK_TASK --> RAM
-    SKEL_TASK --> RAM
-    
-    UI_TASK --> CACHE
-```
-
----
-
-## 📁 File Structure & Artifacts
+## File Structure & Artifacts
 
 ### Directory Structure
 
 ```
-root-mask-and-skeletons/
-│
-├── 📱 GUI Components
-│   ├── main.py                          # Application entry point
-│   ├── main_window.py                   # Main window controller
-│   ├── display_controller.py            # Image display management
-│   ├── mask_tracing_interface.py        # Manual annotation tools
-│   └── image_manager.py                 # File management
-│
-├── ⚙️ Handlers
-│   ├── skeleton_handler.py              # Skeleton operations coordinator
-│   ├── mask_generation_handler.py       # Mask generation coordinator
-│   ├── generate_skeleton_handler.py     # Pix2Pix subprocess manager
-│   └── root_length_inference_handler.py # Morphometry calculator
-│
-├── 🤖 ML Models
-│   ├── mask_model/
-│   │   └── model.py                     # ResNetSkeleton implementation
-│   ├── models/                          # Pix2Pix network definitions
-│   ├── data/                            # Dataset loaders
-│   └── util/                            # Utility functions
-│
-├── 📊 Visualization
-│   ├── root_length_visulization.py      # Qt-Dash integration
-│   ├── dash_app.py                      # Dash application
-│   └── data_processor.py                # Data processing pipeline
-│
-└── 📤 Output Artifacts
-    ├── mask/                             # Generated binary masks
-    ├── output/skeletonizer/              # Pix2Pix results
-    │   └── test_latest/
-    │       ├── images/*_fake.png        # Skeleton images
-    │       └── index.html                # Results viewer
-    └── root_lengths.csv                  # Computed metrics
+Root-Mask-and-Skeletons/
+├── main.py                       # Entry point: start-up flags, theme, MainWindow
+├── app/
+│   ├── config.py, calibration.py # Constants (ports, folder names, FOV); per-project FOV
+│   ├── project_layout.py, naming.py, io_utils.py, provenance.py, models.py, user_paths.py
+│   ├── enhancement.py, feedback.py, workers.py, gc_policy.py, logging_config.py
+│   ├── settings.py, dialogs.py   # The one QSettings factory; the one exec() of a dialog
+│   ├── qt_environment.py         # Qt / Chromium start-up flags per OS (Qt-free)
+│   ├── read_ahead_cache.py       # Bounded cache of the Library and Correct read-aheads (Qt-free)
+│   ├── design/tokens.py          # SPROUTS design tokens
+│   ├── editing/                  # Undo history, journal, geometry, thinning, planes (Qt-free)
+│   ├── imaging/                  # Image pyramid of smooth zoom, skeleton vector links (Qt-free)
+│   ├── masks/store.py            # Mask store
+│   ├── gt/                       # Class labels: registry, store, files, dataset export
+│   ├── mask_model/model.py       # Mask segmentation network
+│   ├── inference/                # batch_engine, mask_inference, skeleton_inference, metrics,
+│   │                             # measure_sources, measure_run, runtime, device_probe, ...
+│   ├── handlers/                 # Batch jobs: mask / skeleton generation, JobRegistry
+│   ├── data_processing/          # CSV processing and MeasurementIndex
+│   ├── visualization/            # Dash length and area dashboards, QWebEngineView windows
+│   └── gui/
+│       ├── main_window.py        # MainWindow, composed from the parts in window/
+│       ├── window/               # navigator, project_loader, metrics, editors, stages,
+│       │                         # job_buttons, lifecycle, body
+│       ├── correct/              # The Correct stage (see above)
+│       ├── canvas_layers/        # Photo, raster and skeleton render items
+│       ├── widgets/              # Buttons, overlays, toasts, icons, tokens re-export
+│       ├── display_controller.py, library_index.py, shell_chrome.py, shortcuts.py, ...
+│       ├── editor_canvas.py, editor_chrome.py, paint_canvas.py, editor_prompts.py
+│       └── skeleton_document.py (SkeletonFiles), skeleton_tools.py, skeleton_graph_model.py
+├── resources/themes/dark_theme.qss
+├── scripts/                      # fetch_models.py, make_examples.py, build scripts
+├── tests/                        # Test suite (offscreen Qt)
+├── docs/                         # This file, DATA_DICTIONARY, MODELS, KNOWN_ISSUES, examples/
+└── <project>/                    # A user's project folder, next to the images
+    ├── mask/<stem>.png           # Predicted masks (Generate)
+    ├── mask/root_areas.csv       # Root area per mask
+    ├── skeletons/<stem>_fake.png # Predicted skeletons (Generate)
+    ├── skeletons/root_lengths.csv# Root length per skeleton
+    ├── gt/mask/, gt/skeletons/   # GT saved in Correct
+    ├── gt/<stem>.png             # Class labels; gt/classes.json is the registry
+    └── sprouts_project.json      # Optional per-project field of view
 ```
 
 ### Runtime Artifacts
 
-| Artifact Type | Location | Format | Description |
-|--------------|----------|--------|-------------|
-| **Input Images** | User specified | PNG/JPG | Original root images |
-| **Binary Masks** | `mask/*.png` | 8-bit PNG | Segmentation masks |
-| **Skeleton Images** | `*_fake.png` | RGB PNG | Skeletonized roots |
-| **Metrics CSV** | `root_lengths.csv` | CSV | Morphometric data |
-| **HTML Reports** | `index.html` | HTML | Visual results browser |
-| **Dash Server** | `localhost:8050` | Web | Interactive dashboard |
+| Artifact | Location | Format | Description |
+|----------|----------|--------|-------------|
+| Input images | User specified | PNG/JPG | Original root images |
+| Predicted masks | `mask/<stem>.png` | 8-bit PNG | ResNet output (Generate) |
+| Predicted skeletons | `skeletons/<stem>_fake.png` | PNG | Pix2Pix output (Generate) |
+| GT masks | `gt/mask/<stem>.png` | PNG | Saved in Correct after an edit |
+| GT skeletons | `gt/skeletons/<stem>.png` | 8-bit PNG | Saved in Correct after an edit |
+| Class labels | `gt/<stem>.png` | 8-bit palette PNG | Saved in Correct; id 255 is Ignore |
+| Length CSV | `skeletons/root_lengths.csv` | CSV | Root length (mm), with a `Source` column |
+| Area CSV | `mask/root_areas.csv` | CSV | Root area (mm2), with a `Source` column |
+| Dash servers | `127.0.0.1:8050`, `:8051` | Web | Length and area dashboards (`app/config.py`) |
 
----
-
-## 🔧 Configuration & Dependencies
-
-### System Requirements
-
-#### Minimum Requirements
-- **OS**: Windows 10/11, Ubuntu 20.04+, macOS 11+
-- **CPU**: Intel i5 or AMD Ryzen 5 (4+ cores)
-- **RAM**: 8 GB
-- **GPU**: NVIDIA GTX 1060 (6GB VRAM) for ML acceleration
-- **Storage**: 10 GB available space
-- **Python**: 3.8+
-
-#### Recommended Requirements
-- **CPU**: Intel i7/i9 or AMD Ryzen 7/9 (8+ cores)
-- **RAM**: 16-32 GB
-- **GPU**: NVIDIA RTX 3060 or better (8+ GB VRAM)
-- **Storage**: 50 GB SSD
-
-### Key Dependencies
-
-```python
-# Core Framework
-PyQt6>=6.4.0          # GUI framework
-numpy>=1.21.0         # Numerical computing
-opencv-python>=4.6.0  # Image processing
-scikit-image>=0.19.0  # Advanced image processing
-
-# Machine Learning
-torch>=1.13.0         # Deep learning framework
-torchvision>=0.14.0   # Computer vision models
-cuda-toolkit>=11.7    # GPU acceleration (optional)
-
-# Visualization
-plotly>=5.11.0        # Interactive plots
-dash>=2.7.0           # Web dashboards
-pandas>=1.5.0         # Data manipulation
-
-# Web Integration
-PyQtWebEngine>=6.4.0  # Web content display
-flask>=2.2.0          # Web server (for Dash)
-```
-
----
-
-## 🚀 Performance Optimization Strategies
-
-### GPU Utilization
-- **Model Persistence**: ResNet model loaded once and kept in memory
-- **Batch Processing**: Process multiple images in single GPU transfer
-- **Mixed Precision**: FP16 computation where supported
-- **Memory Management**: Automatic VRAM cleanup after subprocess completion
-
-### CPU Optimization
-- **Multithreading**: Separate threads for UI, processing, and visualization
-- **Async Operations**: Non-blocking file I/O and network requests
-- **Cache Strategy**: LRU cache for frequently accessed images
-- **Lazy Loading**: Load data only when needed
-
-### Memory Management
-- **Image Pyramids**: Multi-resolution representation for large images
-- **Streaming Processing**: Process large datasets in chunks
-- **Garbage Collection**: Explicit cleanup after major operations
-- **Resource Pooling**: Reuse objects and buffers where possible
-
----
-
-## 📚 API Reference
-
-### Core Classes
-
-#### MainWindow
-```python
-class MainWindow(QMainWindow):
-    """Main application window coordinating all operations"""
-    
-    def load_folder(self, folder_path: str) -> None:
-        """Load images from specified folder"""
-    
-    def generate_masks(self) -> None:
-        """Trigger ML mask generation"""
-    
-    def generate_skeletons(self) -> None:
-        """Trigger Pix2Pix skeleton generation"""
-    
-    def calculate_root_length(self) -> None:
-        """Compute morphometric measurements"""
-    
-    def visualize_results(self) -> None:
-        """Launch interactive dashboard"""
-```
-
-#### ImageManager
-```python
-class ImageManager:
-    """Manages image loading and caching"""
-    
-    def load_images(self, directory: str) -> List[str]:
-        """Load all images from directory"""
-    
-    def get_processed_path(self, image_name: str) -> Optional[str]:
-        """Get path to processed version of image"""
-    
-    def cache_image(self, path: str, image: np.ndarray) -> None:
-        """Cache image in memory"""
-```
-
-#### MaskGenerationHandler
-```python
-class MaskGenerationHandler(QObject):
-    """Coordinates mask generation using ResNet model"""
-    
-    finished = pyqtSignal(str)  # Emits output directory
-    progress = pyqtSignal(int)  # Emits progress percentage
-    
-    def generate_masks(self, input_dir: str, output_dir: str) -> None:
-        """Generate masks for all images in input directory"""
-```
-
----
-
-## 🔒 Security & Error Handling
-
-### Security Measures
-- **Input Validation**: Sanitize file paths and user inputs
-- **Sandboxing**: Run inference in isolated subprocesses
-- **Resource Limits**: Prevent memory exhaustion with limits
-- **Access Control**: Restrict file system access to designated directories
-
-### Error Handling
-- **Graceful Degradation**: Fall back to CPU if GPU unavailable
-- **Recovery Mechanisms**: Auto-save and recovery for long operations
-- **User Feedback**: Clear error messages and suggested actions
-
----
-
-## 📈 Future Enhancements
-
-### Planned Features
-- 🌐 **Cloud Processing**: Distributed processing for large datasets
-- 🤝 **Collaboration Tools**: Multi-user annotation and review
-- 📱 **Mobile Support**: Companion mobile app for field data collection
-- 🧪 **Extended Metrics**: Additional morphological measurements
-- 🔄 **Real-time Processing**: Stream processing for video input
-- 🎯 **Custom Models**: User-trainable models for specific root types
-
-### Technical Roadmap
-1. **Q1 2025**: Implement distributed processing architecture
-2. **Q2 2025**: Add real-time collaboration features
-3. **Q3 2025**: Release mobile companion app
-4. **Q4 2025**: Deploy cloud-based processing service
-
----
-
-## 📞 Support & Documentation
-
-- **Documentation**: Comprehensive user and developer guides
-- **API Reference**: Detailed API documentation with examples
-- **Tutorials**: Step-by-step guides for common workflows
-- **Community Forum**: Active user community for support
-- **Issue Tracker**: GitHub issues for bug reports and features
-- **Contact**: support@rootanalysis.org
-
----
-
-*Last Updated: September 2025*
-*Version: 2.0.0*
-*Architecture Document Revision: 3.1*
+For the module map see CLAUDE.md; for formats see docs/DATA_DICTIONARY.md.

@@ -1,0 +1,787 @@
+{
+ "cases": {
+  "synth_blank_png": {
+   "image": "SYNTH_T001_L001_2024.01.01_000000_001_SMM.png",
+   "mask": {
+    "per_op_plane_sha256": [
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "db12ed7dd03d2008f208f3dd37150de5715fa3e0fa2a0b7144a37932e9a87271",
+     "db12ed7dd03d2008f208f3dd37150de5715fa3e0fa2a0b7144a37932e9a87271",
+     "71d315747be80c9697309b307c8f04085d2fb4feb2c8bbf2014345b50e9c8b41",
+     "71d315747be80c9697309b307c8f04085d2fb4feb2c8bbf2014345b50e9c8b41",
+     "9968f73048935ef2a672cd0d49c45f7abebf4b0f25f80d4096000d485af0e138",
+     "9968f73048935ef2a672cd0d49c45f7abebf4b0f25f80d4096000d485af0e138",
+     "25fd073d7bf62df42934e8a51890fccf681a63b7479d62fc6fa2bcf4e50d9689",
+     "25fd073d7bf62df42934e8a51890fccf681a63b7479d62fc6fa2bcf4e50d9689",
+     "f3c3a4c954ad568d2fa517fbf5d2d1eb549cb4e5325180962c326e27e7c9fd65",
+     "f3c3a4c954ad568d2fa517fbf5d2d1eb549cb4e5325180962c326e27e7c9fd65",
+     "84868561c162410fa867134f5a23b9c9e90b604f04ceb5de3fe5d749f6fa8c1a",
+     "84868561c162410fa867134f5a23b9c9e90b604f04ceb5de3fe5d749f6fa8c1a",
+     "ca037de17cd21dce90d40a8e20f28d39c769669158262e6f97f881819f1b1244",
+     "ca037de17cd21dce90d40a8e20f28d39c769669158262e6f97f881819f1b1244",
+     "263037900f2cf2866aaec8c4bc385c24e0a0559a0ff6ec141994237c6ad1fdee",
+     "263037900f2cf2866aaec8c4bc385c24e0a0559a0ff6ec141994237c6ad1fdee",
+     "3a2cb8edf0440005eeb7fe754c57591f8dd4fcd5cc1bce64407f2e26028dabbb",
+     "3a2cb8edf0440005eeb7fe754c57591f8dd4fcd5cc1bce64407f2e26028dabbb",
+     "38058de1953bd0c833b7b72b81bdf124a3334bbb3dc407965e2a7291742f20b0",
+     "38058de1953bd0c833b7b72b81bdf124a3334bbb3dc407965e2a7291742f20b0",
+     "5b0a1fa74355156a14688fefa2bbac71c02bc1404d51475b1179c49ac97abf61",
+     "5b0a1fa74355156a14688fefa2bbac71c02bc1404d51475b1179c49ac97abf61",
+     "5b0a1fa74355156a14688fefa2bbac71c02bc1404d51475b1179c49ac97abf61",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "5b0a1fa74355156a14688fefa2bbac71c02bc1404d51475b1179c49ac97abf61",
+     "38058de1953bd0c833b7b72b81bdf124a3334bbb3dc407965e2a7291742f20b0",
+     "3a2cb8edf0440005eeb7fe754c57591f8dd4fcd5cc1bce64407f2e26028dabbb",
+     "38058de1953bd0c833b7b72b81bdf124a3334bbb3dc407965e2a7291742f20b0",
+     "38058de1953bd0c833b7b72b81bdf124a3334bbb3dc407965e2a7291742f20b0",
+     "67eb27c1ad5584e8686b02b72ea4eea4dbf00acf40f0fb7b0f19f568e3fbc3d3",
+     "67eb27c1ad5584e8686b02b72ea4eea4dbf00acf40f0fb7b0f19f568e3fbc3d3",
+     "af6d3795e80efc375b359b7a110ea2fa4d4bc6158e346f1c4cbfaf12f4dc3d59",
+     "af6d3795e80efc375b359b7a110ea2fa4d4bc6158e346f1c4cbfaf12f4dc3d59"
+    ],
+    "save_returned": true,
+    "saved": {
+     "area_mm2_as_measured": 15.08,
+     "colour_type": 6,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "58c264f91e7e26dadbc38ae581c61fde759e9875928bde1effc0bc81dcf1f5c7",
+     "on_count": 19061,
+     "on_sha256": "78e23425f32f880e2cf5d51b4745bbef029f3d07986bfc37cd28d659136ea152",
+     "pixels_sha256": "3e19c6d78bbdc78c5ffa375a8010a1ffdd652a38cbfa895874255a80d57701a4",
+     "shape": [
+      480,
+      640,
+      4
+     ]
+    },
+    "undo_depth_after": null
+   },
+   "mask_clear": {
+    "per_op_plane_sha256": [
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0"
+    ],
+    "save_returned": true,
+    "saved": {
+     "exists": false
+    },
+    "undo_depth_after": null
+   },
+   "skeleton": {
+    "per_op_raster_sha256": [
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "e9ba71286230205b7e3f32f16d89b10e0498379743483f297ae34d49681e8381",
+     "59607b34b9ea3dcf0593a9081c47033e62c792a858356b18184cc853b10cfd72",
+     "59607b34b9ea3dcf0593a9081c47033e62c792a858356b18184cc853b10cfd72",
+     "59607b34b9ea3dcf0593a9081c47033e62c792a858356b18184cc853b10cfd72",
+     "59607b34b9ea3dcf0593a9081c47033e62c792a858356b18184cc853b10cfd72",
+     "ee78dc0f3878888ec1a356e4ee2a4fea84e8272d80429b5cc193eeede3206859",
+     "ee78dc0f3878888ec1a356e4ee2a4fea84e8272d80429b5cc193eeede3206859",
+     "65369bfffb0660192f5f67e2681834c63e7653ca12255b40f9fcab0d14786802",
+     "65369bfffb0660192f5f67e2681834c63e7653ca12255b40f9fcab0d14786802",
+     "65369bfffb0660192f5f67e2681834c63e7653ca12255b40f9fcab0d14786802",
+     "e22a909db00caee92384a54836e3b812b6855a93f0803bf6d089bf3e29397c38",
+     "e22a909db00caee92384a54836e3b812b6855a93f0803bf6d089bf3e29397c38",
+     "e22a909db00caee92384a54836e3b812b6855a93f0803bf6d089bf3e29397c38",
+     "e22a909db00caee92384a54836e3b812b6855a93f0803bf6d089bf3e29397c38",
+     "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99",
+     "e22a909db00caee92384a54836e3b812b6855a93f0803bf6d089bf3e29397c38",
+     "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99",
+     "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99"
+    ],
+    "save_returned": true,
+    "saved": {
+     "colour_type": 0,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "11fbb8e92b7149971cdbeae126eea5f8ba68f532ed09a5fb19249196d23ef5a8",
+     "length_mm_if_measured_informational": 27.97,
+     "on_count": 939,
+     "pixels_sha256": "b71f1726d5d7d53a1a381ae829c0476f17d96cee3127069908f069eb597f8f99",
+     "shape": [
+      480,
+      640
+     ],
+     "values": [
+      0,
+      255
+     ]
+    },
+    "start": {
+     "raster_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "raster_shape": [
+      480,
+      640
+     ],
+     "save_size": null,
+     "skeleton_source": null
+    }
+   },
+   "skeleton_clear": {
+    "per_op_raster_sha256": [
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0"
+    ],
+    "save_returned": true,
+    "saved": {
+     "exists": false
+    },
+    "start": {
+     "raster_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "raster_shape": [
+      480,
+      640
+     ],
+     "save_size": null,
+     "skeleton_source": null
+    }
+   }
+  },
+  "synth_model_mask_and_skeleton": {
+   "image": "SYNTH_T001_L001_2024.01.01_000000_001_SMM.png",
+   "mask": {
+    "per_op_plane_sha256": [
+     "b5ecc25392329f167e2219bb446267f2b0921841221256d95e7caf604fd8454f",
+     "c0abad020597fa6d7e49b55e95947a342c81bf8897de7df37707fcadb453431b",
+     "c0abad020597fa6d7e49b55e95947a342c81bf8897de7df37707fcadb453431b",
+     "bfb7f0c4a507c1f630a22fc8cbf1d6838ef90f5a73cc955b05bb187d1d3f544f",
+     "bfb7f0c4a507c1f630a22fc8cbf1d6838ef90f5a73cc955b05bb187d1d3f544f",
+     "8b436b569107ed2f85cfe15bb56d1a8c57f35eabea328e8918acf525a762fbe2",
+     "8b436b569107ed2f85cfe15bb56d1a8c57f35eabea328e8918acf525a762fbe2",
+     "56552d201cb82f10342bdcfe8292f632980cf4034a50ae3aa04edf99ebda2858",
+     "56552d201cb82f10342bdcfe8292f632980cf4034a50ae3aa04edf99ebda2858",
+     "6044f853151de013cfe2a5e9eb051c865ef3f510bb8a15912a216c928de6303f",
+     "6044f853151de013cfe2a5e9eb051c865ef3f510bb8a15912a216c928de6303f",
+     "dd4e6a2864e87c6bf79033298325a2289f505cbbb01146a6b0e630b4bdc3507a",
+     "dd4e6a2864e87c6bf79033298325a2289f505cbbb01146a6b0e630b4bdc3507a",
+     "719f33d71dcfee581ff6cbdcdf61f2aa67bf7bf601947cbfe54d86e9cbdd9fa1",
+     "719f33d71dcfee581ff6cbdcdf61f2aa67bf7bf601947cbfe54d86e9cbdd9fa1",
+     "4476251e3c7d9c22de387d1189231927018514b0feed4a9547b384ad955cbd23",
+     "4476251e3c7d9c22de387d1189231927018514b0feed4a9547b384ad955cbd23",
+     "003d6402c483baebaa4f9d71fc23757936f78241713e9b597e90e6eba39f9bfc",
+     "003d6402c483baebaa4f9d71fc23757936f78241713e9b597e90e6eba39f9bfc",
+     "b6cd92847ba83ead21855d05fcf0586b9d836ca7619f31f0cc06ccb7dbcb8082",
+     "b6cd92847ba83ead21855d05fcf0586b9d836ca7619f31f0cc06ccb7dbcb8082",
+     "8bb1f010c0d9c082d788b8000811e47d87ad85c601dec3f1fa3649712e4d0ec5",
+     "8bb1f010c0d9c082d788b8000811e47d87ad85c601dec3f1fa3649712e4d0ec5",
+     "8bb1f010c0d9c082d788b8000811e47d87ad85c601dec3f1fa3649712e4d0ec5",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "8bb1f010c0d9c082d788b8000811e47d87ad85c601dec3f1fa3649712e4d0ec5",
+     "b6cd92847ba83ead21855d05fcf0586b9d836ca7619f31f0cc06ccb7dbcb8082",
+     "003d6402c483baebaa4f9d71fc23757936f78241713e9b597e90e6eba39f9bfc",
+     "b6cd92847ba83ead21855d05fcf0586b9d836ca7619f31f0cc06ccb7dbcb8082",
+     "b6cd92847ba83ead21855d05fcf0586b9d836ca7619f31f0cc06ccb7dbcb8082",
+     "6cdecde1edfc2c7dfecef5e1556230b15fed668c036cf7fa62477c3442dfa686",
+     "6cdecde1edfc2c7dfecef5e1556230b15fed668c036cf7fa62477c3442dfa686",
+     "89d7585eb9a820fb9f5267dd2106d2d560aca1c9d78ad052b53cba1d267c498c",
+     "89d7585eb9a820fb9f5267dd2106d2d560aca1c9d78ad052b53cba1d267c498c"
+    ],
+    "save_returned": true,
+    "saved": {
+     "area_mm2_as_measured": 39.55,
+     "colour_type": 6,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "c108444b0cf6432f286de96f409c215b4fefeec011afe84d14d817c71cd5eecf",
+     "on_count": 50003,
+     "on_sha256": "ee9b9e6a5dd4757eee33701af7dc118c2f9e8f18578cd1de963b0557bfe574ca",
+     "pixels_sha256": "d51996d801e1bb071141c1e9ee9f8b2d0245d3a39d6ef098f712f8fd156108f4",
+     "shape": [
+      480,
+      640,
+      4
+     ]
+    },
+    "undo_depth_after": null
+   },
+   "mask_clear": {
+    "per_op_plane_sha256": [
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0"
+    ],
+    "save_returned": true,
+    "saved": {
+     "area_mm2_as_measured": 0.0,
+     "colour_type": 6,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "43f709630180239a8bd5bc63905b7c8bc0a0cfbdf267b636679fa4478d09d365",
+     "on_count": 0,
+     "on_sha256": "ffbf2ea92e7dd3330aa68e1abd8f0860673c674a829166ef4138249ed53632b2",
+     "pixels_sha256": "3a30998c7a384bbd8591e77c465600c853613c49758faad6b7ac4ae731efc0a8",
+     "shape": [
+      480,
+      640,
+      4
+     ]
+    },
+    "undo_depth_after": null
+   },
+   "skeleton": {
+    "per_op_raster_sha256": [
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d07375e16159f4628114debddba183aae0f30cd504309e0b64f9b0ade6d74e32",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "d3193c74157db88edcd29402ef95d091c8183dc8159e71fe60cd984d8e42bd1d",
+     "171810a508b742c2f27fd67a14ce29212a214507489dcf9a8aaf1690e327f65e",
+     "171810a508b742c2f27fd67a14ce29212a214507489dcf9a8aaf1690e327f65e",
+     "23212b7d48a7c4dd686878543f8d710a64bff2cecb3c622a8ad05ff4a4fb51e1",
+     "23212b7d48a7c4dd686878543f8d710a64bff2cecb3c622a8ad05ff4a4fb51e1",
+     "23212b7d48a7c4dd686878543f8d710a64bff2cecb3c622a8ad05ff4a4fb51e1",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
+     "4f4ae1a3e86e84e16c963889b98b3c92670bc6fa36d2ac643cb13538e20bb488",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
+     "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def"
+    ],
+    "save_returned": true,
+    "saved": {
+     "colour_type": 0,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "42cddc201e1ff2a9c919b95a1095d38cc2d9efd7ec7ad371dbab2205d5a80c5c",
+     "length_mm_if_measured_informational": 58.87,
+     "on_count": 1797,
+     "pixels_sha256": "1cb788451699f5207c42cae0e876dcbd4691975688749e49c3f94c21e0ad5def",
+     "shape": [
+      480,
+      640
+     ],
+     "values": [
+      0,
+      255
+     ]
+    },
+    "start": {
+     "raster_sha256": "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "raster_shape": [
+      480,
+      640
+     ],
+     "save_size": [
+      341,
+      256
+     ],
+     "skeleton_source": "prediction"
+    }
+   },
+   "skeleton_clear": {
+    "per_op_raster_sha256": [
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0"
+    ],
+    "save_returned": true,
+    "saved": {
+     "colour_type": 0,
+     "dtype": "uint8",
+     "exists": true,
+     "file_sha256_informational": "45e945d98ded38001430be13601895981708846604f9db9184b3b6af1dd62402",
+     "length_mm_if_measured_informational": 0.0,
+     "on_count": 0,
+     "pixels_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+     "shape": [
+      480,
+      640
+     ],
+     "values": [
+      0
+     ]
+    },
+    "start": {
+     "raster_sha256": "111ecd599d8fd981cc72fe144fc380b3a159e5be9d3c63d0715c502f8307ba2c",
+     "raster_shape": [
+      480,
+      640
+     ],
+     "save_size": [
+      341,
+      256
+     ],
+     "skeleton_source": "prediction"
+    }
+   }
+  }
+ },
+ "meta": {
+  "deterministic_across_two_runs": true,
+  "numpy": "2.2.6",
+  "opencv": "4.13.0",
+  "purpose": "pixel goldens of the pre-merge editors; saved.* is the contract",
+  "pyqt": "6.11.0",
+  "qt": "6.11.0",
+  "skeleton_output_size": [
+   341,
+   256
+  ],
+  "skimage": "0.25.2"
+ },
+ "ops": {
+  "mask": [
+   [
+    "brush",
+    1
+   ],
+   [
+    "stroke",
+    [
+     [
+      40,
+      40
+     ],
+     [
+      90,
+      60
+     ]
+    ]
+   ],
+   [
+    "brush",
+    2
+   ],
+   [
+    "stroke",
+    [
+     [
+      40,
+      80
+     ],
+     [
+      120,
+      95
+     ],
+     [
+      150,
+      140
+     ]
+    ]
+   ],
+   [
+    "brush",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      200,
+      40
+     ],
+     [
+      200,
+      160
+     ]
+    ]
+   ],
+   [
+    "brush",
+    6
+   ],
+   [
+    "stroke",
+    [
+     [
+      260,
+      60
+     ],
+     [
+      330,
+      60
+     ],
+     [
+      330,
+      130
+     ]
+    ]
+   ],
+   [
+    "brush",
+    9
+   ],
+   [
+    "stroke",
+    [
+     [
+      400,
+      300
+     ]
+    ]
+   ],
+   [
+    "brush",
+    14
+   ],
+   [
+    "stroke",
+    [
+     [
+      500,
+      100
+     ],
+     [
+      560,
+      200
+     ],
+     [
+      600,
+      420
+     ]
+    ]
+   ],
+   [
+    "brush",
+    25
+   ],
+   [
+    "stroke",
+    [
+     [
+      100,
+      380
+     ],
+     [
+      180,
+      430
+     ]
+    ]
+   ],
+   [
+    "eraser",
+    7
+   ],
+   [
+    "stroke",
+    [
+     [
+      30,
+      70
+     ],
+     [
+      160,
+      120
+     ]
+    ]
+   ],
+   [
+    "eraser",
+    4
+   ],
+   [
+    "stroke",
+    [
+     [
+      200,
+      100
+     ]
+    ]
+   ],
+   [
+    "brush",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      420,
+      40
+     ],
+     [
+      520,
+      40
+     ],
+     [
+      520,
+      160
+     ],
+     [
+      420,
+      160
+     ],
+     [
+      420,
+      40
+     ]
+    ]
+   ],
+   [
+    "fill"
+   ],
+   [
+    "click",
+    [
+     470,
+     100
+    ]
+   ],
+   [
+    "click",
+    [
+     10,
+     470
+    ]
+   ],
+   [
+    "brush",
+    5
+   ],
+   [
+    "clear"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "redo"
+   ],
+   [
+    "brush",
+    11
+   ],
+   [
+    "stroke",
+    [
+     [
+      0,
+      0
+     ],
+     [
+      639,
+      479
+     ]
+    ]
+   ],
+   [
+    "eraser",
+    1
+   ],
+   [
+    "stroke",
+    [
+     [
+      320,
+      0
+     ],
+     [
+      320,
+      479
+     ]
+    ]
+   ],
+   [
+    "save"
+   ]
+  ],
+  "mask_clear": [
+   [
+    "clear"
+   ],
+   [
+    "save"
+   ]
+  ],
+  "skeleton": [
+   [
+    "tool",
+    "polyline"
+   ],
+   [
+    "click",
+    [
+     50,
+     50
+    ]
+   ],
+   [
+    "click",
+    [
+     150,
+     90
+    ]
+   ],
+   [
+    "click",
+    [
+     260,
+     70
+    ]
+   ],
+   [
+    "finish"
+   ],
+   [
+    "tool",
+    "polyline"
+   ],
+   [
+    "smooth",
+    true
+   ],
+   [
+    "click",
+    [
+     60,
+     300
+    ]
+   ],
+   [
+    "click",
+    [
+     140,
+     260
+    ]
+   ],
+   [
+    "click",
+    [
+     220,
+     330
+    ]
+   ],
+   [
+    "click",
+    [
+     330,
+     280
+    ]
+   ],
+   [
+    "finish"
+   ],
+   [
+    "smooth",
+    false
+   ],
+   [
+    "tool",
+    "eraser"
+   ],
+   [
+    "eraser_size",
+    10
+   ],
+   [
+    "drag",
+    [
+     [
+      100,
+      40
+     ],
+     [
+      120,
+      70
+     ],
+     [
+      140,
+      100
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "connect"
+   ],
+   [
+    "connect_endpoints",
+    0,
+    1
+   ],
+   [
+    "tool",
+    "select"
+   ],
+   [
+    "click",
+    [
+     200,
+     80
+    ]
+   ],
+   [
+    "key",
+    "Delete"
+   ],
+   [
+    "tool",
+    "polyline"
+   ],
+   [
+    "click",
+    [
+     400,
+     400
+    ]
+   ],
+   [
+    "click",
+    [
+     600,
+     450
+    ]
+   ],
+   [
+    "double_click",
+    [
+     620,
+     300
+    ]
+   ],
+   [
+    "clear"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "redo"
+   ],
+   [
+    "save"
+   ]
+  ],
+  "skeleton_clear": [
+   [
+    "clear"
+   ],
+   [
+    "save"
+   ]
+  ]
+ }
+}

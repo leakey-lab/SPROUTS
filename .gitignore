@@ -17,9 +17,12 @@ __pycache__
 
 *.spec*
 *.spec.*
+# ...except the tracked PyInstaller spec: a fresh clone must be able to rebuild the app.
+!scripts/build_executable.spec
 
 build/
 dist/
+*.egg-info/
 .vscode/
 .idea/
 .pytest_cache/

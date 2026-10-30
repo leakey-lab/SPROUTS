@@ -1,31 +1,107 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "root-mask-and-skeletons"
-version = "3.0.0"
-description = "Plant-root phenotyping: mask generation, skeletonization, correction GUI, and metric export."
-requires-python = ">=3.10"
+# Single source of the version: app/__init__.py (__version__), read statically by setuptools.
+dynamic = ["version"]
+description = "SPROUTS: plant-root phenotyping from minirhizotron images (root masks, skeletons, correction editors, calibrated root length and area, dashboards)."
 readme = "README.md"
+requires-python = ">=3.14"
+# TODO(owner): ORCIDs and maintainers (kept in sync with CITATION.cff).
+authors = [{ name = "Kinjalk Parth" }, { name = "Sebastian Varela" }, { name = "Andrew D. B. Leakey" }]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "app/assets/licenses/*"]
+keywords = [
+    "plant phenotyping",
+    "minirhizotron",
+    "root segmentation",
+    "skeletonization",
+    "root length",
+    "root area",
+    "deep learning",
+    "ground truth annotation",
+]
+classifiers = [
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+# Compatible ranges; the exact tested pins live in requirements.txt (a test keeps them in
+# sync). torch/torchvision are deliberately absent: install the build matching your CUDA
+# (or CPU) first, see README "Installation" -- pip must never swap in a CPU wheel.
+dependencies = [
+    "PyQt6~=6.11",
+    "PyQt6-WebEngine~=6.11",
+    "numpy~=2.5",
+    "scipy~=1.18",
+    "scikit-image~=0.26",
+    "opencv-python-headless~=5.0",
+    "pillow~=13.0",
+    "pandas~=3.1",
+    "dash~=4.4",
+    "dash-bootstrap-components~=2.0",
+    "plotly~=7.1",
+    "requests~=2.34",
+]
+
+[project.urls]
+Homepage = "https://github.com/leakey-lab/SPROUTS"
+Repository = "https://github.com/leakey-lab/SPROUTS"
+Issues = "https://github.com/leakey-lab/SPROUTS/issues"
+Changelog = "https://github.com/leakey-lab/SPROUTS/blob/main/CHANGELOG.md"
+
+[project.scripts]
+sprouts = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.dynamic]
+version = { attr = "app.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["app*", "resources*"]
+exclude = ["*__pycache__*", "resources.App Image"]
+
+# Whole asset trees ("**" is recursive in setuptools): Dash serves every file in app/assets
+# (vendored CSS, fonts and their licence texts), Qt loads the theme and icons.
+[tool.setuptools.package-data]
+app = ["assets/**/*"]
+resources = ["themes/**/*", "icons/**/*", "app_icon.ico", "app_icon.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# -p no:dash: Dash's pytest plugin (dash.testing, browser fixtures this suite does not use)
+# marks a hook the old way; pytest 9.2 warns it is removed in pytest 10, which would stop the
+# suite from starting. Not loading it changes no test.
+addopts = "-q -p no:dash"
 filterwarnings = ["ignore::DeprecationWarning"]
 
+# Ruff is the single lint + import-sort ("I") + format tool (pre-commit and CI run it).
+# Do not add [tool.black] / [tool.isort] back: the formatters disagree on some lines.
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py314"
+# ruff 0.16+ also formats the Python blocks of Markdown files; the docs keep their examples
+# as written.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
-ignore = ["E501"]
-
-[tool.black]
-line-length = 100
-target-version = ["py310"]
-
-[tool.isort]
-profile = "black"
-line_length = 100
+# UP037: keep quoted annotations. Python 3.14 evaluates annotations lazily, but
+# inspect.signature() and typing.get_type_hints() still evaluate them, and an unquoted name
+# imported only under TYPE_CHECKING (the window parts' "MainWindow") then raises NameError
+# (tests/test_shell_window_split_surface.py signs every window method).
+ignore = ["E501", "UP037"]

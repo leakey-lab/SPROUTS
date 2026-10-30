@@ -1,0 +1,1307 @@
+{
+ "cases": {
+  "dirty_and_history": {
+   "counts": {
+    "0": 302947,
+    "1": 1744,
+    "2": 2509
+   },
+   "dirty_after_save": false,
+   "dirty_before_save": true,
+   "file": {
+    "classes": {
+     "1": "root",
+     "2": "nodule",
+     "255": "ignore",
+     "3": "root_tip"
+    },
+    "exists": true,
+    "file_sha256_informational": "0cdc439e4d45818761ca2cc055911e72d7f40e791fbf47ad1c532696f1a41b49",
+    "ids_sha256": "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "mode": "P",
+    "palette_sha256": "7908de00ad7bb8d9111b8ffc73c292631be17e1bab9603297e439f6d1fa0eed6",
+    "reviewed": [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    "size": [
+     640,
+     480
+    ],
+    "transparency": 0
+   },
+   "ids_sha256": "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+   "per_op_dirty": [
+    false,
+    false,
+    true,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    true,
+    false,
+    true,
+    false,
+    true,
+    true,
+    false,
+    true,
+    false,
+    true,
+    false
+   ],
+   "per_op_ids_sha256": [
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "8e48a42e577e7dba72d7a9670021c938617aa359dffca61a98bae76575ebd3d5",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "588b485379ac45c7e7dd2d2b72cba69959f598d6eb92ef8a0790e53534f7a951"
+   ],
+   "per_op_reviewed": [
+    [],
+    [],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ]
+   ],
+   "reviewed": [
+    "nodule",
+    "root",
+    "root_tip"
+   ],
+   "save_returned": true,
+   "warnings": 0
+  },
+  "empty_save": {
+   "counts": {
+    "0": 307200
+   },
+   "dirty_after_save": false,
+   "dirty_before_save": false,
+   "file": {
+    "classes": {
+     "1": "root",
+     "2": "nodule",
+     "255": "ignore",
+     "3": "root_tip"
+    },
+    "exists": true,
+    "file_sha256_informational": "def803a60fce823b6b8a67df683d5ceddc209c84de28da0d2dd3988935e81854",
+    "ids_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "mode": "P",
+    "palette_sha256": "7908de00ad7bb8d9111b8ffc73c292631be17e1bab9603297e439f6d1fa0eed6",
+    "reviewed": [],
+    "size": [
+     640,
+     480
+    ],
+    "transparency": 0
+   },
+   "ids_sha256": "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+   "per_op_dirty": [
+    false
+   ],
+   "per_op_ids_sha256": [
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0"
+   ],
+   "per_op_reviewed": [
+    []
+   ],
+   "reviewed": [],
+   "save_returned": true,
+   "warnings": 0
+  },
+  "fill_active_class_only": {
+   "counts": {
+    "0": 285700,
+    "1": 20909,
+    "2": 591
+   },
+   "dirty_after_save": false,
+   "dirty_before_save": true,
+   "file": {
+    "classes": {
+     "1": "root",
+     "2": "nodule",
+     "255": "ignore",
+     "3": "root_tip"
+    },
+    "exists": true,
+    "file_sha256_informational": "944abef671935132fccd65cb0b775c6a37c1972ed9fa44543b7c8497a146074a",
+    "ids_sha256": "38b670fe6237f53b860de70f5972a5aff6c065682c72b0a23ab2b08e6ec7a5b5",
+    "mode": "P",
+    "palette_sha256": "7908de00ad7bb8d9111b8ffc73c292631be17e1bab9603297e439f6d1fa0eed6",
+    "reviewed": [
+     "nodule",
+     "root"
+    ],
+    "size": [
+     640,
+     480
+    ],
+    "transparency": 0
+   },
+   "ids_sha256": "38b670fe6237f53b860de70f5972a5aff6c065682c72b0a23ab2b08e6ec7a5b5",
+   "per_op_dirty": [
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ],
+   "per_op_ids_sha256": [
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "a573d967fba0920a543d08167893d357af6a89c6326c6c03b6a15581524c6c6d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "997d869997342d098cc217cdd0c1931c0575f333ada4f6ae0e0c1bfbd435c33d",
+    "56747bb056269917b653b22c428b9dc21dcb3eef417b088d1b78ef4e6cef0bd8",
+    "56747bb056269917b653b22c428b9dc21dcb3eef417b088d1b78ef4e6cef0bd8",
+    "38b670fe6237f53b860de70f5972a5aff6c065682c72b0a23ab2b08e6ec7a5b5",
+    "38b670fe6237f53b860de70f5972a5aff6c065682c72b0a23ab2b08e6ec7a5b5",
+    "38b670fe6237f53b860de70f5972a5aff6c065682c72b0a23ab2b08e6ec7a5b5"
+   ],
+   "per_op_reviewed": [
+    [],
+    [],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ]
+   ],
+   "reviewed": [
+    "nodule",
+    "root"
+   ],
+   "save_returned": true,
+   "warnings": 0
+  },
+  "ignore_interplay": {
+   "counts": {
+    "0": 283423,
+    "1": 12158,
+    "255": 11619
+   },
+   "dirty_after_save": false,
+   "dirty_before_save": true,
+   "file": {
+    "classes": {
+     "1": "root",
+     "2": "nodule",
+     "255": "ignore",
+     "3": "root_tip"
+    },
+    "exists": true,
+    "file_sha256_informational": "cd1bc5e71ebf91ee1bd1d2f889b70baa96f522e0f6679b75a277f06d725f0deb",
+    "ids_sha256": "c2abf6ad9ea85021e51257d6306567d8f5d3600daa6c49922717297454a29f97",
+    "mode": "P",
+    "palette_sha256": "7908de00ad7bb8d9111b8ffc73c292631be17e1bab9603297e439f6d1fa0eed6",
+    "reviewed": [
+     "root"
+    ],
+    "size": [
+     640,
+     480
+    ],
+    "transparency": 0
+   },
+   "ids_sha256": "c2abf6ad9ea85021e51257d6306567d8f5d3600daa6c49922717297454a29f97",
+   "per_op_dirty": [
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ],
+   "per_op_ids_sha256": [
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "55030b5a6f38efc99a3b537b58a87e036dcbfa583bb86e1fa4e5521fb1bc945e",
+    "55030b5a6f38efc99a3b537b58a87e036dcbfa583bb86e1fa4e5521fb1bc945e",
+    "55030b5a6f38efc99a3b537b58a87e036dcbfa583bb86e1fa4e5521fb1bc945e",
+    "d9378acb5ac212a3e2b688815676214ec13bab5ec7056e93c1fdc509c9937b3a",
+    "d9378acb5ac212a3e2b688815676214ec13bab5ec7056e93c1fdc509c9937b3a",
+    "d9378acb5ac212a3e2b688815676214ec13bab5ec7056e93c1fdc509c9937b3a",
+    "d9378acb5ac212a3e2b688815676214ec13bab5ec7056e93c1fdc509c9937b3a",
+    "7ab62e15d1aeed8bdb8aea90c0bd5cbc5f691543fd2ac04c7fd392033900aa14",
+    "7ab62e15d1aeed8bdb8aea90c0bd5cbc5f691543fd2ac04c7fd392033900aa14",
+    "093bb7797898e33342c318a66c07a0850f72fb879de054bc7d67e06b5d693b51",
+    "093bb7797898e33342c318a66c07a0850f72fb879de054bc7d67e06b5d693b51",
+    "093bb7797898e33342c318a66c07a0850f72fb879de054bc7d67e06b5d693b51",
+    "093bb7797898e33342c318a66c07a0850f72fb879de054bc7d67e06b5d693b51",
+    "be4fbc266da06e6f57b8679f23834fa6a2c3bf8081a049ee9a9801ec5445bd92",
+    "be4fbc266da06e6f57b8679f23834fa6a2c3bf8081a049ee9a9801ec5445bd92",
+    "b034f44affba26a3e27f5359d0ae9467ec8cc137ecedf7c316d1c1615254ab79",
+    "b034f44affba26a3e27f5359d0ae9467ec8cc137ecedf7c316d1c1615254ab79",
+    "b034f44affba26a3e27f5359d0ae9467ec8cc137ecedf7c316d1c1615254ab79",
+    "b034f44affba26a3e27f5359d0ae9467ec8cc137ecedf7c316d1c1615254ab79",
+    "c2abf6ad9ea85021e51257d6306567d8f5d3600daa6c49922717297454a29f97",
+    "c2abf6ad9ea85021e51257d6306567d8f5d3600daa6c49922717297454a29f97"
+   ],
+   "per_op_reviewed": [
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ]
+   ],
+   "reviewed": [
+    "root"
+   ],
+   "save_returned": true,
+   "warnings": 0
+  },
+  "lossy_remap_on_load": {
+   "counts": {
+    "0": 272200,
+    "1": 20000,
+    "255": 15000
+   },
+   "dirty_after_save": false,
+   "dirty_before_save": true,
+   "file": {
+    "classes": {
+     "1": "root",
+     "2": "nodule",
+     "255": "ignore",
+     "3": "root_tip"
+    },
+    "exists": true,
+    "file_sha256_informational": "c06035522745d56e4c4cac010cf232595e495f59c4a7c22a24014cdbece68a16",
+    "ids_sha256": "8d9f2ac243a0a125a64e1d33b46b80f97c009322e19f2f1355c91dff882d6d9d",
+    "mode": "P",
+    "palette_sha256": "7908de00ad7bb8d9111b8ffc73c292631be17e1bab9603297e439f6d1fa0eed6",
+    "reviewed": [
+     "root"
+    ],
+    "size": [
+     640,
+     480
+    ],
+    "transparency": 0
+   },
+   "ids_sha256": "8d9f2ac243a0a125a64e1d33b46b80f97c009322e19f2f1355c91dff882d6d9d",
+   "per_op_dirty": [
+    true,
+    false
+   ],
+   "per_op_ids_sha256": [
+    "8d9f2ac243a0a125a64e1d33b46b80f97c009322e19f2f1355c91dff882d6d9d",
+    "8d9f2ac243a0a125a64e1d33b46b80f97c009322e19f2f1355c91dff882d6d9d"
+   ],
+   "per_op_reviewed": [
+    [
+     "root"
+    ],
+    [
+     "root"
+    ]
+   ],
+   "reviewed": [
+    "root"
+   ],
+   "save_returned": true,
+   "warnings": 1
+  },
+  "two_classes_crossing": {
+   "counts": {
+    "0": 290480,
+    "1": 9572,
+    "2": 7148
+   },
+   "dirty_after_save": false,
+   "dirty_before_save": true,
+   "file": {
+    "classes": {
+     "1": "root",
+     "2": "nodule",
+     "255": "ignore",
+     "3": "root_tip"
+    },
+    "exists": true,
+    "file_sha256_informational": "60311d8f12eb69f7026d2813c68fc612ec176cc4ca719ae012d6ef773b1464f3",
+    "ids_sha256": "c66a748f95319ded1bbc4a1e31c58c2a6c84807a2b3ea25e713c466b79f609a4",
+    "mode": "P",
+    "palette_sha256": "7908de00ad7bb8d9111b8ffc73c292631be17e1bab9603297e439f6d1fa0eed6",
+    "reviewed": [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    "size": [
+     640,
+     480
+    ],
+    "transparency": 0
+   },
+   "ids_sha256": "c66a748f95319ded1bbc4a1e31c58c2a6c84807a2b3ea25e713c466b79f609a4",
+   "per_op_dirty": [
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    true,
+    true,
+    false
+   ],
+   "per_op_ids_sha256": [
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "de7fd72d4dd9cf80e54724edac6850ccd40d1474d4d06c8403a62916047ef013",
+    "de7fd72d4dd9cf80e54724edac6850ccd40d1474d4d06c8403a62916047ef013",
+    "de7fd72d4dd9cf80e54724edac6850ccd40d1474d4d06c8403a62916047ef013",
+    "37dba6385b31c3c81be7654be7f3665778c99717854bed66383bf98fef6c9c14",
+    "37dba6385b31c3c81be7654be7f3665778c99717854bed66383bf98fef6c9c14",
+    "37dba6385b31c3c81be7654be7f3665778c99717854bed66383bf98fef6c9c14",
+    "9fd76b5f937876c3c70214043cff27368dd95a3a705608d38cb949eb9d8218dd",
+    "9fd76b5f937876c3c70214043cff27368dd95a3a705608d38cb949eb9d8218dd",
+    "9fd76b5f937876c3c70214043cff27368dd95a3a705608d38cb949eb9d8218dd",
+    "9fd76b5f937876c3c70214043cff27368dd95a3a705608d38cb949eb9d8218dd",
+    "e64c93e3594f13014fda8d063ea39044f597f1d179ad92b772629513ed557ef3",
+    "e64c93e3594f13014fda8d063ea39044f597f1d179ad92b772629513ed557ef3",
+    "c66a748f95319ded1bbc4a1e31c58c2a6c84807a2b3ea25e713c466b79f609a4",
+    "0e99f634c389eaa980f44744ec626c41237d6af18be75e34347b9b8c88f087f0",
+    "c66a748f95319ded1bbc4a1e31c58c2a6c84807a2b3ea25e713c466b79f609a4",
+    "c66a748f95319ded1bbc4a1e31c58c2a6c84807a2b3ea25e713c466b79f609a4",
+    "c66a748f95319ded1bbc4a1e31c58c2a6c84807a2b3ea25e713c466b79f609a4"
+   ],
+   "per_op_reviewed": [
+    [],
+    [],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root"
+    ],
+    [],
+    [
+     "nodule",
+     "root"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ],
+    [
+     "nodule",
+     "root",
+     "root_tip"
+    ]
+   ],
+   "reviewed": [
+    "nodule",
+    "root",
+    "root_tip"
+   ],
+   "save_returned": true,
+   "warnings": 0
+  }
+ },
+ "meta": {
+  "deterministic_across_two_runs": true,
+  "numpy": "2.2.6",
+  "opencv": "4.13.0",
+  "pillow": "12.2.0",
+  "purpose": "class-label goldens of the Trace GT editor before the Correct merge; cases.* is the contract",
+  "pyqt": "6.11.0",
+  "qt": "6.11.0"
+ },
+ "ops": {
+  "dirty_and_history": [
+   [
+    "class",
+    "root"
+   ],
+   [
+    "size",
+    8
+   ],
+   [
+    "stroke",
+    [
+     [
+      100,
+      100
+     ],
+     [
+      200,
+      150
+     ],
+     [
+      300,
+      100
+     ]
+    ]
+   ],
+   [
+    "save"
+   ],
+   [
+    "tick",
+    "nodule",
+    true
+   ],
+   [
+    "tick",
+    "nodule",
+    false
+   ],
+   [
+    "tick",
+    "root",
+    false
+   ],
+   [
+    "class",
+    "nodule"
+   ],
+   [
+    "size",
+    12
+   ],
+   [
+    "stroke",
+    [
+     [
+      100,
+      300
+     ],
+     [
+      300,
+      300
+     ]
+    ]
+   ],
+   [
+    "undo"
+   ],
+   [
+    "redo"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "redo"
+   ],
+   [
+    "redo"
+   ],
+   [
+    "tick",
+    "root_tip",
+    true
+   ],
+   [
+    "save"
+   ],
+   [
+    "tick",
+    "root_tip",
+    false
+   ],
+   [
+    "tick",
+    "root_tip",
+    true
+   ],
+   [
+    "clear"
+   ],
+   [
+    "undo"
+   ]
+  ],
+  "empty_save": [
+   [
+    "save"
+   ]
+  ],
+  "fill_active_class_only": [
+   [
+    "class",
+    "nodule"
+   ],
+   [
+    "size",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      300,
+      100
+     ],
+     [
+      400,
+      100
+     ],
+     [
+      400,
+      200
+     ],
+     [
+      300,
+      200
+     ],
+     [
+      300,
+      100
+     ]
+    ]
+   ],
+   [
+    "class",
+    "root"
+   ],
+   [
+    "tool",
+    "fill"
+   ],
+   [
+    "click",
+    [
+     350,
+     150
+    ]
+   ],
+   [
+    "click",
+    [
+     50,
+     50
+    ]
+   ],
+   [
+    "tool",
+    "eraser"
+   ],
+   [
+    "size",
+    10
+   ],
+   [
+    "stroke",
+    [
+     [
+      280,
+      150
+     ],
+     [
+      320,
+      150
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "fill"
+   ],
+   [
+    "class",
+    "nodule"
+   ],
+   [
+    "click",
+    [
+     350,
+     150
+    ]
+   ],
+   [
+    "tool",
+    "brush"
+   ],
+   [
+    "class",
+    "root"
+   ],
+   [
+    "size",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      250,
+      50
+     ],
+     [
+      350,
+      50
+     ],
+     [
+      350,
+      250
+     ],
+     [
+      250,
+      250
+     ],
+     [
+      250,
+      50
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "fill"
+   ],
+   [
+    "click",
+    [
+     330,
+     150
+    ]
+   ],
+   [
+    "click",
+    [
+     50,
+     400
+    ]
+   ],
+   [
+    "save"
+   ]
+  ],
+  "ignore_interplay": [
+   [
+    "class",
+    "ignore"
+   ],
+   [
+    "size",
+    20
+   ],
+   [
+    "stroke",
+    [
+     [
+      100,
+      200
+     ],
+     [
+      300,
+      200
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "eraser"
+   ],
+   [
+    "size",
+    8
+   ],
+   [
+    "stroke",
+    [
+     [
+      200,
+      170
+     ],
+     [
+      200,
+      230
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "brush"
+   ],
+   [
+    "class",
+    "root"
+   ],
+   [
+    "size",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      150,
+      150
+     ],
+     [
+      250,
+      150
+     ],
+     [
+      250,
+      250
+     ],
+     [
+      150,
+      250
+     ],
+     [
+      150,
+      150
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "fill"
+   ],
+   [
+    "click",
+    [
+     160,
+     160
+    ]
+   ],
+   [
+    "class",
+    "ignore"
+   ],
+   [
+    "tool",
+    "brush"
+   ],
+   [
+    "size",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      350,
+      150
+     ],
+     [
+      450,
+      150
+     ],
+     [
+      450,
+      250
+     ],
+     [
+      350,
+      250
+     ],
+     [
+      350,
+      150
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "fill"
+   ],
+   [
+    "click",
+    [
+     400,
+     200
+    ]
+   ],
+   [
+    "class",
+    "root"
+   ],
+   [
+    "tool",
+    "brush"
+   ],
+   [
+    "size",
+    12
+   ],
+   [
+    "stroke",
+    [
+     [
+      340,
+      200
+     ],
+     [
+      460,
+      200
+     ]
+    ]
+   ],
+   [
+    "save"
+   ]
+  ],
+  "lossy_remap_on_load": [
+   [
+    "open"
+   ],
+   [
+    "save"
+   ]
+  ],
+  "two_classes_crossing": [
+   [
+    "class",
+    "root"
+   ],
+   [
+    "size",
+    8
+   ],
+   [
+    "stroke",
+    [
+     [
+      100,
+      100
+     ],
+     [
+      150,
+      150
+     ],
+     [
+      200,
+      200
+     ],
+     [
+      250,
+      250
+     ],
+     [
+      300,
+      300
+     ]
+    ]
+   ],
+   [
+    "class",
+    "nodule"
+   ],
+   [
+    "size",
+    25
+   ],
+   [
+    "stroke",
+    [
+     [
+      300,
+      100
+     ],
+     [
+      250,
+      150
+     ],
+     [
+      200,
+      200
+     ],
+     [
+      150,
+      250
+     ],
+     [
+      100,
+      300
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "eraser"
+   ],
+   [
+    "size",
+    10
+   ],
+   [
+    "stroke",
+    [
+     [
+      200,
+      180
+     ],
+     [
+      200,
+      200
+     ],
+     [
+      200,
+      220
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "brush"
+   ],
+   [
+    "class",
+    "root"
+   ],
+   [
+    "size",
+    3
+   ],
+   [
+    "stroke",
+    [
+     [
+      150,
+      350
+     ],
+     [
+      250,
+      350
+     ],
+     [
+      250,
+      420
+     ],
+     [
+      150,
+      420
+     ],
+     [
+      150,
+      350
+     ]
+    ]
+   ],
+   [
+    "tool",
+    "fill"
+   ],
+   [
+    "click",
+    [
+     200,
+     385
+    ]
+   ],
+   [
+    "clear"
+   ],
+   [
+    "undo"
+   ],
+   [
+    "tick",
+    "root_tip",
+    true
+   ],
+   [
+    "save"
+   ]
+  ]
+ }
+}

@@ -4,6 +4,7 @@ Handles left panel (controls/tree) and right panel (display area) creation.
 """
 
 import os
+from collections.abc import Callable
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon
@@ -15,15 +16,16 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QStackedWidget,
-    QToolButton,
     QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from app.gui import file_tree_manager
+from app.gui.library_index import LibrarySearchController
 from app.gui.widgets import tokens
 from app.gui.widgets.icons import load_icon
+from resources.resource_utils import project_root
 
 
 def get_icon_path(icon_name: str) -> str:
@@ -34,44 +36,14 @@ def get_icon_path(icon_name: str) -> str:
         icon_name: Name of the icon file (with extension)
 
     Returns:
-        Full path to the icon file
+        Full path to the icon file in resources/icons, or "" when it is not there
     """
-    # Check in resources/icons first
-    base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    base_path = str(project_root())
     resources_icons_path = os.path.join(base_path, "resources", "icons", icon_name)
     if os.path.exists(resources_icons_path):
         return resources_icons_path
 
-    # Check in app/utils for XML icons
-    app_utils_path = os.path.join(base_path, "app", "utils", icon_name)
-    if os.path.exists(app_utils_path):
-        return app_utils_path
-
     return ""
-
-
-def create_icon_button(icon_path: str, tooltip: str, size: int = 100) -> QToolButton:
-    """
-    Create a QToolButton with an icon and tooltip.
-
-    Args:
-        icon_path: Path to the icon file (SVG or XML)
-        tooltip: Tooltip text for the button
-        size: Button size in pixels
-
-    Returns:
-        Configured QToolButton
-    """
-    button = QToolButton()
-    button.setToolTip(tooltip)
-    button.setFixedSize(QSize(size, size))
-    # Use full button size for icon
-    button.setIconSize(QSize(size, size))
-
-    if icon_path and os.path.exists(icon_path):
-        button.setIcon(QIcon(icon_path))
-
-    return button
 
 
 def create_text_button(text: str, tooltip: str) -> QPushButton:
@@ -90,28 +62,30 @@ def create_text_button(text: str, tooltip: str) -> QPushButton:
     return button
 
 
-def create_section_label(text: str, color: str = "#bd93f9") -> QLabel:
-    """
-    Create a styled section label for button groups.
+class LibraryTree(QTreeWidget):
+    """The library tree, whose type-ahead (a typed letter selects the next row that starts
+    with it) runs only while ``typing_selects()`` is true.
 
-    Args:
-        text: Label text
-        color: Color for the label text (hex color code)
-
-    Returns:
-        Styled QLabel
+    On an editor page the tree keeps the keyboard so the arrows browse (W1), and a letter
+    that is no shortcut reached the type-ahead: "L" selected the next "L…" row, and that
+    image opened in the editor, or its save prompt came up (V5). The window turns typing
+    off there; the arrows, PgDn / PgUp, Home / End and the expand keys keep working, and the
+    search field still finds images.
     """
-    label = QLabel(text)
-    label.setStyleSheet(f"""
-        QLabel {{
-            color: {color};
-            font-size: 8pt;
-            font-weight: bold;
-            padding: 2px 0px;
-            margin-top: 4px;
-        }}
-    """)
-    return label
+
+    def __init__(self, typing_selects: Callable[[], bool] | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self._typing_selects = typing_selects or (lambda: True)
+
+    def keyboardSearch(self, search: str) -> None:  # noqa: N802 - Qt API
+        if self._typing_selects():
+            super().keyboardSearch(search)
+
+
+def _no_editor_on_screen(main_window) -> bool:
+    """True unless the editor page (Correct) is on screen."""
+    editor_canvas = getattr(main_window, "_editor_canvas", None)
+    return not callable(editor_canvas) or editor_canvas() is None
 
 
 def create_left_panel(main_window) -> QWidget:
@@ -147,26 +121,7 @@ def create_left_panel(main_window) -> QWidget:
             border: 1px solid {tokens.ACCENT_LINE};
         }}
         QPushButton:pressed {{ background-color: {tokens.BG_ACTIVE}; }}
-    """
-
-    # Style for full-width primary button (Load Images)
-    primary_button_style = """
-        QPushButton {
-            background-color: #6272a4;
-            color: #f8f8f2;
-            border: none;
-            border-radius: 6px;
-            padding: 10px 16px;
-            font-weight: bold;
-            font-size: 10pt;
-        }
-        QPushButton:hover {
-            background-color: #7282b4;
-            border: 2px solid #bd93f9;
-        }
-        QPushButton:pressed {
-            background-color: #5262a4;
-        }
+        {tokens.focus_rule("QPushButton")}
     """
 
     # ========== LOAD IMAGES BUTTON (Full width, prominent) ==========
@@ -175,7 +130,7 @@ def create_left_panel(main_window) -> QWidget:
     if load_icon_path:
         main_window.load_images_button.setIcon(QIcon(load_icon_path))
         main_window.load_images_button.setIconSize(QSize(24, 24))
-    main_window.load_images_button.setStyleSheet(primary_button_style)
+    main_window.load_images_button.setStyleSheet(text_button_style)
     main_window.load_images_button.setToolTip("Load images from a directory")
     main_window.load_images_button.clicked.connect(main_window.load_images)
     # FIX1: Welcome screen is the sole load entry. The attr/connect stay alive
@@ -185,8 +140,8 @@ def create_left_panel(main_window) -> QWidget:
     # ====================================================================== #
     # FIX4: The stage action buttons are constructed here (so their mw.<attr>
     # names and .clicked.connect() targets stay intact) but are NOT added to
-    # the left layout. build_action_bar() reparents the real button objects
-    # into the stage-aware action bar. Construction-only here.
+    # the left layout. The topbar (ShellTopbar) reparents the real button
+    # objects into its stage action pages. Construction-only here.
     # ====================================================================== #
 
     # Generate ML Masks button (kept wired + reparented; the Generate stage now
@@ -202,8 +157,9 @@ def create_left_panel(main_window) -> QWidget:
 
     # Generate Skeleton button (kept wired + reparented)
     main_window.generate_button = create_text_button(
-        "Generate Skeleton",
-        "Generate Skeleton\n\nExtract skeleton structure (medial axis) from segmentation masks. Converts mask images into line-based skeleton representations for length measurement.",
+        "Skeletons only",
+        "Skeletons only — predict skeletons from the original images (Pix2Pix); "
+        "masks are not read or regenerated.",
     )
     main_window.generate_button.setStyleSheet(text_button_style)
     main_window.generate_button.clicked.connect(main_window.skeleton_handler.generate_skeleton)
@@ -212,42 +168,30 @@ def create_left_panel(main_window) -> QWidget:
     main_window.generate_all_button = create_text_button(
         "Generate Mask + Skeleton",
         "Generate Mask + Skeleton\n\nRun the ResNet segmentation model over all "
-        "loaded images, then extract medial-axis skeletons from the masks it "
-        "produces. One pass — no need to run the two steps separately.",
+        "loaded images (masks -> root area), then predict skeletons from the same "
+        "original images (Pix2Pix -> root length). One click runs both. "
+        "Mask -> area, skeleton -> length: the layers are independent.",
     )
     main_window.generate_all_button.setStyleSheet(text_button_style)
     main_window.generate_all_button.clicked.connect(main_window.generate_all)
 
-    # Skeleton Correction button (reparented; kept for .setText callers)
-    main_window.toggle_skeleton_correction_button = create_text_button(
-        "Skeleton Correction",
-        "Skeleton Correction\n\nOpen the skeleton correction editor to manually fix skeleton errors. Allows you to add, remove, or modify skeleton branches interactively.",
-    )
-    main_window.toggle_skeleton_correction_button.setStyleSheet(text_button_style)
-    main_window.toggle_skeleton_correction_button.clicked.connect(
-        main_window.toggle_skeleton_correction
-    )
-
-    # Toggle Mask Tracing button (reparented; kept for .setText callers)
-    main_window.toggle_mask_tracing_button = create_text_button(
-        "Mask Tracing",
-        "Toggle Mask Tracing\n\nSwitch to mask tracing mode to manually draw or edit segmentation masks using brush tools. Toggle again to return to the main view.",
-    )
-    main_window.toggle_mask_tracing_button.setStyleSheet(text_button_style)
-    main_window.toggle_mask_tracing_button.clicked.connect(main_window.toggle_mask_tracing)
-
     # Calculate Root Length button (Measure stage)
     main_window.calculate_length_button = create_text_button(
-        "Root Length",
-        "Calculate Root Length\n\nMeasure total root length from skeleton data. Processes all skeleton files and calculates cumulative length measurements for each image.",
+        "Measure Length",
+        "Measure Length\n\nRoot length (mm) of every image, from its skeleton: the GT skeleton "
+        "saved in Correct where there is one, else the predicted skeleton in skeletons/. "
+        "Writes skeletons/root_lengths.csv. Skeletons whose image is no longer in the project "
+        "are skipped.",
     )
     main_window.calculate_length_button.setStyleSheet(text_button_style)
     main_window.calculate_length_button.clicked.connect(main_window.calculate_root_length)
 
     # Calculate Root Area button (Measure stage)
     main_window.calculate_area_button = create_text_button(
-        "Root Area",
-        "Calculate Root Area\n\nMeasure root surface area from segmentation masks. Processes all mask files and calculates pixel-based area measurements for each image.",
+        "Measure Area",
+        "Measure Area\n\nRoot area (mm²) of every image, from its mask: the GT mask saved in "
+        "Correct where there is one, else the predicted mask in mask/. Writes "
+        "mask/root_areas.csv. Masks whose image is no longer in the project are skipped.",
     )
     main_window.calculate_area_button.setStyleSheet(text_button_style)
     main_window.calculate_area_button.clicked.connect(main_window.calculate_root_area)
@@ -276,7 +220,7 @@ def create_left_panel(main_window) -> QWidget:
     # ========== VIEW MODE COMBO (hidden live driver) ==========
     # The combo stays the single source of truth for the display mode (indices
     # 0/1/2 -> display_controller.update_display_mode). It is hidden; a cosmetic
-    # SegmentedControl in the action bar forwards into it (see build_action_bar).
+    # SegmentedControl in the topbar (ShellTopbar) forwards into it.
     main_window.view_mode_combo = QComboBox()
     main_window.view_mode_combo.addItems(["Single Image", "Overlay", "Side by Side"])
     main_window.view_mode_combo.currentIndexChanged.connect(
@@ -290,6 +234,7 @@ def create_left_panel(main_window) -> QWidget:
     # ========== SEARCH FIELD ==========
     main_window.library_search = QLineEdit()
     main_window.library_search.setPlaceholderText("Search images…")
+    main_window.library_search.setAccessibleName("Search images")
     main_window.library_search.setClearButtonEnabled(True)
     main_window.library_search.setStyleSheet(f"""
         QLineEdit {{
@@ -302,7 +247,16 @@ def create_left_panel(main_window) -> QWidget:
         }}
         QLineEdit:focus {{ border: 1px solid {tokens.ACCENT_LINE}; }}
     """)
-    main_window.library_search.textChanged.connect(lambda text: filter_file_list(main_window, text))
+    # Debounced (one filter per typing burst) with a match count under the field.
+    main_window.library_search_status = QLabel()
+    main_window.library_search_status.setStyleSheet(
+        f"color: {tokens.TEXT_FAINT}; font-size: 11px; padding: 0 2px;"
+    )
+    main_window.library_search_controller = LibrarySearchController(
+        main_window.library_search,
+        lambda text: filter_file_list(main_window, text),
+        main_window.library_search_status,
+    )
 
     # ========== SEARCH + TREE CONTROLS (one row) ==========
     # Search field takes the slack; the expand/collapse controls are icon-only
@@ -325,11 +279,14 @@ def create_left_panel(main_window) -> QWidget:
             color: {tokens.TEXT};
             border: 1px solid {tokens.BORDER_STRONG};
         }}
+        {tokens.focus_rule("QPushButton")}
     """
 
+    # Icon-only: Qt names a button after its text, so a screen reader needs the name set.
     main_window.expand_all_button = QPushButton()
     main_window.expand_all_button.setIcon(load_icon("expand", tokens.TEXT_MUTED, 15))
     main_window.expand_all_button.setToolTip("Expand all groups")
+    main_window.expand_all_button.setAccessibleName("Expand all groups")
     main_window.expand_all_button.setStyleSheet(tree_button_style)
     main_window.expand_all_button.setFixedSize(30, 30)
     main_window.expand_all_button.clicked.connect(lambda: main_window.file_list.expandAll())
@@ -338,27 +295,34 @@ def create_left_panel(main_window) -> QWidget:
     main_window.collapse_all_button = QPushButton()
     main_window.collapse_all_button.setIcon(load_icon("collapse", tokens.TEXT_MUTED, 15))
     main_window.collapse_all_button.setToolTip("Collapse all groups")
+    main_window.collapse_all_button.setAccessibleName("Collapse all groups")
     main_window.collapse_all_button.setStyleSheet(tree_button_style)
     main_window.collapse_all_button.setFixedSize(30, 30)
     main_window.collapse_all_button.clicked.connect(lambda: main_window.file_list.collapseAll())
     tree_controls_layout.addWidget(main_window.collapse_all_button)
 
     layout.addLayout(tree_controls_layout)
+    layout.addWidget(main_window.library_search_status)
 
     # The tree's own header (Field → Tube → Date → Images) names the panel, and
     # it is the only left panel in the app — no redundant "Image Library" label.
 
     # ========== FILE TREE ==========
-    main_window.file_list = QTreeWidget()
+    # Typing selects rows in the Library only: on an editor page a stray letter must not
+    # switch the image being edited (V5).
+    main_window.file_list = LibraryTree(lambda: _no_editor_on_screen(main_window))
+    main_window.file_list.setAccessibleName("Image library")
     main_window.file_list.setHeaderLabels(["Field → Tube → Date → Images"])
     main_window.file_list.itemClicked.connect(main_window.on_tree_item_clicked)
+    # Keyboard browsing (arrows, Home/End) loads the image after a short debounce.
+    main_window.file_list.currentItemChanged.connect(main_window.on_tree_current_changed)
     main_window.file_list.setAnimated(True)
     main_window.file_list.setIndentation(20)
 
     # Names follow the splitter: the name column takes the slack, other columns
-    # size to contents, and long names elide in the MIDDLE so both the prefix
-    # and the extension stay readable (MR_11_001_rep2.png → MR_11_0…rep2.png).
-    main_window.file_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+    # size to contents. Image rows are short ("L44 · 11:15:30"; the full stem is
+    # in the tooltip and the metrics bar), so a narrow panel cuts only the end.
+    main_window.file_list.setTextElideMode(Qt.TextElideMode.ElideRight)
     main_window.file_list.setUniformRowHeights(True)
     _hdr = main_window.file_list.header()
     _hdr.setStretchLastSection(False)
@@ -366,9 +330,28 @@ def create_left_panel(main_window) -> QWidget:
     for _c in range(1, main_window.file_list.columnCount()):
         _hdr.setSectionResizeMode(_c, QHeaderView.ResizeMode.ResizeToContents)
 
-    # Token-styled tree: zebra striping is dropped (hover + selection + stripes
-    # is three competing row treatments in a ~240px panel).
-    main_window.file_list.setStyleSheet(f"""
+    main_window.file_list.setStyleSheet(library_tree_qss())
+    # Per-window index: O(1) lookup/navigation, fast filter, status badges.
+    file_tree_manager.library_index_for(main_window)
+
+    layout.addWidget(main_window.file_list, 1)
+
+    return left_widget
+
+
+def library_tree_qss() -> str:
+    """The library tree's own stylesheet (over the app's).
+
+    Token-styled; zebra striping is dropped (hover + selection + stripes is three
+    competing row treatments in a ~240px panel). The selected row's accent bar (a 3 px
+    left border) takes the place of 3 px of left padding that every other row has, so a
+    row does not move 3 px, or switch to a shorter label, when it is selected (W10). (A
+    transparent border instead would cut a seam into the hover fill.) Those 3 px come off
+    the right padding, so the text keeps the room it had before: the default 240 px panel
+    shows "2024.07.18 · 8 images", not "2024.07.18 · 8" (V4).
+    """
+    bar = 3
+    return f"""
         QTreeWidget {{
             background-color: {tokens.BG_1};
             color: {tokens.TEXT};
@@ -378,11 +361,18 @@ def create_left_panel(main_window) -> QWidget:
             font-size: 9pt;
             outline: none;
         }}
-        QTreeWidget::item {{ padding: 4px; border-radius: 5px; }}
+        QTreeWidget::item {{
+            padding: 4px;
+            padding-left: {4 + bar}px;
+            padding-right: {4 - bar}px;
+            border-radius: 5px;
+        }}
         QTreeWidget::item:hover {{ background-color: {tokens.BG_2}; }}
         QTreeWidget::item:selected {{
             background-color: {tokens.SEL_SOFT};
             color: {tokens.TEXT};
+            border-left: {bar}px solid {tokens.SEL};
+            padding-left: 4px;
         }}
         QHeaderView::section {{
             background-color: {tokens.BG_1};
@@ -393,35 +383,24 @@ def create_left_panel(main_window) -> QWidget:
             font-size: 8pt;
             font-weight: 600;
         }}
-    """)
-
-    layout.addWidget(main_window.file_list, 1)
-
-    return left_widget
-
-
-def filter_file_list(main_window, query: str) -> None:
-    """Filter the image-library tree by item text (case-insensitive contains).
-
-    FIX5: empty query shows everything. A parent stays visible if any of its
-    descendants match (so the path to a matching image is preserved).
+        {tokens.focus_rule("QTreeWidget")}
     """
-    tree = getattr(main_window, "file_list", None)
-    if tree is None:
-        return
-    needle = (query or "").strip().lower()
 
-    def visit(item: "QTreeWidgetItem") -> bool:
-        child_match = False
-        for i in range(item.childCount()):
-            child_match = visit(item.child(i)) or child_match
-        self_match = needle in item.text(0).lower() if needle else True
-        visible = self_match or child_match
-        item.setHidden(not visible)
-        return visible
 
-    for i in range(tree.topLevelItemCount()):
-        visit(tree.topLevelItem(i))
+def filter_file_list(main_window, query: str) -> int:
+    """Filter the image-library tree (case-insensitive contains); returns the match count.
+
+    Images match on their row text or full stem; a group whose own label matches keeps
+    all of its images; an empty query shows everything. Parents of matches stay visible
+    and small result sets are expanded (see :meth:`LibraryIndex.apply_filter`).
+    """
+    if getattr(main_window, "file_list", None) is None:
+        return 0
+    count = file_tree_manager.library_index_for(main_window).apply_filter(query or "")
+    filtered = getattr(main_window, "on_library_filtered", None)
+    if callable(filtered):
+        filtered()  # positions ("Image i / n") count the images the search shows
+    return count
 
 
 def create_right_panel(main_window) -> QWidget:

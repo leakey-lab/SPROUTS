@@ -1,0 +1,29 @@
+/* ============================================================
+   IBM Plex — vendored web fonts (SIL Open Font License 1.1)
+   Served locally from assets/fonts/ so the dashboards render the
+   same offline as online (no Google Fonts request). Files are the
+   official IBM "Latin1" split builds; see THIRD_PARTY.md.
+   Dash loads assets alphabetically: 00_ bootstrap, 01_ fonts,
+   then style.css (the SPROUTS theme, which uses these families).
+   ============================================================ */
+
+@font-face{
+  font-family:'IBM Plex Sans'; font-style:normal; font-weight:400; font-display:swap;
+  src:url("fonts/IBMPlexSans-Regular-Latin1.woff2") format("woff2");
+}
+@font-face{
+  font-family:'IBM Plex Sans'; font-style:normal; font-weight:500; font-display:swap;
+  src:url("fonts/IBMPlexSans-Medium-Latin1.woff2") format("woff2");
+}
+@font-face{
+  font-family:'IBM Plex Sans'; font-style:normal; font-weight:600; font-display:swap;
+  src:url("fonts/IBMPlexSans-SemiBold-Latin1.woff2") format("woff2");
+}
+@font-face{
+  font-family:'IBM Plex Mono'; font-style:normal; font-weight:400; font-display:swap;
+  src:url("fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2");
+}
+@font-face{
+  font-family:'IBM Plex Mono'; font-style:normal; font-weight:500; font-display:swap;
+  src:url("fonts/IBMPlexMono-Medium-Latin1.woff2") format("woff2");
+}

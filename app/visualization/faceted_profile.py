@@ -1,0 +1,523 @@
+"""
+Depth Profile Grid (faceted depth profile): pure data preparation + one-pass figure assembly.
+
+``build_faceted_profile`` turns DataCache interval tables into plain data (no
+Plotly): one :class:`FacetCell` per (date row, tube column), each holding the
+tube's per-interval means next to the field average (all tubes) of the same
+intervals. ``faceted_profile_figure`` renders that grid.
+
+The figure is assembled as plain dicts and handed to ``go.Figure`` without validation
+(PV-08; ``tests/test_viz_data_faceted.py`` compares it with the validated figure). Adding
+one shape per subplot with ``fig.add_shape`` re-validates the whole shapes tuple on every
+call, which made the build O(subplots²): 3 s for 6 tubes x 24 dates.
+The grid's axes and titles are what ``make_subplots`` gives such a grid, computed
+directly (:func:`grid_layout`): ``make_subplots`` builds and validates a whole figure,
+4-160 ms at every new grid shape (R-VIZ X4).
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.io as pio
+
+from . import theme
+
+#: Depth positions per bar (L1-L10, L11-L20, ...).
+INTERVAL_SIZE = 10
+#: Most tube columns the grid is designed for.
+MAX_TUBES = 6
+TITLE = "Depth Profile Grid - Field Average (Left) vs Tube (Right)"
+DEPTH_AXIS_TITLE = "Vertical Depth (cm)"
+
+
+@dataclass(frozen=True)
+class FacetCell:
+    """One tube on one date: the measured depth intervals, ready to draw.
+
+    All tuples run in parallel over the intervals that have tube rows, shallow
+    to deep. ``field_means``/``field_stds`` pool every tube of the date (not only
+    the selected ones); ``depth_fractions`` place each interval between the
+    tube's first (0.0) and last (1.0) interval of that date.
+    """
+
+    tube: Any
+    date: pd.Timestamp
+    interval_ends: tuple[int, ...] = ()
+    interval_starts: tuple[int, ...] = ()
+    tube_means: tuple[float, ...] = ()
+    tube_counts: tuple[int, ...] = ()
+    field_means: tuple[float, ...] = ()
+    field_stds: tuple[float, ...] = ()
+    depth_fractions: tuple[float, ...] = ()
+
+    @property
+    def has_data(self) -> bool:
+        """True when the tube has at least one measured interval on this date."""
+        return bool(self.interval_ends)
+
+
+@dataclass(frozen=True)
+class FacetedProfile:
+    """The whole grid: ``cells[row][col]`` for ``dates[row]`` x ``tubes[col]``."""
+
+    tubes: tuple[Any, ...]
+    dates: tuple[pd.Timestamp, ...]
+    cells: tuple[tuple[FacetCell, ...], ...]
+    #: largest bar (tube or field mean) over every cell; 0 when nothing is drawn
+    max_value: float
+    #: deepest interval end drawn; 0 when nothing is drawn
+    max_depth: int
+
+
+def _is_measured(stats: dict) -> bool:
+    return stats["count"] > 0 and not math.isnan(stats["avg"])
+
+
+def _build_cell(cache, tube, date, field_table: dict, interval_size: int) -> FacetCell:
+    """Pair a tube's measured intervals with the field statistics of the same intervals."""
+    table = cache.get_interval_data(tube, date, interval_size)
+    measured = [end for end in sorted(table) if _is_measured(table[end])]
+    if not measured:
+        return FacetCell(tube=tube, date=date)
+
+    first, last = min(table), max(table)
+    field_means, field_stds = [], []
+    for end in measured:
+        field = field_table.get(end)
+        if field is not None and field["count"] > 0:
+            field_means.append(field["avg"])
+            field_stds.append(0 if math.isnan(field["std"]) else field["std"])
+        else:  # cannot happen for consistent data (tube rows are field rows)
+            field_means.append(0)
+            field_stds.append(0)
+    return FacetCell(
+        tube=tube,
+        date=date,
+        interval_ends=tuple(measured),
+        interval_starts=tuple(table[end]["interval_start"] for end in measured),
+        tube_means=tuple(table[end]["avg"] for end in measured),
+        tube_counts=tuple(table[end]["count"] for end in measured),
+        field_means=tuple(field_means),
+        field_stds=tuple(field_stds),
+        depth_fractions=tuple(
+            (end - first) / (last - first) if last > first else 0.5 for end in measured
+        ),
+    )
+
+
+def build_faceted_profile(
+    cache,
+    tubes: Sequence,
+    dates: Iterable[pd.Timestamp] | None = None,
+    interval_size: int = INTERVAL_SIZE,
+) -> FacetedProfile:
+    """Prepare the faceted grid from a :class:`~.dash_data_cache.DataCache` (no Plotly).
+
+    Args:
+        cache: DataCache over the metric frame.
+        tubes: tube columns, in display order.
+        dates: date rows to consider (default: every date); they are sorted and
+            only dates where at least one of ``tubes`` has data are kept.
+        interval_size: depth positions per interval.
+    """
+    candidates = sorted(cache.dates if dates is None else dates)
+    availability = cache.get_tube_date_availability()
+    kept = [d for d in candidates if any(availability.get((t, d), False) for t in tubes)]
+
+    rows = []
+    max_value, max_depth = 0, 0
+    for date in kept:
+        field_table = cache.get_field_interval_data(date, interval_size)
+        row = tuple(_build_cell(cache, tube, date, field_table, interval_size) for tube in tubes)
+        for cell in row:
+            if cell.has_data:
+                max_value = max(max_value, max(cell.field_means + cell.tube_means))
+                max_depth = max(max_depth, max(cell.interval_ends))
+        rows.append(row)
+    return FacetedProfile(
+        tubes=tuple(tubes),
+        dates=tuple(kept),
+        cells=tuple(rows),
+        max_value=max_value,
+        max_depth=max_depth,
+    )
+
+
+def _merge(target: dict, updates: dict) -> None:
+    """Recursive dict update with Plotly ``update`` semantics (nested dicts merge)."""
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge(target[key], value)
+        else:
+            target[key] = value
+
+
+def _axis_suffix(subplot: int) -> str:
+    """Plotly axis-id suffix of the n-th subplot (row-major): '' for 1, else 'n'."""
+    return "" if subplot == 1 else str(subplot)
+
+
+# The grid's make_subplots arguments: spacing between panels (fractions of the plot),
+# and the width the columns share (make_subplots keeps 2 % free for the row titles).
+_V_SPACING = 0.005
+_H_SPACING = 0.008
+_MAX_WIDTH = 0.98
+
+
+def _check_grid(n_rows: int, n_cols: int) -> None:
+    """``make_subplots``' checks of the grid, with its messages: a grid of 202 or more
+    dates still fails as before (the dashboard shows "Error: ...")."""
+    for name, size in (("rows", n_rows), ("cols", n_cols)):
+        if size <= 0:
+            raise ValueError(
+                f"\nThe '{name}' argument to make_subplots must be an int greater than 0.\n"
+                f"    Received value of type {type(size)}: {size!r}"
+            )
+    for size, spacing, name, var, dim in (
+        (n_cols, _H_SPACING, "Horizontal", "cols", "columns"),
+        (n_rows, _V_SPACING, "Vertical", "rows", "rows"),
+    ):
+        if size > 1 and spacing > 1.0 / float(size - 1):
+            raise ValueError(
+                f"{name} spacing cannot be greater than (1 / ({var} - 1)) = "
+                f"{1.0 / float(size - 1):f}.\n"
+                f"The resulting plot would have {size} {dim} ({var}={size})."
+            )
+
+
+def _clamp(value: float) -> float:
+    """``make_subplots``' rounding of a y domain end just outside [0, 1] (float error)."""
+    if -0.01 < value < 0.0:
+        return 0.0
+    if 1.0 < value < 1.01:
+        return 1.0
+    return value
+
+
+def _starts(sizes: Sequence[float], spacing: float) -> list[float]:
+    """Where each panel starts: ``sum(sizes[:i]) + i * spacing``, make_subplots' formula,
+    with the sizes added up left to right as ``sum()`` adds floats on Python 3.10 and 3.11.
+
+    Python 3.12's ``sum()`` compensates its rounding (Neumaier), which moves panel edges
+    and title positions by up to 4 units in the last place (837 of the 900 grids of 1-60
+    rows x 1-15 columns): the figure JSON would change with the Python version.
+    """
+    starts, before = [], 0.0
+    for i, size in enumerate(sizes):
+        starts.append(before + i * spacing)
+        before += size
+    return starts
+
+
+def _grid_title(text: str, x: float, y: float, *, row: bool) -> dict:
+    """A column title (above the top panel) or a row title (right of the last panel)."""
+    title: dict[str, Any] = {"font": {"size": 16}, "showarrow": False, "text": text}
+    if row:
+        title["textangle"] = 90
+    title.update(
+        x=x,
+        xanchor="left" if row else "center",
+        xref="paper",
+        y=y,
+        yanchor="middle" if row else "bottom",
+        yref="paper",
+    )
+    return title
+
+
+def grid_layout(column_titles: Sequence[str], row_titles: Sequence[str]) -> dict:
+    """The layout ``make_subplots`` gives a grid titled ``column_titles`` (on top) and
+    ``row_titles`` (right): axes, domains and title annotations, template excluded. A
+    fresh dict, free to change.
+
+    Computed with make_subplots' own arithmetic for this grid (top-left start, y axes
+    shared per row), in the same key order, and with Python 3.10's float sums
+    (:func:`_starts`); ``tests/test_viz_data_faceted.py`` compares the two and pins a few
+    grids to the JSON Python 3.10 gave.
+    """
+    n_rows, n_cols = len(row_titles), len(column_titles)
+    _check_grid(n_rows, n_cols)
+    widths = [(_MAX_WIDTH - _H_SPACING * (n_cols - 1)) / n_cols] * n_cols
+    heights = [(1.0 - _V_SPACING * (n_rows - 1)) / n_rows] * n_rows
+    x_domains = [
+        [start, start + width]
+        for start, width in zip(_starts(widths, _H_SPACING), widths, strict=True)
+    ]
+    y_starts = _starts(heights, _V_SPACING)  # the bottom row first
+    layout: dict[str, Any] = {}
+    y_domains = []
+    for row in range(n_rows):  # the top row first
+        start = y_starts[n_rows - 1 - row]
+        y_domain = [_clamp(start), _clamp(start + heights[-1 - row])]
+        y_domains.append(y_domain)
+        for col in range(n_cols):
+            suffix = _axis_suffix(row * n_cols + col + 1)
+            layout[f"xaxis{suffix}"] = {"anchor": f"y{suffix}", "domain": list(x_domains[col])}
+            yaxis = {"anchor": f"x{suffix}", "domain": list(y_domain)}
+            if col:  # the row's first y axis carries the tick labels for the whole row
+                yaxis["matches"] = f"y{_axis_suffix(row * n_cols + 1)}"
+                yaxis["showticklabels"] = False
+            layout[f"yaxis{suffix}"] = yaxis
+    top = y_domains[0][1]
+    layout["annotations"] = [
+        _grid_title(text, (x_domains[col][0] + x_domains[col][1]) / 2.0, top, row=False)
+        for col, text in enumerate(column_titles)
+    ] + [
+        _grid_title(text, x_domains[-1][1], (y_domains[row][0] + y_domains[row][1]) / 2.0, row=True)
+        for row, text in enumerate(row_titles)
+    ]
+    return layout
+
+
+def _x_range(max_value: float) -> int:
+    """Symmetric x half-range: 10% headroom, rounded up to a multiple of 10 (min 10)."""
+    if max_value <= 0:
+        return 10
+    return int(math.ceil(max_value * 1.1 / 10.0) * 10)
+
+
+def _x_tick_step(half_range: int) -> int:
+    """Tick spacing that keeps 2-6 ticks per side of the zero line.
+
+    The outermost ticks are unlabelled (they would collide with the next
+    panel's), so a +-10 range needs a 5-step to show any scale at all; large
+    (e.g. area) ranges step 1-2-5 x 10^k instead of crowding the panel. Ranges
+    of 20-60 keep the original 10-step.
+    """
+    if half_range <= 10:
+        return 5
+    magnitude = 10
+    while True:
+        for multiple in (1, 2, 5):
+            step = multiple * magnitude
+            if half_range / step <= 6:
+                return step
+        magnitude *= 10
+
+
+class _FacetedFigureAssembler:
+    """Collects the traces, panels and axis settings of a profile as plain dicts."""
+
+    def __init__(self, profile: FacetedProfile, label: str, unit: str):
+        self.profile = profile
+        self.label = label
+        self.unit = unit
+        self.n_rows = len(profile.dates)
+        self.n_cols = len(profile.tubes)
+
+    def figure(self) -> go.Figure:
+        layout = grid_layout(
+            [f"Tube {int(tube)}" for tube in self.profile.tubes],
+            [date.strftime("%Y-%m-%d") for date in self.profile.dates],
+        )
+        _merge(layout, self._layout_updates())
+        for annotation in layout.get("annotations", []):
+            _merge(annotation, {"font": {"size": 12}})
+        # Validating the dicts was 60 % of the build (6 x 3 panels: 21 -> 8 ms).
+        return go.Figure(data=self._traces(), layout=layout, _validate=False)
+
+    # -- traces -----------------------------------------------------------
+    def _traces(self) -> list[dict]:
+        traces: list[dict] = []
+        legend_shown = False
+        for row, cells in enumerate(self.profile.cells):
+            for col, cell in enumerate(cells):
+                suffix = _axis_suffix(row * self.n_cols + col + 1)
+                refs = {"xaxis": f"x{suffix}", "yaxis": f"y{suffix}"}
+                if not cell.has_data:
+                    traces.append({**self._no_data_trace(), **refs})
+                    continue
+                show_legend = not legend_shown
+                legend_shown = True
+                traces.append({**self._field_bars(cell, show_legend), **refs})
+                traces.append({**self._tube_bars(cell, show_legend), **refs})
+        return traces
+
+    @staticmethod
+    def _no_data_trace() -> dict:
+        return {
+            "type": "scatter",
+            "x": [0],
+            "y": [50],  # middle of the typical depth range
+            "mode": "text",
+            "text": ["No Data"],
+            "textfont": {"size": 40, "color": theme.TEXT_MUTED},
+            "showlegend": False,
+            "hoverinfo": "skip",
+        }
+
+    def _field_bars(self, cell: FacetCell, show_legend: bool) -> dict:
+        """Field-average bars, drawn leftwards from the zero line."""
+        return {
+            "type": "bar",
+            "x": [-value for value in cell.field_means],
+            "y": list(cell.interval_ends),
+            "orientation": "h",
+            "width": 8,
+            "base": 0,
+            "marker": {"color": theme.TEXT_MUTED, "line": {"color": theme.BORDER, "width": 1}},
+            "name": "Field Avg",
+            "showlegend": show_legend,
+            "legendgroup": "field_avg",
+            "hovertemplate": (
+                f"<b>Field Average - {cell.date.strftime('%Y-%m-%d')}</b><br>"
+                "Interval: L%{customdata[0]}-%{customdata[1]}<br>"
+                f"Avg {self.label}: %{{customdata[2]:.2f}} {self.unit}<br>"
+                "<extra></extra>"
+            ),
+            "customdata": [
+                [start, end, mean, std]
+                for start, end, mean, std in zip(
+                    cell.interval_starts,
+                    cell.interval_ends,
+                    cell.field_means,
+                    cell.field_stds,
+                    strict=True,
+                )
+            ],
+        }
+
+    def _tube_bars(self, cell: FacetCell, show_legend: bool) -> dict:
+        """The tube's own bars, drawn rightwards and coloured by relative depth."""
+        return {
+            "type": "bar",
+            "x": list(cell.tube_means),
+            "y": list(cell.interval_ends),
+            "orientation": "h",
+            "width": 8,
+            "base": 0,
+            "marker": {
+                "color": [theme.sequential_color(f) for f in cell.depth_fractions],
+                "line": {"color": theme.BORDER, "width": 1},
+            },
+            "name": "Tube",
+            "showlegend": show_legend,
+            "legendgroup": "tube",
+            "hovertemplate": (
+                f"<b>Tube {int(cell.tube)} - {cell.date.strftime('%Y-%m-%d')}</b><br>"
+                "Interval: L%{customdata[0]}-%{customdata[1]}<br>"
+                f"Avg {self.label}: %{{x:.2f}} {self.unit}<br>"
+                "Count: %{customdata[2]}<br>"
+                "<extra></extra>"
+            ),
+            "customdata": [
+                [start, end, count]
+                for start, end, count in zip(
+                    cell.interval_starts, cell.interval_ends, cell.tube_counts, strict=True
+                )
+            ],
+        }
+
+    # -- layout -----------------------------------------------------------
+    def _layout_updates(self) -> dict:
+        x_half = _x_range(self.profile.max_value)
+        x_step = _x_tick_step(x_half)
+        x_max_tick = (x_half // x_step) * x_step
+        x_tickvals = list(range(-x_max_tick, x_max_tick + x_step, x_step))
+        # absolute values either side of zero; the outermost labels are hidden
+        x_ticktext = [
+            "" if i in (0, len(x_tickvals) - 1) else f"{abs(v):.0f}"
+            for i, v in enumerate(x_tickvals)
+        ]
+        y_max = self.profile.max_depth + 10 if self.profile.max_depth > 0 else 120
+        y_tickvals = list(range(0, y_max + 1, 20))
+        if y_tickvals[-1] != y_max:
+            y_tickvals.append(y_max)
+        # hide the 0 and max depth labels to reduce clutter
+        y_ticktext = ["" if v in (0, y_max) else str(v) for v in y_tickvals]
+
+        updates: dict[str, Any] = {
+            # The template itself: without validation a name is not looked up, and
+            # plotly.js ignores a template given as a string.
+            "template": pio.templates["sprouts"],
+            "title": {"text": TITLE, "y": 0.985, "yanchor": "top", "font": {"size": 16}},
+            "showlegend": True,
+            "autosize": True,
+            # Smaller per-row height so few-row selections roughly fill the
+            # viewport instead of a giant internal scroll; many rows still
+            # scroll but with readable, non-overlapping text.
+            "height": max(560, self.n_rows * 300),
+            # Wider top margin separates the main title from the "Tube N"
+            # column titles; trim the oversized right margin.
+            "margin": {"l": 64, "r": 60, "t": 118, "b": 52},
+            "hovermode": "closest",
+            "barmode": "overlay",  # field and tube bars share each depth row
+            "shapes": [],
+        }
+        for row in range(1, self.n_rows + 1):
+            for col in range(1, self.n_cols + 1):
+                suffix = _axis_suffix((row - 1) * self.n_cols + col)
+                bottom = row == self.n_rows
+                updates["shapes"].append(self._panel(suffix))
+                updates[f"xaxis{suffix}"] = {
+                    "tickmode": "array",
+                    "tickvals": x_tickvals,
+                    "ticktext": x_ticktext,
+                    "range": [-x_half, x_half],
+                    "showticklabels": bottom,
+                    "showgrid": True,
+                    "zeroline": True,
+                    "zerolinecolor": theme.BORDER_STRONG,
+                    "zerolinewidth": 2,
+                    "showline": bottom,
+                    "linecolor": theme.BORDER_STRONG,
+                    "linewidth": 2,
+                    "matches": "x",
+                    "side": "bottom",
+                    "ticks": "outside" if bottom else "",
+                    "ticklen": 6 if bottom else 0,
+                    "tickfont": {"size": 11},
+                }
+                depth_title = col == 1 and row == (self.n_rows + 1) // 2
+                updates[f"yaxis{suffix}"] = {
+                    "range": [y_max, 0],  # depth grows downwards
+                    "title": {
+                        "text": DEPTH_AXIS_TITLE if depth_title else "",
+                        "font": {"size": 13},
+                    },
+                    "showgrid": True,
+                    "tickfont": {"size": 11},
+                    "showline": True,
+                    "linecolor": theme.BORDER_STRONG,
+                    "linewidth": 2,
+                    "matches": "y",
+                    "tickmode": "array",
+                    "tickvals": y_tickvals,
+                    "ticktext": y_ticktext,
+                }
+        return updates
+
+    @staticmethod
+    def _panel(suffix: str) -> dict:
+        """Background rectangle behind one subplot, in that subplot's domain."""
+        return {
+            "type": "rect",
+            "xref": f"x{suffix} domain",
+            "yref": f"y{suffix} domain",
+            "x0": 0,
+            "y0": 0,
+            "x1": 1,
+            "y1": 1,
+            "fillcolor": theme.rgba(theme.BG_3, 0.55),
+            "line": {"color": theme.BORDER, "width": 1},
+            "layer": "below",
+        }
+
+
+def faceted_profile_figure(
+    profile: FacetedProfile, label: str = "Length", unit: str = "mm"
+) -> go.Figure:
+    """Render a non-empty :class:`FacetedProfile` (rows = dates, columns = tubes).
+
+    Args:
+        profile: output of :func:`build_faceted_profile` with at least one date.
+        label: metric name for hover text (e.g. "Length", "Area").
+        unit: metric unit for hover text (e.g. "mm", "mm²").
+    """
+    return _FacetedFigureAssembler(profile, label, unit).figure()
